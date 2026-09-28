@@ -37,6 +37,8 @@ If their first message already says which one, skip the question.
 
 Before routing to 1, 2, or 3, check whether the repository has a verification skill (`verify-*` under `.agents/skills` or `.claude/skills`). Without one, an agent cannot show proof on screen. Say so plainly, suggest that an engineer runs `/create-verification-skill`, and offer to continue with test results as the only proof.
 
+Also check where you are running. In a cloud session (`CLAUDE_CODE_REMOTE` is `true`, or Codex cloud), the person needs nothing installed, so never talk about installing. Read the `Cloud sessions` section of AGENTS.md: if the app cannot run here (an iOS app, or an Android emulator without KVM), tell them which proof they will get instead, such as screenshot tests, screenshots from a CI job, or a test build on their phone. On a laptop, if the person is not an engineer and the repository has a `Cloud sessions` section, mention that they can do the same from claude.ai/code or the Claude app with nothing installed.
+
 ## 3. Say what will happen
 
 Before starting, tell the person in two or three sentences what you are about to do, what they will get at the end (usually a pull request link with screenshots), and who reviews it. Nothing they ask for goes live without an engineer's review.
@@ -46,6 +48,6 @@ Before starting, tell the person in two or three sentences what you are about to
 End with:
 
 - What changed or what you found, in one or two sentences.
-- The evidence: screenshots, a short video, or test results.
+- The evidence: screenshots, a short video, or test results. Show the images in the conversation, not only in the pull request.
 - The link, if there is one.
 - What happens next and whether anything waits on them.

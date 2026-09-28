@@ -7,11 +7,17 @@ A rollout that works in a week and keeps working after a year.
 1. An engineer installs the kit ([Install](install.md)) and runs `/setup-team-kit` on the main repository. Merge its pull request.
 2. Turn on the review bots (`/setup-review-bots`; no API keys) and [branch protection](../../plugins/trust-ladder/templates/branch-protection.md). From now on every change, from anyone or any agent, passes the same gates.
 3. Run `/create-verification-skill` and merge it. Until this exists, agents cannot prove their work, so the rest of the team cannot rely on them.
-4. Run `/trust-audit` and keep the first row as the baseline.
+4. Run `/setup-cloud-agents`. The repository then boots in a fresh cloud session with the kit loaded, and you have chosen how each surface shows screenshots on pull requests, including the mobile apps a cloud machine cannot run.
+5. Run `/setup-routines` and keep at least the requested-changes job and its issue form.
+6. Run `/trust-audit` and keep the first row as the baseline. Its non-engineer check should be all yes before week 2.
 
-## Week 2: everyone installs
+## Week 2: everyone starts
 
-Each person installs the kit once, in the one agent they use. The repository's settings files make it appear for Claude Code, Codex, and Pi users after they trust the folder. Point each person to their start page:
+Engineers install the kit once, in the one agent they use. The repository's settings files make it appear for Claude Code, Codex, and Pi users after they trust the folder.
+
+Designers, marketers, and founders install nothing. Give each one a seat on the team's Claude plan, have them connect GitHub, and send them [Use the kit from a browser or your phone](use-the-kit-from-the-browser.md).
+
+Point each person to their start page:
 
 - [Engineers](../start/engineers.md)
 - [Designers](../start/designers.md)
@@ -47,6 +53,7 @@ Suggest a first task for non-engineers that is small and visible, such as a copy
 | Time for `scripts/check.sh` | `.agents/trust-audit.tsv` | Under 15 minutes |
 | Ratchet counts | `.agents/ratchet-baseline.json` | Down |
 | Pull requests merged with verification evidence | Pull request descriptions | Up, toward all of them |
+| Requested changes from non-engineers, and days from issue to merge | Issues and pull requests labeled `requested-change` | Count up, days down |
 
 ## More repositories
 

@@ -82,6 +82,7 @@ Routines keep the codebase trustworthy without anyone remembering to: the verifi
 | Gardener | Weekday nights | `gardener` over the last 7 days |
 | Weekly review | Fridays | `/weekly-review` across every author, posted as an issue |
 | Reproduce bug reports | Twice each weekday | Reproduce new `bug` issues with the verification skill, then open a fix when the cause is clear |
+| Build requested changes | Every few hours on weekdays | Pick up issues from the Request a change form and open a `request-a-change` pull request with before and after images |
 
 Each job's instructions live in the repository, in `.agents/routines/` (from [`templates/routines/`](../../plugins/trust-ladder/templates/routines/)), and one teammate runs it on their own plan, with no API keys: as a **Claude Code routine** (claude.ai/code/routines, or `/schedule`), which runs in the cloud, or as a **Codex scheduled task** in the Codex app, which runs on their computer while it is on. Its pull requests and comments appear under that teammate's name. A team that wants the jobs to run as the repository instead can use the GitHub Actions workflows in [`templates/github/routines/`](../../plugins/trust-ladder/templates/github/routines/), which need an `ANTHROPIC_API_KEY` secret. No routine ever merges.
 

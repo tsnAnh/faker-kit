@@ -1,0 +1,30 @@
+name: request-a-change
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  build:
+    if: github.event.label.name == 'requested-change'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: https://github.com/tsnAnh/team-kit.git
+          plugins: |
+            trust-ladder@team-kit
+          prompt: |
+            REPO: ${{ github.repository }}
+            ISSUE NUMBER: ${{ github.event.issue.number }}
+
+            Read .agents/routines/request-a-change.md and follow it for this one issue.
+          claude_args: |
+            --model claude-opus-5-5 --effort max

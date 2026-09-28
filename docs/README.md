@@ -11,7 +11,7 @@ The kit gives your coding agent Lauren Tan's pstack working methods and their co
 | In product or marketing | [Product and marketing](start/product-and-marketing.md) | Change copy in every language, report a bug so an agent reproduces it, and ask how a feature works |
 | A founder or lead | [Founders and leads](start/founders-and-leads.md) | See what shipped, ask why things are built the way they are, and decide how many agents the team can trust |
 
-Not sure? Install the kit ([how](how-to/install.md)) and type `/start-here`. It asks what you want to do in plain words and picks the right skill.
+Not sure? Open claude.ai/code or the Claude app ([how](how-to/use-the-kit-from-the-browser.md)), or install the kit ([how](how-to/install.md)), and type `/start-here`. It asks what you want to do in plain words and picks the right skill.
 
 ## The idea in one minute
 
@@ -29,6 +29,7 @@ As more corrections land in layers 1 and 2, the same mistake stops coming back, 
 
 **How-to guides** for a specific job:
 
+- [Use the kit from a browser or your phone](how-to/use-the-kit-from-the-browser.md), with nothing installed
 - [Install the kit](how-to/install.md) in Claude Code, Codex, or Pi
 - [Choose models](how-to/models.md)
 - [Set up a repository](how-to/set-up-a-repo.md)
