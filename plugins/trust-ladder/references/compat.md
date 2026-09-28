@@ -22,6 +22,7 @@ The pstack, cursor-team-kit, thermos, orchestrate, advisor, continual-learning, 
 | `/loop` | `/loop` | The poteto-mode Autonomous run playbook | Same as Codex |
 | Cloud agents, `environment: "cloud"` | Claude Code on the web sessions | Codex cloud tasks | A pi-subagents background run in its own worktree |
 | Cursor Automations, Grok Bot routines | Claude Code routines or GitHub Actions (`setup-routines`) | GitHub Actions | GitHub Actions |
+| Grok Bot webhook routine and its sender key (`make-bot-ui`) | A routine with an API trigger; its bearer token is the sender key | A GitHub `repository_dispatch` workflow | Same as Codex |
 | Bugbot, agentic security review | Claude Code Review or `claude-code-action` | Codex review or `codex-action` | Same PR bots |
 | Custom Mode pin (`mode: true`) | trust-ladder's hook keeps `/poteto-mode` on until you say "exit poteto mode" | Same hook | trust-ladder's Pi extension does the same |
 | Origin CLI | `gh` | `gh` | `gh` |

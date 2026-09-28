@@ -8,7 +8,7 @@
 | `unawaited_futures`, `discarded_futures`, `use_build_context_synchronously` | Fire-and-forget futures and using a `BuildContext` after an `await`, the classic async bugs in Flutter UI. |
 | `avoid_catches_without_on_clauses`, `only_throw_errors` | `catch (e)` that swallows every error. |
 | `avoid_print` | Debug output in shipped builds. |
-| `always_declare_return_types`, `prefer_final_locals`, `require_trailing_commas` | Code whose types and diffs are harder to read. |
+| `always_declare_return_types`, `prefer_final_locals` | Code whose types are harder to read. `dart format` handles trailing commas, so no lint competes with it. |
 | `import-boundaries.mjs` (agnostic pack) with `examples/import-boundaries.json` | UI importing a feature's data layer, or features importing each other. |
 | `locale-keys.mjs` (agnostic pack) with `examples/locales.json` | Adding a string to one ARB file only, or pasting English into the other locales. |
 | `no_default_cases` | A `default` branch over an enum, which hides every value added later. |

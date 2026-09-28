@@ -1,0 +1,28 @@
+name: maintain-verification-skill
+
+on:
+  schedule:
+    - cron: "17 2 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  maintain:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: https://github.com/tsnAnh/skills.git
+          plugins: |
+            trust-ladder@team-kit
+          prompt: |
+            Run the /maintain-verification-skill skill on this repository's verification skill.
+            Open at most one pull request with proven corrections to the feature map and harness.
+            If nothing drifted, make no changes and say so.
+          claude_args: |
+            --model claude-opus-5-5 --effort max

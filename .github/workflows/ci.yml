@@ -75,6 +75,8 @@ jobs:
           key: team-kit-tools-${{ hashFiles('plugins/trust-ladder/packs/tools.sh') }}
       - name: Every pack fails on its bad fixture and passes on its good one
         run: scripts/test-packs.sh
+      - name: Best-practices examples pass the packs
+        run: scripts/test-examples.sh
 
   orchestrate-tests:
     # orchestrate drives Cursor's cloud agents through @cursor/sdk. Its model catalog is
