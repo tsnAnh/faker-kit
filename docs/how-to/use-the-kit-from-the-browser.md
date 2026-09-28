@@ -6,7 +6,7 @@ This works once an engineer has set the repository up for cloud sessions with `/
 
 ## 1. What you need
 
-- A seat on the team's Claude plan (for Claude Code on the web) or ChatGPT plan (for Codex on the web).
+- A seat on the team's Claude plan (for Claude Code on the web) or ChatGPT plan (for Codex). Use whichever your team set up; the kit is the same in both.
 - Your GitHub account connected to it, with access to the repository.
 
 ## 2. Start a session
@@ -17,7 +17,13 @@ This works once an engineer has set the repository up for cloud sessions with `/
 2. Type `/start-here`, or say what you want in plain words: `/request-a-change the onboarding headline should say "Plan your week in two minutes"`.
 3. Keep the tab open, or close it and come back later: the session keeps working on its own machine.
 
-**Codex on the web**, at chatgpt.com/codex: pick the repository's environment and start with `$start-here`. If Codex does not know the skill, use Claude Code on the web instead, or ask an engineer to check the environment.
+**Codex on the web**, at chatgpt.com/codex, or Codex in the ChatGPT app on your phone:
+
+1. Pick the repository's environment.
+2. Start with `$start-here`, or `$request-a-change` and your request in plain words. Skills start with `$` in Codex, not `/`.
+3. When the task is done, read its summary and look at its screenshots. If it is right, press the button to open a pull request. If not, reply with what to change; the agent keeps going in the same task.
+
+Codex works on its own machine without internet access, so it cannot reach outside services while it works. If it says something it needs is blocked, ask an engineer to look at the environment.
 
 The examples on your role's start page work the same way here.
 
@@ -33,9 +39,11 @@ Some apps cannot run on a cloud machine, such as an iPhone app. The agent says s
 
 If the repository has the **Request a change** issue form, open a new issue on GitHub, pick that form, and fill it in. An agent picks it up, comments its restatement, and links a pull request with screenshots on the issue. This is the easiest door for a quick copy change or a bug you just saw.
 
+If your team uses Codex, you can hand the issue straight to it: assign the issue to Codex, or comment `@codex use request-a-change for this issue`. Codex works on it in the cloud and replies on the issue. The same works by mentioning `@Codex` in a Slack thread or a Linear issue, if your team has connected them.
+
 ## From your phone
 
-Founders and leads: the Claude app on your phone runs the same cloud sessions. Useful ones:
+Founders and leads: the Claude app (Code tab) and the ChatGPT app (Codex) on your phone run the same cloud sessions. Useful ones, with `$` instead of `/` in Codex:
 
 ```text
 /weekly-review for every author on main, not just me
@@ -47,9 +55,10 @@ Founders and leads: the Claude app on your phone runs the same cloud sessions. U
 
 | You see | What it means | Who fixes it |
 |---|---|---|
-| The agent does not know `/start-here` | The kit does not load in this cloud environment | An engineer, with `/setup-cloud-agents` |
+| The agent does not know `/start-here` (or `$start-here`) | The kit does not load in this cloud environment | An engineer, with `/setup-cloud-agents` |
 | No screenshots, only test results | The repository has no verification skill, or this app cannot run in the cloud | An engineer, with `/create-verification-skill` or `/setup-cloud-agents` |
-| The agent cannot push or open a pull request | Your GitHub connection lacks access to the repository | You reconnect GitHub, or a repository admin grants access |
+| Claude Code cannot push or open a pull request | Your GitHub connection lacks access to the repository | You reconnect GitHub, or a repository admin grants access |
+| Codex finished but there is no pull request | In Codex, you open it | Press the button to open a pull request on the task |
 | The agent says the request needs an engineer | It touches money, permissions, personal data, or deleting things | An engineer takes it from the conversation or the issue |
 
 Prefer to run the agent on your own computer? [Install the kit](install.md).

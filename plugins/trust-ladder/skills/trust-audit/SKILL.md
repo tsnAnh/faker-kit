@@ -29,11 +29,11 @@ Also read `.agents/corrections.tsv` if it exists. Count corrections per layer an
 
 Not a layer; a yes or no for each, with evidence:
 
-- **No install.** A fresh cloud session boots with `scripts/cloud-setup.sh` and `/start-here` resolves in it.
+- **No install.** A fresh cloud session boots with `scripts/cloud-setup.sh` and `/start-here` resolves in it, in each agent the team uses (in Codex cloud, `$start-here` through `scripts/install-kit-skills.sh`).
 - **Fast enough.** `check` passes in that session within ten minutes of its start.
 - **Pictures reach people.** The last few `request-a-change` pull requests (label `requested-change`) show before and after images on the page, or a preview link.
 - **Every surface has proof.** AGENTS.md has a `Cloud sessions` section naming, for each surface, how it is proven in the cloud or where else.
-- **A door they already use.** The request-a-change issue form, with a routine that picks it up.
+- **A door they already use.** The request-a-change issue form, with a routine or Codex's GitHub integration picking it up.
 - **Safe to say yes.** Branch protection requires review from code owners and passing checks.
 
 Each "no" is a fix for step 4, done by `setup-cloud-agents` or `setup-routines`.

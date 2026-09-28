@@ -15,7 +15,7 @@ A rollout that works in a week and keeps working after a year.
 
 Engineers install the kit once, in the one agent they use. The repository's settings files make it appear for Claude Code, Codex, and Pi users after they trust the folder.
 
-Designers, marketers, and founders install nothing. Give each one a seat on the team's Claude plan, have them connect GitHub, and send them [Use the kit from a browser or your phone](use-the-kit-from-the-browser.md).
+Designers, marketers, and founders install nothing. Give each one a seat on the team's Claude or ChatGPT plan (whichever agent the team's cloud environment is set up in), have them connect GitHub, and send them [Use the kit from a browser or your phone](use-the-kit-from-the-browser.md).
 
 Point each person to their start page:
 

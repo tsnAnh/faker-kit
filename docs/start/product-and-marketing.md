@@ -2,7 +2,7 @@
 
 You can change copy, report bugs so they get reproduced for you, and get straight answers about how the product works, without waiting for an engineer's time. Everything you change goes through a pull request an engineer reviews, so nothing goes live by accident.
 
-Nothing to install: open claude.ai/code or the Claude app, pick the repository, type `/start-here`, and say what you want; it picks the right skill. [Use the kit from a browser or your phone](../how-to/use-the-kit-from-the-browser.md) shows how. You can also [install the kit](../how-to/install.md) on your own computer. The examples below are for Claude Code. In Codex, start with `$` instead of `/`; in Pi, with `/skill:`.
+Nothing to install: open claude.ai/code, chatgpt.com/codex, or either app, pick the repository, type `/start-here`, and say what you want; it picks the right skill. [Use the kit from a browser or your phone](../how-to/use-the-kit-from-the-browser.md) shows how. You can also [install the kit](../how-to/install.md) on your own computer. The examples below are for Claude Code. In Codex, start with `$` instead of `/`; in Pi, with `/skill:`.
 
 ## Change text in the app
 
@@ -12,7 +12,7 @@ Nothing to install: open claude.ai/code or the Claude app, pick the repository, 
 
 The agent restates the change, updates every language the app supports with a real translation, takes before and after screenshots, and opens a pull request. You get the link and the screenshots. An engineer reviews and merges.
 
-No agent open? If the repository has the **Request a change** issue form, fill it in on GitHub; an agent picks it up and links the pull request on the issue.
+No agent open? If the repository has the **Request a change** issue form, fill it in on GitHub; an agent picks it up and links the pull request on the issue. On a Codex team, you can also assign the issue to Codex, or mention `@Codex` in Slack or Linear.
 
 For a bigger change, describe the outcome, not the implementation: "users who skip onboarding should see a one-line tip on the home screen the first time".
 

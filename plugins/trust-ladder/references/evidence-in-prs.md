@@ -6,9 +6,11 @@ A designer or marketer judges a change by looking at it. A screenshot saved in a
 
 If the repository deploys previews per pull request (Vercel, Netlify, Cloudflare Pages, or its own), wait for the preview, drive it with the verification skill, and put the link at the top of **Before and after**. The requester can click through the real thing. Still add screenshots of the exact states you changed, using 2 below.
 
+In Codex cloud, the agent can open its own browser, look at the result, and attach a screenshot to the task and to the pull request the person opens from it. Use that for web apps, and ask for one screenshot per state you changed.
+
 ## 2. Images committed to the pull request branch, then removed
 
-This works from any cloud session that can push its own branch, in private repositories too.
+This works from any cloud session that can push its own branch, in private repositories too. It does not work in Codex cloud, where the agent cannot push and the pull request is opened from the task's final diff; use 1, 3, or 4 there.
 
 1. Save the images as `.agents/evidence/<branch-name>/<n>-<what>.png` (before and after as separate files; keep each under 1 MB, and use a short `.gif` or `.mp4` for motion).
 2. Commit them. Note the commit's full SHA.
@@ -31,7 +33,7 @@ For surfaces a cloud container cannot run (the iOS Simulator, an accelerated And
 
 ## 4. In the conversation
 
-Also hand the images to the person directly when your agent can send files into the chat (Claude Code on the web and in the Claude app can). The pull request is the record; the chat is where they are looking now.
+Also hand the images to the person directly when your agent can send files into the chat (Claude Code on the web and in the Claude app can; Codex shows its screenshots in the task). The pull request is the record; the chat is where they are looking now.
 
 ## If none is possible
 

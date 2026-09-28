@@ -23,7 +23,7 @@ Add `/continual-learning` weekly for Pi users, and for machines without `bun`. I
 
 The pull request review routine belongs to `setup-review-bots`.
 
-For the requested-changes job, also copy `templates/github/ISSUE_TEMPLATE/request-a-change.yml` to `.github/ISSUE_TEMPLATE/` and create the labels `requested-change`, `in-progress`, `pr-opened`, and `needs-engineer`. The form lets designers, marketers, and founders ask for a change from GitHub without opening an agent at all.
+For the requested-changes job, also copy `templates/github/ISSUE_TEMPLATE/request-a-change.yml` to `.github/ISSUE_TEMPLATE/` and create the labels `requested-change`, `in-progress`, `pr-opened`, and `needs-engineer`. The form lets designers, marketers, and founders ask for a change from GitHub without opening an agent at all. A Codex team can skip the sweep: with Codex's GitHub integration on, the requester (or a triager) assigns the issue to Codex, or comments `@codex use request-a-change for this issue`, and Codex works it in a cloud task and replies on the issue.
 
 ## 2. Commit the prompts
 

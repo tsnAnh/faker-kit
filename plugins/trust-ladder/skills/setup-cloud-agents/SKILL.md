@@ -33,10 +33,17 @@ A cloud container starts with no plugins installed by any person, so the reposit
 
 Step 5 proves that `/start-here` resolves in a fresh session. If it does not, add `claude plugin marketplace add tsnAnh/team-kit` and `claude plugin install trust-ladder@team-kit` to the end of `scripts/cloud-setup.sh`, guarded by `CLAUDE_CODE_REMOTE`.
 
+Codex cloud tasks do not load plugins at all; they read skills from `.agents/skills` in the repository and from `~/.agents/skills`. Copy `scripts/install-kit-skills.sh` from this skill to the repository's `scripts/`. Run from the Codex environment's setup script, it fetches the kit at a pinned commit into `~/.team-kit` and links every kit skill into `~/.agents/skills`, outside the repository, so no task's diff picks them up. Plugin hooks do not run there either, so the compat block in AGENTS.md (from `setup-team-kit`) is what tells Codex how to read the upstream skills.
+
 ## 3. Wire it into each agent's cloud
 
 - **Claude Code on the web** (also what the Claude desktop and mobile apps run). In the cloud environment's settings, set the setup script to `bash scripts/cloud-setup.sh`, set network access to what the script and step 2 need, and add environment variables and API credentials. The result is cached between sessions. For steps that must run in every session, such as starting a local database, add a `SessionStart` hook to `.claude/settings.json` that runs only when `CLAUDE_CODE_REMOTE` is `true`. Name the environment after the repository, so non-engineers can pick it without asking.
-- **Codex cloud.** In the Codex environment for this repository, set the setup script to `bash scripts/cloud-setup.sh` and add the same secrets and network settings. Codex reads the commands in AGENTS.md and the skills linked into `.agents/skills`. Check in step 5 whether it also loads the kit's plugins; if it does not, tell non-engineers to use Claude Code on the web.
+- **Codex cloud** (Codex on the web, in the ChatGPT app, and behind `@codex` on GitHub, Slack, and Linear). At chatgpt.com/codex, create an environment for the repository:
+  - Setup script: `bash scripts/cloud-setup.sh && bash scripts/install-kit-skills.sh --ref <kit commit>`. Pin the same commit as `.pi/settings.json`, so every agent runs the same kit. Add a maintenance script that reruns the second command, so a cached container picks up a new pin.
+  - Codex runs in two phases. The setup script has the network and the environment's secrets; the agent phase that follows has neither, by default. So the setup script must install everything, build once, and seed test data, and the verification skill must run on seeded local accounts with no API keys. Where the app needs an outside service, point it at a local fake. Turn on agent internet access only if verification cannot work without it, limited to a domain allowlist and to `GET`, `HEAD`, and `OPTIONS`.
+  - The agent cannot push, open the pull request, label, or comment. When the task ends, the person presses the button to open a pull request from its diff; Codex writes the pull request from the task. CODEOWNERS still requests the right reviewer.
+  - Codex reads the commands in AGENTS.md; keep them exact.
+  - Also turn on the GitHub integration for the repository (it is the same one `setup-review-bots` uses for Codex review), so people can assign an issue to Codex or mention `@codex` on it. Connect Slack or Linear if the team lives there.
 - **Pi.** Pi has no managed cloud. Run Pi in a remote container or VM prepared by the same script, or use pi-subagents background runs in worktrees for small fan-outs. Do not point non-engineers at Pi.
 
 Give non-engineers access: each needs a claude.ai (or ChatGPT, for Codex) seat on the team plan, the GitHub connection for the repository, and read access to it. Branch protection (`templates/branch-protection.md`) is what keeps their pull requests safe, so turn it on first.
@@ -47,7 +54,7 @@ For every user-facing surface, pick how a cloud session proves a change with pic
 
 | Surface | Proof in a cloud container | Where the rest is verified |
 |---|---|---|
-| Web app | Drive it headless with `control-ui`; screenshots and traces | Per-pull-request preview deployments, if the team has them, give the requester a link to click |
+| Web app | Drive it headless with `control-ui`; screenshots and traces. Codex cloud can also open its own browser and attach a screenshot to the task and its pull request | Per-pull-request preview deployments, if the team has them, give the requester a link to click |
 | Service, CLI, TUI | `control-cli` transcripts, responses, database rows | None needed |
 | Android, KMP Compose | JVM screenshot tests (Roborazzi or Paparazzi) and Robolectric; no emulator, since most containers lack KVM | A KVM-enabled or macOS CI runner, or a device farm, for on-device checks |
 | Flutter | `flutter test` golden images and the web target | As Android and iOS, for platform-specific behavior |
@@ -64,10 +71,10 @@ Start a fresh cloud session in each agent the team uses. In it:
 1. Run `scripts/check.sh`, which must pass.
 2. Run the verification skill's `doctor` command, which must report healthy for every surface the cloud can run.
 3. Type `/start-here` (Codex: `$start-here`). It must ask what you want to do.
-4. Run a small `/request-a-change`, such as a copy change, through to a pull request. Its body must show the before and after images, and anyone on the team must be able to see them.
+4. Run a small `/request-a-change`, such as a copy change, through to a pull request. Its body must show the before and after images, and anyone on the team must be able to see them. In Codex, open the pull request from the task, and also try it from an issue: assign one to Codex, or comment `@codex use request-a-change for this issue`.
 
 Record the time from session start to a passing check. If it is over ten minutes, cache more in the setup script.
 
 ## Report
 
-The setup script, where it is wired in each agent, whether the kit loads in a fresh session, the proof for each surface and where the rest is verified, the link to the test pull request, the time to a passing check, and the next steps: send non-engineers [the browser guide](https://github.com/tsnAnh/team-kit/blob/main/docs/how-to/use-the-kit-from-the-browser.md), and run `trust-audit` to see how many agents the repository can take in parallel.
+The setup script, where it is wired in each agent, whether the kit loads in a fresh session of each (and the kit commit Codex links), the proof for each surface and where the rest is verified, the link to the test pull request, the time to a passing check, and the next steps: send non-engineers [the browser guide](https://github.com/tsnAnh/team-kit/blob/main/docs/how-to/use-the-kit-from-the-browser.md), and run `trust-audit` to see how many agents the repository can take in parallel.

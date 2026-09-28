@@ -2,7 +2,7 @@
 
 Three things the kit does for you: tells you what is happening in the codebase in plain words, measures how far the team can trust agents, and turns the team's review feedback into checks that enforce themselves.
 
-Nothing to install: everything below works from claude.ai/code or the Claude app on your phone ([how](../how-to/use-the-kit-from-the-browser.md)). You can also [install the kit](../how-to/install.md) on your own computer. The examples below are for Claude Code. In Codex, start with `$` instead of `/`; in Pi, with `/skill:`.
+Nothing to install: everything below works from claude.ai/code, chatgpt.com/codex, or either app on your phone ([how](../how-to/use-the-kit-from-the-browser.md)). You can also [install the kit](../how-to/install.md) on your own computer. The examples below are for Claude Code. In Codex, start with `$` instead of `/`; in Pi, with `/skill:`.
 
 ## Know what shipped and why
 

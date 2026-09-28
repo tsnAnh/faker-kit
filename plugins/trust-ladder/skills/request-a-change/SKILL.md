@@ -48,6 +48,8 @@ Title it in plain words, for example "Checkout button says 'Place order' in ever
 
 Request review from the code owners. Add the label `requested-change` if the repository has it.
 
+In Codex cloud you cannot push or open the pull request yourself. End the task with the title and these sections as your final message, with the screenshots attached to the task, and tell the person: "Press the button to open the pull request; an engineer is asked to review it automatically." If the task came from a GitHub issue, Codex posts its result there.
+
 ## 6. Never merge
 
 Do not merge, approve, or push to the default branch, even when checks are green. An engineer reviews and merges.
