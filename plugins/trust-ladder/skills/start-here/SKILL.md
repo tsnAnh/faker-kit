@@ -1,0 +1,51 @@
+---
+name: start-here
+description: A plain-English front door to the team kit for anyone, including designers, marketers, product people, and founders who do not know the skill names. Asks what the person wants to do, picks the right skill or playbook, and explains each step without jargon. Use for /start-here, "what can you do", "help me change something in the app", "how do I use this", or when someone new to the kit asks for help.
+---
+
+# Start here
+
+The person may not be an engineer. Speak plainly: short sentences, no internal names unless they ask, and show results as screenshots and plain summaries rather than code. Never ask them something you can find out by looking at the repository.
+
+## 1. Ask what they want
+
+Ask one question with these choices, using your agent's question tool (AskUserQuestion in Claude Code, `ask_user` in Pi, or a numbered list in Codex):
+
+1. **Change something in the app**: copy, a layout, a small feature, a setting.
+2. **Something is broken**: report a bug, or fix one.
+3. **Try a few design options** and pick one.
+4. **Understand how something works**, or why it is built that way.
+5. **See what shipped** recently.
+6. **Write or polish text**: release notes, help docs, announcement copy.
+7. **Learn a skill**, such as reading a pull request or writing good prompts.
+8. **Set this repository up for agents** (usually an engineer).
+
+If their first message already says which one, skip the question.
+
+## 2. Route it
+
+| Choice | Do this |
+|---|---|
+| 1. Change something | The `request-a-change` skill. |
+| 2. Something is broken | Engineers: `/poteto-mode` with the Bug fix playbook. Everyone else: `request-a-change`, framed as a bug. It restates the problem, reproduces it, and opens a fix for an engineer to review. |
+| 3. Design options | `/poteto-mode` with the Prototype playbook: two or three variants behind a switch, a screenshot of each from the verification skill, and a side-by-side comparison. For "make it match this design", the Visual parity playbook. |
+| 4. How or why | `/teach`, which runs `/how` and `/why` and explains with diagrams. Follow with `/bro` if the answer is still too technical. |
+| 5. What shipped | `/what-did-i-get-done` for one person, `/weekly-review` for the team. |
+| 6. Write or polish text | `/technical-writing` for documents, then `/unslop` for tone. For text inside the app, use `request-a-change` so every language gets updated. |
+| 7. Learn a skill | `create-learning-path` from the teaching plugin. |
+| 8. Set up the repository | `setup-team-kit`. |
+
+Before routing to 1, 2, or 3, check whether the repository has a verification skill (`verify-*` under `.cursor/skills`, `.claude/skills`, or `.agents/skills`). Without one, an agent cannot show proof on screen. Say so plainly, suggest that an engineer runs `/create-verification-skill`, and offer to continue with test results as the only proof.
+
+## 3. Say what will happen
+
+Before starting, tell the person in two or three sentences what you are about to do, what they will get at the end (usually a pull request link with screenshots), and who reviews it. Nothing they ask for goes live without an engineer's review.
+
+## 4. Finish in plain words
+
+End with:
+
+- What changed or what you found, in one or two sentences.
+- The evidence: screenshots, a short video, or test results.
+- The link, if there is one.
+- What happens next and whether anything waits on them.

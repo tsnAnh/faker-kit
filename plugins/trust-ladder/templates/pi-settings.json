@@ -1,0 +1,7 @@
+{
+  "packages": [
+    {
+      "source": "git:github.com/tsnAnh/skills@<commit sha of the kit release the team uses>"
+    }
+  ]
+}
