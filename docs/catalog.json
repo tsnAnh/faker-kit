@@ -11,7 +11,7 @@
   },
   "plugins": {
     "trust-ladder": "This kit's own plugin: the ladder, lint packs, templates, the compat layer, and the skills for non-engineers.",
-    "pstack": "The plugin the talk and both posts are about. Vendored in full, including the principles, playbooks, agents, and the benny automation pack.",
+    "pstack": "The plugin the talk and both posts are about. Vendored with the principles, playbooks, agents, and the benny automation pack. `make-bot-ui` is left out: it builds pages for the upstream editor's Grok Bot.",
     "team-workflows": "pstack routes to its `control-ui`, `control-cli`, and `deslop`; the talk's CI and review workflow lives here.",
     "thermos": "The review panel team-workflows's `thermo-nuclear-code-quality-review` belongs to.",
     "continual-learning": "Turns transcripts into AGENTS.md updates: the rules layer learning on its own. Its cadence hook runs in Claude Code and Codex.",
@@ -120,8 +120,7 @@
 
     "trust-ladder/setup-cloud-agents": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-cloud-agents", "mentioned": [] },
     "trust-ladder/setup-routines": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-routines run the gardener and the verification-skill upkeep every night", "mentioned": [] },
-    "pstack/swarm": { "layer": "scale", "audience": ["engineer"], "prompt": "take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win", "mentioned": ["pt1"] },
-    "pstack/make-bot-ui": { "layer": "scale", "audience": ["engineer"], "prompt": "/make-bot-ui a dashboard whose button asks the routine to reproduce the latest report", "mentioned": [] }
+    "pstack/swarm": { "layer": "scale", "audience": ["engineer"], "prompt": "take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win", "mentioned": ["pt1"] }
   },
   "dormant": {
     "pstack/automations/benny/skills/setup-benny": { "layer": "scale", "prompt": "point your agent at plugins/pstack/automations/benny/FOR_AGENTS.md", "mentioned": [] },

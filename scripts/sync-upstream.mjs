@@ -151,8 +151,9 @@ function agentHooks(plugin, upstreamHooksBuf) {
   return Buffer.from(`${JSON.stringify({ hooks }, null, 2)}\n`, "utf8");
 }
 
-function transform(upstreamDir, pluginNames, { rules, allowed, exceptions }) {
+function transform(upstreamDir, pluginNames, { rules, allowed, exceptions, omit }, manifestDir) {
   const outputs = new Map();
+  const skipped = [];
   const counts = new Map(rules.map((r) => [r.id, 0]));
   const changes = new Map(rules.map((r) => [r.id, []]));
   const tokenProblems = [];
@@ -162,6 +163,11 @@ function transform(upstreamDir, pluginNames, { rules, allowed, exceptions }) {
     if (!fs.existsSync(pluginDir)) fail(`upstream has no plugin directory "${plugin}"`);
     for (const rel of listFiles(pluginDir)) {
       const upstreamPath = `${plugin}/${rel}`;
+      // Omitted files take no rules, except the manifest the generated one is built from.
+      if (rel !== `${manifestDir}/plugin.json` && omit.some((re) => re.test(upstreamPath))) {
+        skipped.push(upstreamPath);
+        continue;
+      }
       const buf = fs.readFileSync(path.join(pluginDir, rel));
       if (!isText(upstreamPath, buf)) {
         outputs.set(upstreamPath, buf);
@@ -195,7 +201,7 @@ function transform(upstreamDir, pluginNames, { rules, allowed, exceptions }) {
   const countProblems = rules
     .filter((r) => counts.get(r.id) !== r.count)
     .map((r) => `rule "${r.id}" expected ${r.count} replacement(s), made ${counts.get(r.id)}`);
-  return { outputs, counts, changes, problems: [...countProblems, ...tokenProblems] };
+  return { outputs, skipped, counts, changes, problems: [...countProblems, ...tokenProblems] };
 }
 
 function claudeManifest(upstreamManifestBuf, hooksPath, { pathRenames, forbidden, authorFallback }) {
@@ -232,11 +238,11 @@ function forbiddenProblems(tree, sources, forbidden) {
 }
 
 function buildTree(upstreamDir, pluginNames, rules, manifestDir) {
-  const result = transform(upstreamDir, pluginNames, rules);
+  const result = transform(upstreamDir, pluginNames, rules, manifestDir);
   const tree = new Map();
   const sources = new Map();
   const renamedPaths = [];
-  const omitted = [];
+  const omitted = [...result.skipped];
   const generated = [];
   for (const [upstreamPath, buf] of result.outputs) {
     if (rules.omit.some((re) => re.test(upstreamPath))) {

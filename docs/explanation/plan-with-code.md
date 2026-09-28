@@ -1,6 +1,6 @@
 # Plan with code
 
-This page follows Pt. 2 of Lauren Tan's "Complete Guide to pstack": once verification works, the next question is how to decide what to build.
+Once verification works, the next question is how to decide what to build.
 
 ## Two reasons agents build the wrong thing
 
@@ -17,7 +17,7 @@ pstack's research skills gather that context:
 
 - `/how` traces how a subsystem works at runtime, sending explorers in parallel when it spans many directories or services.
 - `/why` looks for the reasons behind the code in its history: commits, pull requests, issues, and any other sources the agent is connected to. Code shows what happens; it rarely says why.
-- `/teach` runs both and explains the result so a person understands it. Pt. 2 notes that the same research makes the next agent's work better too.
+- `/teach` runs both and explains the result so a person understands it. The same research makes the next agent's work better too.
 - `/recall` treats past sessions as context: what you did yesterday, what was tried, what failed.
 
 ## Prototypes are planning with code
@@ -28,7 +28,7 @@ The same idea runs through `/faker-mode`: when a question can be answered by run
 
 ## Competing designs
 
-`/architect` sketches the shape of a change (types, signatures, module boundaries) before code locks it in, using several independent design runners and throwaway prototypes to settle disagreements. The point, in Pt. 2's words, is a self-contained loop where the agent synthesizes competing designs into one and is not afraid to throw its own away. Upstream spreads the runners across model families. In this kit every runner is a separate run on your own agent, since each teammate has one; see [Choose models](../how-to/models.md).
+`/architect` sketches the shape of a change (types, signatures, module boundaries) before code locks it in, using several independent design runners and throwaway prototypes to settle disagreements. The point is a self-contained loop where the agent synthesizes competing designs into one and is not afraid to throw its own away. Upstream spreads the runners across model families. In this kit every runner is a separate run on your own agent, since each teammate has one; see [Choose models](../how-to/models.md).
 
 ## Plans built around proof
 

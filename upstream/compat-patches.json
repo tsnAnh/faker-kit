@@ -9,13 +9,6 @@
       "count": 1
     },
     {
-      "id": "pi-codex-invocable-name-make-bot-ui",
-      "files": ["pstack/skills/make-bot-ui/SKILL.md"],
-      "from": "\nname: Make Bot UI\n",
-      "to": "\nname: make-bot-ui\n",
-      "count": 1
-    },
-    {
       "id": "pi-yaml-quote-description-check-agent-compatibility",
       "files": ["agent-compatibility/skills/check-agent-compatibility/SKILL.md"],
       "from": "\ndescription: Run the full repository compatibility pass: scanner score, startup path, validation loop, and docs reliability.\n",

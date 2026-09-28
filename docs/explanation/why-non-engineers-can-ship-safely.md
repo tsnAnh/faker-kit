@@ -1,6 +1,6 @@
 # Why non-engineers can ship safely
 
-Lauren Tan's talk makes the point directly: not every contributor to a codebase is an engineer anymore. Designers, product managers, and CEOs are shipping features. The codebase has to be set up so that agents piloted by busy people with little context still do a good job by default.
+Not every contributor to a codebase is an engineer anymore. Designers, product managers, and CEOs are shipping features. The codebase has to be set up so that agents piloted by busy people with little context still do a good job by default.
 
 This page explains why that is safe with the kit, and where the limits are.
 

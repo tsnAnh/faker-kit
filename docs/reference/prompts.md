@@ -1,6 +1,6 @@
 # Prompts
 
-Prompts to copy, by role. Many are adapted from Lauren Tan's talk and pstack guide posts. They are written for Claude Code; in Codex, start a skill with `$` instead of `/`, and in Pi with `/skill:`.
+Prompts to copy, by role. They are written for Claude Code; in Codex, start a skill with `$` instead of `/`, and in Pi with `/skill:`.
 
 The pattern behind all of them: say what you want and how you will know it is done. You rarely need to name a playbook or list skills.
 

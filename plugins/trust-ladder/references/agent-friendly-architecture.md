@@ -2,8 +2,6 @@
 
 A codebase that agents extend well is locked down enough that the easy path is the right path. It may feel strict to humans. It lets an agent with little context, driven by a designer or a CEO, make a correct change by copying what is already there.
 
-These principles come from the Grok Bot client framework ("Dune") described in Lauren Tan's talk, generalized to other stacks.
-
 ## Principles
 
 1. **One paved path per concern.** Networking, persistence, navigation, date formatting, feature flags, logging: each has exactly one blessed API. Delete the alternatives and ban them with a lint rule whose message names the blessed API. Use the `paved-path` skill.

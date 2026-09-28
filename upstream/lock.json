@@ -4,7 +4,7 @@
   "files": {
     "plugins/pstack/.gitignore": "8ffe9de56bd30c1a95cd945262d6e3ac355ada4111551dde41f67851b9f1fc55",
     "plugins/pstack/LICENSE": "bc957ca6bee02792566a1a028d105e02e247c6e77cf057061674273da77b200e",
-    "plugins/pstack/README.md": "bcbc0908f172da526387ba9cc53dd2418ae4d8f2786d05f67f2637ab656e112f",
+    "plugins/pstack/README.md": "c4e50fe3ca8aec39ceebab8aba7fb1471ac9487bfe5391466926836fc1f41b03",
     "plugins/pstack/agents/comment-sicko.md": "c0fd0383008da45fc78cfac17b9007d62c42f87ad1c8d5c2fb658b1fd01f7c82",
     "plugins/pstack/agents/faker-agent.md": "ba1e8acec8dc620ce1ac2b8650a16ed02739a0b788462e0fa54f4eee015b4280",
     "plugins/pstack/assets/logo.png": "672f6791589ef758b0ced2c4c477913fa2758623c438e265639a0d539ce90695",
@@ -59,7 +59,6 @@
     "plugins/pstack/skills/interrogate/references/reviewer-prompt.md": "e0598e254792b56de39bb16b1e6db559b03a522fdc54b98f942d254090920ae6",
     "plugins/pstack/skills/interrogate/references/rubric.md": "a85aa801abbaf14434f00579440abc0d8e2723227ba8bf57de7cca8d6e7d2f25",
     "plugins/pstack/skills/maintain-verification-skill/SKILL.md": "014d7fd610fb4f74fe48da488037522176d3c460dfe69c16179903eccae3b5c4",
-    "plugins/pstack/skills/make-bot-ui/SKILL.md": "2d07c23cf4db3077decea287c63fea44222f06400952c04fe29feb4e62d312fb",
     "plugins/pstack/skills/no-comments/SKILL.md": "5c5b0882297d704c3a9720c52b7a793c68b013eaf717989f0945624efdfe2b05",
     "plugins/pstack/skills/faker-mode/SKILL.md": "1da5682894e5ac06ffd5d3f889822b282509dee7affea5d5d08a30a1ef468630",
     "plugins/pstack/skills/faker-mode/playbooks/authoring-a-skill.md": "1649353ba4dbcbd29d770df8b05d651534e365f2b7971a306d06be005196264c",

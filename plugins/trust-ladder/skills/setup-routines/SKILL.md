@@ -1,6 +1,6 @@
 ---
 name: setup-routines
-description: Put the team's upkeep on a schedule so it happens without anyone remembering. Sets up recurring agent jobs (daily verification-skill maintenance, daily gardener sweep, weekly review, reproducing new bug reports) as Claude Code routines or Codex scheduled tasks that run on a teammate's subscription, with no API keys; GitHub Actions with an API key is the alternative. Use for /setup-routines, "run this every day", "automatically reproduce bug reports", or anything an automation or Grok Bot routine did.
+description: Put the team's upkeep on a schedule so it happens without anyone remembering. Sets up recurring agent jobs (daily verification-skill maintenance, daily gardener sweep, weekly review, reproducing new bug reports) as Claude Code routines or Codex scheduled tasks that run on a teammate's subscription, with no API keys; GitHub Actions with an API key is the alternative. Use for /setup-routines, "run this every day", "automatically reproduce bug reports", or anything an automation did.
 ---
 
 # Set up routines
@@ -41,8 +41,6 @@ Each job runs in one place, on one teammate's plan. The repository needs no API-
 - **GitHub Actions with an API key**, the alternative when the jobs must not depend on one person's account, or when bug reports must be reproduced the moment the label is added. Copy the matching workflow from `templates/github/routines/` to `.github/workflows/`; each reads the same `.agents/routines/` file. Tell the user to add the `ANTHROPIC_API_KEY` repository secret. To bill one person's Pro or Max plan instead of the API, replace the `anthropic_api_key` line with `claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` and store the token from `claude setup-token` as that secret.
 
 Claude Code routines react to GitHub pull request and release events, not to issues, which is why bug reports are swept on a schedule.
-
-A routine with an API trigger replaces a Grok Bot webhook routine: its URL plus bearer token is what pstack's `make-bot-ui` calls the webhook URL and sender key. Keep the token on the server, never in the page.
 
 ## 4. Make every prompt self-contained
 
