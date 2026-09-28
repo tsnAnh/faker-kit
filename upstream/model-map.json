@@ -1,0 +1,453 @@
+{
+  "$comment": "Model-name rewrites applied to vendored upstream files, in order. Each rule is a literal find/replace scoped to upstream paths by glob. `count` is the exact number of replacements the rule must make across its files; a mismatch fails the sync so upstream changes are never rewritten blindly. Team models: the current coding agent (`inherit-parent`) for single roles; `claude-opus-5-5-max` + `gpt-6-sol-max` + the current agent for cross-family panels.",
+  "rules": [
+    {
+      "id": "pstack-panel-backticked",
+      "files": [
+        "pstack/skills/architect/SKILL.md",
+        "pstack/skills/arena/SKILL.md"
+      ],
+      "from": "`claude-opus-5-5-max`, `gpt-5.6-sol-max`, `grok-4.7-xhigh-fast`",
+      "to": "`claude-opus-5-5-max`, `gpt-6-sol-max`, `inherit-parent`",
+      "count": 3
+    },
+    {
+      "id": "pstack-panel-role-lines",
+      "files": [
+        "pstack/skills/setup-pstack/SKILL.md"
+      ],
+      "from": "claude-opus-5-5-max, gpt-5.6-sol-max, grok-4.7-xhigh-fast",
+      "to": "claude-opus-5-5-max, gpt-6-sol-max, inherit-parent",
+      "count": 4
+    },
+    {
+      "id": "pstack-model-families",
+      "files": [
+        "pstack/skills/arena/SKILL.md",
+        "pstack/skills/interrogate/SKILL.md"
+      ],
+      "from": "Families go by prefix: `claude-*`, `gpt-*`, and `grok-*`.",
+      "to": "Families go by prefix: `claude-*` and `gpt-*`.",
+      "count": 2
+    },
+    {
+      "id": "pstack-interrogate-reviewer-b",
+      "files": [
+        "pstack/skills/interrogate/SKILL.md"
+      ],
+      "from": "| Reviewer B | `gpt-5.6-sol-max` |",
+      "to": "| Reviewer B | `gpt-6-sol-max` |",
+      "count": 1
+    },
+    {
+      "id": "pstack-interrogate-reviewer-c",
+      "files": [
+        "pstack/skills/interrogate/SKILL.md"
+      ],
+      "from": "| Reviewer C | `grok-4.7-xhigh-fast` |",
+      "to": "| Reviewer C | `inherit-parent` |",
+      "count": 1
+    },
+    {
+      "id": "pstack-reflect-tooling",
+      "files": [
+        "pstack/skills/reflect/SKILL.md",
+        "pstack/skills/setup-pstack/SKILL.md"
+      ],
+      "from": "gpt-5.6-sol-max",
+      "to": "gpt-6-sol-max",
+      "count": 2
+    },
+    {
+      "id": "pstack-budget-example",
+      "files": [
+        "pstack/skills/setup-pstack/SKILL.md"
+      ],
+      "from": "`grok-4.7-xhigh-fast` into `grok-4.7-medium-fast`",
+      "to": "`gpt-6-sol-max` into `gpt-6-sol-medium`",
+      "count": 1
+    },
+    {
+      "id": "pstack-code-roles-current-agent",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "grok-4.7-xhigh-fast",
+      "to": "inherit-parent",
+      "count": 17
+    },
+    {
+      "id": "pstack-how-explainer-current-agent",
+      "files": [
+        "pstack/skills/how/SKILL.md"
+      ],
+      "from": "the `how explainer` line, default `claude-opus-5-5-max`",
+      "to": "the `how explainer` line, default `inherit-parent`",
+      "count": 2
+    },
+    {
+      "id": "pstack-why-synthesizer-current-agent",
+      "files": [
+        "pstack/skills/why/SKILL.md"
+      ],
+      "from": "the `why synthesizer` line, default `claude-opus-5-5-max`",
+      "to": "the `why synthesizer` line, default `inherit-parent`",
+      "count": 1
+    },
+    {
+      "id": "pstack-reflect-judgment-table-current-agent",
+      "files": [
+        "pstack/skills/reflect/SKILL.md"
+      ],
+      "from": "| `reflect judgment, divergent, synthesizer` | `claude-opus-5-5-max` |",
+      "to": "| `reflect judgment, divergent, synthesizer` | `inherit-parent` |",
+      "count": 2
+    },
+    {
+      "id": "pstack-reflect-synthesizer-current-agent",
+      "files": [
+        "pstack/skills/reflect/SKILL.md"
+      ],
+      "from": "(default `claude-opus-5-5-max`)",
+      "to": "(default `inherit-parent`)",
+      "count": 1
+    },
+    {
+      "id": "pstack-poteto-mode-prose-judgment-current-agent",
+      "files": [
+        "pstack/skills/poteto-mode/SKILL.md"
+      ],
+      "from": "`claude-opus-5-5-max` for prose and judgment",
+      "to": "`inherit-parent` for prose and judgment",
+      "count": 1
+    },
+    {
+      "id": "pstack-poteto-mode-hardest-current-agent",
+      "files": [
+        "pstack/skills/poteto-mode/SKILL.md"
+      ],
+      "from": "your strongest judgment model (`claude-opus-5-5-max`)",
+      "to": "your strongest judgment model (`inherit-parent`)",
+      "count": 1
+    },
+    {
+      "id": "pstack-setup-judgment-and-prose",
+      "files": [
+        "pstack/skills/setup-pstack/SKILL.md"
+      ],
+      "from": "judgment and prose: claude-opus-5-5-max",
+      "to": "judgment and prose: inherit-parent",
+      "count": 1
+    },
+    {
+      "id": "pstack-setup-hardest-tasks",
+      "files": [
+        "pstack/skills/setup-pstack/SKILL.md"
+      ],
+      "from": "hardest tasks: claude-opus-5-5-max",
+      "to": "hardest tasks: inherit-parent",
+      "count": 1
+    },
+    {
+      "id": "pstack-setup-how-explainer",
+      "files": [
+        "pstack/skills/setup-pstack/SKILL.md"
+      ],
+      "from": "how explainer: claude-opus-5-5-max",
+      "to": "how explainer: inherit-parent",
+      "count": 1
+    },
+    {
+      "id": "pstack-setup-why-synthesizer",
+      "files": [
+        "pstack/skills/setup-pstack/SKILL.md"
+      ],
+      "from": "why synthesizer: claude-opus-5-5-max",
+      "to": "why synthesizer: inherit-parent",
+      "count": 1
+    },
+    {
+      "id": "pstack-setup-reflect-judgment",
+      "files": [
+        "pstack/skills/setup-pstack/SKILL.md"
+      ],
+      "from": "reflect judgment, divergent, synthesizer: claude-opus-5-5-max",
+      "to": "reflect judgment, divergent, synthesizer: inherit-parent",
+      "count": 1
+    },
+    {
+      "id": "pstack-readme-model-split",
+      "files": [
+        "pstack/README.md"
+      ],
+      "from": "code delegates (feature, refactoring, bug fix, perf, hillclimb) go to grok, while the hardest changes, prose, and judgment go to opus 5.5. the default panel is opus 5.5 / sol / grok.",
+      "to": "code delegates (feature, refactoring, bug fix, perf, hillclimb), the hardest changes, prose, and judgment all go to your current coding agent's model. the default panel is opus 5.5 / gpt-6 sol / your current coding agent.",
+      "count": 1
+    },
+    {
+      "id": "agents-fast-model",
+      "files": [
+        "cursor-team-kit/agents/*.md",
+        "agent-compatibility/agents/*.md"
+      ],
+      "from": "\nmodel: fast\n",
+      "to": "\nmodel: opus\n",
+      "count": 5
+    },
+    {
+      "id": "advisor-subagent-model",
+      "files": [
+        "advisor/agents/advisor-subagent.md"
+      ],
+      "from": "model: grok-4.6[effort=xhigh]",
+      "to": "model: opus",
+      "count": 1
+    },
+    {
+      "id": "advisor-default-latest-slug-fast",
+      "files": [
+        "advisor/skills/advisor/SKILL.md"
+      ],
+      "from": "`/advisor cursor-grok-4.6-xhigh-fast`, `/advisor composer-2.5`",
+      "to": "`/advisor gpt-6-sol-high`, `/advisor claude-opus-5-5-max`",
+      "count": 1
+    },
+    {
+      "id": "advisor-default-slug",
+      "files": [
+        "advisor/**"
+      ],
+      "from": "cursor-grok-4.6-xhigh",
+      "to": "gpt-6-sol-max",
+      "count": 4
+    },
+    {
+      "id": "advisor-readme-slug-arg",
+      "files": [
+        "advisor/README.md"
+      ],
+      "from": "`grok-4.6[effort=xhigh]`",
+      "to": "`gpt-6-sol-max`",
+      "count": 1
+    },
+    {
+      "id": "advisor-readme-default-line",
+      "files": [
+        "advisor/README.md"
+      ],
+      "from": "The default advisor is the latest Grok (Grok 4.6) at its highest reasoning effort.",
+      "to": "The default advisor is the latest GPT-6 Sol at its highest reasoning effort.",
+      "count": 1
+    },
+    {
+      "id": "advisor-readme-usage-default",
+      "files": [
+        "advisor/README.md"
+      ],
+      "from": "(Grok 4.6, xhigh effort)",
+      "to": "(GPT-6 Sol, max effort)",
+      "count": 1
+    },
+    {
+      "id": "advisor-readme-usage-other",
+      "files": [
+        "advisor/README.md"
+      ],
+      "from": "/advisor composer-2.5        turn on with a different model",
+      "to": "/advisor claude-opus-5-5-max turn on with a different model",
+      "count": 1
+    },
+    {
+      "id": "advisor-latest-model",
+      "files": [
+        "advisor/README.md",
+        "advisor/skills/advisor/SKILL.md"
+      ],
+      "from": "the latest Grok model at its highest reasoning effort",
+      "to": "the latest GPT-6 Sol model at its highest reasoning effort",
+      "count": 2
+    },
+    {
+      "id": "advisor-skill-default-row",
+      "files": [
+        "advisor/skills/advisor/SKILL.md"
+      ],
+      "from": "the default advisor: the latest Grok at its highest reasoning effort.",
+      "to": "the default advisor: the latest GPT-6 Sol at its highest reasoning effort.",
+      "count": 1
+    },
+    {
+      "id": "advisor-skill-newer",
+      "files": [
+        "advisor/skills/advisor/SKILL.md"
+      ],
+      "from": "If a newer Grok or a higher effort tier",
+      "to": "If a newer GPT-6 Sol or a higher effort tier",
+      "count": 1
+    },
+    {
+      "id": "advisor-family-names",
+      "files": [
+        "advisor/README.md",
+        "advisor/skills/advisor/SKILL.md"
+      ],
+      "from": "`grok fast`",
+      "to": "`gpt sol`",
+      "count": 2
+    },
+    {
+      "id": "advisor-family-composer",
+      "files": [
+        "advisor/README.md",
+        "advisor/skills/advisor/SKILL.md"
+      ],
+      "from": "`composer`",
+      "to": "`claude opus`",
+      "count": 2
+    },
+    {
+      "id": "advisor-readme-cost-line",
+      "files": [
+        "advisor/README.md"
+      ],
+      "from": "The default advisor, Grok 4.6,",
+      "to": "The default advisor, GPT-6 Sol,",
+      "count": 1
+    },
+    {
+      "id": "advisor-changelog",
+      "files": [
+        "advisor/CHANGELOG.md"
+      ],
+      "from": "pinned to Grok 4.6 at xhigh effort",
+      "to": "pinned to GPT-6 Sol at max effort",
+      "count": 1
+    },
+    {
+      "id": "advisor-manifest-keyword",
+      "files": [
+        "advisor/.cursor-plugin/plugin.json"
+      ],
+      "from": "\"grok\"",
+      "to": "\"gpt-6-sol\"",
+      "count": 1
+    },
+    {
+      "id": "orchestrate-opus-thinking",
+      "files": [
+        "orchestrate/**"
+      ],
+      "from": "claude-opus-4-8-thinking-xhigh",
+      "to": "claude-opus-5-5-thinking-xhigh",
+      "count": 5
+    },
+    {
+      "id": "orchestrate-opus",
+      "files": [
+        "orchestrate/**"
+      ],
+      "from": "claude-opus-4-8",
+      "to": "claude-opus-5-5",
+      "count": 9
+    },
+    {
+      "id": "orchestrate-readme-opus",
+      "files": [
+        "orchestrate/README.md"
+      ],
+      "from": "claude-opus-4-7",
+      "to": "claude-opus-5-5",
+      "count": 1
+    },
+    {
+      "id": "orchestrate-codex-slug",
+      "files": [
+        "orchestrate/**"
+      ],
+      "from": "gpt-5.3-codex",
+      "to": "gpt-6-sol",
+      "count": 5
+    },
+    {
+      "id": "orchestrate-codex-summary",
+      "files": [
+        "orchestrate/skills/orchestrate/scripts/models.ts"
+      ],
+      "from": "Codex 5.3 tuned for",
+      "to": "GPT-6 Sol tuned for",
+      "count": 1
+    },
+    {
+      "id": "orchestrate-gpt-5-5",
+      "files": [
+        "orchestrate/**"
+      ],
+      "from": "gpt-5.5",
+      "to": "gpt-6-sol",
+      "count": 20
+    },
+    {
+      "id": "orchestrate-gpt-5-5-prose",
+      "files": [
+        "orchestrate/skills/orchestrate/scripts/models.ts"
+      ],
+      "from": "Maximum-reasoning GPT-5.5;",
+      "to": "Maximum-reasoning GPT-6 Sol;",
+      "count": 1
+    },
+    {
+      "id": "cursor-sdk-and-orchestrate-composer",
+      "files": [
+        "cursor-sdk/**",
+        "orchestrate/**"
+      ],
+      "from": "composer-2",
+      "to": "gpt-6-sol",
+      "count": 25
+    }
+  ],
+  "allowedModelTokens": [
+    "claude-opus-5-5-max",
+    "claude-opus-5-5-medium",
+    "claude-opus-5-5",
+    "claude-opus-5-5-thinking-xhigh",
+    "gpt-6-sol",
+    "gpt-6-sol-max",
+    "gpt-6-sol-high",
+    "gpt-6-sol-medium",
+    "gpt-6-sol-fast",
+    "gpt-6-sol-high-fast",
+    "gpt-xhigh",
+    "claude-",
+    "gpt-",
+    "gpt",
+    "gpt-6"
+  ],
+  "tokenExceptions": [
+    {
+      "file": "pstack/skills/reflect/references/synthesizer.md",
+      "token": "gpt-4",
+      "reason": "example of a renamed code identifier, not a model choice"
+    },
+    {
+      "file": "pstack/skills/reflect/references/synthesizer.md",
+      "token": "gpt-4o",
+      "reason": "example of a renamed code identifier, not a model choice"
+    },
+    {
+      "file": "pstack/skills/make-bot-ui/SKILL.md",
+      "token": "Grok",
+      "reason": "Grok Bot is the product the skill targets, not a model choice"
+    },
+    {
+      "file": "pstack/README.md",
+      "token": "Grok",
+      "reason": "Grok Bot is a product name"
+    },
+    {
+      "file": "cursor-sdk/skills/cursor-sdk/references/runtime-choice.md",
+      "token": "composer",
+      "reason": "\"background composer\" is Cursor's name for the agent runtime behind bc- IDs, not a model choice"
+    }
+  ]
+}

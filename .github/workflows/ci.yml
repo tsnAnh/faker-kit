@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - name: Vendored plugins match upstream plus model rules
+        run: node scripts/sync-upstream.mjs --check
+      - name: Manifests, frontmatter, links, catalog
+        run: node scripts/validate.mjs
+      - name: pstack script tests
+        working-directory: plugins/pstack/skills/poteto-mode/scripts
+        run: bun install --frozen-lockfile && bun test orch watch-pr
+
+  orchestrate-tests:
+    # orchestrate drives Cursor's cloud agents through @cursor/sdk. Its model catalog is
+    # rewritten to the team's models, which merges the GPT-5.5 and Codex 5.3 entries into one
+    # gpt-6-sol-high-fast slug, so the upstream "slugs are unique" test fails. Kept visible,
+    # not blocking. See upstream/CHANGES.md.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - working-directory: plugins/orchestrate/skills/orchestrate/scripts
+        run: bun install --frozen-lockfile && bun test

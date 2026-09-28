@@ -1,0 +1,34 @@
+{
+  "name": "trust-ladder",
+  "version": "0.1.0",
+  "description": "Route every agent correction to the strongest layer (codebase, lint/CI, rules and review bots, skills, style guide), set up repos for agents, and give everyone on the team a plain-English front door. Installs the vendored Cursor team plugins as dependencies.",
+  "author": {
+    "name": "tsnAnh"
+  },
+  "homepage": "https://github.com/tsnAnh/skills",
+  "repository": "https://github.com/tsnAnh/skills",
+  "license": "MIT",
+  "keywords": [
+    "trust-ladder",
+    "agents",
+    "verification",
+    "lint",
+    "code-review",
+    "style-guide",
+    "pstack",
+    "codex",
+    "pi"
+  ],
+  "dependencies": [
+    "pstack",
+    "cursor-team-kit",
+    "thermos",
+    "orchestrate",
+    "cursor-sdk",
+    "continual-learning",
+    "cli-for-agent",
+    "agent-compatibility",
+    "advisor",
+    "teaching"
+  ]
+}
