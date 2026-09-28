@@ -7,14 +7,14 @@ Install it once, in the one agent you use. The kit is the same in all three; onl
 In Claude Code:
 
 ```text
-/plugin marketplace add tsnAnh/skills
+/plugin marketplace add tsnAnh/team-kit
 /plugin install trust-ladder@team-kit
 ```
 
 Or from a terminal:
 
 ```bash
-claude plugin marketplace add tsnAnh/skills
+claude plugin marketplace add tsnAnh/team-kit
 claude plugin install trust-ladder@team-kit
 ```
 
@@ -29,7 +29,7 @@ To update: `claude plugin marketplace update team-kit`, then restart Claude Code
 Codex reads the same marketplace file as Claude Code but does not install dependencies, so add each plugin:
 
 ```bash
-codex plugin marketplace add tsnAnh/skills
+codex plugin marketplace add tsnAnh/team-kit
 for p in trust-ladder pstack team-workflows thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do
   codex plugin add "$p@team-kit"
 done
@@ -46,10 +46,10 @@ To update: `codex plugin marketplace upgrade`, then restart Codex.
 The repository is also a Pi package:
 
 ```bash
-pi install git:github.com/tsnAnh/skills
+pi install git:github.com/tsnAnh/team-kit
 ```
 
-Pin a commit so everyone runs the same version, for example `pi install git:github.com/tsnAnh/skills@<commit sha>`. `pi list` shows the package. Skills are called as `/skill:start-here`, `/skill:faker-mode`.
+Pin a commit so everyone runs the same version, for example `pi install git:github.com/tsnAnh/team-kit@<commit sha>`. `pi list` shows the package. Skills are called as `/skill:start-here`, `/skill:faker-mode`.
 
 The kit's Pi extension adds what the Claude Code and Codex hooks do: it tells the agent how to read the upstream terms in the skills, and it keeps `/faker-mode` switched on across turns until you say "exit faker mode".
 

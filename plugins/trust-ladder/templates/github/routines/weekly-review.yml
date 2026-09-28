@@ -19,7 +19,7 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          plugin_marketplaces: https://github.com/tsnAnh/skills.git
+          plugin_marketplaces: https://github.com/tsnAnh/team-kit.git
           plugins: |
             trust-ladder@team-kit
           prompt: |
