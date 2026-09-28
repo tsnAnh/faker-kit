@@ -10,6 +10,7 @@
 | ktlint, with every wildcard import banned | Formatting churn and `import x.*` that hides dependencies. |
 | Android Lint as errors (`HardcodedText`, `MissingTranslation`, ...) | Hard-coded UI strings and untranslated locales. |
 | Kotlin `allWarningsAsErrors` | Deprecations and unchecked casts piling up as warnings nobody reads. |
+| detekt `ElseCaseInsteadOfExhaustiveWhen` | An `else` branch over a sealed type, which hides every variant added later. |
 
 Layer boundaries, such as UI not importing `com.example.data`, belong in the agnostic pack's `.agents/import-boundaries.json`, which reads Kotlin imports. Konsist architecture tests are an alternative when the team prefers tests in Kotlin.
 

@@ -14,7 +14,7 @@ run_detekt() {
 if run_detekt "$pack/fixtures/bad" > "$work/detekt.log" 2>&1; then
   echo "kotlin-android pack: detekt passed the bad fixture" >&2; exit 1
 fi
-for rule in UnsafeCallOnNullableType ForbiddenComment ForbiddenImport WildcardImport TooGenericExceptionCaught; do
+for rule in UnsafeCallOnNullableType ElseCaseInsteadOfExhaustiveWhen ForbiddenComment ForbiddenImport WildcardImport TooGenericExceptionCaught; do
   grep -q "$rule" "$work/detekt.log" || { echo "kotlin-android pack: detekt did not report $rule" >&2; cat "$work/detekt.log" >&2; exit 1; }
 done
 cp "$pack/files/.editorconfig" "$work/"

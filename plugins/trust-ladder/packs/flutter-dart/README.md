@@ -11,6 +11,7 @@
 | `always_declare_return_types`, `prefer_final_locals`, `require_trailing_commas` | Code whose types and diffs are harder to read. |
 | `import-boundaries.mjs` (agnostic pack) with `examples/import-boundaries.json` | UI importing a feature's data layer, or features importing each other. |
 | `locale-keys.mjs` (agnostic pack) with `examples/locales.json` | Adding a string to one ARB file only, or pasting English into the other locales. |
+| `no_default_cases` | A `default` branch over an enum, which hides every value added later. |
 
 ## Install
 

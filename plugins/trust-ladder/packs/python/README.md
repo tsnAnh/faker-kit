@@ -11,6 +11,8 @@
 | `TID252` (parents) | `from ..x import y` chains that hide which package owns a module. |
 | import-linter `layers` | Lower layers importing higher ones, such as domain code importing UI. |
 | `ruff format` | Style churn in diffs. |
+| mypy `exhaustive-match` | A `match` over an enum that silently ignores a new member. |
+| `PLC0415` | Imports hidden inside functions, which hide a module's real dependencies. |
 
 ## Install
 

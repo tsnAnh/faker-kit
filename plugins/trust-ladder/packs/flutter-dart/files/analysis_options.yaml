@@ -33,6 +33,7 @@ linter:
     - cancel_subscriptions
     - close_sinks
     - directives_ordering
+    - no_default_cases
     - discarded_futures
     - only_throw_errors
     - prefer_final_fields

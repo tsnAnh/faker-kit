@@ -8,6 +8,7 @@ select = [
   "ERA",
   "PGH",
   "TID",
+  "PLC0415",
 ]
 ignore = ["TRY003", "S101"]
 

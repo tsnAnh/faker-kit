@@ -24,8 +24,9 @@ expect_fail() {
 
 prepare bad
 cd "$work/bad"
-for code in ANN201 BLE001 T201 ERA001 PGH003 TID251; do expect_fail "ruff" "$code" ruff check .; done
+for code in ANN201 BLE001 T201 ERA001 PGH003 TID251 PLC0415; do expect_fail "ruff" "$code" ruff check .; done
 expect_fail "mypy" "no-untyped-def" mypy app
+expect_fail "mypy" "exhaustive-match" mypy app
 expect_fail "import-linter" "app.domain.order -> app.ui.format" "$lint_imports"
 
 prepare good

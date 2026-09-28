@@ -15,7 +15,7 @@ prepare bad
 if (cd "$work/bad" && "$dart" analyze --fatal-infos > "$work/bad.log" 2>&1); then
   echo "flutter-dart pack: the analyzer passed the bad fixture" >&2; exit 1
 fi
-for code in todo always_use_package_imports avoid_dynamic_calls avoid_print avoid_catches_without_on_clauses always_declare_return_types discarded_futures; do
+for code in todo always_use_package_imports avoid_dynamic_calls avoid_print avoid_catches_without_on_clauses always_declare_return_types discarded_futures no_default_cases; do
   grep -q " - $code$" "$work/bad.log" || { echo "flutter-dart pack: expected $code on the bad fixture" >&2; cat "$work/bad.log" >&2; exit 1; }
 done
 if grep -q "undefined_lint\|isn't a recognized lint" "$work/bad.log"; then

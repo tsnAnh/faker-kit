@@ -19,3 +19,13 @@ class CartScreen(private val repository: CartRepository?) {
 interface CartRepository {
     fun items(): List<String>
 }
+
+sealed interface Badge {
+    data object New : Badge
+    data object Sale : Badge
+}
+
+fun label(badge: Badge): String = when (badge) {
+    Badge.New -> "New"
+    else -> ""
+}

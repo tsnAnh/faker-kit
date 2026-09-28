@@ -6,6 +6,8 @@ potential-bugs:
     active: true
   UnsafeCast:
     active: true
+  ElseCaseInsteadOfExhaustiveWhen:
+    active: true
   LateinitUsage:
     active: true
     ignoreOnClassesPattern: '.*(Test|Activity|Fragment)$'
