@@ -39,6 +39,8 @@ Then type `/start-here` (Codex: `$start-here`, Pi: `/skill:start-here`). Details
 | In product or marketing | [Start here: product and marketing](docs/start/product-and-marketing.md) |
 | A founder or lead | [Start here: founders and leads](docs/start/founders-and-leads.md) |
 
+Designers, marketers, and founders need nothing installed once an engineer has run `/setup-cloud-agents`, in Claude Code on the web or Codex cloud: [use the kit from a browser or your phone](docs/how-to/use-the-kit-from-the-browser.md).
+
 All documentation: [docs/](docs/README.md).
 
 ## The trust ladder

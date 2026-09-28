@@ -4,8 +4,9 @@ You can change the product yourself: try layouts, fix spacing, match a mockup. Y
 
 ## Before you start
 
-- Install the kit once in your agent: [Install the kit](../how-to/install.md). If you have never used a coding agent, ask an engineer to sit with you for ten minutes.
+- You do not need to install anything. Open claude.ai/code or chatgpt.com/codex (or either phone app), pick the repository, and type `/start-here` (`$start-here` in Codex): [Use the kit from a browser or your phone](../how-to/use-the-kit-from-the-browser.md). If you would rather run the agent on your own computer, [install the kit](../how-to/install.md).
 - Check that the repository has a verification skill (ask an engineer, or type `/start-here`, which checks for you). The verification skill is what lets the agent open the app and take screenshots. Without it, you will only get test results, not pictures.
+- Mobile apps: a cloud machine cannot run an iPhone simulator. The agent tells you up front what you get instead, usually screenshots from automated screen tests or from the team's build system, or a test build on your phone.
 
 The examples below are for Claude Code. In Codex, start with `$` instead of `/`; in Pi, with `/skill:`.
 

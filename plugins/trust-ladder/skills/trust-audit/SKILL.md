@@ -25,13 +25,26 @@ Measure the environment, not the agents. Every score cites evidence you observed
 
 Also read `.agents/corrections.tsv` if it exists. Count corrections per layer and how many repeat the same rule. A growing share in layers 1 and 2 means the team is climbing.
 
-## 3. Pick the five highest-leverage fixes
+## 3. Check whether non-engineers can use it
+
+Not a layer; a yes or no for each, with evidence:
+
+- **No install.** A fresh cloud session boots with `scripts/cloud-setup.sh` and `/start-here` resolves in it, in each agent the team uses (in Codex cloud, `$start-here` through `scripts/install-kit-skills.sh`).
+- **Fast enough.** `check` passes in that session within ten minutes of its start.
+- **Pictures reach people.** The last few `request-a-change` pull requests (label `requested-change`) show before and after images on the page, or a preview link.
+- **Every surface has proof.** AGENTS.md has a `Cloud sessions` section naming, for each surface, how it is proven in the cloud or where else.
+- **A door they already use.** The request-a-change issue form, with a routine or Codex's GitHub integration picking it up.
+- **Safe to say yes.** Branch protection requires review from code owners and passing checks.
+
+Each "no" is a fix for step 4, done by `setup-cloud-agents` or `setup-routines`.
+
+## 4. Pick the five highest-leverage fixes
 
 Rank by how many future corrections a fix prevents, not by effort. Name the skill that does each fix: `setup-team-kit`, `setup-lint-pack`, `encode-lint-rule`, `correct`, `paved-path`, `gardener`, `setup-review-bots`, `/create-verification-skill`, `/maintain-verification-skill`, `setup-cloud-agents`, or `style-guide-from-reviews`.
 
 A missing or failing verification skill is always in the top two when the repository has a user-facing surface.
 
-## 4. Recommend a parallelism level
+## 5. Recommend a parallelism level
 
 | When | Safe parallelism |
 |---|---|
@@ -41,7 +54,7 @@ A missing or failing verification skill is always in the top two when the reposi
 
 The lowest layer sets the level. One weak layer means agents will produce work nobody can trust at volume.
 
-## 5. Record and report
+## 6. Record and report
 
 Append one tab-separated row to `.agents/trust-audit.tsv`, creating the header if needed:
 
@@ -55,4 +68,5 @@ Report:
 2. The agent-compatibility score.
 3. The five fixes, in order, each with the skill to run.
 4. The recommended parallelism level and the one layer holding it back.
-5. The change since the previous row in `.agents/trust-audit.tsv`, if there is one.
+5. Whether designers, marketers, and founders can use the repository from a browser today, and the first "no" to fix.
+6. The change since the previous row in `.agents/trust-audit.tsv`, if there is one.

@@ -31,6 +31,7 @@ The requester judges the outcome; the engineer judges the code. Each looks at wh
 - **It stops on sensitive areas.** Requests that touch money, permissions, personal data, or deleting things are handed to an engineer instead.
 - **It keeps every language in step.** Any user-facing text change updates every supported language with a real translation, and the agnostic pack's `locale-keys` check, when enabled, fails if one is missing.
 - **It works on a branch**, usually in a cloud session, so the requester needs no local setup and nothing on their machine can break.
+- **It shows its proof where the requester looks.** Screenshots go on the pull request page and into the conversation, not into a file on a machine nobody else can open. When the app cannot run in the cloud, it says so and names where the proof comes from.
 
 ## The environment does the rest
 
@@ -39,5 +40,6 @@ Everything on the [trust ladder](trust-ladder.md) makes these changes better, no
 ## Where the limits are
 
 - Without a verification skill, the agent can only show test results. `/start-here` and `/request-a-change` check for one and say so plainly. Build one first ([how](../how-to/build-a-verification-skill.md)).
+- Mobile apps need a second proof path in the cloud: screenshot tests, or a macOS CI job for iOS. `/setup-cloud-agents` sets it up.
 - Branch protection has to actually be on. The kit writes the checklist; someone with admin rights has to apply it.
 - Review load moves to engineers. Keep the first pull requests small, and review them quickly; fast feedback is what makes the habit stick.

@@ -29,3 +29,15 @@ Give agents a small command-line tool inside the skill, not paragraphs of instru
 ## The feature map
 
 Next to the CLI, keep `references/features/`: a `README.md` index and one file per user-facing feature, each with the sections `Sub-features`, `How to get to it (user POV)`, `Driving it with <cli>`, and `Gotchas`. It is the app's memory in a form agents can search: what exists, how a user reaches it, and how to prove it works. Keep it current with `/maintain-verification-skill`, ideally from a daily routine (`setup-routines`), and give the skill an owner the way you would any critical infrastructure.
+
+## Proof without a device
+
+Linux cloud sessions cannot start the iOS Simulator, and most lack the KVM an accelerated Android emulator needs. Give the verification skill a second proof mode for those sessions, and have `doctor` report which mode the current machine supports, so the agent says up front what it can show.
+
+| Surface | Proof a Linux container can take | Where on-device proof comes from |
+|---|---|---|
+| Android or KMP with Compose | JVM screenshot tests: Roborazzi (Robolectric) or Paparazzi (layoutlib). Record per screen state; compare in `check` | A KVM-enabled or macOS CI runner, or a device farm |
+| Flutter | `flutter test` with `matchesGoldenFile`, plus the web target driven by `control-ui` | As Android and iOS |
+| iOS | None | A GitHub Actions macOS runner running the snapshot tests and posting the images (`templates/github/ios-snapshots.yml`); Xcode Cloud or fastlane to TestFlight to put a build on a person's phone |
+
+Screenshot tests double as proof and as a regression check: once recorded, `check` fails when a screen changes without its images being updated. How the images reach the pull request: [evidence in pull requests](evidence-in-prs.md).

@@ -9,7 +9,7 @@ The outer loop is what keeps a codebase trustworthy while many people and agents
 
 ## 1. Pick the jobs
 
-Recommend these four and let the user drop any:
+Recommend these five and let the user drop any:
 
 | Job | Prompt file | When | What it does |
 |---|---|---|---|
@@ -17,10 +17,13 @@ Recommend these four and let the user drop any:
 | Gardener | `templates/routines/gardener.md` | Weekdays, overnight | `gardener` for the last 7 days: a rule per spreading smell, an issue per cleanup |
 | Weekly review | `templates/routines/weekly-review.md` | Friday | `/weekly-review` across every author (the skill defaults to the current git user), posted as an issue anyone on the team can read |
 | Reproduce bug reports | `templates/routines/reproduce-bugs.md` | Twice each weekday | Reproduce open `bug` issues with the verification skill, label them `reproduced` or `cannot-reproduce`, and open a fix PR when the cause is clear |
+| Build requested changes | `templates/routines/request-a-change.md` | Every few hours on weekdays | Pick up issues labeled `requested-change` from the issue form, restate each, and open a `request-a-change` PR with before and after images |
 
 Add `/continual-learning` weekly for Pi users, and for machines without `bun`. In Claude Code and Codex with `bun` installed, continual-learning's own hook already runs it every few hours of work.
 
 The pull request review routine belongs to `setup-review-bots`.
+
+For the requested-changes job, also copy `templates/github/ISSUE_TEMPLATE/request-a-change.yml` to `.github/ISSUE_TEMPLATE/` and create the labels `requested-change`, `in-progress`, `pr-opened`, and `needs-engineer`. The form lets designers, marketers, and founders ask for a change from GitHub without opening an agent at all. A Codex team can skip the sweep: with Codex's GitHub integration on, the requester (or a triager) assigns the issue to Codex, or comments `@codex use request-a-change for this issue`, and Codex works it in a cloud task and replies on the issue.
 
 ## 2. Commit the prompts
 
@@ -36,11 +39,11 @@ Each job runs in one place, on one teammate's plan. The repository needs no API-
   - only the connectors the job needs;
   - a schedule trigger a few minutes past the hour (runs set exactly on the hour can start late; the minimum interval is one hour).
 
-  Every run counts against that person's daily routine runs and plan usage, and its pull requests, issues, and comments appear under their GitHub name. Add up the runs a day (four jobs as above is at most five on a weekday, plus one per triggered pull request review) and check it against the remaining runs shown at claude.ai/code/routines.
+  Every run counts against that person's daily routine runs and plan usage, and its pull requests, issues, and comments appear under their GitHub name. Add up the runs a day (the four upkeep jobs as above are at most five runs on a weekday, the requested-changes sweep adds one per run, plus one per triggered pull request review) and check it against the remaining runs shown at claude.ai/code/routines.
 - **Codex scheduled tasks**, for a team without Claude Code. Create them in the Codex app with the same one-line prompt and schedule. They run on that teammate's computer, and only while it is on, so use a machine that stays on. At the time of writing, scheduled tasks on the web cannot target a repository environment.
-- **GitHub Actions with an API key**, the alternative when the jobs must not depend on one person's account, or when bug reports must be reproduced the moment the label is added. Copy the matching workflow from `templates/github/routines/` to `.github/workflows/`; each reads the same `.agents/routines/` file. Tell the user to add the `ANTHROPIC_API_KEY` repository secret. To bill one person's Pro or Max plan instead of the API, replace the `anthropic_api_key` line with `claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` and store the token from `claude setup-token` as that secret.
+- **GitHub Actions with an API key**, the alternative when the jobs must not depend on one person's account, or when bug reports and requested changes must be picked up the moment the label is added (`issue-reproduce.yml`, `issue-request-a-change.yml`). Copy the matching workflow from `templates/github/routines/` to `.github/workflows/`; each reads the same `.agents/routines/` file. Tell the user to add the `ANTHROPIC_API_KEY` repository secret. To bill one person's Pro or Max plan instead of the API, replace the `anthropic_api_key` line with `claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` and store the token from `claude setup-token` as that secret.
 
-Claude Code routines react to GitHub pull request and release events, not to issues, which is why bug reports are swept on a schedule.
+Claude Code routines react to GitHub pull request and release events, not to issues, which is why bug reports and requested changes are swept on a schedule.
 
 ## 4. Make every prompt self-contained
 

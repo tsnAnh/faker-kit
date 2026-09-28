@@ -2,7 +2,7 @@
 
 Three things the kit does for you: tells you what is happening in the codebase in plain words, measures how far the team can trust agents, and turns the team's review feedback into checks that enforce themselves.
 
-Install the kit once: [Install the kit](../how-to/install.md). The examples below are for Claude Code. In Codex, start with `$` instead of `/`; in Pi, with `/skill:`.
+Nothing to install: everything below works from claude.ai/code, chatgpt.com/codex, or either app on your phone ([how](../how-to/use-the-kit-from-the-browser.md)). You can also [install the kit](../how-to/install.md) on your own computer. The examples below are for Claude Code. In Codex, start with `$` instead of `/`; in Pi, with `/skill:`.
 
 ## Know what shipped and why
 
@@ -32,7 +32,7 @@ The rule of thumb:
 
 ## Let anyone on the team ship safely
 
-Designers, marketers, and you can change the product with `/request-a-change`. The safety comes from the gates, not from the person: every change is a pull request that passes the same checks, gets reviewed by Claude and Codex, and needs an engineer's approval. Turn those gates on with [the branch protection checklist](../../plugins/trust-ladder/templates/branch-protection.md). [Why non-engineers can ship safely](../explanation/why-non-engineers-can-ship-safely.md) explains the reasoning.
+Designers, marketers, and you can change the product with `/request-a-change`. The safety comes from the gates, not from the person: every change is a pull request that passes the same checks, gets reviewed by Claude and Codex, and needs an engineer's approval. Turn those gates on with [the branch protection checklist](../../plugins/trust-ladder/templates/branch-protection.md). Then have an engineer run `/setup-cloud-agents`, so the rest of the team can do all of this from a browser with nothing installed; `/trust-audit` tells you whether that works yet. [Why non-engineers can ship safely](../explanation/why-non-engineers-can-ship-safely.md) explains the reasoning.
 
 ## Turn review feedback into rules
 

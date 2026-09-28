@@ -20,19 +20,19 @@ Ask one question: "Is that right?" Offer to adjust. For a bug report, restate wh
 ## 2. Check the ground
 
 - Find the repository's verification skill (`verify-*`). Without one, say that you can only prove the change with tests, and suggest an engineer runs `/create-verification-skill`.
-- Read AGENTS.md for the check command, paved paths, and anything this change must not touch.
+- Read AGENTS.md for the check command, paved paths, and anything this change must not touch. In a cloud session (`CLAUDE_CODE_REMOTE` is `true`, or Codex cloud), read its `Cloud sessions` section too: it says which surfaces this machine can show and where the rest gets verified.
 - If the request touches money, permissions, personal data, or deleting things, say so and ask an engineer to take it instead. Stop there.
 
 ## 3. Build it on a branch
 
 1. Create a branch named `request/<short-name>`. Never commit to the default branch.
-2. Prefer a cloud session so the person needs no local setup (`setup-cloud-agents`). If the app cannot run in the cloud, say where it will be verified.
+2. Prefer a cloud session so the person needs no local setup (`setup-cloud-agents`). If the app cannot run in this session, tell the person now what proof they will get instead (screenshot tests, a CI job's screenshots, or a test build on their phone) and where it comes from.
 3. Run `/faker-mode` with the playbook that fits: Feature for new behavior, Bug fix for a defect, Visual parity for "make it look like this design". Pass along the restated request as the task.
 4. Every user-facing text change updates every supported language with a real translation.
 
 ## 4. Prove it
 
-1. Take before and after screenshots, or a short recording, with the verification skill.
+1. Take before and after screenshots, or a short recording, with the verification skill. Get them into the pull request and back to the person as `references/evidence-in-prs.md` describes; an image left in the container reaches no one.
 2. Run `scripts/check.sh` (or the check command in AGENTS.md). It must pass.
 3. If a review bot or the check flags something, fix it and repeat the proof.
 
@@ -41,12 +41,14 @@ Ask one question: "Is that right?" Offer to adjust. For a bug report, restate wh
 Title it in plain words, for example "Checkout button says 'Place order' in every language". The body has these sections:
 
 - **What changes for users**: two or three plain sentences.
-- **Before and after**: the screenshots or recording.
+- **Before and after**: the screenshots or recording, embedded so they show on the page, and the preview link if there is one.
 - **How it was checked**: the verification steps and the check result.
 - **Decisions needed**: anything the requester or reviewer must decide, or "None".
 - **Technical notes**: for the reviewing engineer; files touched and anything unusual.
 
 Request review from the code owners. Add the label `requested-change` if the repository has it.
+
+In Codex cloud you cannot push or open the pull request yourself. End the task with the title and these sections as your final message, with the screenshots attached to the task, and tell the person: "Press the button to open the pull request; an engineer is asked to review it automatically." If the task came from a GitHub issue, Codex posts its result there.
 
 ## 6. Never merge
 
