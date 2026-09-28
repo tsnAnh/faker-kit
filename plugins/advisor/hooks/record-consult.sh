@@ -2,7 +2,7 @@
 
 # subagentStop hook for Advisor (matcher: the `advisor-subagent` subagent).
 # Counts the consult, clears the pending-edits marker, and appends the advice
-# to .cursor/advisor/log.md so the user can review it later.
+# to .agents/advisor/log.md so the user can review it later.
 #
 # Input:  { "subagent_type": "advisor-subagent", "status": "completed"|"error"|"aborted",
 #           "description": "...", "summary": "...", ...common }

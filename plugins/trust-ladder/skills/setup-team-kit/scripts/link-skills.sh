@@ -6,9 +6,9 @@ usage() {
 Usage: link-skills.sh [--check] [REPO_DIR]
 
 Make every project skill visible to Claude Code, Codex, and Pi. A skill is a
-directory holding SKILL.md in .cursor/skills, .claude/skills, or .agents/skills.
+directory holding SKILL.md in .claude/skills or .agents/skills.
 Each real skill directory gets a relative symlink of the same name in the other
-two locations. Existing links are kept; a real directory is never replaced.
+location. Existing links are kept; a real directory is never replaced.
 
   --check   Change nothing. Exit 1 and list what is missing or conflicting.
 
@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
 done
 cd "$repo"
 
-locations=(.cursor/skills .claude/skills .agents/skills)
+locations=(.claude/skills .agents/skills)
 problems=0 linked=0
 
 for source_root in "${locations[@]}"; do

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/agent-hooks/cursor-hook-adapter.mjs\" PostToolUse"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/agent-hooks/hook-adapter.mjs\" PostToolUse"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/agent-hooks/cursor-hook-adapter.mjs\" Stop"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/agent-hooks/hook-adapter.mjs\" Stop"
           }
         ]
       }
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/agent-hooks/cursor-hook-adapter.mjs\" SubagentStop"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/agent-hooks/hook-adapter.mjs\" SubagentStop"
           }
         ]
       }

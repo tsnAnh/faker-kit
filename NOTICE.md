@@ -4,25 +4,26 @@ This repository contains two kinds of material.
 
 ## Vendored upstream plugins
 
-Everything under these directories is copied from [cursor/plugins](https://github.com/cursor/plugins) at the commit recorded in [`upstream/lock.json`](upstream/lock.json). Each directory keeps its original `LICENSE` file.
+Everything under these directories is copied from an MIT-licensed upstream plugin repository, at the address and commit recorded in [`upstream/source.json`](upstream/source.json) and [`upstream/lock.json`](upstream/lock.json). Each directory keeps its original `LICENSE` file, with the copyright notice and permission notice the MIT license requires.
 
 | Directory | Upstream author | License |
 |---|---|---|
-| `plugins/pstack/` | Lauren Tan ([@poteto](https://x.com/poteto)) | MIT, Copyright (c) 2026 Lauren Tan |
-| `plugins/cursor-team-kit/` | Eric Zakariasson, Cursor | MIT, Copyright (c) 2026 Cursor |
-| `plugins/thermos/` | Cursor | MIT, Copyright (c) 2026 Cursor |
-| `plugins/continual-learning/` | Eric Zakariasson, Cursor | MIT, Copyright (c) 2026 Cursor |
-| `plugins/cli-for-agent/` | Eric Zakariasson, Cursor | MIT, Copyright (c) 2026 Cursor |
-| `plugins/agent-compatibility/` | Cursor | MIT, Copyright (c) 2026 Cursor |
-| `plugins/advisor/` | Cursor | MIT, Copyright (c) 2026 Cursor |
-| `plugins/teaching/` | Cursor | MIT, Copyright (c) 2026 Cursor |
+| `plugins/pstack/` | Lauren Tan ([@poteto](https://x.com/poteto)) | MIT, see its `LICENSE` |
+| `plugins/team-workflows/` | Eric Zakariasson | MIT, see its `LICENSE` |
+| `plugins/thermos/` | The upstream plugin team | MIT, see its `LICENSE` |
+| `plugins/continual-learning/` | Eric Zakariasson | MIT, see its `LICENSE` |
+| `plugins/cli-for-agent/` | Eric Zakariasson | MIT, see its `LICENSE` |
+| `plugins/agent-compatibility/` | The upstream plugin team | MIT, see its `LICENSE` |
+| `plugins/advisor/` | The upstream plugin team | MIT, see its `LICENSE` |
+| `plugins/teaching/` | The upstream plugin team | MIT, see its `LICENSE` |
 
-The copies are byte-identical to upstream with four exceptions, all applied by [`scripts/sync-upstream.mjs`](scripts/sync-upstream.mjs) and listed occurrence by occurrence in [`upstream/CHANGES.md`](upstream/CHANGES.md):
+The copies are byte-identical to upstream with five exceptions, all applied by [`scripts/sync-upstream.mjs`](scripts/sync-upstream.mjs) and listed occurrence by occurrence in [`upstream/CHANGES.md`](upstream/CHANGES.md):
 
 1. **Model names.** [`upstream/model-map.json`](upstream/model-map.json) rewrites LLM model names, and the sentences that describe them, to the models this team uses.
-2. **Three frontmatter load fixes.** [`upstream/compat-patches.json`](upstream/compat-patches.json) makes `Poteto Mode` and `Make Bot UI` invocable names so Pi and Codex can call them, and quotes the `check-agent-compatibility` description so Pi can parse it.
-3. **Team renames.** [`upstream/renames.json`](upstream/renames.json) renames pstack's `poteto-mode` skill to `faker-mode` and its `poteto-agent` to `faker-agent`, in file names and text. The credit to poteto (Lauren Tan) for the style stays.
-4. **Generated files.** Each plugin gains a `.claude-plugin/plugin.json` built from its `.cursor-plugin/plugin.json`, so Claude Code and Codex can install it. Plugins with Cursor hooks also gain `agent-hooks/`, which runs those hooks, unchanged, as Claude Code and Codex hooks. The Cursor files stay in place.
+2. **Three frontmatter load fixes.** [`upstream/compat-patches.json`](upstream/compat-patches.json) makes two skill names invocable so Pi and Codex can call them, and quotes the `check-agent-compatibility` description so Pi can parse it.
+3. **Team renames.** [`upstream/renames.json`](upstream/renames.json) renames pstack's `poteto-mode` skill to `faker-mode`, its `poteto-agent` to `faker-agent`, and one plugin to `team-workflows`, in file names and text. The credit to poteto (Lauren Tan) for the style stays.
+4. **No editor name.** The same file keeps the upstream editor's name out of the kit: its project folders become `.agents/`, its environment variables become the ones Claude Code and Codex set, and sentences that named it are reworded. The `LICENSE` files are not changed. The sync fails if the name comes back anywhere else.
+5. **Files added and left out.** Each plugin gains a generated `.claude-plugin/plugin.json`, so Claude Code and Codex can install it, and plugins with upstream hooks gain `agent-hooks/`, which runs those hooks as Claude Code and Codex hooks. The upstream editor's own plugin manifests are not copied.
 
 `node scripts/sync-upstream.mjs --check` fails CI if any other byte differs.
 

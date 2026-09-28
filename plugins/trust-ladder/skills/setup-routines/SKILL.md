@@ -1,6 +1,6 @@
 ---
 name: setup-routines
-description: Put the team's upkeep on a schedule so it happens without anyone remembering. Sets up recurring and event-driven agent jobs (daily verification-skill maintenance, daily gardener sweep, weekly review, reproducing new bug reports) as Claude Code routines or GitHub Actions workflows. Use for /setup-routines, "run this every day", "automatically reproduce bug reports", or anything a Cursor Automation or Grok Bot routine did.
+description: Put the team's upkeep on a schedule so it happens without anyone remembering. Sets up recurring and event-driven agent jobs (daily verification-skill maintenance, daily gardener sweep, weekly review, reproducing new bug reports) as Claude Code routines or GitHub Actions workflows. Use for /setup-routines, "run this every day", "automatically reproduce bug reports", or anything an automation or Grok Bot routine did.
 ---
 
 # Set up routines

@@ -1,6 +1,6 @@
 # Using the team kit
 
-The kit gives your coding agent the Cursor team's working methods (pstack and its companions) and a way to make the agent more trustworthy every time you correct it. It works in Claude Code, Codex, and Pi. Each person uses whichever one they already have.
+The kit gives your coding agent Lauren Tan's pstack working methods and their companion plugins and a way to make the agent more trustworthy every time you correct it. It works in Claude Code, Codex, and Pi. Each person uses whichever one they already have.
 
 ## Pick your starting page
 
@@ -48,7 +48,7 @@ As more corrections land in layers 1 and 2, the same mistake stops coming back, 
 - [Playbooks and principles](reference/playbooks.md) that `/faker-mode` uses
 - [Lint packs](reference/lint-packs.md) for Kotlin/Android, KMP, Rust, Python, Flutter/Dart, Swift/iOS, and any stack
 - [Models](reference/models.md): how upstream model names map to ours
-- [Cursor terms in Claude Code, Codex, and Pi](../plugins/trust-ladder/references/compat.md)
+- [Upstream terms in Claude Code, Codex, and Pi](../plugins/trust-ladder/references/compat.md)
 - [Coverage](reference/coverage.md): where everything from the talk and posts lives
 
 **Explanations** of why it works this way:
@@ -59,4 +59,4 @@ As more corrections land in layers 1 and 2, the same mistake stops coming back, 
 - [Scaling to many agents](explanation/scaling-agents.md)
 - [Why non-engineers can ship safely](explanation/why-non-engineers-can-ship-safely.md)
 
-pstack also ships its own [guide](../plugins/pstack/docs/guide/README.md), written by its author. It is the best tour of `/faker-mode` and its skills. Read it for the pstack parts; where it says Cursor, use the [compat table](../plugins/trust-ladder/references/compat.md).
+pstack also ships its own [guide](../plugins/pstack/docs/guide/README.md), written by its author. It is the best tour of `/faker-mode` and its skills. Read it for the pstack parts; where it names a tool your agent calls differently, use the [compat table](../plugins/trust-ladder/references/compat.md).

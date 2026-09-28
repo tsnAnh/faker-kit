@@ -20,7 +20,7 @@ FILE_PATH=$(jq -r '.file_path // empty' <<< "$HOOK_INPUT")
 
 # The plugin's own state is not work product.
 case "$FILE_PATH" in
-  */.cursor/advisor/*) exit 0 ;;
+  */.agents/advisor/*) exit 0 ;;
 esac
 
 touch "$PENDING_FILE"

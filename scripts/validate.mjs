@@ -57,7 +57,8 @@ function checkMarketplace() {
     if (entry.isDirectory() && !listed.has(entry.name)) report(`plugins/${entry.name}`, "plugin directory is missing from .claude-plugin/marketplace.json");
   }
   const own = readJson(`plugins/${OWN_PLUGIN}/.claude-plugin/plugin.json`);
-  const upstream = readJson("upstream/source.json").plugins;
+  const pathRenames = readJson("upstream/renames.json").paths ?? [];
+  const upstream = readJson("upstream/source.json").plugins.map((name) => pathRenames.reduce((acc, r) => acc.split(r.from).join(r.to), name));
   const missing = upstream.filter((p) => !(own.dependencies ?? []).includes(p));
   if (missing.length > 0) report(`plugins/${OWN_PLUGIN}/.claude-plugin/plugin.json`, `dependencies miss vendored plugins: ${missing.join(", ")}`);
   return marketplace.plugins.map((p) => p.name);
@@ -111,6 +112,29 @@ function checkOwnMarkdown() {
   for (const file of files) checkLinks(file);
 }
 
+const OWN_ROOTS = ["README.md", "NOTICE.md", "AGENTS.md", "CLAUDE.md", "package.json", ".claude-plugin", ".github", "docs", "scripts", `plugins/${OWN_PLUGIN}`, "upstream/agent-hooks"];
+
+function textFiles(full) {
+  if (!fs.existsSync(full)) return [];
+  if (fs.statSync(full).isFile()) return [full];
+  return fs.readdirSync(full, { withFileTypes: true }).flatMap((e) => (e.name === "node_modules" ? [] : textFiles(path.join(full, e.name))));
+}
+
+function checkNoEditorName() {
+  const forbidden = readJson("upstream/renames.json").forbidden;
+  if (!forbidden) return;
+  const word = new RegExp(`[A-Za-z0-9_]*${forbidden.pattern}[A-Za-z0-9_]*`, `g${forbidden.flags ?? ""}`);
+  const allowed = new Set(forbidden.allowedWords ?? []);
+  for (const file of OWN_ROOTS.flatMap((r) => textFiles(path.join(ROOT, r)))) {
+    const buf = fs.readFileSync(file);
+    if (buf.includes(0)) continue;
+    const text = buf.toString("utf8");
+    for (const match of text.matchAll(word)) {
+      if (!allowed.has(match[0])) report(rel(file), `line ${text.slice(0, match.index).split("\n").length} names "${match[0]}"; the kit keeps the upstream editor's name out (upstream/renames.json)`);
+    }
+  }
+}
+
 function checkOwnPathReferences() {
   const pluginRoot = path.join(ROOT, "plugins", OWN_PLUGIN);
   const vendoredSkillDirs = fs
@@ -134,6 +158,7 @@ function main() {
   checkPiManifest();
   checkOwnMarkdown();
   checkOwnPathReferences();
+  checkNoEditorName();
   for (const problem of catalogProblems()) problems.push(problem);
   if (problems.length > 0) {
     process.stderr.write(`validate: ${problems.length} problem(s)\n  ${problems.join("\n  ")}\n`);

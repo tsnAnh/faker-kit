@@ -5,11 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const USAGE = `Usage: node agent-hooks/cursor-hook-adapter.mjs <PostToolUse|Stop|SubagentStop> < hook-input.json
+const USAGE = `Usage: node agent-hooks/hook-adapter.mjs <PostToolUse|Stop|SubagentStop> < hook-input.json
 
-Runs this plugin's Cursor hooks (hooks/hooks.json, unchanged from upstream) from a
-Claude Code or Codex hook. Translates the agent's hook input into Cursor's, runs each
-matching Cursor command, and turns a Cursor "followup_message" into a
+Runs this plugin's upstream hooks (hooks/hooks.json, in the upstream hook format) from
+a Claude Code or Codex hook. Translates the agent's hook input into the upstream format,
+runs each matching upstream command, and turns an upstream "followup_message" into a
 {"decision": "block", "reason": ...} reply, which makes the agent continue with it.
 
   PostToolUse   runs afterFileEdit hooks after Edit, Write, MultiEdit, NotebookEdit, or apply_patch
@@ -17,10 +17,10 @@ matching Cursor command, and turns a Cursor "followup_message" into a
   SubagentStop  runs subagentStop hooks whose matcher fits the subagent's name
 
 Generated into each vendored plugin by scripts/sync-upstream.mjs. Always exits 0 so a
-failing Cursor hook never blocks the agent; failures go to stderr.
+failing upstream hook never blocks the agent; failures go to stderr.
 `;
 
-export const CURSOR_EVENTS = {
+export const UPSTREAM_EVENTS = {
   PostToolUse: ["afterFileEdit"],
   Stop: ["afterAgentResponse", "stop"],
   SubagentStop: ["subagentStop"],
@@ -46,32 +46,32 @@ export function subagentName(agentType) {
   return String(agentType ?? "").split(":").pop();
 }
 
-export function cursorInput(cursorEvent, input, { projectDir, loopCount }) {
+export function upstreamInput(upstreamEvent, input, { projectDir, loopCount }) {
   const common = {
     conversation_id: input.session_id,
     generation_id: input.turn_id,
     model: input.model,
-    hook_event_name: cursorEvent,
+    hook_event_name: upstreamEvent,
     workspace_roots: [projectDir],
     transcript_path: input.transcript_path ?? null,
   };
-  if (cursorEvent === "afterFileEdit") {
+  if (upstreamEvent === "afterFileEdit") {
     const file = editedFile(input.tool_input);
     return { ...common, file_path: file && !path.isAbsolute(file) ? path.join(projectDir, file) : file, edits: [] };
   }
-  if (cursorEvent === "afterAgentResponse") return { ...common, text: input.last_assistant_message ?? "" };
-  if (cursorEvent === "stop") return { ...common, status: "completed", loop_count: loopCount };
-  if (cursorEvent === "subagentStop") {
+  if (upstreamEvent === "afterAgentResponse") return { ...common, text: input.last_assistant_message ?? "" };
+  if (upstreamEvent === "stop") return { ...common, status: "completed", loop_count: loopCount };
+  if (upstreamEvent === "subagentStop") {
     return { ...common, subagent_type: subagentName(input.agent_type), status: "completed", summary: input.last_assistant_message ?? "", loop_count: loopCount };
   }
   return common;
 }
 
-function matches(entry, cursorEvent, input) {
+function matches(entry, upstreamEvent, input) {
   if (!entry.matcher) return true;
   const re = new RegExp(entry.matcher);
-  if (cursorEvent === "subagentStop") return re.test(subagentName(input.agent_type));
-  if (cursorEvent === "afterFileEdit") return re.test(editedFile(input.tool_input));
+  if (upstreamEvent === "subagentStop") return re.test(subagentName(input.agent_type));
+  if (upstreamEvent === "afterFileEdit") return re.test(editedFile(input.tool_input));
   return true;
 }
 
@@ -92,7 +92,7 @@ function runCommand(command, stdinText, env, cwd, timeoutSeconds) {
 }
 
 function loopFile(dataDir) {
-  return path.join(dataDir, "cursor-hook-loops.json");
+  return path.join(dataDir, "hook-loops.json");
 }
 
 function readLoops(dataDir) {
@@ -111,28 +111,28 @@ function writeLoops(dataDir, loops) {
 }
 
 export function runAdapter(event, input, { pluginRoot, projectDir, dataDir, env = process.env, run = runCommand }) {
-  const cursorEvents = CURSOR_EVENTS[event];
-  if (!cursorEvents) throw new Error(`unsupported event "${event}"; expected ${Object.keys(CURSOR_EVENTS).join(", ")}`);
+  const upstreamEvents = UPSTREAM_EVENTS[event];
+  if (!upstreamEvents) throw new Error(`unsupported event "${event}"; expected ${Object.keys(UPSTREAM_EVENTS).join(", ")}`);
   if (event === "PostToolUse" && !new RegExp(`^(?:${EDIT_TOOL_MATCHER})$`).test(input.tool_name ?? "")) return { output: null, errors: [] };
   const config = JSON.parse(fs.readFileSync(path.join(pluginRoot, "hooks", "hooks.json"), "utf8"));
   const loopKey = [input.session_id, event, input.agent_id].filter(Boolean).join(":");
   const loops = readLoops(dataDir);
   const loopCount = input.stop_hook_active ? (loops[loopKey] ?? 0) : 0;
-  const cursorEnv = { ...env, CURSOR_PLUGIN_ROOT: pluginRoot, CURSOR_PROJECT_DIR: projectDir };
+  const upstreamEnv = { ...env, CLAUDE_PLUGIN_ROOT: pluginRoot, CLAUDE_PROJECT_DIR: projectDir };
   const followups = [];
   const errors = [];
-  for (const cursorEvent of cursorEvents) {
-    for (const entry of config.hooks?.[cursorEvent] ?? []) {
-      if (!matches(entry, cursorEvent, input)) continue;
-      const stdinText = JSON.stringify(cursorInput(cursorEvent, input, { projectDir, loopCount }));
-      const result = run(entry.command, stdinText, cursorEnv, projectDir, entry.timeout ?? DEFAULT_TIMEOUT_SECONDS);
+  for (const upstreamEvent of upstreamEvents) {
+    for (const entry of config.hooks?.[upstreamEvent] ?? []) {
+      if (!matches(entry, upstreamEvent, input)) continue;
+      const stdinText = JSON.stringify(upstreamInput(upstreamEvent, input, { projectDir, loopCount }));
+      const result = run(entry.command, stdinText, upstreamEnv, projectDir, entry.timeout ?? DEFAULT_TIMEOUT_SECONDS);
       if (result.status !== 0) {
-        errors.push(`${cursorEvent} hook "${entry.command}" exited ${result.status}: ${result.stderr.trim().split("\n").slice(-3).join(" ")}`);
+        errors.push(`${upstreamEvent} hook "${entry.command}" exited ${result.status}: ${result.stderr.trim().split("\n").slice(-3).join(" ")}`);
         continue;
       }
       const reply = lastJsonObject(result.stdout);
       const limit = entry.loop_limit === null ? Infinity : (entry.loop_limit ?? DEFAULT_LOOP_LIMIT);
-      if (FOLLOWUP_EVENTS.has(cursorEvent) && typeof reply?.followup_message === "string" && reply.followup_message && loopCount < limit) {
+      if (FOLLOWUP_EVENTS.has(upstreamEvent) && typeof reply?.followup_message === "string" && reply.followup_message && loopCount < limit) {
         followups.push(reply.followup_message);
       }
     }
@@ -158,10 +158,10 @@ function main() {
     const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
     const dataDir = process.env.CLAUDE_PLUGIN_DATA || path.join(os.tmpdir(), `team-kit-hooks-${path.basename(pluginRoot)}`);
     const { output, errors } = runAdapter(event, input, { pluginRoot, projectDir, dataDir });
-    for (const error of errors) process.stderr.write(`cursor-hook-adapter: ${error}\n`);
+    for (const error of errors) process.stderr.write(`hook-adapter: ${error}\n`);
     if (output) process.stdout.write(`${JSON.stringify(output)}\n`);
   } catch (error) {
-    process.stderr.write(`cursor-hook-adapter: ${error.message}\n`);
+    process.stderr.write(`hook-adapter: ${error.message}\n`);
   }
 }
 

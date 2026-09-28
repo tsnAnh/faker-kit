@@ -16,7 +16,7 @@ What it describes:
 
 | Idea or tool | In this kit |
 |---|---|
-| Control Glass, Cursor's verification skill: it runs the app and takes traces | `/create-verification-skill` writes one for your repository; `control-ui`, `control-cli`, and `control-mobile` are the harness recipes it builds on |
+| Control Glass, the verification skill in the talk: it runs the app and takes traces | `/create-verification-skill` writes one for your repository; `control-ui`, `control-cli`, and `control-mobile` are the harness recipes it builds on |
 | The feature map stored in the skill, and the automation that keeps it current | `/create-verification-skill` writes the map; `/maintain-verification-skill` on a daily routine from `setup-routines` keeps it current |
 | The layers of trust: codebase, static analysis, rules and Bugbot, skills | `correct` routes each correction to the strongest layer; `trust-audit` scores a repository on each |
 | Making mistakes impossible with data structures, types, and the framework | `paved-path`, the language `*-best-practices` skills, and `references/agent-friendly-architecture.md` |
@@ -28,7 +28,7 @@ What it describes:
 | A gardener who watches the codebase for spreading smells | `gardener`, with a daily routine template |
 | Extracting what reviewers keep saying into the codebase: the style guide | `style-guide-from-reviews`, then `correct` to promote each entry down the ladder |
 | Grok Bot routines that react to Slack threads and Sentry alerts | `setup-routines`: Claude Code routines or GitHub Actions |
-| Cursor Automations and the Cursor SDK for building more bots | `setup-routines`. The Cursor SDK and orchestrate plugins were left out; see below |
+| Automations, and an SDK for building more bots | `setup-routines`. The SDK and orchestrate plugins were left out; see below |
 | Cloud agents | `setup-cloud-agents` |
 | Automatically reproducing bug reports and opening pull requests | pstack's benny pack and the `issue-reproduce` routine template |
 | pstack | `plugins/pstack`, vendored in full |
@@ -80,11 +80,11 @@ What it describes:
 | The script that checks every plan's structure | `plugins/pstack/skills/faker-mode/scripts/check-plan.mjs` |
 | Competing design runners from different model families | `/architect` and `/arena` keep their runners, each a separate run on the member's own agent; the Claude and Codex review bots add the second family on every PR. See `docs/how-to/models.md` |
 
-## Named inside pstack but built into Cursor
+## Built-ins pstack names
 
 | Named | In this kit |
 |---|---|
-| Cursor's built-in create-skill and babysit, and /loop | The compat table: `skill-creator`, the Babysit playbook, and Claude Code `/loop` or the Autonomous run playbook |
+| The built-in create-skill and babysit, and /loop | The compat table: `skill-creator`, the Babysit playbook, and Claude Code `/loop` or the Autonomous run playbook |
 
 ## Skills referenced across plugins
 
@@ -92,11 +92,11 @@ Found by scanning each vendored plugin for another plugin's skill names. Each re
 
 | Skill | Lives in | Referenced by |
 |---|---|---|
-| [control-cli](../../plugins/cursor-team-kit/skills/control-cli/SKILL.md) | cursor-team-kit | pstack |
-| [control-ui](../../plugins/cursor-team-kit/skills/control-ui/SKILL.md) | cursor-team-kit | pstack |
-| [deslop](../../plugins/cursor-team-kit/skills/deslop/SKILL.md) | cursor-team-kit | pstack |
-| [thermo-nuclear-code-quality-review](../../plugins/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md) | cursor-team-kit | thermos |
-| [thermo-nuclear-code-quality-review](../../plugins/thermos/skills/thermo-nuclear-code-quality-review/SKILL.md) | thermos | cursor-team-kit |
+| [control-cli](../../plugins/team-workflows/skills/control-cli/SKILL.md) | team-workflows | pstack |
+| [control-ui](../../plugins/team-workflows/skills/control-ui/SKILL.md) | team-workflows | pstack |
+| [deslop](../../plugins/team-workflows/skills/deslop/SKILL.md) | team-workflows | pstack |
+| [thermo-nuclear-code-quality-review](../../plugins/team-workflows/skills/thermo-nuclear-code-quality-review/SKILL.md) | team-workflows | thermos |
+| [thermo-nuclear-code-quality-review](../../plugins/thermos/skills/thermo-nuclear-code-quality-review/SKILL.md) | thermos | team-workflows |
 
 ## Plugins in the kit
 
@@ -104,8 +104,8 @@ Found by scanning each vendored plugin for another plugin's skill names. Each re
 |---|---|---|
 | trust-ladder | 20 | This kit's own plugin: the ladder, lint packs, templates, the compat layer, and the skills for non-engineers. |
 | pstack | 47 | The plugin the talk and both posts are about. Vendored in full, including the principles, playbooks, agents, and the benny automation pack. |
-| cursor-team-kit | 18 | pstack routes to its `control-ui`, `control-cli`, and `deslop`; the talk's CI and review workflow lives here. |
-| thermos | 3 | The review panel cursor-team-kit's `thermo-nuclear-code-quality-review` belongs to. |
+| team-workflows | 18 | pstack routes to its `control-ui`, `control-cli`, and `deslop`; the talk's CI and review workflow lives here. |
+| thermos | 3 | The review panel team-workflows's `thermo-nuclear-code-quality-review` belongs to. |
 | continual-learning | 1 | Turns transcripts into AGENTS.md updates: the rules layer learning on its own. Its cadence hook runs in Claude Code and Codex. |
 | cli-for-agent | 1 | How to design the CLI a verification skill wraps, from Pt. 1's control-app. |
 | agent-compatibility | 1 | Scores how agent-friendly a repository is; `trust-audit` uses it. |
@@ -114,15 +114,15 @@ Found by scanning each vendored plugin for another plugin's skill names. Each re
 
 ## Left out on purpose
 
-From [cursor/plugins](https://github.com/cursor/plugins):
+From the upstream plugin repository:
 
 | Plugin | Why |
 |---|---|
-| orchestrate | Runs Cursor cloud agents through @cursor/sdk and needs a Cursor account. pstack's Orchestrate playbook runs large programs on your own agent's subagents instead. |
-| cursor-sdk | Documents Cursor's TypeScript SDK, which needs a Cursor account. Routines and the review workflows cover the bots this team builds. |
+| orchestrate | Runs cloud agents through the upstream editor's SDK and needs a paid account with it. pstack's Orchestrate playbook runs large programs on your own agent's subagents instead. |
+| the SDK plugin | Documents the upstream editor's TypeScript SDK, which needs a paid account with it. Routines and the review workflows cover the bots this team builds. |
 | ralph-loop | Claude Code's `/loop` and the faker-mode Autonomous run playbook do the same job. |
-| create-plugin | Scaffolds Cursor plugins; this kit ships Claude Code, Codex, and Pi manifests. |
-| docs-canvas | Renders into Cursor's canvas; not referenced by the talk, posts, or pstack. |
-| pr-review-canvas (standalone) | The same skill ships in cursor-team-kit, which is included. |
+| create-plugin | Scaffolds plugins in the upstream editor's format; this kit ships Claude Code, Codex, and Pi manifests. |
+| docs-canvas | Renders into the upstream editor's canvas; not referenced by the talk, posts, or pstack. |
+| pr-review-canvas (standalone) | The same skill ships in team-workflows, which is included. |
 | grok-voice | Voice features for Grok apps; unrelated to the trust ladder. |
-| third_party connectors | Cursor MCP connector bundles; Claude Code, Codex, and Pi connect to services their own way. |
+| third_party connectors | MCP connector bundles for the upstream editor; Claude Code, Codex, and Pi connect to services their own way. |

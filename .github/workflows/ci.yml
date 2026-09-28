@@ -25,7 +25,7 @@ jobs:
         run: node scripts/gen-catalog.mjs --check
       - name: trust-ladder tests (hooks, Pi extension, run-model, link-skills)
         run: bun test plugins/trust-ladder
-      - name: Cursor hooks run through the Claude Code and Codex adapter
+      - name: Upstream hooks run through the Claude Code and Codex adapter
         run: bun test upstream/agent-hooks
       - name: pstack script tests
         working-directory: plugins/pstack/skills/faker-mode/scripts

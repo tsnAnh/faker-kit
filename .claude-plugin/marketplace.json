@@ -4,61 +4,61 @@
     "name": "tsnAnh",
     "url": "https://github.com/tsnAnh"
   },
-  "description": "A trust-ladder team kit for Claude Code, Codex, and Pi: the Cursor team's pstack, cursor-team-kit, thermos, and friends (verbatim except model names) plus the trust-ladder glue.",
+  "description": "A trust-ladder team kit for Claude Code, Codex, and Pi: Lauren Tan's pstack, team-workflows, thermos, and five more vendored plugins (unchanged except model names and the team's renames), plus the trust-ladder glue.",
   "plugins": [
     {
       "name": "trust-ladder",
       "source": "./plugins/trust-ladder",
-      "description": "Route every agent correction to the strongest layer (codebase, lint/CI, rules and review bots, skills, style guide), set up repos for agents, and give everyone on the team a plain-English front door. Installs the vendored Cursor team plugins as dependencies.",
+      "description": "Route every agent correction to the strongest layer (codebase, lint/CI, rules and review bots, skills, style guide), set up repos for agents, and give everyone on the team a plain-English front door. Installs the vendored upstream plugins as dependencies.",
       "category": "team-kit"
     },
     {
       "name": "pstack",
       "source": "./plugins/pstack",
       "description": "if you want to go fast, go deep first. pstack helps you write less, but higher quality code. rigorous agent workflows you can parallelize with confidence.",
-      "category": "upstream: cursor/plugins"
+      "category": "upstream"
     },
     {
-      "name": "cursor-team-kit",
-      "source": "./plugins/cursor-team-kit",
+      "name": "team-workflows",
+      "source": "./plugins/team-workflows",
       "description": "Internal engineering team workflows for CI, code review, shipping, control-cli, control-ui, verify-this, test reliability, code cleanup, and work summaries. Designed to work without requiring third-party service integrations.",
-      "category": "upstream: cursor/plugins"
+      "category": "upstream"
     },
     {
       "name": "thermos",
       "source": "./plugins/thermos",
       "description": "Thermo-nuclear branch review: deep correctness and security audits plus harsh code-quality rubrics, parallel subagents, thermos orchestration, and optional take-the-wheel and FSD merge-ready flows.",
-      "category": "upstream: cursor/plugins"
+      "category": "upstream"
     },
     {
       "name": "continual-learning",
       "source": "./plugins/continual-learning",
       "description": "Incrementally learns durable user preferences and workspace facts from transcript changes and keeps AGENTS.md up to date with plain bullet points.",
-      "category": "upstream: cursor/plugins"
+      "category": "upstream"
     },
     {
       "name": "cli-for-agent",
       "source": "./plugins/cli-for-agent",
       "description": "Patterns for designing CLIs that coding agents can run reliably: non-interactive flags, layered help with examples, pipelines, actionable errors, idempotency, and dry-run.",
-      "category": "upstream: cursor/plugins"
+      "category": "upstream"
     },
     {
       "name": "agent-compatibility",
       "source": "./plugins/agent-compatibility",
       "description": "CLI-backed repo compatibility scans plus agents that audit startup, validation, and docs against reality.",
-      "category": "upstream: cursor/plugins"
+      "category": "upstream"
     },
     {
       "name": "advisor",
       "source": "./plugins/advisor",
       "description": "Consult a stronger model at key checkpoints: before major decisions, when stuck on an error, and before declaring a task done. The advisor gets a full briefing plus the conversation transcript, returns guidance, and the main model keeps doing the work.",
-      "category": "upstream: cursor/plugins"
+      "category": "upstream"
     },
     {
       "name": "teaching",
       "source": "./plugins/teaching",
       "description": "Skill mapping, practice plans, and learning retrospectives. Builds personalized roadmaps with milestones and practice checkpoints, and runs periodic reviews to adjust based on progress.",
-      "category": "upstream: cursor/plugins"
+      "category": "upstream"
     }
   ]
 }

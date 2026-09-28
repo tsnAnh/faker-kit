@@ -25,7 +25,7 @@ Cross-family review still happens where it costs no one's quota: [the review bot
 
 ## When someone names a model
 
-You can still pin a role to a model, with `/setup-pstack` (which writes `~/.cursor/rules/pstack-models.mdc`) or with `/advisor <model>`. Use the team's names: `claude-opus-5-5-max` or `gpt-6-sol-high`. A seat from your own family runs natively. A seat from the other family goes through the `run-model` skill, which runs it through the other agent's CLI if you happen to have it, and otherwise tells your agent to run the seat on its own model and say so. `run-model` always runs GPT at high effort in the standard tier: it drops a `-fast` suffix and lowers `max` or `xhigh` to `high`.
+You can still pin a role to a model, with `/setup-pstack` (which writes `~/.agents/pstack-models.md`) or with `/advisor <model>`. Use the team's names: `claude-opus-5-5-max` or `gpt-6-sol-high`. A seat from your own family runs natively. A seat from the other family goes through the `run-model` skill, which runs it through the other agent's CLI if you happen to have it, and otherwise tells your agent to run the seat on its own model and say so. `run-model` always runs GPT at high effort in the standard tier: it drops a `-fast` suffix and lowers `max` or `xhigh` to `high`.
 
 ## Changing the team's models
 

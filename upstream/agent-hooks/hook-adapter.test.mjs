@@ -3,16 +3,16 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { cursorInput, editedFile, runAdapter, subagentName } from "./cursor-hook-adapter.mjs";
+import { upstreamInput, editedFile, runAdapter, subagentName } from "./hook-adapter.mjs";
 
 const REPO = path.resolve(import.meta.dir, "../..");
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "agent-hooks-"));
 const has = (bin) => spawnSync("bash", ["-c", `command -v ${bin}`]).status === 0;
 
-function fakePlugin(cursorHooks, scripts) {
+function fakePlugin(upstreamHooks, scripts) {
   const root = tmp();
   fs.mkdirSync(path.join(root, "hooks"));
-  fs.writeFileSync(path.join(root, "hooks", "hooks.json"), JSON.stringify({ version: 1, hooks: cursorHooks }));
+  fs.writeFileSync(path.join(root, "hooks", "hooks.json"), JSON.stringify({ version: 1, hooks: upstreamHooks }));
   for (const [name, body] of Object.entries(scripts)) {
     fs.writeFileSync(path.join(root, "hooks", name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
   }
@@ -32,13 +32,13 @@ describe("input translation", () => {
     expect(subagentName("advisor-subagent")).toBe("advisor-subagent");
   });
 
-  test("maps agent hook input to each Cursor event's input", () => {
+  test("maps agent hook input to each upstream event's input", () => {
     const input = { session_id: "s1", turn_id: "t1", model: "opus", transcript_path: "/t.jsonl", last_assistant_message: "Done.", agent_type: "advisor:advisor-subagent", tool_input: { file_path: "src/a.ts" } };
     const opts = { projectDir: "/repo", loopCount: 2 };
-    expect(cursorInput("afterFileEdit", input, opts)).toMatchObject({ conversation_id: "s1", generation_id: "t1", file_path: "/repo/src/a.ts", workspace_roots: ["/repo"] });
-    expect(cursorInput("afterAgentResponse", input, opts)).toMatchObject({ text: "Done." });
-    expect(cursorInput("stop", input, opts)).toMatchObject({ status: "completed", loop_count: 2 });
-    expect(cursorInput("subagentStop", input, opts)).toMatchObject({ subagent_type: "advisor-subagent", status: "completed", summary: "Done." });
+    expect(upstreamInput("afterFileEdit", input, opts)).toMatchObject({ conversation_id: "s1", generation_id: "t1", file_path: "/repo/src/a.ts", workspace_roots: ["/repo"] });
+    expect(upstreamInput("afterAgentResponse", input, opts)).toMatchObject({ text: "Done." });
+    expect(upstreamInput("stop", input, opts)).toMatchObject({ status: "completed", loop_count: 2 });
+    expect(upstreamInput("subagentStop", input, opts)).toMatchObject({ subagent_type: "advisor-subagent", status: "completed", summary: "Done." });
   });
 });
 
@@ -49,10 +49,10 @@ describe("runAdapter", () => {
     const out = tmp();
     const root = fakePlugin(
       {
-        afterFileEdit: [{ command: `bash "\${CURSOR_PLUGIN_ROOT}/hooks/edit.sh"` }],
-        afterAgentResponse: [{ command: `bash "\${CURSOR_PLUGIN_ROOT}/hooks/response.sh"` }],
-        subagentStop: [{ command: `bash "\${CURSOR_PLUGIN_ROOT}/hooks/subagent.sh"`, matcher: "^advisor-subagent$" }],
-        stop: [{ command: `bash "\${CURSOR_PLUGIN_ROOT}/hooks/stop.sh"`, loop_limit: 2 }],
+        afterFileEdit: [{ command: `bash "\${CLAUDE_PLUGIN_ROOT}/hooks/edit.sh"` }],
+        afterAgentResponse: [{ command: `bash "\${CLAUDE_PLUGIN_ROOT}/hooks/response.sh"` }],
+        subagentStop: [{ command: `bash "\${CLAUDE_PLUGIN_ROOT}/hooks/subagent.sh"`, matcher: "^advisor-subagent$" }],
+        stop: [{ command: `bash "\${CLAUDE_PLUGIN_ROOT}/hooks/stop.sh"`, loop_limit: 2 }],
       },
       {
         "edit.sh": `jq -r '"edit " + .file_path' >> ${out}/log`,
@@ -81,7 +81,7 @@ describe("runAdapter", () => {
     expect(fs.readFileSync(path.join(out, "cwd"), "utf8").trim()).toBe(fs.realpathSync(out));
   });
 
-  test.skipIf(!has("jq"))("counts consecutive follow-ups and honors the Cursor loop_limit", () => {
+  test.skipIf(!has("jq"))("counts consecutive follow-ups and honors the upstream loop_limit", () => {
     const { out, opts } = plugin();
     const stop = (active) => runAdapter("Stop", { session_id: "s", stop_hook_active: active, last_assistant_message: "x" }, opts).output;
     expect(stop(false)).not.toBeNull();
@@ -91,14 +91,14 @@ describe("runAdapter", () => {
     expect(log(out).filter((l) => l.startsWith("stop"))).toEqual(["stop 0", "stop 1", "stop 2", "stop 0"]);
   });
 
-  test.skipIf(!has("jq"))("SubagentStop applies the Cursor matcher to the unprefixed subagent name", () => {
+  test.skipIf(!has("jq"))("SubagentStop applies the upstream matcher to the unprefixed subagent name", () => {
     const { out, opts } = plugin();
     runAdapter("SubagentStop", { session_id: "s", agent_id: "a1", agent_type: "general-purpose" }, opts);
     runAdapter("SubagentStop", { session_id: "s", agent_id: "a2", agent_type: "advisor:advisor-subagent" }, opts);
     expect(log(out)).toEqual(["subagent advisor-subagent"]);
   });
 
-  test("a failing Cursor hook is reported, never thrown, and blocks nothing", () => {
+  test("a failing upstream hook is reported, never thrown, and blocks nothing", () => {
     const root = fakePlugin({ stop: [{ command: "exit 7" }] }, {});
     const out = tmp();
     const { output, errors } = runAdapter("Stop", { session_id: "s" }, { pluginRoot: root, projectDir: out, dataDir: out });
@@ -113,15 +113,15 @@ describe("the vendored plugins", () => {
     agentHooks: JSON.parse(fs.readFileSync(path.join(REPO, "plugins", plugin, "agent-hooks", "hooks.json"), "utf8")),
   });
 
-  test("each plugin with Cursor hooks points Claude Code and Codex at its generated agent hooks", () => {
+  test("each plugin with upstream hooks points Claude Code and Codex at its generated agent hooks", () => {
     for (const plugin of fs.readdirSync(path.join(REPO, "plugins"))) {
-      const cursorHooks = path.join(REPO, "plugins", plugin, "hooks", "hooks.json");
-      if (plugin === "trust-ladder" || !fs.existsSync(cursorHooks)) continue;
+      const upstreamHooks = path.join(REPO, "plugins", plugin, "hooks", "hooks.json");
+      if (plugin === "trust-ladder" || !fs.existsSync(upstreamHooks)) continue;
       const { manifest, agentHooks } = hookFiles(plugin);
       expect(manifest.hooks).toBe("./agent-hooks/hooks.json");
-      expect(fs.existsSync(path.join(REPO, "plugins", plugin, "agent-hooks", "cursor-hook-adapter.mjs"))).toBe(true);
+      expect(fs.existsSync(path.join(REPO, "plugins", plugin, "agent-hooks", "hook-adapter.mjs"))).toBe(true);
       for (const [event, entries] of Object.entries(agentHooks.hooks)) {
-        expect(entries[0].hooks[0].command).toBe(`node "\${CLAUDE_PLUGIN_ROOT}/agent-hooks/cursor-hook-adapter.mjs" ${event}`);
+        expect(entries[0].hooks[0].command).toBe(`node "\${CLAUDE_PLUGIN_ROOT}/agent-hooks/hook-adapter.mjs" ${event}`);
       }
     }
     expect(Object.keys(hookFiles("advisor").agentHooks.hooks).sort()).toEqual(["PostToolUse", "Stop", "SubagentStop"]);
@@ -130,7 +130,7 @@ describe("the vendored plugins", () => {
 
   test.skipIf(!has("jq"))("advisor: an edit then a finished turn asks for the pre-completion consult once, and a consult is logged", () => {
     const project = tmp();
-    const advisorDir = path.join(project, ".cursor", "advisor");
+    const advisorDir = path.join(project, ".agents", "advisor");
     fs.mkdirSync(advisorDir, { recursive: true });
     fs.writeFileSync(path.join(advisorDir, "state.json"), JSON.stringify({ enabled: true, model: "inherit-parent", nudge: true, conversation_id: null }));
     const opts = { pluginRoot: path.join(REPO, "plugins", "advisor"), projectDir: project, dataDir: path.join(project, "data") };
@@ -169,6 +169,6 @@ describe("the vendored plugins", () => {
     expect(second.errors).toEqual([]);
     expect(second.output.reason).toStartWith("Run the `continual-learning` skill now.");
     expect(turn().output).toBeNull();
-    expect(fs.existsSync(path.join(project, ".cursor", "hooks", "state", "continual-learning.json"))).toBe(true);
+    expect(fs.existsSync(path.join(project, ".agents", "hooks", "state", "continual-learning.json"))).toBe(true);
   });
 });

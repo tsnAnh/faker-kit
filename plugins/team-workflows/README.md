@@ -1,11 +1,11 @@
-# Cursor Team Kit plugin
+# Team Workflows plugin
 
 Internal-style workflows for CI, code review, shipping, and test reliability. The kit is designed to be plug and play without requiring third-party service integrations.
 
 ## Installation
 
 ```bash
-/add-plugin cursor-team-kit
+/add-plugin team-workflows
 ```
 
 ## Components

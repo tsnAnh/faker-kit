@@ -1,5 +1,5 @@
 {
-  "$comment": "Names the team chose over upstream's, applied after the model and compat rules. `paths` rewrites every path segment containing `from`. `rules` rewrite text the same way model-map.json rules do: literal, scoped by upstream path glob, with an exact count. Faker is the League of Legends player; the mode and its agent carry his name on this team.",
+  "$comment": "Names the team chose over upstream's, applied after the model and compat rules. `paths` rewrites every path segment containing `from`. `omit` drops upstream files the kit does not ship. `rules` rewrite text the same way model-map.json rules do: literal, scoped by upstream path glob, with an exact count. `forbidden` fails the sync if a vendored file still contains the pattern, apart from LICENSE files (whose copyright lines the license requires), the listed words, and the listed per-file exceptions. Faker is the League of Legends player; the mode and its agent carry his name on this team. The upstream editor's name is kept out of the kit.",
   "paths": [
     {
       "from": "poteto-mode",
@@ -8,6 +8,10 @@
     {
       "from": "poteto-agent",
       "to": "faker-agent"
+    },
+    {
+      "from": "cursor-team-kit",
+      "to": "team-workflows"
     }
   ],
   "rules": [
@@ -46,6 +50,479 @@
       "from": "poteto-agent",
       "to": "faker-agent",
       "count": 11
+    },
+    {
+      "id": "neutral-pstack-models-path",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "~/.cursor/rules/pstack-models.mdc",
+      "to": "~/.agents/pstack-models.md",
+      "count": 8
+    },
+    {
+      "id": "neutral-pstack-models-file",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "pstack-models.mdc",
+      "to": "pstack-models.md",
+      "count": 4
+    },
+    {
+      "id": "neutral-home-dir-shell",
+      "files": [
+        "**"
+      ],
+      "from": "$HOME/.cursor/",
+      "to": "$HOME/.agents/",
+      "count": 1
+    },
+    {
+      "id": "neutral-home-dir",
+      "files": [
+        "**"
+      ],
+      "from": "~/.cursor/",
+      "to": "~/.agents/",
+      "count": 17
+    },
+    {
+      "id": "neutral-project-dir",
+      "files": [
+        "**"
+      ],
+      "from": ".cursor/",
+      "to": ".agents/",
+      "count": 84
+    },
+    {
+      "id": "neutral-project-dir-name",
+      "files": [
+        "pstack/automations/**"
+      ],
+      "from": "`.cursor` directory",
+      "to": "`.agents` directory",
+      "count": 1
+    },
+    {
+      "id": "neutral-plugin-root-env",
+      "files": [
+        "**"
+      ],
+      "from": "${CURSOR_PLUGIN_ROOT}",
+      "to": "${CLAUDE_PLUGIN_ROOT}",
+      "count": 5
+    },
+    {
+      "id": "neutral-project-dir-env",
+      "files": [
+        "advisor/**"
+      ],
+      "from": "CURSOR_PROJECT_DIR",
+      "to": "CLAUDE_PROJECT_DIR",
+      "count": 2
+    },
+    {
+      "id": "neutral-team-kit-display-name",
+      "files": [
+        "**"
+      ],
+      "from": "Cursor Team Kit",
+      "to": "Team Workflows",
+      "count": 2
+    },
+    {
+      "id": "neutral-team-kit-name",
+      "files": [
+        "**"
+      ],
+      "from": "cursor-team-kit",
+      "to": "team-workflows",
+      "count": 22
+    },
+    {
+      "id": "neutral-scripts-package-scope",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "@cursor-skill/",
+      "to": "@team-kit/",
+      "count": 2
+    },
+    {
+      "id": "neutral-webhook-url-example",
+      "files": [
+        "pstack/skills/make-bot-ui/SKILL.md"
+      ],
+      "from": "`https://api2.cursor.sh/automations/webhook/<id>`",
+      "to": "`https://<automation-host>/automations/webhook/<id>`",
+      "count": 1
+    },
+    {
+      "id": "neutral-review-bot-login",
+      "files": [
+        "pstack/skills/poteto-mode/scripts/watch-pr/github.ts"
+      ],
+      "from": "(author === \"cursor\" &&",
+      "to": "(author === \"review-bot\" &&",
+      "count": 1
+    },
+    {
+      "id": "neutral-review-bot-token",
+      "files": [
+        "pstack/skills/poteto-mode/scripts/watch-pr/github.ts"
+      ],
+      "from": "\"cursor_automation_id\",",
+      "to": "\"automation_id\",",
+      "count": 1
+    },
+    {
+      "id": "neutral-review-bot-pass-key",
+      "files": [
+        "pstack/skills/poteto-mode/scripts/watch-pr/github.ts"
+      ],
+      "from": "/CURSOR_AUTOMATION_ID:\\s*",
+      "to": "/AUTOMATION_ID:\\s*",
+      "count": 1
+    },
+    {
+      "id": "neutral-review-bot-test-body",
+      "files": [
+        "pstack/skills/poteto-mode/scripts/watch-pr/github.test.ts"
+      ],
+      "from": "\"CURSOR_AUTOMATION_ID: run-2",
+      "to": "\"AUTOMATION_ID: run-2",
+      "count": 1
+    },
+    {
+      "id": "neutral-review-bot-test-login",
+      "files": [
+        "pstack/skills/poteto-mode/scripts/watch-pr/github.test.ts"
+      ],
+      "from": "author: { login: \"cursor\" }",
+      "to": "author: { login: \"review-bot\" }",
+      "count": 1
+    },
+    {
+      "id": "neutral-benny-connector-key",
+      "files": [
+        "pstack/automations/**"
+      ],
+      "from": "prefer_cursor_actions",
+      "to": "prefer_connector_actions",
+      "count": 1
+    },
+    {
+      "id": "neutral-benny-slack-actions",
+      "files": [
+        "pstack/automations/**"
+      ],
+      "from": "Cursor Slack actions",
+      "to": "Slack connector actions",
+      "count": 2
+    },
+    {
+      "id": "neutral-built-in",
+      "files": [
+        "**"
+      ],
+      "from": "Cursor's built-in",
+      "to": "the agent's built-in",
+      "count": 10
+    },
+    {
+      "id": "neutral-loop-command",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "Cursor's `/loop` command",
+      "to": "the `/loop` command",
+      "count": 2
+    },
+    {
+      "id": "neutral-restart",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "a Cursor restart",
+      "to": "an agent restart",
+      "count": 2
+    },
+    {
+      "id": "neutral-cloud-agent",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "Cursor cloud agent",
+      "to": "cloud agent",
+      "count": 3
+    },
+    {
+      "id": "neutral-cloud-dashboard",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "in the Cursor dashboard",
+      "to": "in the cloud dashboard",
+      "count": 1
+    },
+    {
+      "id": "neutral-models-api",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "If Cursor also exposes",
+      "to": "If your agent also exposes",
+      "count": 1
+    },
+    {
+      "id": "neutral-mcp-environment",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "from the Cursor environment",
+      "to": "from the agent environment",
+      "count": 1
+    },
+    {
+      "id": "neutral-mcp-directory",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "directory Cursor exposes",
+      "to": "directory the agent exposes",
+      "count": 1
+    },
+    {
+      "id": "neutral-editor-support-dir",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "`~/Library/Application Support/Cursor`",
+      "to": "`~/Library/Application Support/<your editor>`",
+      "count": 1
+    },
+    {
+      "id": "neutral-readme-bio",
+      "files": [
+        "pstack/README.md"
+      ],
+      "from": "at Meta, Netflix, and Cursor.",
+      "to": "at Meta, Netflix, and elsewhere.",
+      "count": 1
+    },
+    {
+      "id": "neutral-readme-pitch",
+      "files": [
+        "pstack/README.md"
+      ],
+      "from": "ship high quality code at Cursor. this turns cursor into a real engineering team.",
+      "to": "ship high quality code at work. this turns your coding agent into a real engineering team.",
+      "count": 1
+    },
+    {
+      "id": "neutral-readme-models",
+      "files": [
+        "pstack/README.md"
+      ],
+      "from": "**cursor gives you the best of all worlds.**",
+      "to": "**a multi-model setup gives you the best of all worlds.**",
+      "count": 1
+    },
+    {
+      "id": "neutral-readme-loop",
+      "files": [
+        "pstack/README.md"
+      ],
+      "from": "works extremely well with cursor's `/loop` command. you can make cursor work for many hours",
+      "to": "works extremely well with your agent's `/loop` command. you can make your agent work for many hours",
+      "count": 1
+    },
+    {
+      "id": "neutral-readme-built-ins",
+      "files": [
+        "pstack/README.md"
+      ],
+      "from": "`/create-skill` is a cursor built-in. cursor also ships a built-in `/babysit`;",
+      "to": "`/create-skill` is an agent built-in. many agents also ship a built-in `/babysit`;",
+      "count": 1
+    },
+    {
+      "id": "neutral-readme-plan-mode",
+      "files": [
+        "pstack/README.md"
+      ],
+      "from": "cursor already has a great plan mode which works great with pstack.",
+      "to": "your agent likely has a great plan mode, which works great with pstack.",
+      "count": 1
+    },
+    {
+      "id": "neutral-point-at",
+      "files": [
+        "**"
+      ],
+      "from": "point cursor at",
+      "to": "point your agent at",
+      "count": 2
+    },
+    {
+      "id": "neutral-pointing-at-lower",
+      "files": [
+        "**"
+      ],
+      "from": "pointing cursor at",
+      "to": "pointing your agent at",
+      "count": 1
+    },
+    {
+      "id": "neutral-pointing-at",
+      "files": [
+        "**"
+      ],
+      "from": "pointing Cursor at",
+      "to": "pointing your agent at",
+      "count": 1
+    },
+    {
+      "id": "neutral-guide-chat",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "In a Cursor chat, run:",
+      "to": "In a chat with your agent, run:",
+      "count": 1
+    },
+    {
+      "id": "neutral-guide-confirms",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "Cursor confirms the plugin is installed.",
+      "to": "Your agent confirms the plugin is installed.",
+      "count": 1
+    },
+    {
+      "id": "neutral-benny-live-automations",
+      "files": [
+        "pstack/automations/**"
+      ],
+      "from": "two live Cursor automations",
+      "to": "two live automations",
+      "count": 1
+    },
+    {
+      "id": "neutral-benny-automations-lower",
+      "files": [
+        "pstack/automations/**"
+      ],
+      "from": "two cursor automations",
+      "to": "two automations",
+      "count": 2
+    },
+    {
+      "id": "neutral-benny-model-picker",
+      "files": [
+        "pstack/automations/**"
+      ],
+      "from": "the user's Cursor model picker",
+      "to": "the user's model picker",
+      "count": 1
+    },
+    {
+      "id": "neutral-benny-deep-link",
+      "files": [
+        "pstack/automations/**"
+      ],
+      "from": "a Cursor protocol deep link",
+      "to": "an app protocol deep link",
+      "count": 1
+    },
+    {
+      "id": "neutral-advisor-agent",
+      "files": [
+        "advisor/**"
+      ],
+      "from": "Cursor's agent",
+      "to": "your agent",
+      "count": 1
+    },
+    {
+      "id": "neutral-advisor-rejects",
+      "files": [
+        "advisor/**"
+      ],
+      "from": "If Cursor rejects a slug",
+      "to": "If the agent rejects a slug",
+      "count": 1
+    },
+    {
+      "id": "neutral-chats",
+      "files": [
+        "cursor-team-kit/**"
+      ],
+      "from": "recent Cursor chats",
+      "to": "recent agent chats",
+      "count": 1
+    },
+    {
+      "id": "neutral-thermos-agents",
+      "files": [
+        "thermos/**"
+      ],
+      "from": "for Cursor agents",
+      "to": "for coding agents",
+      "count": 1
+    },
+    {
+      "id": "neutral-plugin-readme-openers",
+      "files": [
+        "agent-compatibility/README.md",
+        "cli-for-agent/README.md"
+      ],
+      "from": "\nCursor plugin ",
+      "to": "\nPlugin ",
+      "count": 2
     }
-  ]
+  ],
+  "omit": [
+    "*/.cursor-plugin/**"
+  ],
+  "forbidden": {
+    "pattern": "cursor",
+    "flags": "i",
+    "skipFiles": [
+      "*/LICENSE",
+      "*/LICENSE.*"
+    ],
+    "allowedWords": [
+      "endCursor",
+      "precursor"
+    ],
+    "exceptions": [
+      {
+        "file": "pstack/skills/poteto-mode/scripts/check-plan.mjs",
+        "word": "cursor",
+        "reason": "a variable holding a position in a list"
+      },
+      {
+        "file": "pstack/skills/poteto-mode/scripts/watch-pr/github.ts",
+        "word": "cursor",
+        "reason": "a GraphQL pagination cursor variable"
+      },
+      {
+        "file": "cursor-team-kit/skills/pr-review-canvas/styles.css",
+        "word": "cursor",
+        "reason": "the CSS cursor property"
+      },
+      {
+        "file": "pstack/skills/why/SKILL.md",
+        "word": "cursor",
+        "reason": "the text cursor in the user's editor"
+      }
+    ]
+  },
+  "authorFallback": {
+    "name": "The upstream plugin team (see LICENSE)"
+  }
 }

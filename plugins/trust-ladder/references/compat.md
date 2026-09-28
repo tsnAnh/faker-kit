@@ -1,7 +1,7 @@
 <!-- team-kit:compat:start -->
-## Running the Cursor team's skills in Claude Code, Codex, and Pi
+## Running the upstream skills in Claude Code, Codex, and Pi
 
-The pstack, cursor-team-kit, thermos, advisor, continual-learning, agent-compatibility, and teaching skills were written for Cursor and are kept word for word. When one of them uses a Cursor term, do the equivalent below in the agent you are running in.
+The pstack, team-workflows, thermos, advisor, continual-learning, agent-compatibility, and teaching skills were written for another editor and are kept close to word for word. When one of them uses that editor's terms, do the equivalent below in the agent you are running in.
 
 | The skill says | Claude Code | Codex | Pi |
 |---|---|---|---|
@@ -13,15 +13,16 @@ The pstack, cursor-team-kit, thermos, advisor, continual-learning, agent-compati
 | `run_in_background: true` | The same Agent parameter | Parallel shell jobs | `subagent` background run |
 | `AskQuestion` | AskUserQuestion | Ask in chat | `ask_user` |
 | `/skill-name` | `/skill-name` or `/plugin:skill-name` | `$skill-name` | `/skill:skill-name` |
-| `.cursor/skills/<name>/`, such as a generated `verify-<app>` | Also at `.claude/skills/<name>` after `setup-team-kit` links it | `.agents/skills/<name>` | `.agents/skills/<name>` |
-| `.cursor/rules/*.mdc`, "an always-applied rule" | `CLAUDE.md` or `.claude/rules/*.md` | `AGENTS.md` | `AGENTS.md` |
-| `~/.cursor/rules/pstack-models.mdc` | Read it if it exists; `/setup-pstack` writes it there | Same | Same |
-| `agent-transcripts/` | `~/.claude/projects/<project>/*.jsonl` | `~/.codex/sessions/` | `~/.pi/agent/sessions/` |
-| Cursor's built-in `create-skill` | The `skill-creator` skill, else the faker-mode "Authoring a skill" playbook | `$skill-creator` | The "Authoring a skill" playbook |
-| Cursor's built-in `babysit` | The faker-mode Babysit playbook | Same | Same |
+| `.agents/skills/<name>/`, such as a generated `verify-<app>` | Also at `.claude/skills/<name>` after `setup-team-kit` links it | Read in place | Read in place |
+| `*.mdc` rules, "an always-applied rule" | `CLAUDE.md` or `.claude/rules/*.md` | `AGENTS.md` | `AGENTS.md` |
+| `~/.agents/pstack-models.md` | Read it if it exists; `/setup-pstack` writes it there | Same | Same |
+| `agent-transcripts/`, `~/.agents/projects/<slug>/agent-transcripts/` | `~/.claude/projects/<project>/*.jsonl` | `~/.codex/sessions/` | `~/.pi/agent/sessions/` |
+| `.agents/settings.json`, enabling a plugin for a repository | `enabledPlugins` in `.claude/settings.json` | `codex plugin add` | `packages` in `.pi/settings.json` |
+| The agent's built-in `create-skill` | The `skill-creator` skill, else the faker-mode "Authoring a skill" playbook | `$skill-creator` | The "Authoring a skill" playbook |
+| The agent's built-in `babysit` | The faker-mode Babysit playbook | Same | Same |
 | `/loop` | `/loop` | The faker-mode Autonomous run playbook | Same as Codex |
 | Cloud agents, `environment: "cloud"` | Claude Code on the web sessions | Codex cloud tasks | A pi-subagents background run in its own worktree |
-| Cursor Automations, Grok Bot routines | Claude Code routines or GitHub Actions (`setup-routines`) | GitHub Actions | GitHub Actions |
+| Automations, Grok Bot routines | Claude Code routines or GitHub Actions (`setup-routines`) | GitHub Actions | GitHub Actions |
 | Grok Bot webhook routine and its sender key (`make-bot-ui`) | A routine with an API trigger; its bearer token is the sender key | A GitHub `repository_dispatch` workflow | Same as Codex |
 | Bugbot, agentic security review | Claude Code Review or `claude-code-action` | Codex review or `codex-action` | Same PR bots |
 | Custom Mode pin (`mode: true`) | trust-ladder's hook keeps `/faker-mode` on until you say "exit faker mode" | Same hook | trust-ladder's Pi extension does the same |
@@ -35,7 +36,7 @@ Each teammate runs one agent: Claude Code on Claude Opus 5.5 at max effort, or C
 - A seat someone configured with a model name: `claude-opus-5-5-max` is `model: opus` in Claude Code. `gpt-6-sol-high` is native in Codex, and `openai-codex/gpt-6-sol` with thinking `high` in Pi. For the other family, use the `run-model` skill. If it reports the model is unreachable, run the seat on your own model and say so.
 - Agent files that say `model: inherit` run on your current model.
 
-### Cursor hooks
+### Upstream hooks
 
-advisor's end-of-turn nudge and continual-learning's cadence nudge are Cursor hooks. In Claude Code and Codex they run unchanged through each plugin's `agent-hooks/`, which maps Cursor's `afterFileEdit`, `afterAgentResponse`, `stop`, and `subagentStop` to `PostToolUse`, `Stop`, and `SubagentStop`. A follow-up they post arrives as a hook message that asks you to continue: act on it like a user turn. advisor's hooks need `jq`; continual-learning's needs `bun`. Without them the hook does nothing. Codex runs plugin hooks only after the user trusts them with `/hooks`. In Pi, run `/continual-learning` yourself or schedule it with `setup-routines`, and use `/advisor ask <question>` for a consult.
+advisor's end-of-turn nudge and continual-learning's cadence nudge are upstream hooks. In Claude Code and Codex they run unchanged through each plugin's `agent-hooks/`, which maps the upstream `afterFileEdit`, `afterAgentResponse`, `stop`, and `subagentStop` events to `PostToolUse`, `Stop`, and `SubagentStop`. A follow-up they post arrives as a hook message that asks you to continue: act on it like a user turn. advisor's hooks need `jq`; continual-learning's needs `bun`. Without them the hook does nothing. Codex runs plugin hooks only after the user trusts them with `/hooks`. In Pi, run `/continual-learning` yourself or schedule it with `setup-routines`, and use `/advisor ask <question>` for a consult.
 <!-- team-kit:compat:end -->

@@ -10,7 +10,7 @@ Your agent's sessions live in:
 | Codex | `~/.codex/sessions/` |
 | Pi | `~/.pi/agent/sessions/` |
 
-The pstack and cursor-team-kit skills say `agent-transcripts/`, Cursor's location; your agent reads these paths instead (see the [compat table](../../plugins/trust-ladder/references/compat.md)).
+The pstack and team-workflows skills say `agent-transcripts/` and `~/.agents/projects/`, the upstream locations; your agent reads these paths instead (see the [compat table](../../plugins/trust-ladder/references/compat.md)).
 
 ## Right after a hard task
 

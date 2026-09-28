@@ -10,12 +10,12 @@ Verification ranges from formal methods (proving invariants in something like Le
 
 ## Two parts: a CLI and a feature map
 
-Cursor's first verification skill, Control Glass, drove the Cursor app through the Chrome DevTools protocol and took performance traces. It settled into two parts:
+The first verification skill in the talk, Control Glass, drove a desktop app through the Chrome DevTools protocol and took performance traces. It settled into two parts:
 
 - **A CLI inside the skill.** Instead of each agent writing its own throwaway script, every agent uses the same small command-line tool to launch the app, check it is healthy, drive it, and capture evidence. pstack calls this [building the lever](../../plugins/pstack/skills/principle-build-the-lever/SKILL.md): give agents tools, not only instructions. The tool gets better every time someone improves it, and every agent benefits.
 - **A feature map.** A bug report often arrives as a cropped screenshot and three question marks. An agent that can run the app still has to guess what the user meant. A feature map, like a sitemap for the app's features, says what each feature is, how a user reaches it, how to drive it, and what end state proves it works. It is written-down memory of how the app works.
 
-The combination lets an agent both control the app and understand requests about it. At Cursor it became critical infrastructure, maintained by an automation and improved constantly.
+The combination lets an agent both control the app and understand requests about it. On the speaker's team it became critical infrastructure, maintained by an automation and improved constantly.
 
 ## In this kit
 

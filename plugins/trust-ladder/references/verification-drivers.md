@@ -1,6 +1,6 @@
 # Verification drivers
 
-A verification skill lets an agent prove its own change by driving the real app. `/create-verification-skill` (pstack) builds one per repository. This table gives it a starting recipe for each kind of surface. See `skills/control-mobile/SKILL.md` for the mobile commands and cursor-team-kit's `control-ui` and `control-cli` for web and terminal apps.
+A verification skill lets an agent prove its own change by driving the real app. `/create-verification-skill` (pstack) builds one per repository. This table gives it a starting recipe for each kind of surface. See `skills/control-mobile/SKILL.md` for the mobile commands and team-workflows's `control-ui` and `control-cli` for web and terminal apps.
 
 ## Per surface
 

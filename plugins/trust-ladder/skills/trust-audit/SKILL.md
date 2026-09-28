@@ -11,7 +11,7 @@ Measure the environment, not the agents. Every score cites evidence you observed
 
 1. Run `/check-agent-compatibility` from the agent-compatibility plugin. Keep its overall score and its startup, validation-loop, and docs-reliability scores.
 2. From a clean checkout, run the repository's documented setup and its full `check` or CI-equivalent command. Record the wall time and whether it passed.
-3. If a verification skill exists (`verify-<app>` in `.cursor/skills`, `.claude/skills`, or `.agents/skills`), run its doctor command and drive one feature from its feature map.
+3. If a verification skill exists (`verify-<app>` in `.agents/skills` or `.claude/skills`), run its doctor command and drive one feature from its feature map.
 
 ## 2. Score each layer from 0 to 3
 

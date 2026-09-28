@@ -2,7 +2,7 @@
 
 A verification skill lets an agent run your app the way a user does and capture proof: screenshots, recordings, terminal transcripts, logs, database rows. With it, an agent can check its own work. Without it, a person has to, and that person becomes the limit on how much the team ships.
 
-Cursor calls its verification skill Control Glass. The pstack guide calls the generated one `/control-app`. In your repository it will be `verify-<app>`.
+The talk's verification skill is called Control Glass. The pstack guide calls the generated one `/control-app`. In your repository it will be `verify-<app>`.
 
 ## Create it
 
@@ -13,7 +13,7 @@ Cursor calls its verification skill Control Glass. The pstack guide calls the ge
 This skill only runs when you call it by name. It:
 
 1. Works out from the code what a user touches (web, desktop, mobile, CLI, API), how the app starts, and how an agent can drive it.
-2. Writes `.cursor/skills/verify-<app>/SKILL.md` with launch, doctor, drive, evidence, and cleanup steps, plus a small CLI that scripts them. pstack calls this [building the lever](../../plugins/pstack/skills/principle-build-the-lever/SKILL.md): give agents a tool, not a page of instructions.
+2. Writes `.agents/skills/verify-<app>/SKILL.md` with launch, doctor, drive, evidence, and cleanup steps, plus a small CLI that scripts them. pstack calls this [building the lever](../../plugins/pstack/skills/principle-build-the-lever/SKILL.md): give agents a tool, not a page of instructions.
 3. Seeds a **feature map**: one file per feature saying how to reach it, how to drive it, and what end state proves it works.
 4. Runs itself once, end to end, and fixes what fails.
 
@@ -35,7 +35,7 @@ For Android, iOS, Flutter, and KMP, point it at `control-mobile`:
 
 `control-mobile` covers emulators and simulators: installing builds, tapping by accessibility label, screenshots, screen recordings, and logs. [Verification drivers](../../plugins/trust-ladder/references/verification-drivers.md) lists the tools per platform and what a Linux cloud container cannot run (the iOS Simulator, and usually a hardware-accelerated Android emulator).
 
-For web and Electron apps, the harness builds on cursor-team-kit's `control-ui`. For command-line tools and TUIs, `control-cli`.
+For web and Electron apps, the harness builds on team-workflows's `control-ui`. For command-line tools and TUIs, `control-cli`.
 
 ## Make the CLI good
 

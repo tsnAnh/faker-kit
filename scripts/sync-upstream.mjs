@@ -9,22 +9,24 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const UPSTREAM_DIR = path.join(ROOT, "upstream");
 const PLUGINS_DIR = path.join(ROOT, "plugins");
-const ADAPTER_SOURCE = path.join(UPSTREAM_DIR, "agent-hooks", "cursor-hook-adapter.mjs");
+const ADAPTER_FILE = "hook-adapter.mjs";
+const ADAPTER_SOURCE = path.join(UPSTREAM_DIR, "agent-hooks", ADAPTER_FILE);
 const AGENT_HOOKS_DIR = "agent-hooks";
-const CURSOR_TO_AGENT_EVENT = { afterFileEdit: "PostToolUse", afterAgentResponse: "Stop", stop: "Stop", subagentStop: "SubagentStop" };
+const UPSTREAM_TO_AGENT_EVENT = { afterFileEdit: "PostToolUse", afterAgentResponse: "Stop", stop: "Stop", subagentStop: "SubagentStop" };
 const EDIT_TOOL_MATCHER = "Edit|Write|MultiEdit|NotebookEdit|apply_patch";
 const BINARY_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".woff", ".woff2"]);
-const MODEL_TOKEN = /\b(?:cursor-)?(?:grok|gpt|claude-(?:opus|sonnet|haiku|fable)|composer|gemini)(?:[-.][a-z0-9.]+)*(?:\[[^\]\s]*\])?/gi;
+const MODEL_TOKEN = /\b(?:grok|gpt|claude-(?:opus|sonnet|haiku|fable)|composer|gemini)(?:[-.][a-z0-9.]+)*(?:\[[^\]\s]*\])?/gi;
 
 const USAGE = `Usage: node scripts/sync-upstream.mjs [--check] [--src <dir>] [--ref <sha>]
 
-Vendors cursor/plugins into plugins/<name>/ byte-for-byte, except the model-name
-rewrites in upstream/model-map.json, the load fixes in upstream/compat-patches.json,
-and the team's renames in upstream/renames.json. Adds generated Claude Code and Codex
-manifests, and hook files that run a plugin's Cursor hooks in both agents.
+Vendors the upstream plugin repository in upstream/source.json into plugins/<name>/
+byte-for-byte, except the model-name rewrites in upstream/model-map.json, the load
+fixes in upstream/compat-patches.json, and the team's renames and omissions in
+upstream/renames.json. Adds generated Claude Code and Codex manifests, and hook files
+that run a plugin's upstream hooks in both agents.
 
   --check       Rebuild in memory and fail if plugins/ differs. Writes nothing.
-  --src <dir>   Use an existing checkout of cursor/plugins instead of cloning.
+  --src <dir>   Use an existing checkout of the upstream repository instead of cloning.
   --ref <sha>   Sync a different upstream commit and record it in upstream/source.json.
 
 Examples:
@@ -71,7 +73,7 @@ function globToRegExp(glob) {
 }
 
 function checkoutUpstream(repo, ref) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-plugins-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "upstream-plugins-"));
   const git = (...gitArgs) => execFileSync("git", ["-C", dir, ...gitArgs], { stdio: "pipe" });
   git("init", "-q");
   git("remote", "add", "origin", repo);
@@ -121,6 +123,9 @@ function loadRules() {
   return {
     rules: [...modelMap.rules.map(tag("model")), ...compat.rules.map(tag("compat")), ...renames.rules.map(tag("rename"))],
     pathRenames: renames.paths ?? [],
+    omit: (renames.omit ?? []).map(globToRegExp),
+    forbidden: renames.forbidden ?? null,
+    authorFallback: renames.authorFallback ?? null,
     allowed: new Set(modelMap.allowedModelTokens.map((t) => t.toLowerCase())),
     exceptions: modelMap.tokenExceptions,
   };
@@ -133,14 +138,14 @@ function renamePath(upstreamPath, pathRenames) {
     .join("/");
 }
 
-function agentHooks(plugin, cursorHooksBuf) {
-  const cursor = JSON.parse(cursorHooksBuf.toString("utf8"));
+function agentHooks(plugin, upstreamHooksBuf) {
+  const upstream = JSON.parse(upstreamHooksBuf.toString("utf8"));
   const hooks = {};
-  for (const cursorEvent of Object.keys(cursor.hooks ?? {})) {
-    const event = CURSOR_TO_AGENT_EVENT[cursorEvent];
-    if (!event) fail(`${plugin}/hooks/hooks.json uses Cursor hook "${cursorEvent}", which has no Claude Code or Codex mapping. Add one to CURSOR_TO_AGENT_EVENT and the adapter.`);
+  for (const upstreamEvent of Object.keys(upstream.hooks ?? {})) {
+    const event = UPSTREAM_TO_AGENT_EVENT[upstreamEvent];
+    if (!event) fail(`${plugin}/hooks/hooks.json uses upstream hook "${upstreamEvent}", which has no Claude Code or Codex mapping. Add one to UPSTREAM_TO_AGENT_EVENT and the adapter.`);
     if (hooks[event]) continue;
-    const command = `node "\${CLAUDE_PLUGIN_ROOT}/${AGENT_HOOKS_DIR}/cursor-hook-adapter.mjs" ${event}`;
+    const command = `node "\${CLAUDE_PLUGIN_ROOT}/${AGENT_HOOKS_DIR}/${ADAPTER_FILE}" ${event}`;
     hooks[event] = [{ ...(event === "PostToolUse" ? { matcher: EDIT_TOOL_MATCHER } : {}), hooks: [{ type: "command", command }] }];
   }
   return Buffer.from(`${JSON.stringify({ hooks }, null, 2)}\n`, "utf8");
@@ -193,23 +198,51 @@ function transform(upstreamDir, pluginNames, { rules, allowed, exceptions }) {
   return { outputs, counts, changes, problems: [...countProblems, ...tokenProblems] };
 }
 
-function claudeManifest(cursorManifestBuf, hooksPath) {
-  const cursor = JSON.parse(cursorManifestBuf.toString("utf8"));
-  const manifest = { name: cursor.name };
-  for (const key of ["version", "description", "author", "homepage", "repository", "license", "keywords"]) {
-    if (cursor[key] !== undefined) manifest[key] = cursor[key];
+function claudeManifest(upstreamManifestBuf, hooksPath, { pathRenames, forbidden, authorFallback }) {
+  const upstream = JSON.parse(upstreamManifestBuf.toString("utf8"));
+  const banned = forbidden ? new RegExp(forbidden.pattern, forbidden.flags) : null;
+  const allowed = (value) => !banned || !banned.test(JSON.stringify(value));
+  const manifest = { name: renamePath(upstream.name, pathRenames) };
+  for (const key of ["version", "description", "author", "homepage", "repository", "license"]) {
+    if (upstream[key] !== undefined && allowed(upstream[key])) manifest[key] = upstream[key];
   }
+  if (!manifest.author && authorFallback) manifest.author = authorFallback;
+  if (Array.isArray(upstream.keywords)) manifest.keywords = upstream.keywords.map((k) => renamePath(k, pathRenames)).filter(allowed);
   if (hooksPath) manifest.hooks = hooksPath;
   return Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 }
 
-function buildTree(upstreamDir, pluginNames, rules) {
+function forbiddenProblems(tree, sources, forbidden) {
+  if (!forbidden) return [];
+  const skip = (forbidden.skipFiles ?? []).map(globToRegExp);
+  const allowedWords = new Set(forbidden.allowedWords ?? []);
+  const word = new RegExp(`[A-Za-z0-9_]*${forbidden.pattern}[A-Za-z0-9_]*`, `g${forbidden.flags ?? ""}`);
+  const problems = [];
+  for (const [rel, buf] of tree) {
+    const upstreamPath = sources.get(rel) ?? rel.replace(/^plugins\//, "");
+    if (skip.some((re) => re.test(upstreamPath)) || !isText(rel, buf)) continue;
+    const text = buf.toString("utf8");
+    for (const match of text.matchAll(word)) {
+      if (allowedWords.has(match[0])) continue;
+      if ((forbidden.exceptions ?? []).some((e) => e.file === upstreamPath && e.word === match[0])) continue;
+      problems.push(`${rel}:${lineOf(text, match.index)} contains "${match[0]}"; add a rule to upstream/renames.json`);
+    }
+  }
+  return problems;
+}
+
+function buildTree(upstreamDir, pluginNames, rules, manifestDir) {
   const result = transform(upstreamDir, pluginNames, rules);
   const tree = new Map();
   const sources = new Map();
   const renamedPaths = [];
+  const omitted = [];
   const generated = [];
   for (const [upstreamPath, buf] of result.outputs) {
+    if (rules.omit.some((re) => re.test(upstreamPath))) {
+      omitted.push(upstreamPath);
+      continue;
+    }
     const vendoredPath = renamePath(upstreamPath, rules.pathRenames);
     if (vendoredPath !== upstreamPath) renamedPaths.push([upstreamPath, vendoredPath]);
     tree.set(`plugins/${vendoredPath}`, buf);
@@ -217,39 +250,47 @@ function buildTree(upstreamDir, pluginNames, rules) {
   }
   const adapter = fs.readFileSync(ADAPTER_SOURCE);
   for (const plugin of pluginNames) {
-    const cursorManifest = result.outputs.get(`${plugin}/.cursor-plugin/plugin.json`);
-    if (!cursorManifest) fail(`upstream plugin "${plugin}" has no .cursor-plugin/plugin.json`);
-    const cursorHooks = result.outputs.get(`${plugin}/hooks/hooks.json`);
-    const hooksPath = cursorHooks ? `./${AGENT_HOOKS_DIR}/hooks.json` : null;
-    tree.set(`plugins/${plugin}/.claude-plugin/plugin.json`, claudeManifest(cursorManifest, hooksPath));
-    generated.push(`plugins/${plugin}/.claude-plugin/plugin.json`);
-    if (cursorHooks) {
-      for (const [rel, buf] of [[`${AGENT_HOOKS_DIR}/hooks.json`, agentHooks(plugin, cursorHooks)], [`${AGENT_HOOKS_DIR}/cursor-hook-adapter.mjs`, adapter]]) {
-        tree.set(`plugins/${plugin}/${rel}`, buf);
-        generated.push(`plugins/${plugin}/${rel}`);
+    const dir = `plugins/${renamePath(plugin, rules.pathRenames)}`;
+    const upstreamManifest = result.outputs.get(`${plugin}/${manifestDir}/plugin.json`);
+    if (!upstreamManifest) fail(`upstream plugin "${plugin}" has no ${manifestDir}/plugin.json`);
+    const upstreamHooks = result.outputs.get(`${plugin}/hooks/hooks.json`);
+    const hooksPath = upstreamHooks ? `./${AGENT_HOOKS_DIR}/hooks.json` : null;
+    tree.set(`${dir}/.claude-plugin/plugin.json`, claudeManifest(upstreamManifest, hooksPath, rules));
+    generated.push(`${dir}/.claude-plugin/plugin.json`);
+    if (upstreamHooks) {
+      for (const [rel, buf] of [[`${AGENT_HOOKS_DIR}/hooks.json`, agentHooks(plugin, upstreamHooks)], [`${AGENT_HOOKS_DIR}/${ADAPTER_FILE}`, adapter]]) {
+        tree.set(`${dir}/${rel}`, buf);
+        generated.push(`${dir}/${rel}`);
       }
     }
   }
-  return { ...result, tree, sources, renamedPaths, generated };
+  const problems = [...result.problems, ...forbiddenProblems(tree, sources, rules.forbidden)];
+  return { ...result, problems, tree, sources, renamedPaths, omitted, generated };
 }
 
 function sha256(buf) {
   return createHash("sha256").update(buf).digest("hex");
 }
 
-function renderChanges(rules, changes, renamedPaths, generated) {
+function renderChanges(rules, changes, renamedPaths, omitted, generated) {
   const lines = [
     "# Upstream changes",
     "",
-    "Generated by `scripts/sync-upstream.mjs`. Every difference between `plugins/` and upstream `cursor/plugins` is listed here. Model rules rewrite LLM model names to the team's models; compat rules are the minimum edits a file needs to load in Claude Code, Codex, or Pi; rename rules apply the names the team chose. Occurrences use upstream paths.",
+    "Generated by `scripts/sync-upstream.mjs`. Every difference between `plugins/` and the upstream repository in `upstream/source.json` is listed here. Model rules rewrite LLM model names to the team's models; compat rules are the minimum edits a file needs to load in Claude Code, Codex, or Pi; rename rules apply the names the team chose. Rules quote the upstream text they replace, and occurrences use upstream paths.",
     "",
     "## Renamed paths",
     "",
     ...renamedPaths.map(([from, to]) => `- \`${from}\` → \`${to}\``),
     "",
+    "## Omitted files",
+    "",
+    "Upstream files the kit does not ship, per `omit` in `upstream/renames.json`.",
+    "",
+    ...omitted.map((file) => `- \`${file}\``),
+    "",
     "## Generated files",
     "",
-    "Not in upstream. `.claude-plugin/plugin.json` is built from `.cursor-plugin/plugin.json`. `agent-hooks/` runs the plugin's Cursor hooks (`hooks/hooks.json`, unchanged) as Claude Code and Codex hooks, through `upstream/agent-hooks/cursor-hook-adapter.mjs`.",
+    "Not in upstream. `.claude-plugin/plugin.json` is built from the upstream manifest named in `upstream/source.json`. `agent-hooks/` runs the plugin's upstream hooks (`hooks/hooks.json`) as Claude Code and Codex hooks, through `upstream/agent-hooks/hook-adapter.mjs`.",
     "",
     ...generated.map((file) => `- \`${file}\``),
     "",
@@ -285,10 +326,11 @@ function main() {
   }
 
   const rules = loadRules();
-  const { tree, sources, changes, renamedPaths, generated, problems } = buildTree(upstreamDir, source.plugins, rules);
+  const vendoredNames = source.plugins.map((plugin) => renamePath(plugin, rules.pathRenames));
+  const { tree, sources, changes, renamedPaths, omitted, generated, problems } = buildTree(upstreamDir, source.plugins, rules, source.manifestDir);
   if (problems.length > 0) fail(`transform problems:\n  ${problems.join("\n  ")}`);
 
-  const changesDoc = Buffer.from(renderChanges(rules.rules, changes, renamedPaths, generated), "utf8");
+  const changesDoc = Buffer.from(renderChanges(rules.rules, changes, renamedPaths, omitted, generated), "utf8");
   const lock = {
     repo: source.repo,
     ref: head,
@@ -303,7 +345,7 @@ function main() {
       if (!fs.existsSync(full)) diffs.push(`missing ${rel}`);
       else if (!fs.readFileSync(full).equals(buf)) diffs.push(`differs ${rel}`);
     }
-    for (const rel of vendoredFiles(source.plugins)) if (!tree.has(rel)) diffs.push(`extra ${rel}`);
+    for (const rel of vendoredFiles(vendoredNames)) if (!tree.has(rel)) diffs.push(`extra ${rel}`);
     for (const [rel, buf] of [["upstream/CHANGES.md", changesDoc], ["upstream/lock.json", lockBuf]]) {
       const full = path.join(ROOT, rel);
       if (!fs.existsSync(full) || !fs.readFileSync(full).equals(buf)) diffs.push(`stale ${rel}`);
@@ -315,7 +357,7 @@ function main() {
     return;
   }
 
-  for (const plugin of source.plugins) fs.rmSync(path.join(PLUGINS_DIR, plugin), { recursive: true, force: true });
+  for (const plugin of new Set([...source.plugins, ...vendoredNames])) fs.rmSync(path.join(PLUGINS_DIR, plugin), { recursive: true, force: true });
   for (const [rel, buf] of tree) {
     const full = path.join(ROOT, rel);
     fs.mkdirSync(path.dirname(full), { recursive: true });

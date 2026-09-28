@@ -1,7 +1,7 @@
 {
   "name": "trust-ladder",
   "version": "0.1.0",
-  "description": "Route every agent correction to the strongest layer (codebase, lint/CI, rules and review bots, skills, style guide), set up repos for agents, and give everyone on the team a plain-English front door. Installs the vendored Cursor team plugins as dependencies.",
+  "description": "Route every agent correction to the strongest layer (codebase, lint/CI, rules and review bots, skills, style guide), set up repos for agents, and give everyone on the team a plain-English front door. Installs the vendored upstream plugins as dependencies.",
   "author": {
     "name": "tsnAnh"
   },
@@ -21,7 +21,7 @@
   ],
   "dependencies": [
     "pstack",
-    "cursor-team-kit",
+    "team-workflows",
     "thermos",
     "continual-learning",
     "cli-for-agent",

@@ -16,7 +16,7 @@ The skill inspects the repository before it asks you anything. If the repository
 
 | Layer | Files | What they do |
 |---|---|---|
-| 3. Rules | `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`) | Commands, layout, boundaries, paved paths, a never-list, `## Review guidelines`, and the table that maps the Cursor terms in pstack to your agent |
+| 3. Rules | `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`) | Commands, layout, boundaries, paved paths, a never-list, `## Review guidelines`, and the table that maps pstack's upstream terms to your agent |
 | 5. Style guide | `REVIEW.md`, `STYLE.md` | What reviewers check, and the team's taste with bad and good examples |
 | 2. Static analysis | `scripts/check.sh`, lint configs, baselines, a CI job | One command that runs everything CI runs. Existing violations are recorded in a baseline so only new ones fail |
 | 3. Review bots | `.github/workflows/claude-review.yml`, `codex-review.yml` | Claude and Codex review every pull request |

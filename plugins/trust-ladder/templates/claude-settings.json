@@ -10,7 +10,7 @@
   "enabledPlugins": {
     "trust-ladder@team-kit": true,
     "pstack@team-kit": true,
-    "cursor-team-kit@team-kit": true,
+    "team-workflows@team-kit": true,
     "thermos@team-kit": true,
     "continual-learning@team-kit": true,
     "cli-for-agent@team-kit": true,

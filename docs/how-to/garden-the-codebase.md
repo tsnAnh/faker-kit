@@ -23,7 +23,7 @@ When the gardener finds two ways of doing the same thing (two HTTP clients, thre
 /paved-path we have three ways to format dates
 ```
 
-It picks the path, migrates every caller, deletes the alternatives, and bans them with a lint message that names the path. This is what Cursor did with Dune, the framework that made the right way the only way. [Agent-friendly architecture](../../plugins/trust-ladder/references/agent-friendly-architecture.md) covers the patterns: one blessed API per concern, boundaries the build enforces, types that make bad states unrepresentable.
+It picks the path, migrates every caller, deletes the alternatives, and bans them with a lint message that names the path. This is what the talk's team did with Dune, the framework that made the right way the only way. [Agent-friendly architecture](../../plugins/trust-ladder/references/agent-friendly-architecture.md) covers the patterns: one blessed API per concern, boundaries the build enforces, types that make bad states unrepresentable.
 
 pstack's principle behind this: [migrate callers, then delete legacy APIs](../../plugins/pstack/skills/principle-migrate-callers-then-delete-legacy-apis/SKILL.md) in the same change, so nothing is left half-migrated for the next agent to copy.
 

@@ -1,6 +1,6 @@
 # Thermos plugin
 
-Thermo-nuclear branch review for Cursor agents: deep correctness and security audits, harsh maintainability rubrics, and parallel subagent orchestration.
+Thermo-nuclear branch review for coding agents: deep correctness and security audits, harsh maintainability rubrics, and parallel subagent orchestration.
 
 ## Installation
 
@@ -61,9 +61,9 @@ flowchart TB
 
 **Single skill:** invoke `thermo-nuclear-review` or `thermo-nuclear-code-quality-review` in the main agent, or the matching subagent after gathering diff context.
 
-## Migration from cursor-team-kit
+## Migration from team-workflows
 
-`cursor-team-kit` previously included only `thermo-nuclear-code-quality-review`. That skill and agent now live in **Thermos** alongside deep review and `thermos`. Remove the old thermo entries from team-kit when you install this plugin to avoid duplicates.
+`team-workflows` previously included only `thermo-nuclear-code-quality-review`. That skill and agent now live in **Thermos** alongside deep review and `thermos`. Remove the old thermo entries from team-kit when you install this plugin to avoid duplicates.
 
 ## License
 

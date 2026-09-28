@@ -13,7 +13,7 @@ Answer from the files, not from the user:
 
 - **Stacks.** `settings.gradle(.kts)` with Android plugins means kotlin-android. A `kotlin("multiplatform")` or `org.jetbrains.kotlin.multiplatform` plugin means kmp. `Cargo.toml` means rust. `pyproject.toml`, `setup.cfg`, or `requirements*.txt` means python. `pubspec.yaml` means flutter-dart. `Package.swift` or `*.xcodeproj` means swift-ios. Every repository also gets the agnostic pack.
 - **Commands.** How to install, build, test, lint, and run the app. Prefer the repo's own scripts (Makefile, package scripts, Gradle tasks, `justfile`).
-- **What exists.** AGENTS.md, CLAUDE.md, `.cursor/rules`, `.claude/`, `.codex/`, `.pi/`, CI workflows, linters, CODEOWNERS, `.github/pull_request_template.md`.
+- **What exists.** AGENTS.md, CLAUDE.md, other editors' rule folders, `.claude/`, `.codex/`, `.pi/`, CI workflows, linters, CODEOWNERS, `.github/pull_request_template.md`.
 - **Surfaces.** What a user touches: mobile app, web app, desktop app, CLI, or service.
 
 If the repository does not build or its tests do not pass as they are, stop and report it. Setting up on a broken base teaches agents the wrong commands.
@@ -23,7 +23,7 @@ If the repository does not build or its tests do not pass as they are, stop and 
 1. **AGENTS.md** from `templates/AGENTS.md`. Fill every section from step 1: one `check` command that runs everything CI runs, the layout, the boundaries, the paved paths, the never-list, and `## Review guidelines`. Delete a section rather than leave a placeholder. If AGENTS.md exists, merge: keep its content and add only the missing sections.
 2. **The compat block.** Copy the text between the markers in `references/compat.md`, markers included, to the end of AGENTS.md. With it in place, the SessionStart hook and the Pi extension stop injecting it.
 3. **CLAUDE.md.** If it does not exist, create it containing only `@AGENTS.md`. If it exists, add `@AGENTS.md` as its first line and move anything that applies to every agent into AGENTS.md.
-4. **Rules from other tools.** Port `.cursor/rules/*.mdc` into AGENTS.md sections, or into nested AGENTS.md files for rules scoped to one directory. Then run `correct` on each rule to see whether it can move down to a lint rule.
+4. **Rules from other tools.** Port rule files from other editors (such as `*.mdc` rules) into AGENTS.md sections, or into nested AGENTS.md files for rules scoped to one directory. Then run `correct` on each rule to see whether it can move down to a lint rule.
 5. **REVIEW.md and STYLE.md** from `templates/`. Seed STYLE.md with rules the team already repeats in review. Leave it short; `style-guide-from-reviews` fills it from real review comments.
 
 ## 3. Static analysis

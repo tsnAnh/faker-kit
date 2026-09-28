@@ -1,6 +1,6 @@
 ---
 name: control-mobile
-description: Build or adapt a local harness to drive and inspect an Android, iOS, Flutter, or Kotlin Multiplatform app on an emulator or simulator. Use for mobile UI verification, screenshots and screen recordings, UI hierarchy dumps, logs, startup and frame timing, deep links, or reproducing mobile bugs. The mobile counterpart of cursor-team-kit's control-ui.
+description: Build or adapt a local harness to drive and inspect an Android, iOS, Flutter, or Kotlin Multiplatform app on an emulator or simulator. Use for mobile UI verification, screenshots and screen recordings, UI hierarchy dumps, logs, startup and frame timing, deep links, or reproducing mobile bugs. The mobile counterpart of team-workflows's control-ui.
 ---
 
 # Control mobile

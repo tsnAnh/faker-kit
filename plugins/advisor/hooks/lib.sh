@@ -2,13 +2,13 @@
 
 # Shared helpers for the Advisor hooks. Source this file; do not run it.
 #
-# State lives in $CURSOR_PROJECT_DIR/.cursor/advisor/:
+# State lives in $CLAUDE_PROJECT_DIR/.agents/advisor/:
 #   state.json          written by the advisor skill, kept current here
 #   pending             marker: files were edited since the last consult
 #   last-response.txt   tail of the latest assistant message
 #   log.md              one entry per completed consult
 
-ADVISOR_DIR="${CURSOR_PROJECT_DIR:-.}/.cursor/advisor"
+ADVISOR_DIR="${CLAUDE_PROJECT_DIR:-.}/.agents/advisor"
 STATE_FILE="$ADVISOR_DIR/state.json"
 PENDING_FILE="$ADVISOR_DIR/pending"
 LAST_RESPONSE_FILE="$ADVISOR_DIR/last-response.txt"

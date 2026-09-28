@@ -1,6 +1,6 @@
 ---
 name: run-model
-description: Run one panel seat, judge, or delegate on a specific model slug (claude-opus-5-5-max, gpt-6-sol-high) from Claude Code, Codex, or Pi. Every pstack default is inherit-parent, so this is only needed when someone names a model, in ~/.cursor/rules/pstack-models.mdc or with /advisor <model>, that your agent cannot select directly, such as a gpt-* seat from Claude Code.
+description: Run one panel seat, judge, or delegate on a specific model slug (claude-opus-5-5-max, gpt-6-sol-high) from Claude Code, Codex, or Pi. Every pstack default is inherit-parent, so this is only needed when someone names a model, in ~/.agents/pstack-models.md or with /advisor <model>, that your agent cannot select directly, such as a gpt-* seat from Claude Code.
 ---
 
 # Run a model seat

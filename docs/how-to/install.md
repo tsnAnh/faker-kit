@@ -18,7 +18,7 @@ claude plugin marketplace add tsnAnh/skills
 claude plugin install trust-ladder@team-kit
 ```
 
-Installing `trust-ladder` also installs the eight plugins it depends on: pstack, cursor-team-kit, thermos, continual-learning, cli-for-agent, agent-compatibility, advisor, and teaching. `claude plugin list` shows all nine.
+Installing `trust-ladder` also installs the eight plugins it depends on: pstack, team-workflows, thermos, continual-learning, cli-for-agent, agent-compatibility, advisor, and teaching. `claude plugin list` shows all nine.
 
 Skills are called with a slash: `/start-here`, `/faker-mode`. If two plugins share a name, add the plugin: `/pstack:faker-mode`.
 
@@ -30,14 +30,14 @@ Codex reads the same marketplace file as Claude Code but does not install depend
 
 ```bash
 codex plugin marketplace add tsnAnh/skills
-for p in trust-ladder pstack cursor-team-kit thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do
+for p in trust-ladder pstack team-workflows thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do
   codex plugin add "$p@team-kit"
 done
 ```
 
 `codex plugin list` shows each one as installed and enabled. Skills are called with a dollar sign: `$start-here`, `$faker-mode`. Codex also picks a skill on its own when your request matches it.
 
-Codex runs a plugin's hooks only after you trust them. At the first start it says hooks need review: type `/hooks` and trust the team-kit ones. trust-ladder's add the Cursor-terms table and keep `$faker-mode` pinned; advisor's and continual-learning's run those plugins' reminders. Review them again after an update changes them.
+Codex runs a plugin's hooks only after you trust them. At the first start it says hooks need review: type `/hooks` and trust the team-kit ones. trust-ladder's add the upstream-terms table and keep `$faker-mode` pinned; advisor's and continual-learning's run those plugins' reminders. Review them again after an update changes them.
 
 To update: `codex plugin marketplace upgrade`, then restart Codex.
 
@@ -51,7 +51,7 @@ pi install git:github.com/tsnAnh/skills
 
 Pin a commit so everyone runs the same version, for example `pi install git:github.com/tsnAnh/skills@<commit sha>`. `pi list` shows the package. Skills are called as `/skill:start-here`, `/skill:faker-mode`.
 
-The kit's Pi extension adds what the Claude Code and Codex hooks do: it tells the agent how to read Cursor terms in the skills, and it keeps `/faker-mode` switched on across turns until you say "exit faker mode".
+The kit's Pi extension adds what the Claude Code and Codex hooks do: it tells the agent how to read the upstream terms in the skills, and it keeps `/faker-mode` switched on across turns until you say "exit faker mode".
 
 pstack's skills delegate work to subagents and ask you questions. In Pi, that needs the `pi-subagents` and `pi-ask-user` packages. If you use a setup like [pikachu](https://github.com/tsnAnh/pikachu), you already have both.
 
@@ -66,7 +66,7 @@ A repository can make the kit appear for everyone who opens it. `/setup-team-kit
 | `.claude/settings.json` | After a teammate trusts the folder, Claude Code registers the team-kit marketplace and knows which plugins the project enables. Each person still runs `/plugin install trust-ladder@team-kit` once. |
 | `.codex/config.toml` | Sets the team's Codex model, reasoning effort, and sandbox for this project after the teammate trusts it. The install loop above is in its header. |
 | `.pi/settings.json` | Declares the kit as a pinned project package. Pi installs and loads it after the teammate trusts the project. |
-| `AGENTS.md` and `CLAUDE.md` | The instructions every agent reads, with the Cursor-terms table built in. |
+| `AGENTS.md` and `CLAUDE.md` | The instructions every agent reads, with the upstream-terms table built in. |
 
 None of these files affect the other agents, so a repository can carry all three.
 

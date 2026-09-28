@@ -208,7 +208,7 @@ describe("run-model", () => {
   });
 
   test("bad input explains itself", () => {
-    const result = spawnSync(RUN_MODEL, ["--from", "cursor", "--model", "x"], { encoding: "utf8" });
+    const result = spawnSync(RUN_MODEL, ["--from", "vim", "--model", "x"], { encoding: "utf8" });
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("--from must be claude, codex, or pi");
   });
@@ -217,12 +217,12 @@ describe("run-model", () => {
 describe("link-skills", () => {
   test("refuses to replace a real skill directory and reports the conflict", () => {
     const repo = tmp();
-    for (const root of [".cursor/skills", ".agents/skills"]) {
+    for (const root of [".claude/skills", ".agents/skills"]) {
       fs.mkdirSync(path.join(repo, root, "verify-app"), { recursive: true });
       fs.writeFileSync(path.join(repo, root, "verify-app", "SKILL.md"), "---\nname: verify-app\ndescription: x\n---\n");
     }
     const result = spawnSync(LINK_SKILLS, [repo], { encoding: "utf8" });
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("conflict: .cursor/skills/verify-app and .agents/skills/verify-app");
+    expect(result.stderr).toContain("conflict: .claude/skills/verify-app and .agents/skills/verify-app");
   });
 });

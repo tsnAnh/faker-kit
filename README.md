@@ -2,7 +2,7 @@
 
 A team kit for Claude Code, Codex, and Pi that makes coding agents trustworthy enough to run many at once, and safe enough for anyone on the team to use.
 
-It packages the Cursor team's agent plugins (Lauren Tan's pstack, cursor-team-kit, thermos, and five more) word for word, with only model names changed to ours, and adds `trust-ladder`: skills that turn every correction you give an agent into a lasting fix, lint packs for seven stacks, review bots, routines, and plain-language skills for designers, marketers, and founders.
+It packages eight open-source agent plugins (Lauren Tan's pstack, team-workflows, thermos, and five more), unchanged except for model names and a few renames, and adds `trust-ladder`: skills that turn every correction you give an agent into a lasting fix, lint packs for seven stacks, review bots, routines, and plain-language skills for designers, marketers, and founders.
 
 ## Install
 
@@ -19,7 +19,7 @@ Pick the one agent you use.
 
 ```bash
 codex plugin marketplace add tsnAnh/skills
-for p in trust-ladder pstack cursor-team-kit thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do codex plugin add "$p@team-kit"; done
+for p in trust-ladder pstack team-workflows thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do codex plugin add "$p@team-kit"; done
 ```
 
 **Pi**
@@ -60,9 +60,9 @@ Every time you correct an agent, `/correct` puts the fix in the strongest layer 
 | Path | Contents |
 |---|---|
 | `plugins/trust-ladder/` | This kit's plugin: 20 skills, templates, lint packs, hooks, and the Pi extension |
-| `plugins/pstack/` and seven others | Vendored from [cursor/plugins](https://github.com/cursor/plugins), byte-identical except model names and the `faker-mode` rename, plus generated manifests and hook files ([what changed](upstream/CHANGES.md)) |
+| `plugins/pstack/` and seven others | Vendored from the MIT-licensed upstream repository named in `upstream/source.json`, byte-identical except model names and the `faker-mode` rename, plus generated manifests and hook files ([what changed](upstream/CHANGES.md)) |
 | `docs/` | Usage instructions for every role |
-| `upstream/` | The pinned upstream commit, the model map, the team's renames, the Cursor hook adapter, and the change list |
+| `upstream/` | The pinned upstream commit, the model map, the team's renames, the hook adapter, and the change list |
 | `scripts/` | Sync, validation, catalog generation, and the test runners CI uses |
 
 Every skill, with who it is for and a prompt to try: [docs/reference/skills.md](docs/reference/skills.md). Where everything from the talk and the pstack guide posts lives: [coverage](docs/reference/coverage.md).

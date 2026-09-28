@@ -35,7 +35,7 @@ If their first message already says which one, skip the question.
 | 7. Learn a skill | `create-learning-path` from the teaching plugin. |
 | 8. Set up the repository | `setup-team-kit`. |
 
-Before routing to 1, 2, or 3, check whether the repository has a verification skill (`verify-*` under `.cursor/skills`, `.claude/skills`, or `.agents/skills`). Without one, an agent cannot show proof on screen. Say so plainly, suggest that an engineer runs `/create-verification-skill`, and offer to continue with test results as the only proof.
+Before routing to 1, 2, or 3, check whether the repository has a verification skill (`verify-*` under `.agents/skills` or `.claude/skills`). Without one, an agent cannot show proof on screen. Say so plainly, suggest that an engineer runs `/create-verification-skill`, and offer to continue with test results as the only proof.
 
 ## 3. Say what will happen
 

@@ -18,7 +18,7 @@ Each teammate has one agent: Claude Code (Claude Opus 5.5, max effort) or Codex 
 | `gpt-5.6-sol-max` for reflect tooling | pstack | `inherit-parent` |
 | The budget example `grok-4.7-xhigh-fast` into `grok-4.7-medium-fast` | pstack setup-pstack | `gpt-6-sol-high` into `gpt-6-sol-medium` |
 | "Families go by prefix: `claude-*`, `gpt-*`, and `grok-*`" | pstack | "`claude-*` and `gpt-*`" |
-| `model: fast` in agent frontmatter | cursor-team-kit's ci-watcher, agent-compatibility's four reviewers | `model: inherit` |
+| `model: fast` in agent frontmatter | team-workflows's ci-watcher, agent-compatibility's four reviewers | `model: inherit` |
 | The default advisor, Grok 4.6 at xhigh effort | advisor | `inherit-parent`; the advisor agent's `model:` becomes `inherit` |
 | The advisor's example slugs and family names | advisor | `gpt-6-sol-high` and `claude-opus-5-5-max`; `gpt sol` and `claude opus` |
 

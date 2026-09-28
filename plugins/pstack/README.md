@@ -1,14 +1,14 @@
 # pstack
 
-i'm [poteto](https://x.com/poteto). i'm not a president or ceo, but i've worked with millions of lines of code at Meta, Netflix, and Cursor. i'm also on the react core team where i help build and maintain react compiler.
+i'm [poteto](https://x.com/poteto). i'm not a president or ceo, but i've worked with millions of lines of code at Meta, Netflix, and elsewhere. i'm also on the react core team where i help build and maintain react compiler.
 
 there's a growing sense that ai writes too much slop code. i agree. i don't want to ship like a team of twenty slop artists. throughput without quality is not a goal i aspire to. if you want to go fast, go deep first. 
 
-**pstack is my answer.** these are the same skills i use everyday to ship high quality code at Cursor. this turns cursor into a real engineering team. the goal is not to maximize loc, in fact it's the opposite. pstack helps you write less, but higher quality code.
+**pstack is my answer.** these are the same skills i use everyday to ship high quality code at work. this turns your coding agent into a real engineering team. the goal is not to maximize loc, in fact it's the opposite. pstack helps you write less, but higher quality code.
 
 **pstack gives you fearless parallelism.** when you can go deep on one agent and trust it to write good, verifiable code, you can truly parallelize with confidence. start multiple agents up with `faker-mode` and trust that they'll apply rigorous engineering principles to their work.
 
-**cursor gives you the best of all worlds.** every frontier model has its strengths and weaknesses. use any model with pstack. in fact, many of my skills use multi-model workflows to take advantage of each model's unique strengths.
+**a multi-model setup gives you the best of all worlds.** every frontier model has its strengths and weaknesses. use any model with pstack. in fact, many of my skills use multi-model workflows to take advantage of each model's unique strengths.
 
 fork it. improve it. make it yours. PRs are welcome! 
 
@@ -90,7 +90,7 @@ the full rules and playbooks live in [`skills/faker-mode/SKILL.md`](./skills/fak
 
 [`/faker-mode`](./skills/faker-mode/SKILL.md) is also a sticky mode: once entered it stays on across turns, applying itself when a playbook matches or the task needs rigor and staying out of the way otherwise. opt out any time by saying so.
 
-[`/faker-mode`](./skills/faker-mode/SKILL.md) works extremely well with cursor's `/loop` command. you can make cursor work for many hours without sacrificing rigor.
+[`/faker-mode`](./skills/faker-mode/SKILL.md) works extremely well with your agent's `/loop` command. you can make your agent work for many hours without sacrificing rigor.
 
 ## skills
 
@@ -230,15 +230,15 @@ twenty-three short skills, one principle each. `faker-mode` indexes them inline 
 
 a few things `faker-mode` references but doesn't bundle:
 
-- `/deslop` and the `deslop` skill ship in the `cursor-team-kit` plugin.
-- `control-cli` (for CLIs and TUIs) and `control-ui` (for browser, Electron, web) ship in `cursor-team-kit` too.
-- `/create-skill` is a cursor built-in. cursor also ships a built-in `/babysit`; inside `faker-mode`, the [babysit playbook](./skills/faker-mode/playbooks/babysit.md) supersedes it for pr-status requests.
+- `/deslop` and the `deslop` skill ship in the `team-workflows` plugin.
+- `control-cli` (for CLIs and TUIs) and `control-ui` (for browser, Electron, web) ship in `team-workflows` too.
+- `/create-skill` is an agent built-in. many agents also ship a built-in `/babysit`; inside `faker-mode`, the [babysit playbook](./skills/faker-mode/playbooks/babysit.md) supersedes it for pr-status requests.
 
-install `cursor-team-kit` alongside pstack if you want the full set.
+install `team-workflows` alongside pstack if you want the full set.
 
 ## why are there no planning skills?
 
-cursor already has a great plan mode which works great with pstack. but personally, i don't believe in planning. the best spec is code. if you do want to make a plan, [`/faker-mode`](./skills/faker-mode/SKILL.md) covers it, but it's not a default. 
+your agent likely has a great plan mode, which works great with pstack. but personally, i don't believe in planning. the best spec is code. if you do want to make a plan, [`/faker-mode`](./skills/faker-mode/SKILL.md) covers it, but it's not a default. 
 
 ## make it yours
 
@@ -254,7 +254,7 @@ a rule written before 0.15.3 pins the old default models. delete those role line
 
 pstack also ships a dormant [benny automation pack](./automations/benny/). benny triages slack issue reports, then reproduces and fixes confirmed bugs with real ui evidence. its files are not registered as slash skills.
 
-to set it up, point cursor at [`FOR_AGENTS.md`](./automations/benny/FOR_AGENTS.md). setup copies the pack into the target repository at `.cursor/automations/benny/`, enables pstack there for shared skills, and keeps user configuration outside the copied pack.
+to set it up, point your agent at [`FOR_AGENTS.md`](./automations/benny/FOR_AGENTS.md). setup copies the pack into the target repository at `.agents/automations/benny/`, enables pstack there for shared skills, and keeps user configuration outside the copied pack.
 
 ## license
 
