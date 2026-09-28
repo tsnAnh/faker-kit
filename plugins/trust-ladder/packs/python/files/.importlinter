@@ -1,0 +1,10 @@
+[importlinter]
+root_package = app
+
+[importlinter:contract:layers]
+name = UI depends on services, services on domain; never the reverse
+type = layers
+layers =
+    app.ui
+    app.services
+    app.domain

@@ -1,0 +1,22 @@
+line-length = 100
+
+[lint]
+select = [
+  "E", "W", "F", "I", "B", "UP", "SIM", "RUF", "C4", "RET", "PTH",
+  "ANN", "BLE", "TRY", "ARG", "S", "PT",
+  "T20",
+  "ERA",
+  "PGH",
+  "TID",
+]
+ignore = ["TRY003", "S101"]
+
+[lint.per-file-ignores]
+"tests/**" = ["ANN", "ARG", "S"]
+"**/test_*.py" = ["ANN", "ARG", "S"]
+
+[lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "Model the type. If a boundary really is untyped, parse it into a typed object there."

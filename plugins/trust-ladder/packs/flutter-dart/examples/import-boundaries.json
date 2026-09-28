@@ -1,0 +1,17 @@
+{
+  "rules": [
+    {
+      "id": "feature-ui-does-not-touch-data",
+      "from": ["lib/features/*/ui/**"],
+      "forbid": ["lib/features/*/data/**", "package:*/features/*/data/**", "package:http/**", "package:dio/**"],
+      "message": "UI reads state from the feature's controller. Data access lives in data/."
+    },
+    {
+      "id": "features-do-not-import-each-other",
+      "from": ["lib/features/**"],
+      "forbid": ["package:*/features/**"],
+      "allow": ["package:*/features/shared/**"],
+      "message": "Features talk through lib/core or a shared feature, not by importing each other."
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+id: swift-no-workaround-comments
+language: swift
+severity: error
+message: Fix the root cause or open a task. A comment that excuses a workaround gets copied along with it.
+rule:
+  any:
+    - kind: comment
+    - kind: multiline_comment
+  regex: (?i)\b(hack|xxx|workaround|for now|temporar(y|ily))\b

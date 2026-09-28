@@ -1,0 +1,30 @@
+{
+  "name": "python",
+  "description": "ruff with the rule families that catch agent habits, mypy strict, and import-linter layer contracts.",
+  "detect": { "files": ["pyproject.toml", "setup.cfg", "setup.py", "requirements.txt"] },
+  "tools": [
+    { "name": "ruff", "version": ">=0.15", "why": "lint and format" },
+    { "name": "mypy", "version": ">=1.10", "why": "strict type checking" },
+    { "name": "import-linter", "version": ">=2.0", "why": "layer contracts" }
+  ],
+  "merge": [
+    {
+      "from": "files/.importlinter",
+      "into": ".importlinter",
+      "how": "Set root_package to the repository's top-level package and list its real layers, highest first. Mark a layer optional by listing only layers that exist."
+    },
+    {
+      "from": "files/ruff.toml",
+      "into": "pyproject.toml",
+      "how": "If pyproject.toml already has [tool.ruff], move the pack's settings under it (prefix each table with tool.ruff.) and delete ruff.toml; ruff ignores ruff.toml when pyproject.toml configures it."
+    }
+  ],
+  "check": [
+    "ruff format --check .",
+    "ruff check .",
+    "mypy .",
+    "lint-imports"
+  ],
+  "baseline": "Run `ruff check --add-noqa .` once to mark existing violations, then ratchet the markers: add {\"id\": \"python-noqa\", \"pattern\": \"# noqa\", \"files\": [\"*.py\"]} to .agents/ratchet.json and run ratchet.mjs update. For mypy, list legacy modules in a [mypy-<module>] section with ignore_errors = True and ratchet the count of those sections the same way.",
+  "ci": "ci/github-actions.yml"
+}

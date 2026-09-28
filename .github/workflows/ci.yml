@@ -47,6 +47,35 @@ jobs:
       - name: Pi discovers every skill and loads the extension
         run: node scripts/check-pi-package.mjs --sdk "$RUNNER_TEMP/agents"
 
+  lint-packs:
+    runs-on: ubuntu-latest
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff mypy import-linter
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: dart-lang/setup-dart@v1
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/team-kit-tools
+          key: team-kit-tools-${{ hashFiles('plugins/trust-ladder/packs/tools.sh') }}
+      - name: Every pack fails on its bad fixture and passes on its good one
+        run: scripts/test-packs.sh
+
   orchestrate-tests:
     # orchestrate drives Cursor's cloud agents through @cursor/sdk. Its model catalog is
     # rewritten to the team's models, which merges the GPT-5.5 and Codex 5.3 entries into one

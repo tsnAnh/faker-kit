@@ -1,0 +1,9 @@
+id: swift-no-print
+language: swift
+severity: error
+message: Log with the app's Logger (os.Logger) instead of print, debugPrint, or NSLog.
+rule:
+  any:
+    - pattern: print($$$ARGS)
+    - pattern: debugPrint($$$ARGS)
+    - pattern: NSLog($$$ARGS)
