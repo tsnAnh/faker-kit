@@ -15,7 +15,7 @@ Recommend these four and let the user drop any:
 |---|---|---|
 | Maintain the verification skill | Weekdays, overnight | `/maintain-verification-skill`, at most one PR of proven feature-map fixes |
 | Gardener | Weekdays, overnight | `gardener` for the last 7 days: a rule per spreading smell, an issue per cleanup |
-| Weekly review | Friday | `/weekly-review`, posted as an issue anyone on the team can read |
+| Weekly review | Friday | `/weekly-review` across every author (the skill defaults to the current git user), posted as an issue anyone on the team can read |
 | Reproduce bug reports | An issue gets the `bug` label | Restate, reproduce with the verification skill, and open a fix PR when the cause is clear |
 
 Add `/continual-learning` weekly if the team uses the continual-learning plugin; its Cursor hook does not fire outside Cursor.

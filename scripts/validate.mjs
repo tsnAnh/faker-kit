@@ -2,8 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ROOT, parseFrontmatter, skillDirs } from "./lib/skills.mjs";
+import { catalogProblems } from "./gen-catalog.mjs";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+export { parseFrontmatter, skillDirs };
+
 const OWN_PLUGIN = "trust-ladder";
 const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ALLOWED_DUPLICATE_SKILLS = new Set(["thermo-nuclear-code-quality-review"]);
@@ -12,42 +15,6 @@ const problems = [];
 const report = (where, message) => problems.push(`${where}: ${message}`);
 const rel = (full) => path.relative(ROOT, full).split(path.sep).join("/");
 const readJson = (file) => JSON.parse(fs.readFileSync(path.join(ROOT, file), "utf8"));
-
-export function parseFrontmatter(text) {
-  const match = /^---\n([\s\S]*?)\n---\n/.exec(text);
-  if (!match) return null;
-  const fields = {};
-  const lines = match[1].split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const kv = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(lines[i]);
-    if (!kv) continue;
-    let value = kv[2];
-    if (/^[>|][-+]?$/.test(value)) {
-      const block = [];
-      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) block.push(lines[++i].trim());
-      value = block.join(" ");
-    }
-    fields[kv[1]] = value.replace(/^["'](.*)["']$/, "$1");
-  }
-  return fields;
-}
-
-export function skillDirs(pluginDir) {
-  const skillsDir = path.join(pluginDir, "skills");
-  if (!fs.existsSync(skillsDir)) return [];
-  const found = [];
-  const walk = (dir) => {
-    if (fs.existsSync(path.join(dir, "SKILL.md"))) {
-      found.push(dir);
-      return;
-    }
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) walk(path.join(dir, entry.name));
-    }
-  };
-  walk(skillsDir);
-  return found.sort();
-}
 
 function markdownFiles(dir) {
   if (!fs.existsSync(dir)) return [];
@@ -144,11 +111,30 @@ function checkOwnMarkdown() {
   for (const file of files) checkLinks(file);
 }
 
+function checkOwnPathReferences() {
+  const pluginRoot = path.join(ROOT, "plugins", OWN_PLUGIN);
+  const vendoredSkillDirs = fs
+    .readdirSync(path.join(ROOT, "plugins"))
+    .filter((p) => p !== OWN_PLUGIN)
+    .flatMap((p) => skillDirs(path.join(ROOT, "plugins", p)));
+  for (const dir of skillDirs(pluginRoot)) {
+    const file = path.join(dir, "SKILL.md");
+    const text = fs.readFileSync(file, "utf8");
+    for (const match of text.matchAll(/`((?:templates|references|packs)\/[^`\s]+)`/g)) {
+      const target = match[1].replace(/[<{].*$/, "");
+      const bases = [dir, pluginRoot, ...vendoredSkillDirs];
+      if (!bases.some((base) => fs.existsSync(path.join(base, target)))) report(rel(file), `\`${match[1]}\` does not exist`);
+    }
+  }
+}
+
 function main() {
   const pluginNames = checkMarketplace();
   checkSkills(pluginNames);
   checkPiManifest();
   checkOwnMarkdown();
+  checkOwnPathReferences();
+  for (const problem of catalogProblems()) problems.push(problem);
   if (problems.length > 0) {
     process.stderr.write(`validate: ${problems.length} problem(s)\n  ${problems.join("\n  ")}\n`);
     process.exit(1);

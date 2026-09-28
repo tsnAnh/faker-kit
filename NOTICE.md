@@ -31,4 +31,4 @@ The copies are byte-identical to upstream with three exceptions, all applied by 
 
 Everything else, including `plugins/trust-ladder/`, `docs/`, `scripts/`, and the templates and lint packs, is Copyright (c) 2026 tsnAnh under the MIT license in [`LICENSE`](LICENSE).
 
-`docs/` summarizes ideas from Lauren Tan's talk on building trust in agents and her "Complete Guide to pstack" posts. [poteto/verification-skill-example](https://github.com/poteto/verification-skill-example) is referenced as an example and nothing is copied from it.
+`docs/` summarizes ideas from Lauren Tan's talk on building trust in agents and her "Complete Guide to pstack" posts, and quotes some of their example prompts. The generated pages in `docs/reference/` quote each vendored skill's description and poteto-mode's playbook list. [poteto/verification-skill-example](https://github.com/poteto/verification-skill-example) is referenced as an example and nothing is copied from it.

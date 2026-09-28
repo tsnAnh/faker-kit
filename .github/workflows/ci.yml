@@ -21,6 +21,8 @@ jobs:
         run: node scripts/sync-upstream.mjs --check
       - name: Manifests, frontmatter, links, catalog
         run: node scripts/validate.mjs
+      - name: Generated docs are current
+        run: node scripts/gen-catalog.mjs --check
       - name: trust-ladder tests (hooks, Pi extension, run-model, link-skills)
         run: bun test plugins/trust-ladder
       - name: pstack script tests

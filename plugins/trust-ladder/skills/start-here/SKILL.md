@@ -30,7 +30,7 @@ If their first message already says which one, skip the question.
 | 2. Something is broken | Engineers: `/poteto-mode` with the Bug fix playbook. Everyone else: `request-a-change`, framed as a bug. It restates the problem, reproduces it, and opens a fix for an engineer to review. |
 | 3. Design options | `/poteto-mode` with the Prototype playbook: two or three variants behind a switch, a screenshot of each from the verification skill, and a side-by-side comparison. For "make it match this design", the Visual parity playbook. |
 | 4. How or why | `/teach`, which runs `/how` and `/why` and explains with diagrams. Follow with `/bro` if the answer is still too technical. |
-| 5. What shipped | `/what-did-i-get-done` for one person, `/weekly-review` for the team. |
+| 5. What shipped | `/what-did-i-get-done` or `/weekly-review` for the person's own commits. For the whole team, run `/weekly-review` and tell it to include every author, or point them to the weekly review issue if the team runs that routine. |
 | 6. Write or polish text | `/technical-writing` for documents, then `/unslop` for tone. For text inside the app, use `request-a-change` so every language gets updated. |
 | 7. Learn a skill | `create-learning-path` from the teaching plugin. |
 | 8. Set up the repository | `setup-team-kit`. |

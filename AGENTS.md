@@ -6,7 +6,7 @@ This repository is a team kit of agent skills for Claude Code, Codex, and Pi. Re
 
 - `plugins/<name>/` for every name in `upstream/source.json`: vendored from `cursor/plugins`. Byte-identical to upstream except the rules in `upstream/model-map.json`.
 - `plugins/trust-ladder/`: this repo's own plugin. Skills, templates, lint packs, the Pi extension, and helper scripts.
-- `docs/`: usage instructions. `docs/reference/skills.md` is generated.
+- `docs/`: usage instructions. `docs/reference/{skills,coverage,playbooks,lint-packs}.md` are generated from `docs/catalog.json`, each SKILL.md, poteto-mode's playbook list, and each `pack.json`.
 - `scripts/`: `sync-upstream.mjs`, `validate.mjs`, and the generators and test runners.
 
 ## Never edit vendored files by hand
@@ -26,7 +26,7 @@ To take a newer upstream: `node scripts/sync-upstream.mjs --ref <sha>`. Fix any 
 - `description` says what the skill does and when to use it, in under 1024 characters.
 - Write for an agent reading the file cold. Say which tool does what in Claude Code, Codex, and Pi only where they differ, using the vocabulary in `plugins/trust-ladder/references/compat.md`.
 - Never reuse a vendored skill's name. Pi keeps only the first skill with a given name.
-- Add every new skill to `docs/catalog.json`, then run `node scripts/gen-catalog.mjs`.
+- Add every new skill to `docs/catalog.json` (layer, audience, an example prompt), then run `node scripts/gen-catalog.mjs`. `validate.mjs` fails on a skill without an entry.
 
 ## Checks
 
