@@ -8,6 +8,7 @@ This repository is a team kit of agent skills for Claude Code, Codex, and Pi. Re
 - `upstream/agent-hooks/hook-adapter.mjs`: runs a vendored plugin's upstream hooks from Claude Code and Codex hooks. The sync script copies it into each plugin that has a `hooks/hooks.json`.
 - `plugins/trust-ladder/`: this repo's own plugin. Skills, templates, lint packs, the Pi extension, and helper scripts.
 - `docs/`: usage instructions. `docs/reference/{skills,coverage,playbooks,lint-packs}.md` are generated from `docs/catalog.json`, each SKILL.md, faker-mode's playbook list, and each `pack.json`.
+- `site/`: the Mintlify docs site, deployed to GitHub Pages by `.github/workflows/docs-site.yml`. The home page, `quickstart/`, `guides/`, and `docs.json` are hand-written. `node scripts/gen-site.mjs` generates `how-to/`, `explanation/`, and `reference/` from `docs/` (gitignored). Edit `docs/`, never the generated copies. A new `docs/` page needs an entry in `site/docs.json`. Preview with `cd site && npx mint dev`.
 - `scripts/`: `sync-upstream.mjs`, `validate.mjs`, and the generators and test runners.
 
 ## Never edit vendored files by hand
@@ -39,6 +40,7 @@ Run these before you commit. CI runs the same ones.
 node scripts/sync-upstream.mjs --check   # vendored plugins match upstream + rules
 node scripts/validate.mjs                # manifests, frontmatter, links, catalog
 node scripts/gen-catalog.mjs --check     # generated docs are current
+node scripts/gen-site.mjs                # docs site pages, links, and navigation resolve
 bun test plugins/trust-ladder            # trust-ladder scripts and the Pi extension
 bun test upstream/agent-hooks            # upstream hooks run in Claude Code and Codex
 bash scripts/test-packs.sh               # lint packs fail on bad fixtures, pass on good

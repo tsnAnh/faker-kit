@@ -1,0 +1,43 @@
+---
+title: "Founders and leads: quick start"
+sidebarTitle: "Founders and leads"
+description: "See what shipped in plain words, measure how far the team can trust agents, and turn review feedback into checks."
+---
+
+Three things the kit does for you: tells you what is happening in the codebase in plain words, measures how far the team can trust agents, and turns the team's review feedback into checks that enforce themselves.
+
+Nothing to install: everything below works from [claude.ai/code](https://claude.ai/code), [chatgpt.com/codex](https://chatgpt.com/codex), or either phone app. [How to start](/how-to/use-the-kit-from-the-browser).
+
+## Your first three tasks
+
+<Steps>
+  <Step title="See what shipped">
+    ```text
+    /weekly-review for every author on main, not just me
+    ```
+    A week of commits grouped into bug fixes, tech debt, and new work. Without "every author" it covers only your own commits.
+  </Step>
+  <Step title="Measure how much you can trust agents">
+    ```text
+    /trust-audit
+    ```
+    A score from 0 to 3 on each layer of the trust ladder, with evidence, the five fixes that would help most, and how many agents can safely work in parallel today.
+  </Step>
+  <Step title="Turn review feedback into rules">
+    ```text
+    /style-guide-from-reviews last 90 days
+    ```
+    Finds the feedback reviewers keep repeating and writes it into STYLE.md with an example of each. Engineers then move each entry to a stronger layer with `/correct`.
+  </Step>
+</Steps>
+
+## Next
+
+<CardGroup cols={2}>
+  <Card title="Full founders and leads guide" icon="book-open" href="/guides/founders-and-leads">
+    Visibility, trust scores, letting anyone ship, and rolling the kit out.
+  </Card>
+  <Card title="Roll the kit out to a team" icon="users" href="/how-to/roll-out-to-a-team">
+    A week-by-week plan, roles, rituals, and numbers to watch.
+  </Card>
+</CardGroup>

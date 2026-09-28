@@ -1,0 +1,79 @@
+name: docs-site
+
+# Builds the Mintlify site in site/ with `mint export` and publishes it to GitHub Pages.
+# Pull requests build it without deploying, so a page that breaks the export fails before merge.
+# One-time setup: Settings → Pages → Build and deployment → Source: GitHub Actions.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - site/**
+      - scripts/gen-site.mjs
+      - scripts/pages-base-path.mjs
+      - .github/workflows/docs-site.yml
+  pull_request:
+    paths:
+      - docs/**
+      - site/**
+      - scripts/gen-site.mjs
+      - scripts/pages-base-path.mjs
+      - .github/workflows/docs-site.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-site-${{ github.event_name == 'pull_request' && github.ref || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  MINT_VERSION: 4.2.942
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Generate pages from docs/ and check links
+        run: node scripts/gen-site.mjs
+      - name: Read the Pages base path
+        id: pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+      - name: Export the static site
+        working-directory: site
+        run: npx --yes "mint@${MINT_VERSION}" export --output "$RUNNER_TEMP/site.zip"
+      - name: Unpack and serve under the Pages base path
+        env:
+          # Empty with a custom domain; /<repo> on <owner>.github.io.
+          BASE_PATH: ${{ github.event_name == 'pull_request' && format('/{0}', github.event.repository.name) || steps.pages.outputs.base_path }}
+        run: |
+          unzip -q "$RUNNER_TEMP/site.zip" -d _site
+          rm -f _site/serve.js "_site/Start Docs.command" "_site/Start Docs.bat"
+          test -f _site/index.html
+          node scripts/pages-base-path.mjs _site "$BASE_PATH"
+          touch _site/.nojekyll
+          echo "pages: $(find _site -name index.html | wc -l)"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

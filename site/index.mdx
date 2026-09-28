@@ -1,0 +1,73 @@
+---
+title: "team-kit"
+description: "Agent skills for Claude Code, Codex, and Pi that make coding agents trustworthy enough to run many at once, and safe enough for anyone on the team to use."
+mode: "wide"
+---
+
+team-kit packs eight open-source agent plugins and adds its own, `trust-ladder`. Together they give your coding agent 93 skills: ways to plan, build, prove, review, and ship changes, plus a system that turns every correction you give an agent into a lasting fix.
+
+Every change still goes through a pull request with checks, two review bots, and an engineer's approval. That is why designers, marketers, and founders can use it safely.
+
+## Pick your role
+
+<CardGroup cols={2}>
+  <Card title="Engineers" icon="code" href="/quickstart/engineers">
+    Set up a repository, ship a change with proof that it works, and turn a correction into a check.
+  </Card>
+  <Card title="Designers" icon="palette" href="/quickstart/designers">
+    Try layouts side by side, match a mockup, and ship visual changes as pull requests.
+  </Card>
+  <Card title="Product and marketing" icon="megaphone" href="/quickstart/product-and-marketing">
+    Change copy in every language, report bugs that get reproduced, and ask how things work.
+  </Card>
+  <Card title="Founders and leads" icon="chart-line" href="/quickstart/founders-and-leads">
+    See what shipped, measure how far you can trust agents, and roll the kit out.
+  </Card>
+</CardGroup>
+
+Each role has a **quick start** (your first hour) and a **full guide** (everything you can do, by situation).
+
+## Two ways to use it
+
+<CardGroup cols={2}>
+  <Card title="From a browser or phone" icon="globe" href="/how-to/use-the-kit-from-the-browser">
+    Nothing to install. Open claude.ai/code or chatgpt.com/codex, pick the repository, type `/start-here`. Needs an engineer to have run `/setup-cloud-agents` once.
+  </Card>
+  <Card title="In your own agent" icon="terminal" href="/how-to/install">
+    Install once in Claude Code, Codex, or Pi. Engineers usually start here.
+  </Card>
+</CardGroup>
+
+## How to call a skill
+
+The same kit works in three agents. Only the first character changes:
+
+| Claude Code | Codex | Pi |
+|---|---|---|
+| `/start-here` | `$start-here` | `/skill:start-here` |
+
+You rarely need a skill's name. Describe what you want in plain words and the agent picks the skill. Examples on this site use Claude Code's `/`.
+
+## The idea in one minute
+
+When you correct an agent in chat, that correction helps one agent, once. The kit's `/correct` skill puts the fix where every future agent meets it, in the strongest layer that can hold it:
+
+<Steps>
+  <Step title="Codebase">
+    Make the mistake impossible to write: types, module boundaries, one approved way to do each thing.
+  </Step>
+  <Step title="Static analysis">
+    Make it fail CI: lint rules, compiler settings, checks.
+  </Step>
+  <Step title="Rules and review bots">
+    Make it visible: AGENTS.md, plus Claude and Codex reviewing every pull request.
+  </Step>
+  <Step title="Skills">
+    Teach the procedure, above all how to run the app and prove a change works.
+  </Step>
+  <Step title="Style guide">
+    Write it down for human reviewers until it can move to a stronger layer.
+  </Step>
+</Steps>
+
+As more corrections land in the first two layers, the same mistakes stop coming back, and you can run more agents at once without reading every line. [Read more about the trust ladder](/explanation/trust-ladder).

@@ -23,6 +23,8 @@ jobs:
         run: node scripts/validate.mjs
       - name: Generated docs are current
         run: node scripts/gen-catalog.mjs --check
+      - name: Docs site pages, links, and navigation resolve
+        run: node scripts/gen-site.mjs
       - name: trust-ladder tests (hooks, Pi extension, run-model, link-skills)
         run: bun test plugins/trust-ladder
       - name: Upstream hooks run through the Claude Code and Codex adapter
