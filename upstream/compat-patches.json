@@ -1,0 +1,26 @@
+{
+  "$comment": "Frontmatter-only edits that a vendored file needs to load or be invoked in Claude Code, Codex, or Pi. Same shape as model-map.json. Each id names the agent that needs it.",
+  "rules": [
+    {
+      "id": "pi-codex-invocable-name-poteto-mode",
+      "files": ["pstack/skills/poteto-mode/SKILL.md"],
+      "from": "\nname: Poteto Mode\n",
+      "to": "\nname: poteto-mode\n",
+      "count": 1
+    },
+    {
+      "id": "pi-codex-invocable-name-make-bot-ui",
+      "files": ["pstack/skills/make-bot-ui/SKILL.md"],
+      "from": "\nname: Make Bot UI\n",
+      "to": "\nname: make-bot-ui\n",
+      "count": 1
+    },
+    {
+      "id": "pi-yaml-quote-description-check-agent-compatibility",
+      "files": ["agent-compatibility/skills/check-agent-compatibility/SKILL.md"],
+      "from": "\ndescription: Run the full repository compatibility pass: scanner score, startup path, validation loop, and docs reliability.\n",
+      "to": "\ndescription: \"Run the full repository compatibility pass: scanner score, startup path, validation loop, and docs reliability.\"\n",
+      "count": 1
+    }
+  ]
+}

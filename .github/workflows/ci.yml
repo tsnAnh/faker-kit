@@ -21,9 +21,31 @@ jobs:
         run: node scripts/sync-upstream.mjs --check
       - name: Manifests, frontmatter, links, catalog
         run: node scripts/validate.mjs
+      - name: trust-ladder tests (hooks, Pi extension, run-model, link-skills)
+        run: bun test plugins/trust-ladder
       - name: pstack script tests
         working-directory: plugins/pstack/skills/poteto-mode/scripts
         run: bun install --frozen-lockfile && bun test orch watch-pr
+
+  agents-load-the-kit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Claude Code, Codex, and Pi
+        run: |
+          npm i --prefix "$RUNNER_TEMP/agents" @anthropic-ai/claude-code @openai/codex @earendil-works/pi-coding-agent
+          echo "$RUNNER_TEMP/agents/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Claude Code validates the marketplace and every plugin
+        run: |
+          claude plugin validate .
+          for plugin in plugins/*/; do claude plugin validate "$plugin"; done
+      - name: Codex installs every plugin
+        run: scripts/check-codex.sh codex
+      - name: Pi discovers every skill and loads the extension
+        run: node scripts/check-pi-package.mjs --sdk "$RUNNER_TEMP/agents"
 
   orchestrate-tests:
     # orchestrate drives Cursor's cloud agents through @cursor/sdk. Its model catalog is

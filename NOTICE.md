@@ -19,10 +19,11 @@ Everything under these directories is copied from [cursor/plugins](https://githu
 | `plugins/advisor/` | Cursor | MIT, Copyright (c) 2026 Cursor |
 | `plugins/teaching/` | Cursor | MIT, Copyright (c) 2026 Cursor |
 
-The copies are byte-identical to upstream with two exceptions, both applied by [`scripts/sync-upstream.mjs`](scripts/sync-upstream.mjs) and listed occurrence by occurrence in [`upstream/CHANGES.md`](upstream/CHANGES.md):
+The copies are byte-identical to upstream with three exceptions, all applied by [`scripts/sync-upstream.mjs`](scripts/sync-upstream.mjs) and listed occurrence by occurrence in [`upstream/CHANGES.md`](upstream/CHANGES.md):
 
 1. **Model names.** [`upstream/model-map.json`](upstream/model-map.json) rewrites LLM model names to the models this team uses. Nothing else in the text changes.
-2. **Generated manifests.** Each plugin gains a `.claude-plugin/plugin.json` built from its `.cursor-plugin/plugin.json`, so Claude Code and Codex can install it. The Cursor manifest stays in place.
+2. **Three frontmatter load fixes.** [`upstream/compat-patches.json`](upstream/compat-patches.json) renames `Poteto Mode` to `poteto-mode` and `Make Bot UI` to `make-bot-ui` so Pi and Codex can invoke them, and quotes the `check-agent-compatibility` description so Pi can parse it.
+3. **Generated manifests.** Each plugin gains a `.claude-plugin/plugin.json` built from its `.cursor-plugin/plugin.json`, so Claude Code and Codex can install it. The Cursor manifest stays in place.
 
 `node scripts/sync-upstream.mjs --check` fails CI if any other byte differs.
 
