@@ -40,8 +40,13 @@ jobs:
           node-version: 22
       - name: Install Claude Code, Codex, and Pi
         run: |
-          npm i --prefix "$RUNNER_TEMP/agents" @anthropic-ai/claude-code @openai/codex @earendil-works/pi-coding-agent
+          # Codex publishes its main package minutes before each platform binary, and npm skips a
+          # missing optional binary without an error. Take the newest release whose Linux build is out.
+          codex=$(npm view @openai/codex dist-tags.linux-x64)
+          test -n "$codex"
+          npm i --prefix "$RUNNER_TEMP/agents" @anthropic-ai/claude-code "@openai/codex@${codex%-linux-x64}" @earendil-works/pi-coding-agent
           echo "$RUNNER_TEMP/agents/node_modules/.bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/agents/node_modules/.bin/codex" --version
       - name: Claude Code validates the marketplace and every plugin
         run: |
           claude plugin validate .
