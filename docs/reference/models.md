@@ -24,7 +24,7 @@ Each teammate has one agent: Claude Code (Claude Opus 5.5, max effort) or Codex 
 
 ## Allowed model names
 
-After the rewrite, a vendored file may name only `claude-opus-5-5` (with `-max` or `-medium`), `gpt-6-sol` (with `-high` or `-medium`), and the family prefixes `claude-` and `gpt-`. [`scripts/sync-upstream.mjs`](../../scripts/sync-upstream.mjs) fails on anything else, apart from the map's `tokenExceptions`: code identifiers in a reflect example, and the Grok Bot product name.
+After the rewrite, a vendored file may name only `claude-opus-5-5` (with `-max` or `-medium`), `gpt-6-sol` (with `-high` or `-medium`), and the family prefixes `claude-` and `gpt-`. [`scripts/sync-upstream.mjs`](../../scripts/sync-upstream.mjs) fails on anything else, apart from the map's `tokenExceptions`: code identifiers in a reflect example.
 
 ## Outside the vendored plugins
 

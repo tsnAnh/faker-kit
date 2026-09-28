@@ -22,8 +22,7 @@ The pstack, team-workflows, thermos, advisor, continual-learning, agent-compatib
 | The agent's built-in `babysit` | The faker-mode Babysit playbook | Same | Same |
 | `/loop` | `/loop` | The faker-mode Autonomous run playbook | Same as Codex |
 | Cloud agents, `environment: "cloud"` | Claude Code on the web sessions | Codex cloud tasks | A pi-subagents background run in its own worktree |
-| Automations, Grok Bot routines | Claude Code routines (`setup-routines`) | Codex app scheduled tasks, which run while that computer is on | A teammate's Claude Code routine or Codex scheduled task |
-| Grok Bot webhook routine and its sender key (`make-bot-ui`) | A routine with an API trigger; its bearer token is the sender key | A teammate's Claude Code routine, or a GitHub `repository_dispatch` workflow with an API key | Same as Codex |
+| Automations | Claude Code routines (`setup-routines`) | Codex app scheduled tasks, which run while that computer is on | A teammate's Claude Code routine or Codex scheduled task |
 | Bugbot, agentic security review | A review routine with a GitHub trigger, or Claude Code Review (`setup-review-bots`) | Codex code review, automatic or `@codex review` | The team's PR review bots |
 | Custom Mode pin (`mode: true`) | trust-ladder's hook keeps `/faker-mode` on until you say "exit faker mode" | Same hook | trust-ladder's Pi extension does the same |
 | Origin CLI | `gh` | `gh` | `gh` |

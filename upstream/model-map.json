@@ -390,16 +390,6 @@
       "file": "pstack/skills/reflect/references/synthesizer.md",
       "token": "gpt-4o",
       "reason": "example of a renamed code identifier, not a model choice"
-    },
-    {
-      "file": "pstack/skills/make-bot-ui/SKILL.md",
-      "token": "Grok",
-      "reason": "Grok Bot is the product the skill targets, not a model choice"
-    },
-    {
-      "file": "pstack/README.md",
-      "token": "Grok",
-      "reason": "Grok Bot is a product name"
     }
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "$comment": "Names the team chose over upstream's, applied after the model and compat rules. `paths` rewrites every path segment containing `from`. `omit` drops upstream files the kit does not ship. `rules` rewrite text the same way model-map.json rules do: literal, scoped by upstream path glob, with an exact count. `forbidden` fails the sync if a vendored file still contains the pattern, apart from LICENSE files (whose copyright lines the license requires), the listed words, and the listed per-file exceptions. Faker is the League of Legends player; the mode and its agent carry his name on this team. The upstream editor's name is kept out of the kit.",
+  "$comment": "Names the team chose over upstream's, applied after the model and compat rules. `paths` rewrites every path segment containing `from`. `omit` drops upstream files the kit does not ship, such as `make-bot-ui`, which builds pages for the upstream editor's Grok Bot. `rules` rewrite text the same way model-map.json rules do: literal, scoped by upstream path glob, with an exact count. `forbidden` fails the sync if a vendored file still contains the pattern, apart from LICENSE files (whose copyright lines the license requires), the listed words, and the listed per-file exceptions. Faker is the League of Legends player; the mode and its agent carry his name on this team. The upstream editor's name is kept out of the kit.",
   "paths": [
     {
       "from": "poteto-mode",
@@ -149,15 +149,6 @@
       "from": "@cursor-skill/",
       "to": "@team-kit/",
       "count": 2
-    },
-    {
-      "id": "neutral-webhook-url-example",
-      "files": [
-        "pstack/skills/make-bot-ui/SKILL.md"
-      ],
-      "from": "`https://api2.cursor.sh/automations/webhook/<id>`",
-      "to": "`https://<automation-host>/automations/webhook/<id>`",
-      "count": 1
     },
     {
       "id": "neutral-review-bot-login",
@@ -483,10 +474,20 @@
       "from": "\nCursor plugin ",
       "to": "\nPlugin ",
       "count": 2
+    },
+    {
+      "id": "drop-make-bot-ui-readme-row",
+      "files": [
+        "pstack/README.md"
+      ],
+      "from": "| [`/make-bot-ui`](./skills/make-bot-ui/SKILL.md) | you want a page or dashboard whose buttons wake a Grok Bot over a webhook, including the sender-key handoff and Tailscale. |\n",
+      "to": "",
+      "count": 1
     }
   ],
   "omit": [
-    "*/.cursor-plugin/**"
+    "*/.cursor-plugin/**",
+    "pstack/skills/make-bot-ui/**"
   ],
   "forbidden": {
     "pattern": "cursor",

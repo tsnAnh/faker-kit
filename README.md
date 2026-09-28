@@ -60,7 +60,7 @@ Every time you correct an agent, `/correct` puts the fix in the strongest layer 
 | Path | Contents |
 |---|---|
 | `plugins/trust-ladder/` | This kit's plugin: 20 skills, templates, lint packs, hooks, and the Pi extension |
-| `plugins/pstack/` and seven others | Vendored from the MIT-licensed upstream repository named in `upstream/source.json`, byte-identical except model names and the `faker-mode` rename, plus generated manifests and hook files ([what changed](upstream/CHANGES.md)) |
+| `plugins/pstack/` and seven others | Vendored from the MIT-licensed upstream repository named in `upstream/source.json`, byte-identical except model names and the `faker-mode` rename, without the `make-bot-ui` skill (it only drives the upstream editor's bot), plus generated manifests and hook files ([what changed](upstream/CHANGES.md)) |
 | `docs/` | Usage instructions for every role |
 | `upstream/` | The pinned upstream commit, the model map, the team's renames, the hook adapter, and the change list |
 | `scripts/` | Sync, validation, catalog generation, and the test runners CI uses |

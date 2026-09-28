@@ -2,7 +2,7 @@
 
 # Skills
 
-Every skill in the kit: 94 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 93 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
@@ -148,7 +148,6 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 | [setup-cloud-agents](../../plugins/trust-ladder/skills/setup-cloud-agents/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-cloud-agents` | Make the repository start, build, test, and run its app in a fresh cloud container, so agents can work in parallel in the cloud instead of in local worktrees. |
 | [setup-routines](../../plugins/trust-ladder/skills/setup-routines/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-routines run the gardener and the verification-skill upkeep every night` | Put the team's upkeep on a schedule so it happens without anyone remembering. |
 | [swarm](../../plugins/pstack/skills/swarm/SKILL.md) | pstack | Engineers | `take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win` | Fan out N parallel workers, drain them, and return one report. |
-| [make-bot-ui](../../plugins/pstack/skills/make-bot-ui/SKILL.md) | pstack | Engineers | `/make-bot-ui a dashboard whose button asks the routine to reproduce the latest report` | Use when building a custom UI (page, dashboard, buttons) that should wake a Grok Bot over a webhook, when the user must provide a webhook sender key, or when exposing that UI on Tailscale. |
 
 ## Dormant: the benny automation pack
 

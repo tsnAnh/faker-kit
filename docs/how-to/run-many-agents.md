@@ -85,7 +85,7 @@ Routines keep the codebase trustworthy without anyone remembering to: the verifi
 
 Each job's instructions live in the repository, in `.agents/routines/` (from [`templates/routines/`](../../plugins/trust-ladder/templates/routines/)), and one teammate runs it on their own plan, with no API keys: as a **Claude Code routine** (claude.ai/code/routines, or `/schedule`), which runs in the cloud, or as a **Codex scheduled task** in the Codex app, which runs on their computer while it is on. Its pull requests and comments appear under that teammate's name. A team that wants the jobs to run as the repository instead can use the GitHub Actions workflows in [`templates/github/routines/`](../../plugins/trust-ladder/templates/github/routines/), which need an `ANTHROPIC_API_KEY` secret. No routine ever merges.
 
-For a full bug-report bot (a feedback channel, triage, reproduction, and fixes), pstack ships [benny](../../plugins/pstack/automations/benny/README.md), an automation pack you install by pointing your agent at its `FOR_AGENTS.md`. `/make-bot-ui` builds a small page whose buttons wake a bot; here, a Claude Code routine through its API trigger.
+For a full bug-report bot (a feedback channel, triage, reproduction, and fixes), pstack ships [benny](../../plugins/pstack/automations/benny/README.md), an automation pack you install by pointing your agent at its `FOR_AGENTS.md`.
 
 ## Stay in control at scale
 
