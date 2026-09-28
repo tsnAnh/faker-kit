@@ -1,6 +1,6 @@
 {
   "name": "agnostic",
-  "description": "Checks for every repository: a single check entry point, a ratchet that stops patterns from spreading, import boundaries, no new comments, and complete translations.",
+  "description": "Checks for every repository: a single check entry point, a ratchet that stops patterns from spreading, import boundaries, proof that every encoded rule still fires, no new comments, and complete translations.",
   "detect": { "always": true },
   "tools": [
     { "name": "node", "version": ">=18", "why": "runs scripts/agent-checks/*.mjs with no dependencies" },
@@ -8,7 +8,8 @@
   ],
   "check": [
     "node scripts/agent-checks/ratchet.mjs check",
-    "node scripts/agent-checks/import-boundaries.mjs"
+    "node scripts/agent-checks/import-boundaries.mjs",
+    "node scripts/agent-checks/rule-fixtures.mjs"
   ],
   "optionalChecks": {
     "no-new-comments": "node scripts/agent-checks/no-new-comments.mjs",

@@ -3,10 +3,12 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { globToRegExp } from "../files/scripts/agent-checks/glob.mjs";
 import { checkBoundaries } from "../files/scripts/agent-checks/import-boundaries.mjs";
 import { checkSet } from "../files/scripts/agent-checks/locale-keys.mjs";
-import { commentIn, findNewComments } from "../files/scripts/agent-checks/no-new-comments.mjs";
+import { commentIn, commentLines, findNewComments } from "../files/scripts/agent-checks/no-new-comments.mjs";
 import { runRatchet } from "../files/scripts/agent-checks/ratchet.mjs";
+import { checkRuleFixtures } from "../files/scripts/agent-checks/rule-fixtures.mjs";
 
 const CHECKS = path.resolve(import.meta.dir, "../files/scripts/agent-checks");
 
@@ -29,6 +31,21 @@ function write(dir, files) {
   }
 }
 
+describe("globToRegExp", () => {
+  test("matches ** across directories, including none, and * within one", () => {
+    const re = (glob) => globToRegExp(glob);
+    expect(re("**/generated/**").test("generated/a.ts")).toBe(true);
+    expect(re("**/generated/**").test("src/generated/a/b.ts")).toBe(true);
+    expect(re("**/generated/**").test("src/notgenerated/a.ts")).toBe(false);
+    expect(re("app/domain/**").test("app/domain")).toBe(true);
+    expect(re("app/domain/**").test("app/domain/cart.py")).toBe(true);
+    expect(re("lib/features/*/ui/**").test("lib/features/cart/ui/page.dart")).toBe(true);
+    expect(re("lib/features/*/ui/**").test("lib/features/a/b/ui/page.dart")).toBe(false);
+    expect(re("**/*.g.dart").test("model.g.dart")).toBe(true);
+    expect(re("package:http/**").test("package:http/http.dart")).toBe(true);
+  });
+});
+
 describe("ratchet", () => {
   const config = { rules: [{ id: "rust-unwrap", pattern: "\\.unwrap\\(\\)", files: ["*.rs"], message: "Return a Result instead." }] };
 
@@ -47,6 +64,14 @@ describe("ratchet", () => {
 
     const kept = runRatchet(r.dir, "update", ".agents/ratchet.json", ".agents/ratchet-baseline.json");
     expect(kept.lines[0]).toContain("kept baseline 2");
+  });
+
+  test("does not count a rule's bad fixture", () => {
+    const r = repo({ ".agents/ratchet.json": JSON.stringify(config), "src/a.rs": "fn a() { x.unwrap(); }\n" });
+    runRatchet(r.dir, "update", ".agents/ratchet.json", ".agents/ratchet-baseline.json");
+    r.write({ ".agents/rule-fixtures/rust-unwrap/bad.rs": "fn b() { y.unwrap(); }\n" });
+    r.commit();
+    expect(runRatchet(r.dir, "check", ".agents/ratchet.json", ".agents/ratchet-baseline.json").failed).toBe(false);
   });
 });
 
@@ -80,6 +105,29 @@ describe("no-new-comments", () => {
       "src/app.ts:8: // temporary",
       "tools/run.py:2: # for now",
     ]);
+  });
+
+  test("reads whole files, so markers inside strings, regexes, and heredocs are not comments", () => {
+    const flagged = (text, ext) => [...commentLines(text, ext)].filter(([, c]) => !c.doc).map(([n, c]) => `${n}: ${c.text}`);
+    expect(flagged("const usage = `Usage:\n  run it // like this\n`;\nconst x = 1; // real\n", "mjs")).toEqual(["4: // real"]);
+    expect(flagged('const re = /\\/\\*[\\s\\S]*?\\*\\//g;\nconst list = [\n  /https?:\\/\\//,\n];\nconst half = a / b; // real\n', "ts")).toEqual(["5: // real"]);
+    expect(flagged("cat <<'USAGE'\n  run.sh   # link skills\nUSAGE\necho ${#items[@]} $# # real\n", "sh")).toEqual(["4: # real"]);
+    expect(flagged('HELP = """\n# not a comment\n"""\nx = 1  # real\n', "py")).toEqual(["4: # real"]);
+    expect(flagged("fn f<'a>(x: &'a str) -> char { '#' } // real\n", "rs")).toEqual(["1: // real"]);
+    expect(flagged("var s = `line one\n// still a string`\nx := 1 // real\n", "go")).toEqual(["3: // real"]);
+    expect(flagged("/**\n * Formats a price.\n */\n/* why\n   this */\n", "kt")).toEqual(["4: /* why", "5: this */"]);
+  });
+
+  test("skips config and Markdown files, where comments are the documentation", () => {
+    const r = repo({ "README.md": "# App\n" });
+    r.write({ "README.md": "# App\n<!-- marker -->\n", "config.toml": "# team default\nx = 1\n", "ci.yml": "# why\non: push\n" });
+    expect(findNewComments(r.dir, "HEAD")).toEqual([]);
+  });
+
+  test("only reports comments on added lines of a tracked file", () => {
+    const r = repo({ "src/a.ts": "export const usage = `\n  one\n`;\n" });
+    r.write({ "src/a.ts": "export const usage = `\n  one\n  two // inside the string\n`;\nexport const b = 1; // new\n" });
+    expect(findNewComments(r.dir, "HEAD").map((f) => `${f.file}:${f.line}`)).toEqual(["src/a.ts:5"]);
   });
 
   test("respects exclude globs and allow patterns", () => {
@@ -152,6 +200,40 @@ describe("locale-keys", () => {
     expect(checkSet(r.dir, { id: "android", format: "android", source: "res/values/strings.xml", targets: "res/values-*/strings.xml" }).problems).toEqual([]);
     expect(checkSet(r.dir, { id: "ios", format: "apple-strings", source: "App/en.lproj/Localizable.strings", targets: "App/*.lproj/Localizable.strings" }).problems).toEqual([
       'App/vi.lproj/Localizable.strings: "count" has placeholders [%@] but the source has [%d]',
+    ]);
+  });
+});
+
+describe("rule-fixtures", () => {
+  const rule = { id: "no-console", run: "grep -n 'console.log' {file} && echo 'no-console: use logger.info' && exit 1 || exit 0", bad: "fx/bad.ts", good: "fx/good.ts", expect: "use logger.info" };
+
+  test("passes while the rule fires on the bad fixture and not on the good one", () => {
+    const r = repo({ "fx/bad.ts": "console.log(1)\n", "fx/good.ts": "logger.info(1)\n" });
+    expect(checkRuleFixtures(r.dir, { rules: [rule] })).toEqual([]);
+  });
+
+  test("fails when a weakened rule stops firing", () => {
+    const r = repo({ "fx/bad.ts": "console.log(1)\n", "fx/good.ts": "logger.info(1)\n" });
+    const weakened = { ...rule, run: "exit 0" };
+    expect(checkRuleFixtures(r.dir, { rules: [weakened] })[0]).toContain("passed on fx/bad.ts; the rule no longer fires");
+  });
+
+  test("fails when the bad fixture fails for another reason, or the good one fails", () => {
+    const r = repo({ "fx/bad.ts": "console.log(1)\n", "fx/good.ts": "console.log(2)\n" });
+    const problems = checkRuleFixtures(r.dir, { rules: [{ ...rule, expect: "something else" }] });
+    expect(problems[0]).toContain('without "something else" in its output');
+    expect(problems[1]).toContain("failed on fx/good.ts, which must pass");
+  });
+
+  test("reports missing fields and fixtures", () => {
+    const r = repo({ "x.txt": "x\n" });
+    expect(checkRuleFixtures(r.dir, { rules: [{ id: "a" }, { ...rule, id: "b" }] })).toEqual([
+      'rule a: missing "run"',
+      'rule a: missing "bad"',
+      'rule a: missing "good"',
+      'rule a: missing "expect"',
+      "rule b: fx/bad.ts does not exist",
+      "rule b: fx/good.ts does not exist",
     ]);
   });
 });

@@ -25,7 +25,7 @@ function fail(message) {
 }
 
 function trackedFiles(repo, globs) {
-  const out = execFileSync("git", ["-C", repo, "ls-files", "-z", "--", ...globs], { encoding: "utf8" });
+  const out = execFileSync("git", ["-C", repo, "ls-files", "-z", "--", ...globs, ":(exclude).agents/rule-fixtures/**"], { encoding: "utf8" });
   return out.split("\0").filter(Boolean);
 }
 

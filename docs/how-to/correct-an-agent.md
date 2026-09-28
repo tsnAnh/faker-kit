@@ -27,7 +27,7 @@ It then:
    3. **Rules and review bots:** a line in the right AGENTS.md, repeated under `## Review guidelines` so both review bots flag it.
    4. **Skills:** a step in the skill that owns the procedure, often the verification skill.
    5. **Style guide:** a STYLE.md entry naming the layer it should reach next.
-3. **Proves it:** the check fails on the bad example and passes on the good one, and both are committed as fixtures. Existing violations are fixed, or recorded in a baseline that only goes down.
+3. **Proves it:** the check fails on the bad example and passes on the good one. Both are committed under `.agents/rule-fixtures/` and registered in `.agents/rule-fixtures.json`, so `scripts/check.sh` keeps proving the rule fires; if someone later weakens it, CI fails. Existing violations are fixed, or recorded in a baseline that only goes down.
 4. **Logs it:** one row in `.agents/corrections.tsv`.
 5. Opens a small pull request titled `chore(agents): encode <rule>`.
 

@@ -7,7 +7,8 @@ Checks every repository gets, whatever its stack. They need only Node 18 or newe
 | `scripts/check.sh` | Guessing which commands prove a change. One entry point runs everything CI runs. | `.agents/check-commands`, one command per line |
 | `ratchet.mjs` | Spreading a pattern you are cleaning up. Existing instances are allowed; new ones fail. | `.agents/ratchet.json` rules; `.agents/ratchet-baseline.json` counts |
 | `import-boundaries.mjs` | Reaching across layers, such as UI code calling the network or `commonMain` importing Android. Covers Dart, TypeScript, Python, Kotlin, Java, Swift, and Rust imports. | `.agents/import-boundaries.json` |
-| `no-new-comments.mjs` (optional) | Explaining workarounds in comments, which the next agent copies along with the workaround. Checks only lines added since the base branch. | `.agents/no-new-comments.json`: `mode`, `allow`, `exclude` |
+| `rule-fixtures.mjs` | Weakening or deleting a rule someone encoded. Each rule's bad fixture must still fail with the expected message, and its good fixture must pass. The `correct` and `encode-lint-rule` skills register each new rule here. | `.agents/rule-fixtures.json`; fixtures in `.agents/rule-fixtures/<id>/` |
+| `no-new-comments.mjs` (optional) | Explaining workarounds in comments, which the next agent copies along with the workaround. Checks only lines added since the base branch, and only source code: YAML, TOML, and Markdown are skipped. Each changed file is read whole, so `//` inside a string, template literal, regex, or heredoc does not count. | `.agents/no-new-comments.json`: `mode`, `allow`, `exclude` |
 | `locale-keys.mjs` (optional) | Shipping a string in one language only, copying the source text into other locales, or dropping a placeholder. Reads ARB, JSON, Android `strings.xml`, and Apple `.strings`. | `.agents/locales.json` |
 | `lefthook.yml` | Pushing without running the checks. | `pre-push` runs `scripts/check.sh` |
 

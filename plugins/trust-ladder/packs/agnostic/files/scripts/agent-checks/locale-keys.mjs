@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { globToRegExp } from "./glob.mjs";
 
 const USAGE = `Usage: node scripts/agent-checks/locale-keys.mjs [--config .agents/locales.json]
 
@@ -25,23 +26,6 @@ targets is a glob; the source file is skipped when it matches.
 Example:
   node scripts/agent-checks/locale-keys.mjs
 `;
-
-function globToRegExp(glob) {
-  let re = "";
-  for (let i = 0; i < glob.length; i++) {
-    const ch = glob[i];
-    if (glob.slice(i) === "/**") {
-      re += "(?:/.*)?";
-      break;
-    }
-    if (ch === "*" && glob[i + 1] === "*") {
-      re += ".*";
-      i++;
-    } else if (ch === "*") re += "[^/]*";
-    else re += ch.replace(/[.+^${}()|[\]\\?]/g, "\\$&");
-  }
-  return new RegExp(`^${re}$`);
-}
 
 function flatten(obj, prefix = "", out = {}) {
   for (const [key, value] of Object.entries(obj)) {

@@ -36,7 +36,7 @@ Run `setup-review-bots`. It adds the Claude and Codex PR review workflows, so ev
 
 ## 5. Skills
 
-1. Run `scripts/link-skills.sh` from this skill against the repository root. It links every project skill into `.claude/skills` (Claude Code) and `.agents/skills` (Codex and Pi). Add `scripts/link-skills.sh --check .` to the `check` command.
+1. Copy `scripts/link-skills.sh` from this skill to the repository's `scripts/`, then run `bash scripts/link-skills.sh .`. It links every project skill into `.claude/skills` (Claude Code) and `.agents/skills` (Codex and Pi). Add `bash scripts/link-skills.sh --check .` to `.agents/check-commands`, so a skill added later without its links fails `check`.
 2. If the repository has a user-facing surface and no verification skill, recommend `/create-verification-skill` next. It is the most valuable skill the repository can have: it lets an agent prove its own work. For Android, iOS, Flutter, or KMP apps, point it at `control-mobile` and `references/verification-drivers.md`.
 
 ## 6. Team settings

@@ -20,10 +20,10 @@ This skill only runs when you call it by name. It:
 Then link it so every agent sees it:
 
 ```bash
-bash <trust-ladder plugin>/skills/setup-team-kit/scripts/link-skills.sh .
+bash scripts/link-skills.sh .
 ```
 
-`/setup-team-kit` wires this into `scripts/check.sh`, so a forgotten link fails CI.
+`/setup-team-kit` copies that script into the repository and adds its `--check` mode to `scripts/check.sh`, so a forgotten link fails CI.
 
 ## Mobile apps
 

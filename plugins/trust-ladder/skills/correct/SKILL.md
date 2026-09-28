@@ -29,7 +29,7 @@ Encode the rule once, at the strongest layer. Do not also add prose at a weaker 
 
 ## 3. Prove the mechanism fires
 
-- **Layers 1 and 2:** run the check on the bad example and show it fails with the "do this instead" message. Run it on the good example and show it passes. Commit both as fixtures or tests next to the rule.
+- **Layers 1 and 2:** run the check on the bad example and show it fails with the "do this instead" message. Run it on the good example and show it passes. Commit both so the proof keeps running: as a test when the rule is a type or a test, otherwise as `.agents/rule-fixtures/<id>/bad.<ext>` and `good.<ext>` with an entry in `.agents/rule-fixtures.json` (see `encode-lint-rule`). `scripts/check.sh` then fails if anyone later weakens the rule.
 - **Existing violations:** run the check on the whole repository. Fix them in this change when there are few. Otherwise record them in the ratchet baseline so CI blocks only new ones, and file one cleanup task. Never weaken the rule to get green.
 - **Layer 3:** give a fresh subagent with no chat history the bad example and the repository's instructions, and ask for a review. It must flag the mistake. If it does not, the rule is unclear or in the wrong file.
 - **Layers 4 and 5:** run the skill step or read the entry cold, as a new teammate would.

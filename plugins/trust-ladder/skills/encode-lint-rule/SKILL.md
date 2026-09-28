@@ -39,12 +39,19 @@ A good message names the replacement and, if one exists, where it lives:
 
 ## 4. Prove it
 
-1. Put the bad example in a fixture or test file next to the rule, or in a temporary file in the repository.
-2. Run the linter. It must fail and print your message.
-3. Replace it with the good example. The linter must pass.
-4. Run `scripts/check.sh` on the whole repository. Handle existing violations with the pack's baseline method, never by weakening the rule.
+1. Write the bad example to `.agents/rule-fixtures/<rule-id>/bad.<ext>` and the good example to `good.<ext>` beside it.
+2. Exclude `.agents/rule-fixtures/` from the linter's normal run (for example `extend-exclude` in ruff, `excluded` in SwiftLint, `exclude` in detekt or `analysis_options.yaml`), so the bad fixture does not fail the rest of `scripts/check.sh`.
+3. Run the linter on the bad fixture. It must fail and print your message. Run it on the good fixture. It must pass.
+4. Register the rule in `.agents/rule-fixtures.json` with the command that lints one file, the two fixtures, and a piece of the message to expect:
 
-Keep the bad and good examples as committed fixtures when the linter supports them, so the rule stays proven after later edits.
+   ```json
+   { "id": "no-direct-now", "run": "ruff check --no-cache {file}", "bad": ".agents/rule-fixtures/no-direct-now/bad.py", "good": ".agents/rule-fixtures/no-direct-now/good.py", "expect": "TID251" }
+   ```
+
+   `node scripts/agent-checks/rule-fixtures.mjs` (part of `scripts/check.sh`) then proves on every run that the rule still fires.
+5. Run `scripts/check.sh` on the whole repository. Handle existing violations with the pack's baseline method, never by weakening the rule.
+
+When the linter cannot check a single file on its own (Rust's clippy lints a crate; Android Lint a module), keep the bad example as a test or a small fixture crate or module instead, and point `run` at the command that builds it.
 
 ## Report
 

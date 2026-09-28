@@ -33,6 +33,7 @@ describe("install-pack", () => {
     expect(first.checksAdded).toEqual([
       "node scripts/agent-checks/ratchet.mjs check",
       "node scripts/agent-checks/import-boundaries.mjs",
+      "node scripts/agent-checks/rule-fixtures.mjs",
       "node scripts/agent-checks/locale-keys.mjs",
     ]);
     const second = installPack("agnostic", { repo, withOptional: ["locale-keys"] });

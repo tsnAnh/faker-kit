@@ -8,7 +8,7 @@ Install a pack with `/setup-lint-pack <name>`, or let `/setup-team-kit` pick pac
 
 | Pack | Installed when the repository has | What it enforces |
 |---|---|---|
-| [agnostic](../../plugins/trust-ladder/packs/agnostic/README.md) | Every repository | Checks for every repository: a single check entry point, a ratchet that stops patterns from spreading, import boundaries, no new comments, and complete translations. |
+| [agnostic](../../plugins/trust-ladder/packs/agnostic/README.md) | Every repository | Checks for every repository: a single check entry point, a ratchet that stops patterns from spreading, import boundaries, proof that every encoded rule still fires, no new comments, and complete translations. |
 | [kotlin-android](../../plugins/trust-ladder/packs/kotlin-android/README.md) | `settings.gradle.kts` or `settings.gradle` containing `com.android.application` or `com.android.library` | detekt with type resolution, ktlint, strict Android Lint, and Kotlin warnings as errors, each with a native baseline. |
 | [kmp](../../plugins/trust-ladder/packs/kmp/README.md) | `build.gradle.kts` or `settings.gradle.kts` containing `kotlin("multiplatform")` or `org.jetbrains.kotlin.multiplatform` | Kotlin Multiplatform on top of the kotlin-android pack: keeps platform APIs out of commonMain, requires explicit public API, and turns warnings into errors on every target. |
 | [rust](../../plugins/trust-ladder/packs/rust/README.md) | `Cargo.toml` | Clippy in deny mode for the panics, debug output, and unexplained suppressions agents leave behind, plus rustfmt and cargo-deny. |
@@ -18,13 +18,14 @@ Install a pack with `/setup-lint-pack <name>`, or let `/setup-team-kit` pick pac
 
 ## agnostic
 
-Checks for every repository: a single check entry point, a ratchet that stops patterns from spreading, import boundaries, no new comments, and complete translations.
+Checks for every repository: a single check entry point, a ratchet that stops patterns from spreading, import boundaries, proof that every encoded rule still fires, no new comments, and complete translations.
 
 Checks added to `scripts/check.sh`:
 
 ```bash
 node scripts/agent-checks/ratchet.mjs check
 node scripts/agent-checks/import-boundaries.mjs
+node scripts/agent-checks/rule-fixtures.mjs
 ```
 
 Optional checks, added with `--with <name>`:
