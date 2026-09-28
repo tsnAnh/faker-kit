@@ -10,7 +10,7 @@ The number of agents you can usefully run is set by how much of their output you
 |---|---|
 | 1 to 5 agents, each watched | Nothing yet. You are the verification. |
 | 10 to 30 agents, one pull request each | Every layer at 2: strict checks in CI, accurate AGENTS.md, a review bot, and a verification skill that drives the real app |
-| 100 or more | Every layer at 3: a paved path per concern, every recurring correction encoded, a maintained feature map, both review bots required, and a check that runs in under 15 minutes |
+| 100 or more | Every layer at 3: a paved path per concern, every recurring correction encoded, a maintained feature map, both review bots on every pull request, and a check that runs in under 15 minutes |
 
 ## What changes as you scale
 
@@ -20,13 +20,13 @@ The number of agents you can usefully run is set by how much of their output you
 
 **Who coordinates.** Above a few dozen agents, a person cannot track them. pstack's Orchestrate, Autopilot-full, and Autopilot-stack playbooks put one coordinator agent in charge of a program: it writes briefs, spawns workers, verifies each result with an independent swarm, and checks in with you twice a day. The coordinator owns verdicts; it never trusts a worker's own report.
 
-**What you review.** At volume you read evidence and decision trails, not diffs. `/show-me-your-work` keeps one row per decision with its evidence; the verification skill supplies the proof; the review bots and required checks do the line-by-line pass.
+**What you review.** At volume you read evidence and decision trails, not diffs. `/show-me-your-work` keeps one row per decision with its evidence; the verification skill supplies the proof; the review bots and the required check do the line-by-line pass.
 
 **Where diversity comes from.** Each person on this team uses one agent, so every pstack panel runs its seats as separate runs on that agent: independent samples from one family, with nothing waiting on a model the person does not have. The review bots run Claude and Codex on every pull request in CI, so every change still gets two families' scrutiny.
 
 ## The outer loop
 
-Many agents also means agents that start themselves. The talk describes bots subscribed to Slack threads and Sentry alerts that kick off cloud agents, reproduce bug reports, and open pull requests. In this kit, routines do that: nightly verification-skill upkeep, a nightly gardener sweep, a weekly review, and reproducing every issue labeled as a bug. They run as Claude Code routines or GitHub Actions ([Run many agents](../how-to/run-many-agents.md#routines)). No routine merges; each opens a pull request that goes through the same gates as everyone else's.
+Many agents also means agents that start themselves. The talk describes bots subscribed to Slack threads and Sentry alerts that kick off cloud agents, reproduce bug reports, and open pull requests. In this kit, routines do that: nightly verification-skill upkeep, a nightly gardener sweep, a weekly review, and reproducing every issue labeled as a bug. They run as Claude Code routines or Codex scheduled tasks on a teammate's plan ([Run many agents](../how-to/run-many-agents.md#routines)). No routine merges; each opens a pull request that goes through the same gates as everyone else's.
 
 ## Keep measuring
 

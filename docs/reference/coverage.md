@@ -27,10 +27,10 @@ What it describes:
 | Agents leaving comments to justify papering over a problem | `/no-comments`, the Comment Sicko agent, and the agnostic pack's `no-new-comments` check |
 | A gardener who watches the codebase for spreading smells | `gardener`, with a daily routine template |
 | Extracting what reviewers keep saying into the codebase: the style guide | `style-guide-from-reviews`, then `correct` to promote each entry down the ladder |
-| Grok Bot routines that react to Slack threads and Sentry alerts | `setup-routines`: Claude Code routines or GitHub Actions |
+| Grok Bot routines that react to Slack threads and Sentry alerts | `setup-routines`: Claude Code routines or Codex scheduled tasks |
 | Automations, and an SDK for building more bots | `setup-routines`. The SDK and orchestrate plugins were left out; see below |
 | Cloud agents | `setup-cloud-agents` |
-| Automatically reproducing bug reports and opening pull requests | pstack's benny pack and the `issue-reproduce` routine template |
+| Automatically reproducing bug reports and opening pull requests | pstack's benny pack and the `reproduce-bugs` routine |
 | pstack | `plugins/pstack`, vendored in full |
 
 ## The Complete Guide to pstack, Pt. 1
@@ -55,7 +55,7 @@ What it describes:
 | Designing an agent-friendly CLI | `cli-for-agents` from cli-for-agent |
 | Pinning /poteto-mode as a Custom Mode | `/faker-mode` (this kit's name for `/poteto-mode`) stays pinned through trust-ladder's UserPromptSubmit hook in Claude Code and Codex, and its Pi extension |
 | Cloud agents instead of worktrees | `setup-cloud-agents` |
-| Automatically reproducing user reports with a cloud agent | pstack's benny pack (dormant until set up) and the `issue-reproduce` routine template |
+| Automatically reproducing user reports with a cloud agent | pstack's benny pack (dormant until set up) and the `reproduce-bugs` routine |
 
 ## The Complete Guide to pstack, Pt. 2
 

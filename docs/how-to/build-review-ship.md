@@ -35,7 +35,7 @@ can we unslop the PR description?
 Three layers review every change:
 
 1. **Your agent**, before it opens the pull request: `/interrogate review this pr.` runs a panel of reviewers; `/thermos` runs a security-and-correctness review and a code-quality review in parallel.
-2. **The review bots**, on every pull request: Claude and Codex review it against REVIEW.md, the `## Review guidelines` in AGENTS.md, and STYLE.md. Set them up with `/setup-review-bots`. Because they run in CI, every change gets two model families' review, whichever agent its author uses.
+2. **The review bots**, on every pull request: Claude and Codex review it against REVIEW.md, the `## Review guidelines` in AGENTS.md, and STYLE.md. Set them up with `/setup-review-bots`. Codex's own code review and a teammate's Claude Code routine run them on GitHub, with no API keys, so every change gets two model families' review, whichever agent its author uses. Comment `@codex review` to ask Codex again after you push fixes.
 3. **A human code owner**, who approves. Branch protection requires it.
 
 `/make-pr-easy-to-review` cleans up commit history, improves the description, and adds reviewer guidance without changing behavior. `/pr-review-canvas` renders a pull request as an interactive walkthrough.

@@ -21,7 +21,7 @@ pstack's skills name a model for each role. This kit rewrote every one of them t
 
 Nothing in a default run calls a model you do not have, so nothing falls back and nothing waits on another tool.
 
-Cross-family review still happens where it costs no one's quota: [the review bots](build-review-ship.md#review) run Claude and Codex on every pull request in CI, on repository secrets, whichever agent wrote the change.
+Cross-family review still happens once per pull request instead of in every session: [the review bots](build-review-ship.md#review) run Claude and Codex on every pull request, whichever agent wrote the change. They draw on the plans of the teammates who set them up, not on API keys.
 
 ## When someone names a model
 

@@ -14,7 +14,7 @@ The lowest-scoring layer sets the safe level:
 |---|---|---|
 | No verification skill, or `check` fails | 1 to 5, each watched | Subagents in your own session |
 | Every layer at 2 or more | 10 to 30 | Cloud sessions, one pull request each |
-| Every layer at 3, `check` under 15 minutes, both review bots required | 100 or more | Playbooks that coordinate agents, and routines |
+| Every layer at 3, `check` under 15 minutes, both review bots on | 100 or more | Playbooks that coordinate agents, and routines |
 
 Fix the top items `/trust-audit` lists before you go up a level. See [Scaling to many agents](../explanation/scaling-agents.md) for why.
 
@@ -81,9 +81,9 @@ Routines keep the codebase trustworthy without anyone remembering to: the verifi
 | Maintain the verification skill | Weekday nights | `/maintain-verification-skill` |
 | Gardener | Weekday nights | `gardener` over the last 7 days |
 | Weekly review | Fridays | `/weekly-review` across every author, posted as an issue |
-| Reproduce bug reports | When an issue gets the `bug` label | Reproduce with the verification skill, then open a fix when the cause is clear |
+| Reproduce bug reports | Twice each weekday | Reproduce new `bug` issues with the verification skill, then open a fix when the cause is clear |
 
-Each job runs either as a **Claude Code routine** (claude.ai/code/routines, or `/schedule`), which runs as its creator's cloud session, or as a **GitHub Actions workflow** from [`templates/github/routines/`](../../plugins/trust-ladder/templates/github/routines/), which runs on repository secrets and works whichever agent each teammate uses. No routine ever merges.
+Each job's instructions live in the repository, in `.agents/routines/` (from [`templates/routines/`](../../plugins/trust-ladder/templates/routines/)), and one teammate runs it on their own plan, with no API keys: as a **Claude Code routine** (claude.ai/code/routines, or `/schedule`), which runs in the cloud, or as a **Codex scheduled task** in the Codex app, which runs on their computer while it is on. Its pull requests and comments appear under that teammate's name. A team that wants the jobs to run as the repository instead can use the GitHub Actions workflows in [`templates/github/routines/`](../../plugins/trust-ladder/templates/github/routines/), which need an `ANTHROPIC_API_KEY` secret. No routine ever merges.
 
 For a full bug-report bot (a feedback channel, triage, reproduction, and fixes), pstack ships [benny](../../plugins/pstack/automations/benny/README.md), an automation pack you install by pointing your agent at its `FOR_AGENTS.md`. `/make-bot-ui` builds a small page whose buttons wake a bot; here, a Claude Code routine through its API trigger.
 

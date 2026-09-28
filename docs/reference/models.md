@@ -31,6 +31,8 @@ After the rewrite, a vendored file may name only `claude-opus-5-5` (with `-max` 
 | Where | Model |
 |---|---|
 | `templates/codex-config.toml` | `gpt-6-sol`, `model_reasoning_effort = "high"`, `service_tier = "default"` |
-| `templates/github/codex-review.yml` | `gpt-6-sol`, effort `high`, `service_tier="default"` |
-| `templates/github/claude-review.yml` and the routine workflows | `claude-opus-5-5`, effort `max` |
+| Claude Code routines, including the PR review (`setup-review-bots`, `setup-routines`) | Claude Opus 5.5, chosen in the routine's model selector |
+| Codex code review | Codex's own review model |
+| `templates/github/codex-review.yml` (API-key alternative) | `gpt-6-sol`, effort `high`, `service_tier="default"` |
+| `templates/github/claude-review.yml` and the routine workflows (API-key alternative) | `claude-opus-5-5`, effort `max` |
 | `run-model` | GPT at `high` in the standard tier, whatever the slug says; Claude at the slug's effort, `max` by default |

@@ -5,7 +5,7 @@ A rollout that works in a week and keeps working after a year.
 ## Week 1: one repository, done properly
 
 1. An engineer installs the kit ([Install](install.md)) and runs `/setup-team-kit` on the main repository. Merge its pull request.
-2. Add the review bots' secrets and turn on [branch protection](../../plugins/trust-ladder/templates/branch-protection.md). From now on every change, from anyone or any agent, passes the same gates.
+2. Turn on the review bots (`/setup-review-bots`; no API keys) and [branch protection](../../plugins/trust-ladder/templates/branch-protection.md). From now on every change, from anyone or any agent, passes the same gates.
 3. Run `/create-verification-skill` and merge it. Until this exists, agents cannot prove their work, so the rest of the team cannot rely on them.
 4. Run `/trust-audit` and keep the first row as the baseline.
 
@@ -28,6 +28,7 @@ Suggest a first task for non-engineers that is small and visible, such as a copy
 | Verification-skill owner | One engineer, with an on-call rotation once many agents depend on it | Keeps the verification skill and its feature map working; reviews the nightly `/maintain-verification-skill` pull request |
 | Code owners | Per area, in CODEOWNERS | Review and merge pull requests, including those opened by non-engineers and routines |
 | Kit maintainer | One engineer | Updates the kit from upstream, adjusts models, and adds team skills to this repository |
+| Bot owners | One teammate with Claude Code, one with Codex | Run the Claude review routine and the other routines on their plan, and connect Codex code review. When one leaves, someone else recreates their routines from `.agents/routines/` |
 
 ## Rituals
 

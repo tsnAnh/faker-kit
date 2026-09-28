@@ -10,7 +10,7 @@ The same gates apply to every change, whoever asked for it and whichever agent w
 
 1. **The change is a pull request.** Nothing reaches the default branch directly. Branch protection blocks direct pushes and force pushes for everyone, including administrators.
 2. **The checks run.** `scripts/check.sh` runs the lint packs, the compiler, the tests, and the agnostic checks the team turned on: import boundaries always, and optionally complete translations and no new comments. A change that breaks a rule fails, with a message that tells the agent how to fix it.
-3. **Two review bots read it.** Claude and Codex review every pull request against REVIEW.md, AGENTS.md, and STYLE.md, and must pass.
+3. **Two review bots read it.** Claude and Codex review every pull request against REVIEW.md, AGENTS.md, and STYLE.md. Every blocking finding must be fixed or answered before merge.
 4. **A code owner approves it.** CODEOWNERS names an engineer for every path. Their approval is required, and a new commit dismisses an earlier approval.
 
 A designer's pull request and a senior engineer's pull request pass through exactly the same gates. That is what makes the first one safe. The [branch protection checklist](../../plugins/trust-ladder/templates/branch-protection.md) turns them on.

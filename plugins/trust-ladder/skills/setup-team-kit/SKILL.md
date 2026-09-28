@@ -32,7 +32,7 @@ Run `setup-lint-pack` once per detected stack, agnostic included. Each run copie
 
 ## 4. Review bots
 
-Run `setup-review-bots`. It adds the Claude and Codex PR review workflows, so every PR gets a review from two model families whichever agent wrote it.
+Run `setup-review-bots`. It writes the Claude reviewer's prompt and walks the user through turning on Codex code review and a Claude Code review routine, so every PR gets a review from two model families whichever agent wrote it. Both run on teammates' subscriptions; the repository needs no API-key secrets.
 
 ## 5. Skills
 
@@ -46,7 +46,7 @@ So that every teammate, whichever agent they use, gets the kit without setup:
 - `.claude/settings.json` from `templates/claude-settings.json`: adds this marketplace, enables the plugins, and denies destructive commands.
 - `.pi/settings.json` from `templates/pi-settings.json`: pins the kit as a project package. Pi applies it after the user trusts the project.
 - `.codex/config.toml` from `templates/codex-config.toml`: sandbox and approval defaults. Codex applies it after the user trusts the project. Codex users add the kit once with `codex plugin marketplace add tsnAnh/skills`, then install each plugin, because Codex does not install dependencies. The one-line install loop is at the top of that template.
-- `CODEOWNERS` and the branch-protection checklist in `templates/branch-protection.md`: required checks and one human approval, so changes from anyone, including non-engineers, pass the same gates.
+- `CODEOWNERS` and the branch-protection checklist in `templates/branch-protection.md`: the required check, resolved review conversations, and one human approval, so changes from anyone, including non-engineers, pass the same gates.
 
 ## 7. Start the ledgers
 
@@ -57,4 +57,4 @@ Create `.agents/corrections.tsv` with the header row from the `correct` skill. R
 1. Run `check`. It must pass.
 2. Break one rule on purpose, confirm `check` fails with a useful message, then revert.
 3. Run `scripts/link-skills.sh --check .`.
-4. Open one PR titled `chore(agents): set up team kit`. The body lists what was added, the baseline counts per pack, the trust-audit scores, and the recommended next step (usually `/create-verification-skill`).
+4. Open one PR titled `chore(agents): set up team kit`. The body lists what was added, the baseline counts per pack, the trust-audit scores, what the user must turn on after merging (the two review bots and branch protection), and the recommended next step (usually `/create-verification-skill`).

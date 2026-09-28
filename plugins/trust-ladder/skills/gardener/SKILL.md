@@ -43,4 +43,4 @@ For each smell you stopped, open one issue or task: the rule that now blocks it,
 
 ## Running it on a schedule
 
-A gardener works best daily or weekly. `setup-routines` can schedule this skill as a Claude Code routine or a GitHub Actions job that opens its PRs for review.
+A gardener works best daily or weekly. `setup-routines` can schedule this skill as a Claude Code routine or a Codex scheduled task that opens its PRs for review.

@@ -19,7 +19,7 @@ The skill inspects the repository before it asks you anything. If the repository
 | 3. Rules | `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`) | Commands, layout, boundaries, paved paths, a never-list, `## Review guidelines`, and the table that maps pstack's upstream terms to your agent |
 | 5. Style guide | `REVIEW.md`, `STYLE.md` | What reviewers check, and the team's taste with bad and good examples |
 | 2. Static analysis | `scripts/check.sh`, lint configs, baselines, a CI job | One command that runs everything CI runs. Existing violations are recorded in a baseline so only new ones fail |
-| 3. Review bots | `.github/workflows/claude-review.yml`, `codex-review.yml` | Claude and Codex review every pull request |
+| 3. Review bots | `.agents/routines/pr-review.md` | The Claude reviewer's instructions. With Codex code review, Claude and Codex review every pull request, with no API keys |
 | 4. Skills | `.claude/skills/`, `.agents/skills/` links | Project skills (such as your verification skill) visible to Claude Code, Codex, and Pi |
 | Team | `.claude/settings.json`, `.codex/config.toml`, `.pi/settings.json`, `CODEOWNERS` | The kit and safe defaults for every teammate's agent, and a named reviewer for every path |
 | Measurement | `.agents/corrections.tsv`, `.agents/trust-audit.tsv` | The ledger of encoded corrections and the first trust score |
@@ -28,8 +28,8 @@ It installs one [lint pack](../reference/lint-packs.md) per detected stack, plus
 
 ## After it merges
 
-1. **Secrets for the review bots.** Add `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` as repository secrets. See `setup-review-bots` for the details.
-2. **Branch protection.** Work through [the checklist](../../plugins/trust-ladder/templates/branch-protection.md): require the check job, both review bots, and a code owner's approval, with no bypass. This is what makes it safe for non-engineers to open pull requests.
+1. **Turn on the review bots.** They run on teammates' subscriptions, so the repository needs no API-key secrets. Someone with Codex turns on Codex code review for the repository in Codex settings. Someone with Claude Code creates a routine at claude.ai/code/routines that follows `.agents/routines/pr-review.md` whenever a pull request opens. `setup-review-bots` walks through both.
+2. **Branch protection.** Work through [the checklist](../../plugins/trust-ladder/templates/branch-protection.md): require the check job, resolved review conversations, and a code owner's approval, with no bypass. This is what makes it safe for non-engineers to open pull requests.
 3. **A verification skill.** Run `/create-verification-skill` next. It is the single most valuable skill a repository can have. See [Build a verification skill](build-a-verification-skill.md).
 4. **Cloud sessions.** When you want agents to work in parallel without your laptop, run `/setup-cloud-agents`.
 
