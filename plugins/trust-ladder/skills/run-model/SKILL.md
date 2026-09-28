@@ -1,11 +1,13 @@
 ---
 name: run-model
-description: Run one panel seat, judge, or delegate on a specific model slug from a pstack skill (claude-opus-5-5-max, gpt-6-sol-max, inherit-parent) from Claude Code, Codex, or Pi. Use when a skill's role line or panel names a model your agent cannot select directly, such as a gpt-* seat from Claude Code or a claude-* seat from Codex.
+description: Run one panel seat, judge, or delegate on a specific model slug (claude-opus-5-5-max, gpt-6-sol-high) from Claude Code, Codex, or Pi. Every pstack default is inherit-parent, so this is only needed when someone names a model, in ~/.cursor/rules/pstack-models.mdc or with /advisor <model>, that your agent cannot select directly, such as a gpt-* seat from Claude Code.
 ---
 
 # Run a model seat
 
-pstack's arena, architect, interrogate, and reflect skills name a model per seat. Your agent can select its own family directly. For the other family, this skill finds a route or tells you to fall back.
+Every role and panel seat in the kit defaults to `inherit-parent`: it runs on your own agent, and a panel gets its independent opinions from separate runs. Each teammate uses one agent, so that is the fast path. This skill is for the exception, when a configured seat names a model. Your agent runs its own family directly. For the other family, this skill finds a route or tells you to fall back.
+
+GPT seats always run on `gpt-6-sol` at high effort in the standard service tier. The script drops a `-fast` suffix and lowers `max` or `xhigh` to `high`, because the fast tier costs 1.5x quota.
 
 ## Steps
 
@@ -13,7 +15,7 @@ pstack's arena, architect, interrogate, and reflect skills name a model per seat
 2. Run the script from this skill's directory. Pass the agent you are running in and the slug:
 
    ```bash
-   scripts/run-model.sh --from claude --model gpt-6-sol-max < seat-prompt.md
+   scripts/run-model.sh --from claude --model gpt-6-sol-high < seat-prompt.md
    ```
 
    Use `--from codex` in Codex and `--from pi` in Pi. Add `--dry-run` to see the route without running. Add `--write` only when the seat must edit files; the default run is read-only.

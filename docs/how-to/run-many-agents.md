@@ -41,7 +41,7 @@ Local worktrees top out at around ten agents: each one costs disk, CPU, and the 
 It writes one setup script that boots the repository from nothing and wires it into Claude Code on the web and Codex cloud, then proves it in a fresh session. After that, start a cloud session per task, for example from Pt. 1 of the pstack guide:
 
 ```text
-/poteto-mode improve the initial loading time of our app. first use the verification skill to take a trace of the status quo and identify opportunities. then make a targeted fix, and use it with /swarm to confirm the win.
+/faker-mode improve the initial loading time of our app. first use the verification skill to take a trace of the status quo and identify opportunities. then make a targeted fix, and use it with /swarm to confirm the win.
 ```
 
 Pi has no managed cloud; Pi users run the same script in a remote container, or use pi-subagents background runs for small fan-outs.
@@ -49,10 +49,10 @@ Pi has no managed cloud; Pi users run the same script in a remote container, or 
 ## 4. Let work run while you are away
 
 ```text
-/poteto-mode i'm stepping away. migrate every caller to the new async store; i want to trust it when i'm back.
+/faker-mode i'm stepping away. migrate every caller to the new async store; i want to trust it when i'm back.
 ```
 
-For a long task, `/poteto-mode` uses the Autonomous run playbook (a checkable exit condition, then iterate until it holds) or `/figure-it-out` for a large, one-off change. Either keeps a decision trail with `/show-me-your-work`: one row per decision, with the evidence, so you can audit the run afterwards. Pause safely and Session pickup let a run stop cleanly and another agent resume it. The pstack guide's [Run work while you sleep](../../plugins/pstack/docs/guide/07-overnight.md) is the full treatment.
+For a long task, `/faker-mode` uses the Autonomous run playbook (a checkable exit condition, then iterate until it holds) or `/figure-it-out` for a large, one-off change. Either keeps a decision trail with `/show-me-your-work`: one row per decision, with the evidence, so you can audit the run afterwards. Pause safely and Session pickup let a run stop cleanly and another agent resume it. The pstack guide's [Run work while you sleep](../../plugins/pstack/docs/guide/07-overnight.md) is the full treatment.
 
 ## 5. Run a program
 
@@ -65,10 +65,8 @@ For work that outlives any one agent (a multi-day migration, a queue of independ
 | Autopilot-stack | The same, but delivered as one reviewed stack that you land yourself |
 
 ```text
-/poteto-mode orchestrate the store migration. own it until every package is converted and merged. i'll check in twice a day.
+/faker-mode orchestrate the store migration. own it until every package is converted and merged. i'll check in twice a day.
 ```
-
-The separate `orchestrate` plugin does the same with a tree of Cursor cloud agents through the Cursor SDK; it needs a Cursor API key.
 
 ## Routines
 

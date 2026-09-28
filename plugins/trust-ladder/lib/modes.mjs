@@ -1,8 +1,8 @@
 export const MODES = [
   {
-    skill: "poteto-mode",
+    skill: "faker-mode",
     plugin: "pstack",
-    reminder: "New task? Playbook match or rigor needed -> apply /poteto-mode. Casual turn or user opts out -> don't.",
+    reminder: "New task? Playbook match or rigor needed -> apply /faker-mode. Casual turn or user opts out -> don't.",
   },
 ];
 

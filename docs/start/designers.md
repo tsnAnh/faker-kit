@@ -12,7 +12,7 @@ The examples below are for Claude Code. In Codex, start with `$` instead of `/`;
 ## Try two or three versions and pick one
 
 ```text
-/poteto-mode try three layouts for the empty cart screen. show me a screenshot of each side by side.
+/faker-mode try three layouts for the empty cart screen. show me a screenshot of each side by side.
 ```
 
 The agent builds each version behind a switch, takes screenshots, and puts them next to each other. Pick one, or ask for a mix: "the second layout with the first one's illustration". The versions are throwaway. When you pick, the agent builds the chosen one properly.
@@ -20,7 +20,7 @@ The agent builds each version behind a switch, takes screenshots, and puts them 
 ## Make a screen match a design
 
 ```text
-/poteto-mode make the settings screen match this mockup exactly. <paste the image or a link>
+/faker-mode make the settings screen match this mockup exactly. <paste the image or a link>
 ```
 
 This uses the Visual parity playbook: the agent compares screenshots of the app with your mockup until they match, and shows you both.

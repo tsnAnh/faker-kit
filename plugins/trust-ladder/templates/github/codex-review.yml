@@ -31,7 +31,8 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           model: gpt-6-sol
-          effort: max
+          effort: high
+          codex-args: '["-c", "service_tier=\"default\""]'
           permission-profile: ":workspace"
           prompt: |
             Review pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.

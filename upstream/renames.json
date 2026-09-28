@@ -1,0 +1,51 @@
+{
+  "$comment": "Names the team chose over upstream's, applied after the model and compat rules. `paths` rewrites every path segment containing `from`. `rules` rewrite text the same way model-map.json rules do: literal, scoped by upstream path glob, with an exact count. Faker is the League of Legends player; the mode and its agent carry his name on this team.",
+  "paths": [
+    {
+      "from": "poteto-mode",
+      "to": "faker-mode"
+    },
+    {
+      "from": "poteto-agent",
+      "to": "faker-agent"
+    }
+  ],
+  "rules": [
+    {
+      "id": "rename-poteto-mode-heading",
+      "files": [
+        "pstack/skills/poteto-mode/SKILL.md"
+      ],
+      "from": "\n# Poteto mode\n",
+      "to": "\n# Faker mode\n",
+      "count": 1
+    },
+    {
+      "id": "rename-poteto-agent-heading",
+      "files": [
+        "pstack/agents/poteto-agent.md"
+      ],
+      "from": "\n# Poteto subagent\n",
+      "to": "\n# Faker subagent\n",
+      "count": 1
+    },
+    {
+      "id": "rename-poteto-mode",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "poteto-mode",
+      "to": "faker-mode",
+      "count": 153
+    },
+    {
+      "id": "rename-poteto-agent",
+      "files": [
+        "pstack/**"
+      ],
+      "from": "poteto-agent",
+      "to": "faker-agent",
+      "count": 11
+    }
+  ]
+}

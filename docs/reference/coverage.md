@@ -4,7 +4,7 @@
 
 Where everything in Lauren Tan's talk and her two pstack guide posts lives in this kit, plus every skill those skills reference. `node scripts/validate.mjs` fails if a skill in the kit is missing from the catalog, so this page cannot fall behind.
 
-- 96 skills from 11 plugins, plus 3 dormant automation skills.
+- 94 skills from 9 plugins, plus 3 dormant automation skills.
 - 12 skills are named in the posts, and all of them are here.
 - 27 ideas, bots, and tools from the talk and posts are mapped to the skills that carry them.
 
@@ -28,7 +28,7 @@ What it describes:
 | A gardener who watches the codebase for spreading smells | `gardener`, with a daily routine template |
 | Extracting what reviewers keep saying into the codebase: the style guide | `style-guide-from-reviews`, then `correct` to promote each entry down the ladder |
 | Grok Bot routines that react to Slack threads and Sentry alerts | `setup-routines`: Claude Code routines or GitHub Actions |
-| Cursor Automations and the Cursor SDK for building more bots | `setup-routines`; `cursor-sdk` and `orchestrate` if you have a Cursor API key |
+| Cursor Automations and the Cursor SDK for building more bots | `setup-routines`. The Cursor SDK and orchestrate plugins were left out; see below |
 | Cloud agents | `setup-cloud-agents` |
 | Automatically reproducing bug reports and opening pull requests | pstack's benny pack and the `issue-reproduce` routine template |
 | pstack | `plugins/pstack`, vendored in full |
@@ -39,7 +39,7 @@ Skills it names:
 
 | Skill | Plugin |
 |---|---|
-| [poteto-mode](../../plugins/pstack/skills/poteto-mode/SKILL.md) | pstack |
+| [faker-mode](../../plugins/pstack/skills/faker-mode/SKILL.md) (named `poteto-mode` there) | pstack |
 | [create-verification-skill](../../plugins/pstack/skills/create-verification-skill/SKILL.md) | pstack |
 | [maintain-verification-skill](../../plugins/pstack/skills/maintain-verification-skill/SKILL.md) | pstack |
 | [principle-build-the-lever](../../plugins/pstack/skills/principle-build-the-lever/SKILL.md) | pstack |
@@ -53,7 +53,7 @@ What it describes:
 | Dr Eggbot, which makes bots that run /create-verification-skill and a daily /maintain-verification-skill | `setup-routines` |
 | /control-app, the verification skill with its CLI and feature map | The `verify-<app>` skill that `/create-verification-skill` writes |
 | Designing an agent-friendly CLI | `cli-for-agents` from cli-for-agent |
-| Pinning /poteto-mode as a Custom Mode | trust-ladder's UserPromptSubmit hook in Claude Code and Codex, and its Pi extension |
+| Pinning /poteto-mode as a Custom Mode | `/faker-mode` (this kit's name for `/poteto-mode`) stays pinned through trust-ladder's UserPromptSubmit hook in Claude Code and Codex, and its Pi extension |
 | Cloud agents instead of worktrees | `setup-cloud-agents` |
 | Automatically reproducing user reports with a cloud agent | pstack's benny pack (dormant until set up) and the `issue-reproduce` routine template |
 
@@ -65,7 +65,7 @@ Skills it names:
 |---|---|
 | [teach](../../plugins/pstack/skills/teach/SKILL.md) | pstack |
 | [architect](../../plugins/pstack/skills/architect/SKILL.md) | pstack |
-| [poteto-mode](../../plugins/pstack/skills/poteto-mode/SKILL.md) | pstack |
+| [faker-mode](../../plugins/pstack/skills/faker-mode/SKILL.md) (named `poteto-mode` there) | pstack |
 | [how](../../plugins/pstack/skills/how/SKILL.md) | pstack |
 | [why](../../plugins/pstack/skills/why/SKILL.md) | pstack |
 | [recall](../../plugins/pstack/skills/recall/SKILL.md) | pstack |
@@ -76,9 +76,9 @@ What it describes:
 
 | Idea or tool | In this kit |
 |---|---|
-| The prototyping and multi-phase planning playbooks | `plugins/pstack/skills/poteto-mode/playbooks/`, loaded by `/poteto-mode` |
-| The script that checks every plan's structure | `plugins/pstack/skills/poteto-mode/scripts/check-plan.mjs` |
-| Competing design runners from different model families | `/architect` and `/arena` panels run on Claude Opus 5.5 and GPT-6 Sol; see `docs/how-to/models.md` |
+| The prototyping and multi-phase planning playbooks | `plugins/pstack/skills/faker-mode/playbooks/`, loaded by `/faker-mode` |
+| The script that checks every plan's structure | `plugins/pstack/skills/faker-mode/scripts/check-plan.mjs` |
+| Competing design runners from different model families | `/architect` and `/arena` keep their runners, each a separate run on the member's own agent; the Claude and Codex review bots add the second family on every PR. See `docs/how-to/models.md` |
 
 ## Named inside pstack but built into Cursor
 
@@ -92,7 +92,6 @@ Found by scanning each vendored plugin for another plugin's skill names. Each re
 
 | Skill | Lives in | Referenced by |
 |---|---|---|
-| [cursor-sdk](../../plugins/cursor-sdk/skills/cursor-sdk/SKILL.md) | cursor-sdk | orchestrate |
 | [control-cli](../../plugins/cursor-team-kit/skills/control-cli/SKILL.md) | cursor-team-kit | pstack |
 | [control-ui](../../plugins/cursor-team-kit/skills/control-ui/SKILL.md) | cursor-team-kit | pstack |
 | [deslop](../../plugins/cursor-team-kit/skills/deslop/SKILL.md) | cursor-team-kit | pstack |
@@ -107,12 +106,10 @@ Found by scanning each vendored plugin for another plugin's skill names. Each re
 | pstack | 47 | The plugin the talk and both posts are about. Vendored in full, including the principles, playbooks, agents, and the benny automation pack. |
 | cursor-team-kit | 18 | pstack routes to its `control-ui`, `control-cli`, and `deslop`; the talk's CI and review workflow lives here. |
 | thermos | 3 | The review panel cursor-team-kit's `thermo-nuclear-code-quality-review` belongs to. |
-| orchestrate | 1 | Spawns a tree of Cursor cloud agents under one coordinator. Needs a Cursor API key; without one, pstack's Orchestrate playbook does the job with your own agent's subagents. |
-| cursor-sdk | 1 | orchestrate builds on it; the talk's bots are built with it. Needs a Cursor API key. |
-| continual-learning | 1 | Turns transcripts into AGENTS.md updates: the rules layer learning on its own. |
+| continual-learning | 1 | Turns transcripts into AGENTS.md updates: the rules layer learning on its own. Its cadence hook runs in Claude Code and Codex. |
 | cli-for-agent | 1 | How to design the CLI a verification skill wraps, from Pt. 1's control-app. |
 | agent-compatibility | 1 | Scores how agent-friendly a repository is; `trust-audit` uses it. |
-| advisor | 1 | A second opinion from a stronger model before a risky step. |
+| advisor | 1 | A second opinion before a risky step, from a fresh run of your own model. Its end-of-turn reminder runs in Claude Code and Codex. |
 | teaching | 2 | Learning paths, so designers, marketers, and founders can build skills with agents. |
 
 ## Left out on purpose
@@ -121,7 +118,9 @@ From [cursor/plugins](https://github.com/cursor/plugins):
 
 | Plugin | Why |
 |---|---|
-| ralph-loop | Claude Code's `/loop` and the poteto-mode Autonomous run playbook do the same job. |
+| orchestrate | Runs Cursor cloud agents through @cursor/sdk and needs a Cursor account. pstack's Orchestrate playbook runs large programs on your own agent's subagents instead. |
+| cursor-sdk | Documents Cursor's TypeScript SDK, which needs a Cursor account. Routines and the review workflows cover the bots this team builds. |
+| ralph-loop | Claude Code's `/loop` and the faker-mode Autonomous run playbook do the same job. |
 | create-plugin | Scaffolds Cursor plugins; this kit ships Claude Code, Codex, and Pi manifests. |
 | docs-canvas | Renders into Cursor's canvas; not referenced by the talk, posts, or pstack. |
 | pr-review-canvas (standalone) | The same skill ships in cursor-team-kit, which is included. |

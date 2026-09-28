@@ -8,7 +8,7 @@ const CATALOG = "docs/catalog.json";
 const OUTPUTS = { skills: "docs/reference/skills.md", coverage: "docs/reference/coverage.md", playbooks: "docs/reference/playbooks.md", packs: "docs/reference/lint-packs.md" };
 const PACKS = "plugins/trust-ladder/packs";
 const PACK_ORDER = ["agnostic", "kotlin-android", "kmp", "rust", "python", "flutter-dart", "swift-ios"];
-const POTETO_MODE = "plugins/pstack/skills/poteto-mode";
+const FAKER_MODE = "plugins/pstack/skills/faker-mode";
 const OWN_PLUGIN = "trust-ladder";
 const AUDIENCES = { everyone: "Everyone", engineer: "Engineers", lead: "Leads" };
 const SOURCES = {
@@ -89,7 +89,7 @@ function renderSkills(catalog, skills) {
     "",
     "| Claude Code | Codex | Pi |",
     "|---|---|---|",
-    "| `/poteto-mode` or `/pstack:poteto-mode` | `$poteto-mode` | `/skill:poteto-mode` |",
+    "| `/faker-mode` or `/pstack:faker-mode` | `$faker-mode` | `/skill:faker-mode` |",
     "",
     "You rarely need the name. Each agent picks a skill on its own when your request matches the skill's description, so \"verify it really works\" is often enough. Call a skill by name when you want to be sure.",
     "",
@@ -154,9 +154,10 @@ function renderCoverage(catalog, skills) {
       out.push("It names no skill by name. Everything it describes is mapped below.", "");
     } else {
       out.push("Skills it names:", "", "| Skill | Plugin |", "|---|---|");
-      for (const [key] of skillRows) {
+      for (const [key, entry] of skillRows) {
         const skill = byKey.get(key);
-        if (skill) out.push(`| ${skillLink(skill, "docs/reference")} | ${skill.plugin} |`);
+        const renamed = entry.renamedFrom ? ` (named \`${entry.renamedFrom}\` there)` : "";
+        if (skill) out.push(`| ${skillLink(skill, "docs/reference")}${renamed} | ${skill.plugin} |`);
       }
       out.push("");
     }
@@ -193,7 +194,7 @@ function renderCoverage(catalog, skills) {
 }
 
 export function playbookRoutes() {
-  const text = fs.readFileSync(path.join(ROOT, POTETO_MODE, "SKILL.md"), "utf8");
+  const text = fs.readFileSync(path.join(ROOT, FAKER_MODE, "SKILL.md"), "utf8");
   const routes = [];
   for (const line of text.split("\n")) {
     const match = /^- \*\*(.+?)\.\*\* (.*?)\s*(?:Full steps: )?`(playbooks\/[\w-]+\.md)`\.?\s*$/.exec(line);
@@ -210,13 +211,13 @@ function renderPlaybooks(skills) {
     "",
     "# Playbooks and principles",
     "",
-    `\`/poteto-mode\` classifies each task and loads one of these ${routes.length} playbooks. You do not pick them; describing the task is enough. Naming one ("use the prototype playbook") forces the choice. The list below is read from [poteto-mode's SKILL.md](../../${POTETO_MODE}/SKILL.md), so it stays current with pstack.`,
+    `\`/faker-mode\` classifies each task and loads one of these ${routes.length} playbooks. You do not pick them; describing the task is enough. Naming one ("use the prototype playbook") forces the choice. The list below is read from [faker-mode's SKILL.md](../../${FAKER_MODE}/SKILL.md), so it stays current with pstack.`,
     "",
-    "| Playbook | poteto-mode uses it for |",
+    "| Playbook | faker-mode uses it for |",
     "|---|---|",
   ];
   for (const route of routes) {
-    out.push(`| [${route.name}](../../${POTETO_MODE}/${route.file}) | ${escapeCell(route.when)} |`);
+    out.push(`| [${route.name}](../../${FAKER_MODE}/${route.file}) | ${escapeCell(route.when)} |`);
   }
   out.push(
     "",
@@ -311,9 +312,9 @@ export function catalogProblems() {
   for (const plugin of marketplacePlugins()) {
     if (!catalog.plugins[plugin]) problems.push(`${CATALOG}: plugin ${plugin} has no reason in "plugins"`);
   }
-  const playbooks = fs.readdirSync(path.join(ROOT, POTETO_MODE, "playbooks")).filter((f) => f.endsWith(".md"));
+  const playbooks = fs.readdirSync(path.join(ROOT, FAKER_MODE, "playbooks")).filter((f) => f.endsWith(".md"));
   const routed = new Set(playbookRoutes().map((r) => path.basename(r.file)));
-  for (const file of playbooks) if (!routed.has(file)) problems.push(`${POTETO_MODE}/playbooks/${file}: not found in poteto-mode's routing list; update playbookRoutes()`);
+  for (const file of playbooks) if (!routed.has(file)) problems.push(`${FAKER_MODE}/playbooks/${file}: not found in faker-mode's routing list; update playbookRoutes()`);
   if (problems.length > 0) return problems;
   for (const [file, content] of Object.entries(render(catalog, skills))) {
     const full = path.join(ROOT, file);

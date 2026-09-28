@@ -18,7 +18,7 @@ Recommend these four and let the user drop any:
 | Weekly review | Friday | `/weekly-review` across every author (the skill defaults to the current git user), posted as an issue anyone on the team can read |
 | Reproduce bug reports | An issue gets the `bug` label | Restate, reproduce with the verification skill, and open a fix PR when the cause is clear |
 
-Add `/continual-learning` weekly if the team uses the continual-learning plugin; its Cursor hook does not fire outside Cursor.
+Add `/continual-learning` weekly for Pi users, and for machines without `bun`. In Claude Code and Codex with `bun` installed, continual-learning's own hook already runs it every few hours of work.
 
 ## 2. Pick where they run
 

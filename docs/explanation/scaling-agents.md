@@ -22,7 +22,7 @@ The number of agents you can usefully run is set by how much of their output you
 
 **What you review.** At volume you read evidence and decision trails, not diffs. `/show-me-your-work` keeps one row per decision with its evidence; the verification skill supplies the proof; the review bots and required checks do the line-by-line pass.
 
-**Where diversity comes from.** Each person on this team uses one agent, so their own session sees one model family. The review bots run Claude and Codex on every pull request in CI, so every change still gets two families' scrutiny. Panels in pstack fall back to repeated runs on your own model when the other family is not reachable, which keeps independent samples even when it cannot keep different families.
+**Where diversity comes from.** Each person on this team uses one agent, so every pstack panel runs its seats as separate runs on that agent: independent samples from one family, with nothing waiting on a model the person does not have. The review bots run Claude and Codex on every pull request in CI, so every change still gets two families' scrutiny.
 
 ## The outer loop
 

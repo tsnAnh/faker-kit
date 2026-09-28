@@ -2,10 +2,12 @@
 #
 # Install the kit once per machine (Codex does not install plugin dependencies, so add each plugin):
 #   codex plugin marketplace add tsnAnh/skills
-#   for p in trust-ladder pstack cursor-team-kit thermos orchestrate cursor-sdk continual-learning cli-for-agent agent-compatibility advisor teaching; do codex plugin add "$p@team-kit"; done
+#   for p in trust-ladder pstack cursor-team-kit thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do codex plugin add "$p@team-kit"; done
 
+# GPT-6 Sol at high effort in the standard service tier. The fast tier costs 1.5x quota, so it stays off.
 model = "gpt-6-sol"
-model_reasoning_effort = "max"
+model_reasoning_effort = "high"
+service_tier = "default"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 

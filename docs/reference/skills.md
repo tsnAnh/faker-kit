@@ -2,7 +2,7 @@
 
 # Skills
 
-Every skill in the kit: 96 skills from 11 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 94 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
@@ -10,7 +10,7 @@ The examples below are written for Claude Code. In the other agents, change the 
 
 | Claude Code | Codex | Pi |
 |---|---|---|
-| `/poteto-mode` or `/pstack:poteto-mode` | `$poteto-mode` | `/skill:poteto-mode` |
+| `/faker-mode` or `/pstack:faker-mode` | `$faker-mode` | `/skill:faker-mode` |
 
 You rarely need the name. Each agent picks a skill on its own when your request matches the skill's description, so "verify it really works" is often enough. Call a skill by name when you want to be sure.
 
@@ -22,7 +22,7 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 |---|---|---|---|---|
 | [paved-path](../../plugins/trust-ladder/skills/paved-path/SKILL.md) | trust-ladder | Engineers | `/paved-path we have three ways to format dates` | Give one concern (networking, persistence, dates, logging, navigation, feature flags, state, UI tokens) exactly one blessed way to do it. |
 | [gardener](../../plugins/trust-ladder/skills/gardener/SKILL.md) | trust-ladder | Engineers | `/gardener what spread in the codebase this week?` | Tend the codebase the way a gardener tends weeds. |
-| [architect](../../plugins/pstack/skills/architect/SKILL.md) | pstack | Engineers | `/poteto-mode we need rate limiting for external webhooks. /architect this first, and answer open questions with prototypes.` | Sketch types, signatures, and module structure before code, then stay in the loop while implementation fills in. |
+| [architect](../../plugins/pstack/skills/architect/SKILL.md) | pstack | Engineers | `/faker-mode we need rate limiting for external webhooks. /architect this first, and answer open questions with prototypes.` | Sketch types, signatures, and module structure before code, then stay in the loop while implementation fills in. |
 | [blast-radius](../../plugins/pstack/skills/blast-radius/SKILL.md) | pstack | Engineers | `/blast-radius this change to the session cache` | Find what a change could break somewhere else before it ships, beyond the diff, and prove the one fact it's safe because of by running real code instead of writing it up. |
 | [no-comments](../../plugins/pstack/skills/no-comments/SKILL.md) | pstack | Engineers | `/no-comments` | Spawn Comment Sicko, fix accepted findings, and offer encodings for claimed constraints. |
 | [typescript-best-practices](../../plugins/pstack/skills/typescript-best-practices/SKILL.md) | pstack | Engineers | `apply typescript-best-practices to this module` | TypeScript best practices. |
@@ -63,7 +63,7 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 
 | Skill | Plugin | For | Try | What it does |
 |---|---|---|---|---|
-| [poteto-mode](../../plugins/pstack/skills/poteto-mode/SKILL.md) | pstack | Engineers | `/poteto-mode build a small feature behind a feature flag. verify it really works.` | poteto's agent style for concise, detailed responses, deliberate subagents, unslopped prose, simple code, and verified work. |
+| [faker-mode](../../plugins/pstack/skills/faker-mode/SKILL.md) | pstack | Engineers | `/faker-mode build a small feature behind a feature flag. verify it really works.` | poteto's agent style for concise, detailed responses, deliberate subagents, unslopped prose, simple code, and verified work. |
 | [create-verification-skill](../../plugins/pstack/skills/create-verification-skill/SKILL.md) | pstack | Engineers | `/create-verification-skill` | Generate a project-local verification skill that drives your app the way a user does — any language, framework, or platform. |
 | [maintain-verification-skill](../../plugins/pstack/skills/maintain-verification-skill/SKILL.md) | pstack | Engineers | `/maintain-verification-skill` | Periodic pass that keeps a project's verification skill and feature map honest: parallel source readers per feature, one live session driving every feature, at most one PR of proven corrections. |
 | [control-mobile](../../plugins/trust-ladder/skills/control-mobile/SKILL.md) | trust-ladder | Engineers | `use control-mobile to reproduce the crash on the Android emulator and record it` | Build or adapt a local harness to drive and inspect an Android, iOS, Flutter, or Kotlin Multiplatform app on an emulator or simulator. |
@@ -76,7 +76,7 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 | [why](../../plugins/pstack/skills/why/SKILL.md) | pstack | Engineers, Everyone | `/why are we still stuck on an old version of node?` | Use for 'why does X work this way', 'why we picked Y', design rationale, regressions, postmortems, or data-backed thresholds. |
 | [recall](../../plugins/pstack/skills/recall/SKILL.md) | pstack | Engineers | `/recall the work i did yesterday on virtualization and then read this bug report` | Reconstruct your recent working context from your own chat history, live state, and the shared record (user reports, prior fixes, incidents), then hand back a tight current-state brief. |
 | [arena](../../plugins/pstack/skills/arena/SKILL.md) | pstack | Engineers | `/arena take my prompt to the arena verbatim. i want to compare their proposals with yours.` | Spawn N parallel candidates at the same task, pick a base, graft the strongest parts of the losers into it. |
-| [figure-it-out](../../plugins/pstack/skills/figure-it-out/SKILL.md) | pstack | Engineers | `/poteto-mode i'm stepping away. migrate every caller to the new async store; i want to trust it when i'm back.` | Design an auditable playbook when no narrower one fits: a large migration, an ambitious multi-part change, or work a human reviews after stepping away. |
+| [figure-it-out](../../plugins/pstack/skills/figure-it-out/SKILL.md) | pstack | Engineers | `/faker-mode i'm stepping away. migrate every caller to the new async store; i want to trust it when i'm back.` | Design an auditable playbook when no narrower one fits: a large migration, an ambitious multi-part change, or work a human reviews after stepping away. |
 | [tdd](../../plugins/pstack/skills/tdd/SKILL.md) | pstack | Engineers | `/tdd implement` | Use only when the user explicitly asks for TDD, a failing test, or a regression test, OR when the bug has an obvious cheap local test target. |
 | [show-me-your-work](../../plugins/pstack/skills/show-me-your-work/SKILL.md) | pstack | Engineers, Leads | `/show-me-your-work keep a decision trail i can review when i'm back` | Keep a reviewable decision trail for long-running or unattended work: a TSV log with one row per decision (what, why, evidence, result). |
 | [reflect](../../plugins/pstack/skills/reflect/SKILL.md) | pstack | Engineers | `/reflect that took too long. capture what we learned so the next run doesn't repeat it.` | Spawn three parallel review subagents over the active transcript, surface learnings, and route each to a concrete edit on an existing skill. |
@@ -139,7 +139,7 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 | [setup-team-kit](../../plugins/trust-ladder/skills/setup-team-kit/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-team-kit` | Prepare a repository so agents can work in it unattended and anyone on the team can use the kit. |
 | [trust-audit](../../plugins/trust-ladder/skills/trust-audit/SKILL.md) | trust-ladder | Engineers, Leads | `/trust-audit how many agents can this repo take?` | Score how far a repository can be trusted to agents, layer by layer (codebase, static analysis, rules and review bots, skills and verification, style guide), with evidence from running its commands. |
 | [check-agent-compatibility](../../plugins/agent-compatibility/skills/check-agent-compatibility/SKILL.md) | agent-compatibility | Engineers, Leads | `/check-agent-compatibility` | Run the full repository compatibility pass: scanner score, startup path, validation loop, and docs reliability. |
-| [run-model](../../plugins/trust-ladder/skills/run-model/SKILL.md) | trust-ladder | Engineers | `run this arena seat on gpt-6-sol-max with the run-model skill` | Run one panel seat, judge, or delegate on a specific model slug from a pstack skill (claude-opus-5-5-max, gpt-6-sol-max, inherit-parent) from Claude Code, Codex, or Pi. |
+| [run-model](../../plugins/trust-ladder/skills/run-model/SKILL.md) | trust-ladder | Engineers | `run this seat on gpt-6-sol-high with the run-model skill` | Run one panel seat, judge, or delegate on a specific model slug (claude-opus-5-5-max, gpt-6-sol-high) from Claude Code, Codex, or Pi. |
 
 ## Scale: many agents and the outer loop
 
@@ -148,8 +148,6 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 | [setup-cloud-agents](../../plugins/trust-ladder/skills/setup-cloud-agents/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-cloud-agents` | Make the repository start, build, test, and run its app in a fresh cloud container, so agents can work in parallel in the cloud instead of in local worktrees. |
 | [setup-routines](../../plugins/trust-ladder/skills/setup-routines/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-routines run the gardener and the verification-skill upkeep every night` | Put the team's upkeep on a schedule so it happens without anyone remembering. |
 | [swarm](../../plugins/pstack/skills/swarm/SKILL.md) | pstack | Engineers | `take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win` | Fan out N parallel workers, drain them, and return one report. |
-| [orchestrate](../../plugins/orchestrate/skills/orchestrate/SKILL.md) | orchestrate | Engineers | `only with a Cursor API key: /orchestrate migrate every screen to the new design tokens` | Use only when the user explicitly types `/orchestrate <goal>` to decompose a large task, spawn a tree of parallel cloud-agent workers/subplanners/verifiers via the Cursor SDK, and collect structured handoffs; do not... |
-| [cursor-sdk](../../plugins/cursor-sdk/skills/cursor-sdk/SKILL.md) | cursor-sdk | Engineers | `only with a Cursor API key: build a bot on the Cursor SDK` | Guide users building apps, scripts, CI pipelines, or automations on top of the Cursor TypeScript SDK (`@cursor/sdk`). |
 | [make-bot-ui](../../plugins/pstack/skills/make-bot-ui/SKILL.md) | pstack | Engineers | `/make-bot-ui a dashboard whose button asks the routine to reproduce the latest report` | Use when building a custom UI (page, dashboard, buttons) that should wake a Grok Bot over a webhook, when the user must provide a webhook sender key, or when exposing that UI on Tailscale. |
 
 ## Dormant: the benny automation pack

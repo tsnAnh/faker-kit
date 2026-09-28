@@ -22,7 +22,7 @@ The text after `/advisor` selects the action.
 
 | Input | Action |
 | --- | --- |
-| `/advisor` | Enable for this conversation with the default advisor: the latest GPT-6 Sol at its highest reasoning effort. If a state file already exists, from this or another conversation, re-bind it here, keeping its `model` and `nudge` settings. |
+| `/advisor` | Enable for this conversation with the default advisor: your current coding agent's model (`inherit-parent`). If a state file already exists, from this or another conversation, re-bind it here, keeping its `model` and `nudge` settings. |
 | `/advisor <model>` | Same, with the given model. Any model available to subagents works: `/advisor gpt-6-sol-high`, `/advisor claude-opus-5-5-max`. |
 | `/advisor off` | Disable: delete `.cursor/advisor/`. |
 | `/advisor status` | Report model, consult count, and whether the end-of-turn nudge is on. Changes nothing. |
@@ -33,15 +33,15 @@ If the message also contains a task (`/advisor, then refactor the cache layer`),
 
 ### Choosing the model
 
-The default is the latest GPT-6 Sol model at its highest reasoning effort, currently `gpt-6-sol-max`. If a newer GPT-6 Sol or a higher effort tier appears in the subagent model list available to you, prefer it and say so.
+The default is `inherit-parent`: the advisor runs on your current coding agent's model, in a fresh context, so omit `model` when you spawn it.
 
 For `/advisor <model>`, resolve the request against the subagent model slugs available to you:
 
 - An exact slug: use it as is.
-- A family or version name (`gpt sol`, `claude opus`): that family's latest model at its highest reasoning tier.
+- A family or version name (`gpt sol`, `claude opus`): the team's model for that family (`gpt-6-sol-high` or `claude-opus-5-5-max`).
 - No match: say so, name two or three close options, and keep the current model.
 
-If the Task tool rejects a slug, read the valid slugs from its error message, pick the closest one (same family, highest reasoning tier), save it to `state.json`, and tell the user in one line. Do not block the consult on the slug.
+If the Task tool rejects a slug, read the valid slugs from its error message, pick the closest one (same family: `claude-opus-5-5-max` for Claude, `gpt-6-sol-high` for GPT), save it to `state.json`, and tell the user in one line. Do not block the consult on the slug.
 
 ## Enabling
 
@@ -51,7 +51,7 @@ If the Task tool rejects a slug, read the valid slugs from its error message, pi
    ```json
    {
      "enabled": true,
-     "model": "gpt-6-sol-max",
+     "model": "inherit-parent",
      "nudge": true,
      "advisor_agent_id": null,
      "conversation_id": null,

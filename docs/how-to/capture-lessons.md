@@ -42,7 +42,7 @@ It extracts durable preferences from recent sessions and proposes skills, rules,
 /continual-learning
 ```
 
-It mines sessions for facts the repository's AGENTS.md is missing (commands that changed, a gotcha that cost an hour) and updates it. In Cursor it runs on a hook every few turns; that hook does not fire in Claude Code, Codex, or Pi, so run it yourself or schedule it weekly with `/setup-routines`.
+It mines sessions for facts the repository's AGENTS.md is missing (commands that changed, a gotcha that cost an hour) and updates it. It also starts on its own: after at least 10 turns and 2 hours since its last run, its hook asks your agent to run it. That hook runs in Claude Code and Codex when `bun` is installed. In Pi, or without `bun`, run it yourself or schedule it weekly with `/setup-routines`. Tune the cadence with `CONTINUAL_LEARNING_MIN_TURNS` and `CONTINUAL_LEARNING_MIN_MINUTES`.
 
 ## Pick up where you left off
 

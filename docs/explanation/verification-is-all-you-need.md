@@ -23,7 +23,7 @@ The combination lets an agent both control the app and understand requests about
 - `control-ui` (web and desktop), `control-cli` (terminal apps), and `control-mobile` (Android, iOS, Flutter, KMP) are the harness recipes it builds on.
 - `/cli-for-agents` reviews the CLI for the properties that make tools reliable for agents: no prompts, examples in `--help`, fast errors that say what to do.
 - `/maintain-verification-skill` keeps the feature map honest as the app changes. Run it daily as a routine, and give the skill an owner. Some teams put it on an on-call rotation, because when it breaks, every agent loses its eyes.
-- `/poteto-mode`'s playbooks require evidence from it before a change counts as done, and `/request-a-change` shows its screenshots to non-engineers.
+- `/faker-mode`'s playbooks require evidence from it before a change counts as done, and `/request-a-change` shows its screenshots to non-engineers.
 
 See [Build a verification skill](../how-to/build-a-verification-skill.md) for the steps.
 

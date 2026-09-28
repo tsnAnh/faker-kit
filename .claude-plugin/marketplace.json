@@ -31,18 +31,6 @@
       "category": "upstream: cursor/plugins"
     },
     {
-      "name": "orchestrate",
-      "source": "./plugins/orchestrate",
-      "description": "Fan a large task out across parallel cloud agents via the Cursor SDK: planners publish tasks, workers hand off back up, and a script reconciles the tree from disk and git.",
-      "category": "upstream: cursor/plugins"
-    },
-    {
-      "name": "cursor-sdk",
-      "source": "./plugins/cursor-sdk",
-      "description": "Build apps, scripts, and automations with the TypeScript SDK.",
-      "category": "upstream: cursor/plugins"
-    },
-    {
       "name": "continual-learning",
       "source": "./plugins/continual-learning",
       "description": "Incrementally learns durable user preferences and workspace facts from transcript changes and keeps AGENTS.md up to date with plain bullet points.",

@@ -17,7 +17,7 @@ Each teammate uses one coding agent, so a pull request's author sees only one mo
 
 1. Copy `templates/github/claude-review.yml` and `templates/github/codex-review.yml` to `.github/workflows/`.
 2. Tell the user which repository secrets to add: `ANTHROPIC_API_KEY` for the Claude workflow and `OPENAI_API_KEY` for the Codex workflow. Never write a key into a file.
-3. Model defaults follow the team: Claude Opus 5.5 at max effort and GPT-6 Sol at max effort. Change the `--model` and `model:` lines only if the team changes models.
+3. Model defaults follow the team: Claude Opus 5.5 at max effort, and GPT-6 Sol at high effort in the standard service tier (`service_tier="default"`; the fast tier costs 1.5x quota). Change the `--model`, `model:`, and `effort:` lines only if the team changes models.
 
 Alternatives, when the team prefers them to the workflows:
 

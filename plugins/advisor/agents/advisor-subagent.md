@@ -1,7 +1,7 @@
 ---
 name: advisor-subagent
 description: Stronger-model advisor for the Advisor plugin. Consulted by the main agent at key checkpoints (before a major decision, when stuck on an error, before declaring a task done) with a briefing and, when available, the conversation transcript. Read-only. Returns a verdict and concrete guidance, not edits.
-model: opus
+model: inherit
 readonly: true
 ---
 

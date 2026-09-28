@@ -1,39 +1,32 @@
 # Choose models
 
-The team standard is the strongest model each agent offers, at its highest effort:
+Each person on the team uses one coding agent, Claude Code or Codex, so the kit is set up to run everything on that one agent.
 
 | Agent | Model | How to set it |
 |---|---|---|
 | Claude Code | Claude Opus 5.5, effort max | `/model opus`, then `/effort max`. For one run: `claude --model opus --effort max`. |
-| Codex | GPT-6 Sol, reasoning effort max | In `~/.codex/config.toml` or the project's `.codex/config.toml`: `model = "gpt-6-sol"` and `model_reasoning_effort = "max"`. |
-| Pi | `openai-codex/gpt-6-sol`, thinking max | In `~/.pi/agent/settings.json`: `"defaultProvider": "openai-codex"`, `"defaultModel": "gpt-6-sol"`, `"defaultThinkingLevel": "max"`. |
+| Codex | GPT-6 Sol, reasoning effort high, standard service tier | In `~/.codex/config.toml` or the project's `.codex/config.toml`: `model = "gpt-6-sol"`, `model_reasoning_effort = "high"`, and `service_tier = "default"`. |
+| Pi | `openai-codex/gpt-6-sol`, thinking high | In `~/.pi/agent/settings.json`: `"defaultProvider": "openai-codex"`, `"defaultModel": "gpt-6-sol"`, `"defaultThinkingLevel": "high"`. |
+
+Never turn on Codex's Fast mode (its toggle in the Codex TUI, or `service_tier = "fast"`): it uses 1.5x the quota. `service_tier = "default"` pins the standard tier so a model's own default cannot switch it on.
 
 ## What the skills ask for
 
-pstack's skills name a model for some roles. This kit rewrote those names (and nothing else) to the models above. You will see three names:
+pstack's skills name a model for each role. This kit rewrote every one of them to `inherit-parent`, which means "omit the model and use the one you are already running":
 
-| Name in a skill | Meaning |
-|---|---|
-| `inherit-parent` | Run the role on the model you are already using. Every single role (code delegates, explorers, investigators, `/how` explainers, `/why` synthesizers, judges) uses this, so the whole run stays on your agent. |
-| `claude-opus-5-5-max` | Claude Opus 5.5 at max effort. A seat in a panel. |
-| `gpt-6-sol-max` | GPT-6 Sol at max effort. A seat in a panel. |
+- Single roles: code delegates, explorers, investigators, `/how` explainers, `/why` synthesizers, reflect reviewers, judges.
+- Panels: `/arena` runners and its cross-judge, `/architect` design runners, `/interrogate` reviewers. A panel still spawns one run per seat, so its opinions stay independent; they just all run on your agent.
+- The advisor: `/advisor` consults your own model in a fresh context.
+- Agent files (`ci-watcher`, the agent-compatibility reviewers, `advisor-subagent`) say `model: inherit`.
 
-Panels are the skills that want independent opinions: `/arena`, `/architect` design runners, `/interrogate` reviewers, and the cross-judges. They list `claude-opus-5-5-max, gpt-6-sol-max, inherit-parent`, so that different model families catch different mistakes.
+Nothing in a default run calls a model you do not have, so nothing falls back and nothing waits on another tool.
 
-## Panels when you have only one agent
+Cross-family review still happens where it costs no one's quota: [the review bots](build-review-ship.md#review) run Claude and Codex on every pull request in CI, on repository secrets, whichever agent wrote the change.
 
-Most people have only one agent. A panel seat from your own family runs natively. A seat from the other family runs through the `run-model` skill, which checks whether the other family is reachable from your machine:
+## When someone names a model
 
-| You use | `claude-opus-5-5-max` seat | `gpt-6-sol-max` seat |
-|---|---|---|
-| Claude Code | Native: a subagent with `model: opus` | `codex exec` if Codex is installed, or `pi -p --model openai-codex/gpt-6-sol` if Pi is, else your own model |
-| Codex | `claude -p --model claude-opus-5-5 --effort max` if Claude Code is installed, else your own model | Native |
-| Pi | `claude -p` if Claude Code is installed, or a subagent on `anthropic/claude-opus-5-5` if you configured Pi's Anthropic provider, else your own model | Native: a subagent on `openai-codex/gpt-6-sol` |
-
-When a seat falls back to your own model, the panel keeps its size (independent runs still disagree usefully), and the agent says the panel was single-family. Nothing breaks.
-
-Cross-family review still happens on every pull request, because [the review bots](build-review-ship.md#review) run Claude and Codex in CI whichever agent wrote the change.
+You can still pin a role to a model, with `/setup-pstack` (which writes `~/.cursor/rules/pstack-models.mdc`) or with `/advisor <model>`. Use the team's names: `claude-opus-5-5-max` or `gpt-6-sol-high`. A seat from your own family runs natively. A seat from the other family goes through the `run-model` skill, which runs it through the other agent's CLI if you happen to have it, and otherwise tells your agent to run the seat on its own model and say so. `run-model` always runs GPT at high effort in the standard tier: it drops a `-fast` suffix and lowers `max` or `xhigh` to `high`.
 
 ## Changing the team's models
 
-The rewrite lives in [`upstream/model-map.json`](../../upstream/model-map.json). Every occurrence it changed is listed in [`upstream/CHANGES.md`](../../upstream/CHANGES.md), and [the models reference](../reference/models.md) summarizes it. To move to a new model, edit the rules' `to` values, run `node scripts/sync-upstream.mjs`, and review the diff. CI fails if any vendored file names a model the map does not allow.
+The rewrite lives in [`upstream/model-map.json`](../../upstream/model-map.json). Every occurrence it changed is listed in [`upstream/CHANGES.md`](../../upstream/CHANGES.md), and [the models reference](../reference/models.md) summarizes it. To change it, edit the rules, run `node scripts/sync-upstream.mjs`, and review the diff. CI fails if a vendored file names a model the map does not allow.

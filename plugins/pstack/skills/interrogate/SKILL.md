@@ -37,8 +37,8 @@ Launch all reviewers in a single message using the Task tool. Use the `interroga
 
 | Subagent | Default model |
 |----------|---------------|
-| Reviewer A | `claude-opus-5-5-max` |
-| Reviewer B | `gpt-6-sol-max` |
+| Reviewer A | `inherit-parent` |
+| Reviewer B | `inherit-parent` |
 | Reviewer C | `inherit-parent` |
 
 For each reviewer:

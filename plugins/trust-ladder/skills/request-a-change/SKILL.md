@@ -1,6 +1,6 @@
 ---
 name: request-a-change
-description: Let anyone on the team, including designers, marketers, and founders, turn a plain-English request or bug report into a reviewed pull request. Restates the request, builds it with poteto-mode, proves it with screenshots or video from the verification skill, updates every language, and opens a PR for an engineer to review. Never merges. Use for /request-a-change, "can you change X in the app", "the button should say Y", or a bug report from someone who is not an engineer.
+description: Let anyone on the team, including designers, marketers, and founders, turn a plain-English request or bug report into a reviewed pull request. Restates the request, builds it with faker-mode, proves it with screenshots or video from the verification skill, updates every language, and opens a PR for an engineer to review. Never merges. Use for /request-a-change, "can you change X in the app", "the button should say Y", or a bug report from someone who is not an engineer.
 ---
 
 # Request a change
@@ -27,7 +27,7 @@ Ask one question: "Is that right?" Offer to adjust. For a bug report, restate wh
 
 1. Create a branch named `request/<short-name>`. Never commit to the default branch.
 2. Prefer a cloud session so the person needs no local setup (`setup-cloud-agents`). If the app cannot run in the cloud, say where it will be verified.
-3. Run `/poteto-mode` with the playbook that fits: Feature for new behavior, Bug fix for a defect, Visual parity for "make it look like this design". Pass along the restated request as the task.
+3. Run `/faker-mode` with the playbook that fits: Feature for new behavior, Bug fix for a defect, Visual parity for "make it look like this design". Pass along the restated request as the task.
 4. Every user-facing text change updates every supported language with a real translation.
 
 ## 4. Prove it

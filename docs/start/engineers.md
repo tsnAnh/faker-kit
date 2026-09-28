@@ -27,10 +27,10 @@ This is the most valuable thing you can give an agent: a small CLI that starts y
 ## 4. Ship one change with proof (15 minutes)
 
 ```text
-/poteto-mode add an empty state to the search screen. verify it really works.
+/faker-mode add an empty state to the search screen. verify it really works.
 ```
 
-`/poteto-mode` picks a playbook (here, Feature), delegates the work to subagents, runs your verification skill, and opens a pull request with the evidence. It stays on for the rest of the session; say "exit poteto mode" to turn it off. Read the pstack guide's [Route work through `/poteto-mode`](../../plugins/pstack/docs/guide/02-poteto-mode.md) for how to phrase tasks.
+`/faker-mode` picks a playbook (here, Feature), delegates the work to subagents, runs your verification skill, and opens a pull request with the evidence. It stays on for the rest of the session; say "exit faker mode" to turn it off. Read the pstack guide's [Route work through `/faker-mode`](../../plugins/pstack/docs/guide/02-faker-mode.md) for how to phrase tasks.
 
 ## 5. Correct the agent once, for good
 

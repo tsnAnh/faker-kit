@@ -7,7 +7,6 @@ import { parseFrontmatter, skillDirs } from "./validate.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXPECTED_DIAGNOSTICS = [
-  /^warning description exceeds 1024 characters \(1045\)$/,
   /^collision name "thermo-nuclear-code-quality-review" collision$/,
 ];
 const USAGE = `Usage: node scripts/check-pi-package.mjs --sdk <dir>

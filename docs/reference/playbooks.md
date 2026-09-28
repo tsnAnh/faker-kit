@@ -2,33 +2,33 @@
 
 # Playbooks and principles
 
-`/poteto-mode` classifies each task and loads one of these 23 playbooks. You do not pick them; describing the task is enough. Naming one ("use the prototype playbook") forces the choice. The list below is read from [poteto-mode's SKILL.md](../../plugins/pstack/skills/poteto-mode/SKILL.md), so it stays current with pstack.
+`/faker-mode` classifies each task and loads one of these 23 playbooks. You do not pick them; describing the task is enough. Naming one ("use the prototype playbook") forces the choice. The list below is read from [faker-mode's SKILL.md](../../plugins/pstack/skills/faker-mode/SKILL.md), so it stays current with pstack.
 
-| Playbook | poteto-mode uses it for |
+| Playbook | faker-mode uses it for |
 |---|---|
-| [Investigation](../../plugins/pstack/skills/poteto-mode/playbooks/investigation.md) | Read-only question: how does X work, why was Y built this way, are we sure about Z, should we do X or Y. |
-| [Bug fix](../../plugins/pstack/skills/poteto-mode/playbooks/bug-fix.md) | A reported defect to reproduce, root-cause, and fix with runtime evidence. |
-| [Perf issue](../../plugins/pstack/skills/poteto-mode/playbooks/perf-issue.md) | A measured slowness to trace and improve against a baseline. |
-| [Hillclimb](../../plugins/pstack/skills/poteto-mode/playbooks/hillclimb.md) | Sustained, scientific improvement of one metric against a target: loop hypotheses with before/after measurement, a decision log, and one commit per accepted win. Distinct from Perf issue, which is a one-off fix. |
-| [Runtime forensics](../../plugins/pstack/skills/poteto-mode/playbooks/runtime-forensics.md) | Diagnose a runtime symptom (leak, idle-CPU spin, glitch) from live instrumentation. The deliverable is a diagnosis, not a fix. |
-| [Trace forensics](../../plugins/pstack/skills/poteto-mode/playbooks/trace-forensics.md) | Diagnose a captured profiling artifact (cpuprofile, trace, spindump, heap snapshot) handed to you after the fact. The deliverable is a diagnosis, not a fix. |
-| [Feature](../../plugins/pstack/skills/poteto-mode/playbooks/feature.md) | New or changed behavior, built from a named data shape. |
-| [Refactoring](../../plugins/pstack/skills/poteto-mode/playbooks/refactoring.md) | A behavior-preserving change to structure or shape (rename, extract, inline, dedupe, move). |
-| [Prototype](../../plugins/pstack/skills/poteto-mode/playbooks/prototype.md) | A throwaway sketch to make a design or behavioral decision cheaply, or to settle an empirical fork by observing it instead of asking the human ("prototype", "mock it up", "try this layout", "sketch it to decide"). |
-| [Visual parity](../../plugins/pstack/skills/poteto-mode/playbooks/visual-parity.md) | Pixel-exact UI equivalence: matching two implementations or migrating a styling system. |
-| [Authoring or modifying a skill](../../plugins/pstack/skills/poteto-mode/playbooks/authoring-a-skill.md) | Writing or editing a SKILL.md. |
-| [Eval](../../plugins/pstack/skills/poteto-mode/playbooks/eval.md) | Testing how a skill, structure, or prompt change affects agent behavior before promoting it. |
-| [Babysit](../../plugins/pstack/skills/poteto-mode/playbooks/babysit.md) | Driving a PR or a stack to merge-ready: conflicts, review threads, CI. |
-| [Shipping](../../plugins/pstack/skills/poteto-mode/playbooks/shipping.md) | The half after Babysit. Independently verifying a green stack, then landing the contiguous verified run bottom-up through `gh` by default or Origin when its CLI is available. |
-| [Autonomous run](../../plugins/pstack/skills/poteto-mode/playbooks/autonomous-run.md) | A long task to drive to completion without stopping ("run until done", "/loop until X"). |
-| [Orchestrate](../../plugins/pstack/skills/poteto-mode/playbooks/orchestrate.md) | A standing project handed to one coordinator chat: multi-day, many stacked PRs, dozens to hundreds of subagents, minimal human turns ("run this whole project", "own this migration until it lands"). Distinct from Autonomous run, which drives one task to a predicate. Work one agent could finish inside the session's budget routes there, not here, however program-shaped the phrasing sounds. |
-| [Autopilot-full](../../plugins/pstack/skills/poteto-mode/playbooks/autopilot-full.md) | A queue of independent PRs run to merged with full autonomy. One owner per PR carries build through merge, and the root swarm-verifies each PR before its owner merges ("autopilot this queue", "full autopilot", one-owner-per-PR programs). |
-| [Autopilot-stack](../../plugins/pstack/skills/poteto-mode/playbooks/autopilot-stack.md) | A queue of changes built and verified with full autonomy, delivered as one linear reviewed base-branch stack the operator lands ("autopilot-stack", "stack them, don't ship", "build the stack, I'll land it"). |
-| [Session pickup](../../plugins/pstack/skills/poteto-mode/playbooks/session-pickup.md) | Resuming or taking over a prior agent's in-flight work from a transcript, cloud-agent URL, or pushed branch. |
-| [Pause safely](../../plugins/pstack/skills/poteto-mode/playbooks/pause-safely.md) | Suspending in-flight work cleanly so it can be resumed, on an explicit pause, going offline, a Cursor restart, or imminent context compaction. The complement to Session pickup. |
-| [Multi-phase or multi-PR plan](../../plugins/pstack/skills/poteto-mode/playbooks/multi-phase-plan.md) | Work that spans phases or stacked PRs. |
-| [Worktree and simulator cleanup](../../plugins/pstack/skills/poteto-mode/playbooks/worktree-cleanup.md) | Reclaiming local disk by pruning merged or abandoned git worktrees and stale iOS simulators ("what's using my disk", "clean up worktrees", "prune safe-to-prune worktrees", "free up space", "delete old simulators"). |
-| [Opening a PR](../../plugins/pstack/skills/poteto-mode/playbooks/opening-a-pr.md) | Invoked at the end of every other playbook. |
+| [Investigation](../../plugins/pstack/skills/faker-mode/playbooks/investigation.md) | Read-only question: how does X work, why was Y built this way, are we sure about Z, should we do X or Y. |
+| [Bug fix](../../plugins/pstack/skills/faker-mode/playbooks/bug-fix.md) | A reported defect to reproduce, root-cause, and fix with runtime evidence. |
+| [Perf issue](../../plugins/pstack/skills/faker-mode/playbooks/perf-issue.md) | A measured slowness to trace and improve against a baseline. |
+| [Hillclimb](../../plugins/pstack/skills/faker-mode/playbooks/hillclimb.md) | Sustained, scientific improvement of one metric against a target: loop hypotheses with before/after measurement, a decision log, and one commit per accepted win. Distinct from Perf issue, which is a one-off fix. |
+| [Runtime forensics](../../plugins/pstack/skills/faker-mode/playbooks/runtime-forensics.md) | Diagnose a runtime symptom (leak, idle-CPU spin, glitch) from live instrumentation. The deliverable is a diagnosis, not a fix. |
+| [Trace forensics](../../plugins/pstack/skills/faker-mode/playbooks/trace-forensics.md) | Diagnose a captured profiling artifact (cpuprofile, trace, spindump, heap snapshot) handed to you after the fact. The deliverable is a diagnosis, not a fix. |
+| [Feature](../../plugins/pstack/skills/faker-mode/playbooks/feature.md) | New or changed behavior, built from a named data shape. |
+| [Refactoring](../../plugins/pstack/skills/faker-mode/playbooks/refactoring.md) | A behavior-preserving change to structure or shape (rename, extract, inline, dedupe, move). |
+| [Prototype](../../plugins/pstack/skills/faker-mode/playbooks/prototype.md) | A throwaway sketch to make a design or behavioral decision cheaply, or to settle an empirical fork by observing it instead of asking the human ("prototype", "mock it up", "try this layout", "sketch it to decide"). |
+| [Visual parity](../../plugins/pstack/skills/faker-mode/playbooks/visual-parity.md) | Pixel-exact UI equivalence: matching two implementations or migrating a styling system. |
+| [Authoring or modifying a skill](../../plugins/pstack/skills/faker-mode/playbooks/authoring-a-skill.md) | Writing or editing a SKILL.md. |
+| [Eval](../../plugins/pstack/skills/faker-mode/playbooks/eval.md) | Testing how a skill, structure, or prompt change affects agent behavior before promoting it. |
+| [Babysit](../../plugins/pstack/skills/faker-mode/playbooks/babysit.md) | Driving a PR or a stack to merge-ready: conflicts, review threads, CI. |
+| [Shipping](../../plugins/pstack/skills/faker-mode/playbooks/shipping.md) | The half after Babysit. Independently verifying a green stack, then landing the contiguous verified run bottom-up through `gh` by default or Origin when its CLI is available. |
+| [Autonomous run](../../plugins/pstack/skills/faker-mode/playbooks/autonomous-run.md) | A long task to drive to completion without stopping ("run until done", "/loop until X"). |
+| [Orchestrate](../../plugins/pstack/skills/faker-mode/playbooks/orchestrate.md) | A standing project handed to one coordinator chat: multi-day, many stacked PRs, dozens to hundreds of subagents, minimal human turns ("run this whole project", "own this migration until it lands"). Distinct from Autonomous run, which drives one task to a predicate. Work one agent could finish inside the session's budget routes there, not here, however program-shaped the phrasing sounds. |
+| [Autopilot-full](../../plugins/pstack/skills/faker-mode/playbooks/autopilot-full.md) | A queue of independent PRs run to merged with full autonomy. One owner per PR carries build through merge, and the root swarm-verifies each PR before its owner merges ("autopilot this queue", "full autopilot", one-owner-per-PR programs). |
+| [Autopilot-stack](../../plugins/pstack/skills/faker-mode/playbooks/autopilot-stack.md) | A queue of changes built and verified with full autonomy, delivered as one linear reviewed base-branch stack the operator lands ("autopilot-stack", "stack them, don't ship", "build the stack, I'll land it"). |
+| [Session pickup](../../plugins/pstack/skills/faker-mode/playbooks/session-pickup.md) | Resuming or taking over a prior agent's in-flight work from a transcript, cloud-agent URL, or pushed branch. |
+| [Pause safely](../../plugins/pstack/skills/faker-mode/playbooks/pause-safely.md) | Suspending in-flight work cleanly so it can be resumed, on an explicit pause, going offline, a Cursor restart, or imminent context compaction. The complement to Session pickup. |
+| [Multi-phase or multi-PR plan](../../plugins/pstack/skills/faker-mode/playbooks/multi-phase-plan.md) | Work that spans phases or stacked PRs. |
+| [Worktree and simulator cleanup](../../plugins/pstack/skills/faker-mode/playbooks/worktree-cleanup.md) | Reclaiming local disk by pruning merged or abandoned git worktrees and stale iOS simulators ("what's using my disk", "clean up worktrees", "prune safe-to-prune worktrees", "free up space", "delete old simulators"). |
+| [Opening a PR](../../plugins/pstack/skills/faker-mode/playbooks/opening-a-pr.md) | Invoked at the end of every other playbook. |
 
 ## Principles
 

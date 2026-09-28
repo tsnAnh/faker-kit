@@ -12,10 +12,10 @@
   "keywords": [
     "advisor",
     "second-opinion",
-    "gpt-6-sol",
     "multi-model",
     "subagents",
     "review",
     "quality"
-  ]
+  ],
+  "hooks": "./agent-hooks/hooks.json"
 }

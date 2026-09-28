@@ -24,11 +24,11 @@ pstack's research skills gather that context:
 
 A plan written before anything runs is a guess. pstack's Prototype playbook turns open questions into experiments: build a few throwaway versions behind one switch, observe each (screenshots for a visual choice, measured behavior for a technical one), and pick with evidence. It gives the agent room to explore and to surprise you with an option you would not have thought of.
 
-The same idea runs through `/poteto-mode`: when a question can be answered by running something, it prototypes instead of asking you. Only product and preference calls go to a person.
+The same idea runs through `/faker-mode`: when a question can be answered by running something, it prototypes instead of asking you. Only product and preference calls go to a person.
 
 ## Competing designs
 
-`/architect` sketches the shape of a change (types, signatures, module boundaries) before code locks it in, using design runners from different model families and throwaway prototypes to settle disagreements. The point, in Pt. 2's words, is a self-contained loop where the agent synthesizes competing designs into one and is not afraid to throw its own away. In this kit the panel runs on Claude Opus 5.5 and GPT-6 Sol; see [Choose models](../how-to/models.md) for how that works when you have one agent.
+`/architect` sketches the shape of a change (types, signatures, module boundaries) before code locks it in, using several independent design runners and throwaway prototypes to settle disagreements. The point, in Pt. 2's words, is a self-contained loop where the agent synthesizes competing designs into one and is not afraid to throw its own away. Upstream spreads the runners across model families. In this kit every runner is a separate run on your own agent, since each teammate has one; see [Choose models](../how-to/models.md).
 
 ## Plans built around proof
 

@@ -14,5 +14,6 @@
     "transcripts",
     "hooks",
     "incremental"
-  ]
+  ],
+  "hooks": "./agent-hooks/hooks.json"
 }

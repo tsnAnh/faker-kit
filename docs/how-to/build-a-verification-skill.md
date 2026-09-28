@@ -53,7 +53,7 @@ It checks the map against the app, fixes what drifted, and opens at most one pul
 
 ## Use it
 
-You rarely call it by name. `/poteto-mode` and `/request-a-change` look for a `verify-*` skill and use it to prove each change. To prove one thing directly:
+You rarely call it by name. `/faker-mode` and `/request-a-change` look for a `verify-*` skill and use it to prove each change. To prove one thing directly:
 
 ```text
 /verify-this the list no longer jitters when scrolling fast

@@ -45,7 +45,7 @@ As more corrections land in layers 1 and 2, the same mistake stops coming back, 
 
 - [Every skill](reference/skills.md), by layer, with who it is for and a prompt to try
 - [Prompts](reference/prompts.md) to copy, by role
-- [Playbooks and principles](reference/playbooks.md) that `/poteto-mode` uses
+- [Playbooks and principles](reference/playbooks.md) that `/faker-mode` uses
 - [Lint packs](reference/lint-packs.md) for Kotlin/Android, KMP, Rust, Python, Flutter/Dart, Swift/iOS, and any stack
 - [Models](reference/models.md): how upstream model names map to ours
 - [Cursor terms in Claude Code, Codex, and Pi](../plugins/trust-ladder/references/compat.md)
@@ -59,4 +59,4 @@ As more corrections land in layers 1 and 2, the same mistake stops coming back, 
 - [Scaling to many agents](explanation/scaling-agents.md)
 - [Why non-engineers can ship safely](explanation/why-non-engineers-can-ship-safely.md)
 
-pstack also ships its own [guide](../plugins/pstack/docs/guide/README.md), written by its author. It is the best tour of `/poteto-mode` and its skills. Read it for the pstack parts; where it says Cursor, use the [compat table](../plugins/trust-ladder/references/compat.md).
+pstack also ships its own [guide](../plugins/pstack/docs/guide/README.md), written by its author. It is the best tour of `/faker-mode` and its skills. Read it for the pstack parts; where it says Cursor, use the [compat table](../plugins/trust-ladder/references/compat.md).

@@ -11,19 +11,18 @@ Everything under these directories is copied from [cursor/plugins](https://githu
 | `plugins/pstack/` | Lauren Tan ([@poteto](https://x.com/poteto)) | MIT, Copyright (c) 2026 Lauren Tan |
 | `plugins/cursor-team-kit/` | Eric Zakariasson, Cursor | MIT, Copyright (c) 2026 Cursor |
 | `plugins/thermos/` | Cursor | MIT, Copyright (c) 2026 Cursor |
-| `plugins/orchestrate/` | Cursor | MIT, Copyright (c) 2026 Cursor |
-| `plugins/cursor-sdk/` | Cursor | MIT, Copyright (c) 2026 Cursor |
 | `plugins/continual-learning/` | Eric Zakariasson, Cursor | MIT, Copyright (c) 2026 Cursor |
 | `plugins/cli-for-agent/` | Eric Zakariasson, Cursor | MIT, Copyright (c) 2026 Cursor |
 | `plugins/agent-compatibility/` | Cursor | MIT, Copyright (c) 2026 Cursor |
 | `plugins/advisor/` | Cursor | MIT, Copyright (c) 2026 Cursor |
 | `plugins/teaching/` | Cursor | MIT, Copyright (c) 2026 Cursor |
 
-The copies are byte-identical to upstream with three exceptions, all applied by [`scripts/sync-upstream.mjs`](scripts/sync-upstream.mjs) and listed occurrence by occurrence in [`upstream/CHANGES.md`](upstream/CHANGES.md):
+The copies are byte-identical to upstream with four exceptions, all applied by [`scripts/sync-upstream.mjs`](scripts/sync-upstream.mjs) and listed occurrence by occurrence in [`upstream/CHANGES.md`](upstream/CHANGES.md):
 
-1. **Model names.** [`upstream/model-map.json`](upstream/model-map.json) rewrites LLM model names to the models this team uses. Nothing else in the text changes.
-2. **Three frontmatter load fixes.** [`upstream/compat-patches.json`](upstream/compat-patches.json) renames `Poteto Mode` to `poteto-mode` and `Make Bot UI` to `make-bot-ui` so Pi and Codex can invoke them, and quotes the `check-agent-compatibility` description so Pi can parse it.
-3. **Generated manifests.** Each plugin gains a `.claude-plugin/plugin.json` built from its `.cursor-plugin/plugin.json`, so Claude Code and Codex can install it. The Cursor manifest stays in place.
+1. **Model names.** [`upstream/model-map.json`](upstream/model-map.json) rewrites LLM model names, and the sentences that describe them, to the models this team uses.
+2. **Three frontmatter load fixes.** [`upstream/compat-patches.json`](upstream/compat-patches.json) makes `Poteto Mode` and `Make Bot UI` invocable names so Pi and Codex can call them, and quotes the `check-agent-compatibility` description so Pi can parse it.
+3. **Team renames.** [`upstream/renames.json`](upstream/renames.json) renames pstack's `poteto-mode` skill to `faker-mode` and its `poteto-agent` to `faker-agent`, in file names and text. The credit to poteto (Lauren Tan) for the style stays.
+4. **Generated files.** Each plugin gains a `.claude-plugin/plugin.json` built from its `.cursor-plugin/plugin.json`, so Claude Code and Codex can install it. Plugins with Cursor hooks also gain `agent-hooks/`, which runs those hooks, unchanged, as Claude Code and Codex hooks. The Cursor files stay in place.
 
 `node scripts/sync-upstream.mjs --check` fails CI if any other byte differs.
 

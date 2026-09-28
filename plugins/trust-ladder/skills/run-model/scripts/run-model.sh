@@ -9,6 +9,10 @@ Run one panel seat or delegate on a model slug from a pstack skill, using whiche
 agent CLIs this machine has. Prints JSON: {"route", "how", "command"}, then the
 model's answer when it ran one.
 
+Team models: Claude runs at the effort the slug names (max by default). GPT runs on
+gpt-6-sol at high effort in the standard service tier: a "-fast" suffix is dropped and
+max or xhigh is lowered to high, because the fast tier and higher efforts cost more quota.
+
 Routes:
   native    Your own agent runs this model. "how" says which subagent or model to use.
   external  Another installed CLI ran it (claude, codex, or pi). The answer follows the JSON.
@@ -17,13 +21,13 @@ Routes:
 
 Options:
   --from      The agent you are running in.
-  --model     A slug such as claude-opus-5-5-max, gpt-6-sol-max, inherit-parent, or auto.
+  --model     A slug such as claude-opus-5-5-max, gpt-6-sol-high, inherit-parent, or auto.
   --cwd       Working directory for the external run (default: current directory).
   --write     Allow the external run to edit files. Default is read-only.
   --dry-run   Print the route and command without running anything.
 
 Examples:
-  run-model.sh --from claude --model gpt-6-sol-max < review-prompt.md
+  run-model.sh --from claude --model gpt-6-sol-high < review-prompt.md
   run-model.sh --from codex --model claude-opus-5-5-max --dry-run < judge-prompt.md
 
 Environment: TEAMKIT_CLAUDE_BIN, TEAMKIT_CODEX_BIN, TEAMKIT_PI_BIN override the CLI paths.
@@ -61,7 +65,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$from" in claude|codex|pi) ;; "") die "--from is required: claude, codex, or pi" ;; *) die "--from must be claude, codex, or pi, not \"$from\"" ;; esac
-[ -n "$model" ] || die "--model is required, for example --model gpt-6-sol-max"
+[ -n "$model" ] || die "--model is required, for example --model gpt-6-sol-high"
 
 claude_bin=${TEAMKIT_CLAUDE_BIN:-claude}
 codex_bin=${TEAMKIT_CODEX_BIN:-codex}
@@ -79,11 +83,16 @@ case "$model" in
   *) die "unknown model family for \"$model\"; expected claude-*, gpt-*, inherit-parent, or auto" ;;
 esac
 
-effort=max
 base=${model%-fast}
+effort=
 case "${base##*-}" in
   max|xhigh|high|medium|low|minimal) effort=${base##*-}; base=${base%-*} ;;
 esac
+if [ "$family" = gpt ]; then
+  case "$effort" in ""|max|xhigh) effort=high ;; esac
+else
+  effort=${effort:-max}
+fi
 
 claude_alias() {
   case "$1" in
@@ -100,7 +109,7 @@ if [ "$from" = claude ] && [ "$family" = claude ]; then
   exit 0
 fi
 if [ "$from" = codex ] && [ "$family" = gpt ]; then
-  emit native "Run it in Codex with model $base at reasoning effort $effort (codex exec -m $base -c model_reasoning_effort=\"$effort\")."
+  emit native "Run it in Codex with model $base at reasoning effort $effort in the standard service tier (codex exec -m $base -c model_reasoning_effort=\"$effort\" -c service_tier=\"default\")."
   exit 0
 fi
 if [ "$from" = pi ] && [ "$family" = gpt ]; then
@@ -115,7 +124,7 @@ if [ "$dry_run" -eq 0 ]; then cat > "$prompt_file"; fi
 
 if [ "$family" = gpt ] && have "$codex_bin"; then
   sandbox=read-only; [ "$write" -eq 1 ] && sandbox=workspace-write
-  cmd=("$codex_bin" exec -m "$base" -c "model_reasoning_effort=\"$effort\"" -s "$sandbox" --skip-git-repo-check -C "$cwd" -o "$answer_file" -)
+  cmd=("$codex_bin" exec -m "$base" -c "model_reasoning_effort=\"$effort\"" -c "service_tier=\"default\"" -s "$sandbox" --skip-git-repo-check -C "$cwd" -o "$answer_file" -)
 elif [ "$family" = gpt ] && [ "$from" != pi ] && have "$pi_bin"; then
   cmd=("$pi_bin" -p --model "openai-codex/$base" --thinking "$effort")
 elif [ "$family" = claude ] && have "$claude_bin"; then

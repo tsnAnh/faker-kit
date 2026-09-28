@@ -1,7 +1,7 @@
 ---
 name: validation-review
 description: Assess whether an agent can verify a small change without guessing or running an unnecessarily heavy loop
-model: opus
+model: inherit
 readonly: true
 ---
 

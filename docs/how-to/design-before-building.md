@@ -19,28 +19,28 @@ Agents make code cheap, so the expensive mistake is building the wrong thing wel
 ## 2. Try the options instead of arguing about them
 
 ```text
-/poteto-mode prototype two approaches to offline sync: a queue of operations, and last-write-wins on whole records. show me how each behaves when two devices edit the same note.
+/faker-mode prototype two approaches to offline sync: a queue of operations, and last-write-wins on whole records. show me how each behaves when two devices edit the same note.
 ```
 
 The Prototype playbook builds throwaway versions behind one switch, observes each one (screenshots for a visual choice, measured behavior for a technical one), and recommends. Nothing from a prototype ships; the chosen direction gets built properly afterwards.
 
-When a question can be settled by running something, `/poteto-mode` prototypes instead of asking you.
+When a question can be settled by running something, `/faker-mode` prototypes instead of asking you.
 
 ## 3. Sketch the shape with competing designs
 
 ```text
-/poteto-mode we need rate limiting for external webhooks. /architect this first, and answer open questions with prototypes. let me review before proceeding.
+/faker-mode we need rate limiting for external webhooks. /architect this first, and answer open questions with prototypes. let me review before proceeding.
 ```
 
-`/architect` sketches types, signatures, and module boundaries before code, using design runners from different model families (see [models](models.md) for how the panel runs when you have one agent). `/arena` runs several candidates at the same task, picks the strongest as a base, and grafts in the best parts of the rest.
+`/architect` sketches types, signatures, and module boundaries before code, using several independent design runners, each a separate run on your own agent (see [models](models.md)). `/arena` runs several candidates at the same task, picks the strongest as a base, and grafts in the best parts of the rest.
 
 ## 4. Write a plan for large changes
 
 ```text
-/poteto-mode create a plan to migrate our UI library to the new design tokens. break it into small, verifiable PRs. each PR needs visual regression tests and live verification steps.
+/faker-mode create a plan to migrate our UI library to the new design tokens. break it into small, verifiable PRs. each PR needs visual regression tests and live verification steps.
 ```
 
-The Multi-phase plan playbook writes a checklist, one section per pull request, where each step names the evidence that proves it. A script ([`check-plan.mjs`](../../plugins/pstack/skills/poteto-mode/scripts/check-plan.mjs)) checks the plan's structure. Once you approve it, the plan executes item by item, and each small pull request is easy to review.
+The Multi-phase plan playbook writes a checklist, one section per pull request, where each step names the evidence that proves it. A script ([`check-plan.mjs`](../../plugins/pstack/skills/faker-mode/scripts/check-plan.mjs)) checks the plan's structure. Once you approve it, the plan executes item by item, and each small pull request is easy to review.
 
 ## For designers
 

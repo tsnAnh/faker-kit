@@ -37,7 +37,7 @@ A missing or failing verification skill is always in the top two when the reposi
 |---|---|
 | Layer 4 below 2, or `check` fails | 1 to 5 agents, each watched by a person |
 | Every layer at 2 or more | 10 to 30 agents in cloud sessions, each opening its own PR |
-| Every layer at 3, `check` under 15 minutes, both review bots on | 100 or more through `/orchestrate`, the pstack autopilot playbooks, or routines |
+| Every layer at 3, `check` under 15 minutes, both review bots on | 100 or more through pstack's Orchestrate and Autopilot playbooks, or routines |
 
 The lowest layer sets the level. One weak layer means agents will produce work nobody can trust at volume.
 

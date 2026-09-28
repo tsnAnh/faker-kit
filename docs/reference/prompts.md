@@ -23,8 +23,8 @@ The pattern behind all of them: say what you want and how you will know it is do
 ## Designers
 
 ```text
-/poteto-mode try three layouts for the empty state. show me a screenshot of each side by side.
-/poteto-mode make the settings screen match this mockup exactly. <image>
+/faker-mode try three layouts for the empty state. show me a screenshot of each side by side.
+/faker-mode make the settings screen match this mockup exactly. <image>
 /request-a-change the primary buttons should use 12px corner radius everywhere
 /request-a-change on small phones the pay button is cut off at the bottom
 ```
@@ -53,16 +53,16 @@ Understand:
 Design:
 
 ```text
-/poteto-mode we need to add rate limiting for external webhooks. /architect this first, and answer any open questions with prototypes. let me review before proceeding.
-/poteto-mode create a plan to migrate our entire UI library to the new design tokens. break the migration into small, verifiable PRs. each PR must have its visual regression tests and live verification steps.
+/faker-mode we need to add rate limiting for external webhooks. /architect this first, and answer any open questions with prototypes. let me review before proceeding.
+/faker-mode create a plan to migrate our entire UI library to the new design tokens. break the migration into small, verifiable PRs. each PR must have its visual regression tests and live verification steps.
 /arena take my prompt to the arena verbatim. i want to compare their proposals with yours.
 ```
 
 Build and prove:
 
 ```text
-/poteto-mode the export writes duplicate rows when a retry lands mid-run. repro first, then fix and verify.
-/poteto-mode build this behind a feature flag. verify it really works.
+/faker-mode the export writes duplicate rows when a retry lands mid-run. repro first, then fix and verify.
+/faker-mode build this behind a feature flag. verify it really works.
 apply prove it works. run the real import flow and show me the written records.
 take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win
 /verify-this the list no longer jitters when scrolling
@@ -75,8 +75,8 @@ Clean, review, and ship:
 /no-comments
 /interrogate review this pr.
 /thermos review this branch
-/poteto-mode babysit this PR until it is merge-ready
-/poteto-mode ship this stack
+/faker-mode babysit this PR until it is merge-ready
+/faker-mode ship this stack
 ```
 
 Correct and garden:
@@ -92,8 +92,8 @@ Correct and garden:
 Run while away:
 
 ```text
-/poteto-mode i'm stepping away. migrate every caller to the new async store; i want to trust it when i'm back.
-/poteto-mode orchestrate the store migration. own it until every package is converted and merged. i'll check in twice a day.
+/faker-mode i'm stepping away. migrate every caller to the new async store; i want to trust it when i'm back.
+/faker-mode orchestrate the store migration. own it until every package is converted and merged. i'll check in twice a day.
 /show-me-your-work keep a decision trail i can review when i'm back
 ```
 

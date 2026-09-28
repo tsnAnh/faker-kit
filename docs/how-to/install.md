@@ -18,9 +18,9 @@ claude plugin marketplace add tsnAnh/skills
 claude plugin install trust-ladder@team-kit
 ```
 
-Installing `trust-ladder` also installs the ten plugins it depends on: pstack, cursor-team-kit, thermos, orchestrate, cursor-sdk, continual-learning, cli-for-agent, agent-compatibility, advisor, and teaching. `claude plugin list` shows all eleven.
+Installing `trust-ladder` also installs the eight plugins it depends on: pstack, cursor-team-kit, thermos, continual-learning, cli-for-agent, agent-compatibility, advisor, and teaching. `claude plugin list` shows all nine.
 
-Skills are called with a slash: `/start-here`, `/poteto-mode`. If two plugins share a name, add the plugin: `/pstack:poteto-mode`.
+Skills are called with a slash: `/start-here`, `/faker-mode`. If two plugins share a name, add the plugin: `/pstack:faker-mode`.
 
 To update: `claude plugin marketplace update team-kit`, then restart Claude Code.
 
@@ -30,12 +30,14 @@ Codex reads the same marketplace file as Claude Code but does not install depend
 
 ```bash
 codex plugin marketplace add tsnAnh/skills
-for p in trust-ladder pstack cursor-team-kit thermos orchestrate cursor-sdk continual-learning cli-for-agent agent-compatibility advisor teaching; do
+for p in trust-ladder pstack cursor-team-kit thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do
   codex plugin add "$p@team-kit"
 done
 ```
 
-`codex plugin list` shows each one as installed and enabled. Skills are called with a dollar sign: `$start-here`, `$poteto-mode`. Codex also picks a skill on its own when your request matches it.
+`codex plugin list` shows each one as installed and enabled. Skills are called with a dollar sign: `$start-here`, `$faker-mode`. Codex also picks a skill on its own when your request matches it.
+
+Codex runs a plugin's hooks only after you trust them. At the first start it says hooks need review: type `/hooks` and trust the team-kit ones. trust-ladder's add the Cursor-terms table and keep `$faker-mode` pinned; advisor's and continual-learning's run those plugins' reminders. Review them again after an update changes them.
 
 To update: `codex plugin marketplace upgrade`, then restart Codex.
 
@@ -47,9 +49,9 @@ The repository is also a Pi package:
 pi install git:github.com/tsnAnh/skills
 ```
 
-Pin a commit so everyone runs the same version, for example `pi install git:github.com/tsnAnh/skills@<commit sha>`. `pi list` shows the package. Skills are called as `/skill:start-here`, `/skill:poteto-mode`.
+Pin a commit so everyone runs the same version, for example `pi install git:github.com/tsnAnh/skills@<commit sha>`. `pi list` shows the package. Skills are called as `/skill:start-here`, `/skill:faker-mode`.
 
-The kit's Pi extension adds what the Claude Code and Codex hooks do: it tells the agent how to read Cursor terms in the skills, and it keeps `/poteto-mode` switched on across turns until you say "exit poteto mode".
+The kit's Pi extension adds what the Claude Code and Codex hooks do: it tells the agent how to read Cursor terms in the skills, and it keeps `/faker-mode` switched on across turns until you say "exit faker mode".
 
 pstack's skills delegate work to subagents and ask you questions. In Pi, that needs the `pi-subagents` and `pi-ask-user` packages. If you use a setup like [pikachu](https://github.com/tsnAnh/pikachu), you already have both.
 

@@ -1,13 +1,13 @@
 <!-- team-kit:compat:start -->
 ## Running the Cursor team's skills in Claude Code, Codex, and Pi
 
-The pstack, cursor-team-kit, thermos, orchestrate, advisor, continual-learning, agent-compatibility, and teaching skills were written for Cursor and are kept word for word. When one of them uses a Cursor term, do the equivalent below in the agent you are running in.
+The pstack, cursor-team-kit, thermos, advisor, continual-learning, agent-compatibility, and teaching skills were written for Cursor and are kept word for word. When one of them uses a Cursor term, do the equivalent below in the agent you are running in.
 
 | The skill says | Claude Code | Codex | Pi |
 |---|---|---|---|
 | `Task` tool, `subagent_type: generalPurpose` | Agent tool, `general-purpose` | Run the step yourself, or run `codex exec -s read-only -` with the prompt for a fresh context | `subagent` tool with the builtin `delegate` (call `subagents_enable` first) |
 | `subagent_type: "explore"` or `"shell"` | `Explore` or `general-purpose` | Run it yourself | `subagent` with `scout` or `worker` |
-| `subagent_type: "poteto-agent"`, `"Comment Sicko"` | `pstack:poteto-agent`, `pstack:comment-sicko` | Read the agent file in pstack `agents/` and follow it | `subagent` with `worker`, prompt starting "Read pstack `agents/<file>.md` first" |
+| `subagent_type: "faker-agent"`, `"Comment Sicko"` | `pstack:faker-agent`, `pstack:comment-sicko` | Read the agent file in pstack `agents/` and follow it | `subagent` with `worker`, prompt starting "Read pstack `agents/<file>.md` first" |
 | `subagent_type: "thermo-nuclear-review-subagent"` and the other named agents | `<plugin>:<name>`, for example `thermos:thermo-nuclear-review-subagent` | Read `agents/<name>.md` in that plugin and follow it | `subagent` with `reviewer`, prompt starting "Read `agents/<name>.md` first" |
 | `readonly: true` | An agent without edit tools, such as `Explore` | `codex exec -s read-only` | `oracle` or `scout`, which do not edit |
 | `run_in_background: true` | The same Agent parameter | Parallel shell jobs | `subagent` background run |
@@ -17,24 +17,25 @@ The pstack, cursor-team-kit, thermos, orchestrate, advisor, continual-learning, 
 | `.cursor/rules/*.mdc`, "an always-applied rule" | `CLAUDE.md` or `.claude/rules/*.md` | `AGENTS.md` | `AGENTS.md` |
 | `~/.cursor/rules/pstack-models.mdc` | Read it if it exists; `/setup-pstack` writes it there | Same | Same |
 | `agent-transcripts/` | `~/.claude/projects/<project>/*.jsonl` | `~/.codex/sessions/` | `~/.pi/agent/sessions/` |
-| Cursor's built-in `create-skill` | The `skill-creator` skill, else the poteto-mode "Authoring a skill" playbook | `$skill-creator` | The "Authoring a skill" playbook |
-| Cursor's built-in `babysit` | The poteto-mode Babysit playbook | Same | Same |
-| `/loop` | `/loop` | The poteto-mode Autonomous run playbook | Same as Codex |
+| Cursor's built-in `create-skill` | The `skill-creator` skill, else the faker-mode "Authoring a skill" playbook | `$skill-creator` | The "Authoring a skill" playbook |
+| Cursor's built-in `babysit` | The faker-mode Babysit playbook | Same | Same |
+| `/loop` | `/loop` | The faker-mode Autonomous run playbook | Same as Codex |
 | Cloud agents, `environment: "cloud"` | Claude Code on the web sessions | Codex cloud tasks | A pi-subagents background run in its own worktree |
 | Cursor Automations, Grok Bot routines | Claude Code routines or GitHub Actions (`setup-routines`) | GitHub Actions | GitHub Actions |
 | Grok Bot webhook routine and its sender key (`make-bot-ui`) | A routine with an API trigger; its bearer token is the sender key | A GitHub `repository_dispatch` workflow | Same as Codex |
 | Bugbot, agentic security review | Claude Code Review or `claude-code-action` | Codex review or `codex-action` | Same PR bots |
-| Custom Mode pin (`mode: true`) | trust-ladder's hook keeps `/poteto-mode` on until you say "exit poteto mode" | Same hook | trust-ladder's Pi extension does the same |
+| Custom Mode pin (`mode: true`) | trust-ladder's hook keeps `/faker-mode` on until you say "exit faker mode" | Same hook | trust-ladder's Pi extension does the same |
 | Origin CLI | `gh` | `gh` | `gh` |
 
 ### Models
 
-- `inherit-parent` or `auto`: omit `model`. The role runs on your current agent's model.
-- `claude-opus-5-5-max`: in Claude Code use `model: opus`. In Codex or Pi, run the seat with the `run-model` skill.
-- `gpt-6-sol-max`: native in Codex. In Pi use `openai-codex/gpt-6-sol` with thinking `max`. In Claude Code, run the seat with the `run-model` skill.
-- If `run-model` reports that the model is unreachable, run that seat on your own model, keep the panel size, and say the panel was single-family.
+Each teammate runs one agent: Claude Code on Claude Opus 5.5 at max effort, or Codex on GPT-6 Sol at high effort in the standard service tier (never the fast tier, which costs 1.5x quota).
 
-### Cursor hooks that do not fire here
+- Every pstack role and panel seat defaults to `inherit-parent`. Omit `model` and run it on your own agent. A panel keeps its size: each seat is a separate run, so the opinions stay independent.
+- A seat someone configured with a model name: `claude-opus-5-5-max` is `model: opus` in Claude Code. `gpt-6-sol-high` is native in Codex, and `openai-codex/gpt-6-sol` with thinking `high` in Pi. For the other family, use the `run-model` skill. If it reports the model is unreachable, run the seat on your own model and say so.
+- Agent files that say `model: inherit` run on your current model.
 
-continual-learning's cadence nudge and advisor's end-of-turn nudge are Cursor-format hooks. They are ignored. Run `/continual-learning` yourself or schedule it with `setup-routines`, and use `/advisor ask <question>` when you want a consult.
+### Cursor hooks
+
+advisor's end-of-turn nudge and continual-learning's cadence nudge are Cursor hooks. In Claude Code and Codex they run unchanged through each plugin's `agent-hooks/`, which maps Cursor's `afterFileEdit`, `afterAgentResponse`, `stop`, and `subagentStop` to `PostToolUse`, `Stop`, and `SubagentStop`. A follow-up they post arrives as a hook message that asks you to continue: act on it like a user turn. advisor's hooks need `jq`; continual-learning's needs `bun`. Without them the hook does nothing. Codex runs plugin hooks only after the user trusts them with `/hooks`. In Pi, run `/continual-learning` yourself or schedule it with `setup-routines`, and use `/advisor ask <question>` for a consult.
 <!-- team-kit:compat:end -->

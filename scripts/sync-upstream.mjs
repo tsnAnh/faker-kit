@@ -9,13 +9,19 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const UPSTREAM_DIR = path.join(ROOT, "upstream");
 const PLUGINS_DIR = path.join(ROOT, "plugins");
+const ADAPTER_SOURCE = path.join(UPSTREAM_DIR, "agent-hooks", "cursor-hook-adapter.mjs");
+const AGENT_HOOKS_DIR = "agent-hooks";
+const CURSOR_TO_AGENT_EVENT = { afterFileEdit: "PostToolUse", afterAgentResponse: "Stop", stop: "Stop", subagentStop: "SubagentStop" };
+const EDIT_TOOL_MATCHER = "Edit|Write|MultiEdit|NotebookEdit|apply_patch";
 const BINARY_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".woff", ".woff2"]);
 const MODEL_TOKEN = /\b(?:cursor-)?(?:grok|gpt|claude-(?:opus|sonnet|haiku|fable)|composer|gemini)(?:[-.][a-z0-9.]+)*(?:\[[^\]\s]*\])?/gi;
 
 const USAGE = `Usage: node scripts/sync-upstream.mjs [--check] [--src <dir>] [--ref <sha>]
 
 Vendors cursor/plugins into plugins/<name>/ byte-for-byte, except the model-name
-rewrites in upstream/model-map.json and the load fixes in upstream/compat-patches.json.
+rewrites in upstream/model-map.json, the load fixes in upstream/compat-patches.json,
+and the team's renames in upstream/renames.json. Adds generated Claude Code and Codex
+manifests, and hook files that run a plugin's Cursor hooks in both agents.
 
   --check       Rebuild in memory and fail if plugins/ differs. Writes nothing.
   --src <dir>   Use an existing checkout of cursor/plugins instead of cloning.
@@ -105,14 +111,39 @@ function lineOf(text, index) {
 
 function loadRules() {
   const modelMap = readJson(path.join(UPSTREAM_DIR, "model-map.json"));
-  const compatFile = path.join(UPSTREAM_DIR, "compat-patches.json");
-  const compat = fs.existsSync(compatFile) ? readJson(compatFile) : { rules: [] };
+  const optional = (name) => {
+    const file = path.join(UPSTREAM_DIR, name);
+    return fs.existsSync(file) ? readJson(file) : { rules: [] };
+  };
+  const compat = optional("compat-patches.json");
+  const renames = optional("renames.json");
   const tag = (kind) => (rule) => ({ ...rule, kind, matchers: rule.files.map(globToRegExp) });
   return {
-    rules: [...modelMap.rules.map(tag("model")), ...compat.rules.map(tag("compat"))],
+    rules: [...modelMap.rules.map(tag("model")), ...compat.rules.map(tag("compat")), ...renames.rules.map(tag("rename"))],
+    pathRenames: renames.paths ?? [],
     allowed: new Set(modelMap.allowedModelTokens.map((t) => t.toLowerCase())),
     exceptions: modelMap.tokenExceptions,
   };
+}
+
+function renamePath(upstreamPath, pathRenames) {
+  return upstreamPath
+    .split("/")
+    .map((segment) => pathRenames.reduce((acc, r) => acc.split(r.from).join(r.to), segment))
+    .join("/");
+}
+
+function agentHooks(plugin, cursorHooksBuf) {
+  const cursor = JSON.parse(cursorHooksBuf.toString("utf8"));
+  const hooks = {};
+  for (const cursorEvent of Object.keys(cursor.hooks ?? {})) {
+    const event = CURSOR_TO_AGENT_EVENT[cursorEvent];
+    if (!event) fail(`${plugin}/hooks/hooks.json uses Cursor hook "${cursorEvent}", which has no Claude Code or Codex mapping. Add one to CURSOR_TO_AGENT_EVENT and the adapter.`);
+    if (hooks[event]) continue;
+    const command = `node "\${CLAUDE_PLUGIN_ROOT}/${AGENT_HOOKS_DIR}/cursor-hook-adapter.mjs" ${event}`;
+    hooks[event] = [{ ...(event === "PostToolUse" ? { matcher: EDIT_TOOL_MATCHER } : {}), hooks: [{ type: "command", command }] }];
+  }
+  return Buffer.from(`${JSON.stringify({ hooks }, null, 2)}\n`, "utf8");
 }
 
 function transform(upstreamDir, pluginNames, { rules, allowed, exceptions }) {
@@ -162,36 +193,65 @@ function transform(upstreamDir, pluginNames, { rules, allowed, exceptions }) {
   return { outputs, counts, changes, problems: [...countProblems, ...tokenProblems] };
 }
 
-function claudeManifest(cursorManifestBuf) {
+function claudeManifest(cursorManifestBuf, hooksPath) {
   const cursor = JSON.parse(cursorManifestBuf.toString("utf8"));
   const manifest = { name: cursor.name };
   for (const key of ["version", "description", "author", "homepage", "repository", "license", "keywords"]) {
     if (cursor[key] !== undefined) manifest[key] = cursor[key];
   }
+  if (hooksPath) manifest.hooks = hooksPath;
   return Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 }
 
 function buildTree(upstreamDir, pluginNames, rules) {
   const result = transform(upstreamDir, pluginNames, rules);
   const tree = new Map();
-  for (const [upstreamPath, buf] of result.outputs) tree.set(`plugins/${upstreamPath}`, buf);
+  const sources = new Map();
+  const renamedPaths = [];
+  const generated = [];
+  for (const [upstreamPath, buf] of result.outputs) {
+    const vendoredPath = renamePath(upstreamPath, rules.pathRenames);
+    if (vendoredPath !== upstreamPath) renamedPaths.push([upstreamPath, vendoredPath]);
+    tree.set(`plugins/${vendoredPath}`, buf);
+    sources.set(`plugins/${vendoredPath}`, upstreamPath);
+  }
+  const adapter = fs.readFileSync(ADAPTER_SOURCE);
   for (const plugin of pluginNames) {
     const cursorManifest = result.outputs.get(`${plugin}/.cursor-plugin/plugin.json`);
     if (!cursorManifest) fail(`upstream plugin "${plugin}" has no .cursor-plugin/plugin.json`);
-    tree.set(`plugins/${plugin}/.claude-plugin/plugin.json`, claudeManifest(cursorManifest));
+    const cursorHooks = result.outputs.get(`${plugin}/hooks/hooks.json`);
+    const hooksPath = cursorHooks ? `./${AGENT_HOOKS_DIR}/hooks.json` : null;
+    tree.set(`plugins/${plugin}/.claude-plugin/plugin.json`, claudeManifest(cursorManifest, hooksPath));
+    generated.push(`plugins/${plugin}/.claude-plugin/plugin.json`);
+    if (cursorHooks) {
+      for (const [rel, buf] of [[`${AGENT_HOOKS_DIR}/hooks.json`, agentHooks(plugin, cursorHooks)], [`${AGENT_HOOKS_DIR}/cursor-hook-adapter.mjs`, adapter]]) {
+        tree.set(`plugins/${plugin}/${rel}`, buf);
+        generated.push(`plugins/${plugin}/${rel}`);
+      }
+    }
   }
-  return { ...result, tree };
+  return { ...result, tree, sources, renamedPaths, generated };
 }
 
 function sha256(buf) {
   return createHash("sha256").update(buf).digest("hex");
 }
 
-function renderChanges(rules, changes) {
+function renderChanges(rules, changes, renamedPaths, generated) {
   const lines = [
     "# Upstream changes",
     "",
-    "Generated by `scripts/sync-upstream.mjs`. Every difference between `plugins/` and upstream `cursor/plugins` is listed here. Model rules rewrite LLM model names only; compat rules are the minimum edits a file needs to load in Claude Code, Codex, or Pi.",
+    "Generated by `scripts/sync-upstream.mjs`. Every difference between `plugins/` and upstream `cursor/plugins` is listed here. Model rules rewrite LLM model names to the team's models; compat rules are the minimum edits a file needs to load in Claude Code, Codex, or Pi; rename rules apply the names the team chose. Occurrences use upstream paths.",
+    "",
+    "## Renamed paths",
+    "",
+    ...renamedPaths.map(([from, to]) => `- \`${from}\` → \`${to}\``),
+    "",
+    "## Generated files",
+    "",
+    "Not in upstream. `.claude-plugin/plugin.json` is built from `.cursor-plugin/plugin.json`. `agent-hooks/` runs the plugin's Cursor hooks (`hooks/hooks.json`, unchanged) as Claude Code and Codex hooks, through `upstream/agent-hooks/cursor-hook-adapter.mjs`.",
+    "",
+    ...generated.map((file) => `- \`${file}\``),
     "",
   ];
   for (const rule of rules) {
@@ -225,10 +285,10 @@ function main() {
   }
 
   const rules = loadRules();
-  const { tree, changes, problems } = buildTree(upstreamDir, source.plugins, rules);
+  const { tree, sources, changes, renamedPaths, generated, problems } = buildTree(upstreamDir, source.plugins, rules);
   if (problems.length > 0) fail(`transform problems:\n  ${problems.join("\n  ")}`);
 
-  const changesDoc = Buffer.from(renderChanges(rules.rules, changes), "utf8");
+  const changesDoc = Buffer.from(renderChanges(rules.rules, changes, renamedPaths, generated), "utf8");
   const lock = {
     repo: source.repo,
     ref: head,
@@ -260,8 +320,8 @@ function main() {
     const full = path.join(ROOT, rel);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, buf);
-    const upstreamFile = path.join(upstreamDir, rel.replace(/^plugins\//, ""));
-    if (fs.existsSync(upstreamFile)) fs.chmodSync(full, fs.statSync(upstreamFile).mode & 0o777);
+    const upstreamFile = sources.has(rel) ? path.join(upstreamDir, sources.get(rel)) : rel.endsWith(".mjs") ? ADAPTER_SOURCE : null;
+    if (upstreamFile && fs.existsSync(upstreamFile)) fs.chmodSync(full, fs.statSync(upstreamFile).mode & 0o777);
   }
   fs.writeFileSync(path.join(UPSTREAM_DIR, "CHANGES.md"), changesDoc);
   fs.writeFileSync(path.join(UPSTREAM_DIR, "lock.json"), lockBuf);
