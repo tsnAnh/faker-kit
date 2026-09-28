@@ -1,0 +1,32 @@
+{
+  "name": "team-kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Trust-ladder team kit for Claude Code, Codex, and Pi. Install in Pi with: pi install git:github.com/tsnAnh/skills",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tsnAnh/skills.git"
+  },
+  "pi": {
+    "skills": [
+      "./plugins/*/skills"
+    ],
+    "extensions": [
+      "./plugins/trust-ladder/pi/team-kit.ts"
+    ]
+  },
+  "scripts": {
+    "sync": "node scripts/sync-upstream.mjs",
+    "sync:check": "node scripts/sync-upstream.mjs --check",
+    "validate": "node scripts/validate.mjs",
+    "test:packs": "bash scripts/test-packs.sh"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
