@@ -1,6 +1,6 @@
 # Design before building
 
-Agents make code cheap, so the expensive mistake is building the wrong thing well. pstack's answer, from Pt. 2 of the guide, is to plan with code: understand the system, try the options for real, then write a plan whose every step carries proof. The pstack guide's [Understand](../../plugins/pstack/docs/guide/03-understand.md) and [Design](../../plugins/pstack/docs/guide/04-design.md) chapters cover this in depth; this page is the short version.
+Agents make code cheap, so the expensive mistake is building the wrong thing well. pstack's answer is to plan with code: understand the system, try the options for real, then write a plan whose every step carries proof. The pstack guide's [Understand](../../plugins/pstack/docs/guide/03-understand.md) and [Design](../../plugins/pstack/docs/guide/04-design.md) chapters cover this in depth; this page is the short version.
 
 ## 1. Understand what is there
 

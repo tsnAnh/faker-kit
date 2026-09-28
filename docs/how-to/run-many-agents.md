@@ -38,7 +38,7 @@ Local worktrees top out at around ten agents: each one costs disk, CPU, and the 
 /setup-cloud-agents
 ```
 
-It writes one setup script that boots the repository from nothing and wires it into Claude Code on the web and Codex cloud, then proves it in a fresh session. After that, start a cloud session per task, for example from Pt. 1 of the pstack guide:
+It writes one setup script that boots the repository from nothing and wires it into Claude Code on the web and Codex cloud, then proves it in a fresh session. After that, start a cloud session per task, for example:
 
 ```text
 /faker-mode improve the initial loading time of our app. first use the verification skill to take a trace of the status quo and identify opportunities. then make a targeted fix, and use it with /swarm to confirm the win.

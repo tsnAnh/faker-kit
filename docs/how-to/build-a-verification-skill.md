@@ -2,7 +2,7 @@
 
 A verification skill lets an agent run your app the way a user does and capture proof: screenshots, recordings, terminal transcripts, logs, database rows. With it, an agent can check its own work. Without it, a person has to, and that person becomes the limit on how much the team ships.
 
-The talk's verification skill is called Control Glass. The pstack guide calls the generated one `/control-app`. In your repository it will be `verify-<app>`.
+In your repository it will be called `verify-<app>`.
 
 ## Create it
 

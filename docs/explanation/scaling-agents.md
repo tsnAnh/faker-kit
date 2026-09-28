@@ -14,7 +14,7 @@ The number of agents you can usefully run is set by how much of their output you
 
 ## What changes as you scale
 
-**Where agents run.** Local worktrees top out at around ten agents: disk, CPU, and the one simulator your machine can run. Past that, cloud sessions each get their own machine, which is why Pt. 1 recommends cloud agents over worktrees. `/setup-cloud-agents` makes the repository boot from nothing in Claude Code on the web and Codex cloud.
+**Where agents run.** Local worktrees top out at around ten agents: disk, CPU, and the one simulator your machine can run. Past that, cloud sessions each get their own machine, which is why cloud agents beat worktrees at scale. `/setup-cloud-agents` makes the repository boot from nothing in Claude Code on the web and Codex cloud.
 
 **How work is shared.** pstack's rule is [separate before serializing shared state](../../plugins/pstack/skills/principle-separate-before-serializing-shared-state/SKILL.md): give each agent its own worktree or machine and its own branch, not a lock on a shared one. One pull request per agent keeps each change reviewable on its own.
 
@@ -26,7 +26,7 @@ The number of agents you can usefully run is set by how much of their output you
 
 ## The outer loop
 
-Many agents also means agents that start themselves. The talk describes bots subscribed to Slack threads and Sentry alerts that kick off cloud agents, reproduce bug reports, and open pull requests. In this kit, routines do that: nightly verification-skill upkeep, a nightly gardener sweep, a weekly review, and reproducing every issue labeled as a bug. They run as Claude Code routines or Codex scheduled tasks on a teammate's plan ([Run many agents](../how-to/run-many-agents.md#routines)). No routine merges; each opens a pull request that goes through the same gates as everyone else's.
+Many agents also means agents that start themselves. Bots subscribed to Slack threads and error alerts can kick off cloud agents, reproduce bug reports, and open pull requests. In this kit, routines do that: nightly verification-skill upkeep, a nightly gardener sweep, a weekly review, and reproducing every issue labeled as a bug. They run as Claude Code routines or Codex scheduled tasks on a teammate's plan ([Run many agents](../how-to/run-many-agents.md#routines)). No routine merges; each opens a pull request that goes through the same gates as everyone else's.
 
 ## Keep measuring
 
