@@ -45,7 +45,7 @@ So that every teammate, whichever agent they use, gets the kit without setup:
 
 - `.claude/settings.json` from `templates/claude-settings.json`: adds this marketplace, enables the plugins, and denies destructive commands.
 - `.pi/settings.json` from `templates/pi-settings.json`: pins the kit as a project package. Pi applies it after the user trusts the project.
-- `.codex/config.toml` from `templates/codex-config.toml`: sandbox and approval defaults. Codex applies it after the user trusts the project. Codex users add the kit once with `codex plugin marketplace add tsnAnh/skills`, then install each plugin, because Codex does not install dependencies. The one-line install loop is at the top of that template.
+- `.codex/config.toml` from `templates/codex-config.toml`: sandbox and approval defaults. Codex applies it after the user trusts the project. Codex users add the kit once with `codex plugin marketplace add tsnAnh/team-kit`, then install each plugin, because Codex does not install dependencies. The one-line install loop is at the top of that template.
 - `CODEOWNERS` and the branch-protection checklist in `templates/branch-protection.md`: the required check, resolved review conversations, and one human approval, so changes from anyone, including non-engineers, pass the same gates.
 
 ## 7. Start the ledgers

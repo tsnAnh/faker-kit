@@ -1,7 +1,7 @@
 # Team defaults for Codex in this repository. Codex applies this file after you trust the project.
 #
 # Install the kit once per machine (Codex does not install plugin dependencies, so add each plugin):
-#   codex plugin marketplace add tsnAnh/skills
+#   codex plugin marketplace add tsnAnh/team-kit
 #   for p in trust-ladder pstack team-workflows thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do codex plugin add "$p@team-kit"; done
 
 # GPT-6 Sol at high effort in the standard service tier. The fast tier costs 1.5x quota, so it stays off.

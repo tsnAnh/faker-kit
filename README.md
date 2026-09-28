@@ -11,21 +11,21 @@ Pick the one agent you use.
 **Claude Code**
 
 ```text
-/plugin marketplace add tsnAnh/skills
+/plugin marketplace add tsnAnh/team-kit
 /plugin install trust-ladder@team-kit
 ```
 
 **Codex**
 
 ```bash
-codex plugin marketplace add tsnAnh/skills
+codex plugin marketplace add tsnAnh/team-kit
 for p in trust-ladder pstack team-workflows thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do codex plugin add "$p@team-kit"; done
 ```
 
 **Pi**
 
 ```bash
-pi install git:github.com/tsnAnh/skills
+pi install git:github.com/tsnAnh/team-kit
 ```
 
 Then type `/start-here` (Codex: `$start-here`, Pi: `/skill:start-here`). Details, team-wide setup, and updating: [Install the kit](docs/how-to/install.md).

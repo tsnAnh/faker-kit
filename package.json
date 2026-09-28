@@ -2,7 +2,7 @@
   "name": "team-kit",
   "version": "0.1.0",
   "private": true,
-  "description": "Trust-ladder team kit for Claude Code, Codex, and Pi. Install in Pi with: pi install git:github.com/tsnAnh/skills",
+  "description": "Trust-ladder team kit for Claude Code, Codex, and Pi. Install in Pi with: pi install git:github.com/tsnAnh/team-kit",
   "license": "MIT",
   "type": "module",
   "keywords": [
@@ -10,7 +10,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/tsnAnh/skills.git"
+    "url": "https://github.com/tsnAnh/team-kit.git"
   },
   "pi": {
     "skills": [
