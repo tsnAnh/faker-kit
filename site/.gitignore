@@ -2,3 +2,5 @@
 /how-to/
 /explanation/
 /reference/
+# Written by scripts/export-site.sh
+/dist/
