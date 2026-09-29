@@ -9,6 +9,13 @@
       "count": 1
     },
     {
+      "id": "claude-codex-faker-agent-invoke-skill-disable-model-invocation",
+      "files": ["pstack/agents/poteto-agent.md"],
+      "from": "Read the `poteto-mode` skill's `SKILL.md` in full before doing any work, including its inline Principles index.",
+      "to": "The `faker-mode` skill is `disable-model-invocation`, so the Skill tool refuses it. Your first action is to run `/faker-mode` (Claude Code), `$faker-mode` (Codex), or `/skill:faker-mode` (Pi) as a user-style command, then read the `faker-mode` skill's `SKILL.md` in full before doing any work, including its inline Principles index.",
+      "count": 1
+    },
+    {
       "id": "pi-yaml-quote-description-check-agent-compatibility",
       "files": ["agent-compatibility/skills/check-agent-compatibility/SKILL.md"],
       "from": "\ndescription: Run the full repository compatibility pass: scanner score, startup path, validation loop, and docs reliability.\n",

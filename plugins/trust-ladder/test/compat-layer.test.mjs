@@ -22,6 +22,15 @@ describe("sticky modes", () => {
     expect(MODES.find((m) => m.skill === "faker-mode").reminder).toBe(reminder);
   });
 
+  test("faker-agent runs faker-mode as a command because the skill disables model invocation", () => {
+    const agent = fs.readFileSync(path.join(REPO, "plugins/pstack/agents/faker-agent.md"), "utf8");
+    const compat = fs.readFileSync(path.join(PLUGIN, "references/compat.md"), "utf8");
+    for (const text of [agent, compat]) {
+      expect(text).toContain("`/faker-mode`");
+      expect(text).toContain("`$faker-mode`");
+    }
+  });
+
   test("every agent's invocation syntax turns the mode on", () => {
     for (const prompt of ["/faker-mode fix it", "/pstack:faker-mode go", "/skill:faker-mode go", "$faker-mode go", "please /faker-mode"]) {
       expect([...nextActiveModes(prompt, new Set())]).toEqual(["faker-mode"]);
