@@ -1,0 +1,77 @@
+# team-kit guard policy for one machine. Lives at ~/.hermes/team-kit/guard.yaml.
+# Read by the team_kit_guard Hermes plugin on every tool call, and by github-triage.py
+# and team-kit-gh. If this file is missing or invalid, the guard blocks every tool call.
+version: 1
+
+# Repositories Hermes may dispatch to and hear webhooks from.
+repos:
+  - OWNER/REPO
+
+# GitHub logins whose unit issues, pull requests, and reports count: the dispatcher
+# profile's login (it opens the issues), and the account the coding agent posts as (for
+# Claude Code on the web, usually the owner). Events by anyone else are ignored, so a
+# copied marker cannot move a card.
+trusted_authors:
+  - OWNER-LOGIN
+
+# Refuse to open an issue whose body is not a parsed brief with the team-kit marker.
+require_brief_marker: true
+
+# Tool results from these are wrapped in <untrusted source=...> and taint the turn.
+# After that, every tool not in read_only_tools needs the owner's approval in Desktop.
+# team-kit-gh report-status is not here: it prints only the parsed status line.
+untrusted_readers:
+  - tool: web_*
+  - tool: browser_*
+  - tool: x_search
+  - tool: terminal
+    command: "team-kit-gh read *"
+
+# Tool calls blocked outright, in every profile. A plain string is a glob over each
+# simple command in a terminal call. {tool, command} matches other tools.
+deny:
+  - "gh pr merge*"
+  - "gh api* -X DELETE*"
+  - "gh api* --method DELETE*"
+  - "gh repo delete*"
+  - "git push* main"
+  - "git push* main *"
+  - "git push* *:main*"
+  - "git push* master"
+  - "git push* *:master*"
+  - "git push* --force*"
+  - "git push* -f*"
+  - tool: delegate_task
+  - tool: cronjob_manage
+  - tool: execute_code
+  - tool: skill_manage
+
+# Tools that never change anything. Everything else counts as side-effecting.
+read_only_tools:
+  - read_file
+  - search_files
+  - kanban_show
+  - kanban_list
+  - kanban_attachments
+  - skills_list
+  - skill_view
+  - session_search
+  - clarify
+  - todo_list
+  - web_search
+  - web_extract
+  - vision_analyze
+
+# Per-profile allowlists. terminal_allow is a list of regular expressions; a terminal
+# command must match one in full. write_paths limits write_file and patch.
+profiles:
+  dispatcher:
+    terminal_allow:
+      - '(~/\.hermes/bin/)?team-kit-gh (open-issue|report-status|read|show|pr-state|needs-human|kit-check)( [A-Za-z0-9_./:#=@~-]+)*'
+    write_paths:
+      - "~/.hermes/team-kit/briefs/*"
+  launcher:
+    terminal_allow:
+      - 'claude --cloud ''/faker-mode Work the brief in [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+ using the follow-brief skill'''
+      - 'codex cloud exec --env [A-Za-z0-9_-]+ --attempts [1-3] ''\$faker-mode Work the brief in [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+ using the follow-brief skill'''
+    write_paths: []

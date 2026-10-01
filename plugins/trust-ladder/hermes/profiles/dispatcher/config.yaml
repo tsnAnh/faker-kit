@@ -1,0 +1,13 @@
+# Merged into ~/.hermes/profiles/dispatcher/config.yaml by install.sh. Keys here win;
+# lists are replaced, except plugins.enabled, which gains team_kit_guard.
+# The model is set separately: install.sh --dispatcher-model, or
+# `hermes -p dispatcher config set model.default <model>`.
+toolsets: [kanban, terminal, file, clarify, skills]
+approvals:
+  mode: manual
+  cron_mode: deny
+plugins:
+  enabled: [team_kit_guard]
+kanban:
+  auto_decompose: false
+timezone: Asia/Saigon

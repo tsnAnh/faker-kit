@@ -43,6 +43,7 @@ node scripts/gen-catalog.mjs --check     # generated docs are current
 node scripts/gen-site.mjs                # docs site pages, links, and navigation resolve
 bun test plugins/trust-ladder            # trust-ladder scripts and the Pi extension
 bun test upstream/agent-hooks            # upstream hooks run in Claude Code and Codex
+python -m pytest plugins/trust-ladder/hermes   # Hermes guard, webhook triage, contracts, install
 bash scripts/test-packs.sh               # lint packs fail on bad fixtures, pass on good
 claude plugin validate .                 # Claude Code marketplace schema
 ```

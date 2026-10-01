@@ -120,6 +120,9 @@
 
     "trust-ladder/setup-cloud-agents": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-cloud-agents", "mentioned": [] },
     "trust-ladder/setup-routines": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-routines run the gardener and the verification-skill upkeep every night", "mentioned": [] },
+    "trust-ladder/setup-dispatch": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-dispatch for OWNER/REPO with Claude Code as the backend", "mentioned": [] },
+    "trust-ladder/dispatch": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/dispatch add CSV export to the orders page, then a test for the empty case", "mentioned": [] },
+    "trust-ladder/follow-brief": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill", "mentioned": [] },
     "pstack/swarm": { "layer": "scale", "audience": ["engineer"], "prompt": "take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win", "mentioned": ["pt1"] }
   },
   "dormant": {
