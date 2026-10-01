@@ -126,7 +126,9 @@ def test_a_tainted_turn_needs_approval_for_side_effects_only():
     assert g.is_tainted("s1", "t1")
     verdict = g.pre_tool_call(tool_name="kanban_create", args={"title": "x"}, session_id="s1", turn_id="t1")
     assert verdict["action"] == "approve"
-    assert verdict["rule_key"] == "team-kit-taint:kanban_create"
+    assert verdict["rule_key"].startswith("team-kit-taint:kanban_create:")
+    other = g.pre_tool_call(tool_name="kanban_create", args={"title": "y"}, session_id="s1", turn_id="t1")
+    assert other["rule_key"] != verdict["rule_key"], "an always-approval covers only the exact call"
     assert g.pre_tool_call(**terminal("team-kit-gh needs-human --repo acme/shop --issue 7"))["action"] == "approve"
     assert g.pre_tool_call(tool_name="kanban_show", args={}, session_id="s1", turn_id="t1") is None
 
@@ -192,7 +194,20 @@ def test_launcher_writes_nothing():
     assert guard("launcher").pre_tool_call(tool_name="write_file", args={"path": "/tmp/x"})["action"] == "block"
 
 
-def test_register_wires_the_three_hooks(team_kit_home):
+def test_a_cron_notice_delivered_as_a_turn_is_tainted():
+    g = guard("dispatcher")
+    out = g.check_message(user_message="Cronjob Response: dispatch-status\nteam-kit notice: In flight: 1.", session_id="s1", turn_id="t9")
+    assert "not a request from the owner" in out["context"]
+    assert g.pre_tool_call(tool_name="kanban_complete", args={}, session_id="s1", turn_id="t9")["action"] == "approve"
+
+
+def test_an_owner_message_is_not_tainted():
+    g = guard("dispatcher")
+    assert g.check_message(user_message="Add CSV export to orders", session_id="s1", turn_id="t1") is None
+    assert not g.is_tainted("s1", "t1")
+
+
+def test_register_wires_the_hooks(team_kit_home):
     hooks = {}
 
     class Ctx:
@@ -200,5 +215,5 @@ def test_register_wires_the_three_hooks(team_kit_home):
             hooks[name] = callback
 
     register(Ctx())
-    assert sorted(hooks) == ["on_session_end", "pre_tool_call", "transform_tool_result"]
+    assert sorted(hooks) == ["on_session_end", "pre_llm_call", "pre_tool_call", "transform_tool_result"]
     assert hooks["pre_tool_call"](**terminal("gh pr merge 1"))["action"] == "block"

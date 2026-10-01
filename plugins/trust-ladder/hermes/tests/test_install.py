@@ -88,7 +88,7 @@ def test_installs_the_hermes_side_pinned_to_the_commit(kit_source, machine):
     assert len(secret) == 64 and route["secret"] == secret
     assert stat.S_IMODE((root / "team-kit" / "webhook-secret").stat().st_mode) == 0o600
     assert route["script"] == "team-kit/github-triage.py" and route["cron_job"] == "dispatcher-drain"
-    assert "terminal" not in route["toolsets"]
+    assert "toolsets" not in route
     assert (root / "profiles" / "dispatcher" / "scripts" / "team-kit" / route["script"].split("/")[1]).exists()
     assert (root / "team-kit" / "guard.yaml").exists()
 

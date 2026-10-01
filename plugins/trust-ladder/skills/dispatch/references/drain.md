@@ -2,7 +2,7 @@
 
 `dispatcher-drain` is a cron job in the `dispatcher` profile. The webhook route `team-kit-github` fires it after `github-triage.py` keeps an event. Its prompt carries one event's fields: `event`, `repo`, `card`, `issue`, `pr`, `status`, `conclusion`. A field the event does not have is `-`.
 
-Hermes runs the job at most once at a time, so events that arrive during a run can be folded into it. Handle the event in the prompt, then sweep every open unit, so a missed event is caught on the next run.
+Hermes runs the job at most once at a time. An event that arrives while it runs is dropped, not queued. So handle the event in the prompt, then sweep every open unit. The sweep reads current state from GitHub and Kanban, so it catches what a dropped event would have done. The job's schedule runs the sweep even when no event arrives.
 
 Approvals are denied in cron runs. Never run `team-kit-gh read` here. It taints the turn, and every later side-effecting call is then denied. Read only `team-kit-gh report-status`, `kanban_list`, and `kanban_show`.
 
@@ -34,17 +34,18 @@ If any check fails, ignore the event.
 3. Run `team-kit-gh needs-human --repo <repo> --issue <issue>`.
 4. `kanban_comment(<card>, "needs owner: report <status> on <issue url>")`.
 5. If the card is not blocked, `kanban_block(<card>, reason="needs owner: report <status>")`.
-6. Add one line to the output for the owner: `<card> needs you: the agent reported <status> on <issue url>.`
+6. Add one line to the output for the owner: `team-kit notice: <card> needs you. The agent reported <status> on <issue url>.`
 
 ## Sweep
 
 After the event, for each card assigned to `launcher` that is not done and has an `issue:` comment:
 
 1. Run `team-kit-gh report-status` for its issue. If the status is `partial`, `blocked`, or `unreadable`, open a gate.
-2. If the card is blocked and a pull request is known (its `pr:` comment, or the `pr` field of the report), try `kanban_complete` as for `checks_finished`. A refusal is expected.
+2. If a pull request is known (its `pr:` comment, or the `pr` field of the report) and the card has no `merged:` comment, run `team-kit-gh pr-state --repo <repo> --pr <pr>`. If `merged` is true, do the `pr_merged` row.
+3. Otherwise, if the card is blocked and a pull request is known, try `kanban_complete` as for `checks_finished`. A refusal is expected.
 
 Then, if any card has a `queued: max_in_flight` comment and no `issue:` comment, open the oldest one with steps 4 and 5 of the skill. Stop at the first `max_in_flight` refusal.
 
 ## Output
 
-Print `[SILENT]` unless a gate opened. Otherwise print only the gate lines, one per gate. Hermes delivers them to the owner's Desktop Bot Chat.
+Print `[SILENT]` unless a gate opened. Otherwise print only the gate lines, one per gate, each starting with `team-kit notice:`. Hermes delivers them to the owner's Desktop Bot Chat as a new turn. The guard taints any turn that contains `team-kit notice:`, so the dispatcher cannot act on it without the owner's approval.

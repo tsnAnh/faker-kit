@@ -7,9 +7,10 @@ version: 1
 repos:
   - OWNER/REPO
 
-# GitHub logins whose unit pull requests and reports count: the owner, and the account
-# the coding agent posts as (for Claude Code on the web, usually the owner). Events by
-# anyone else are ignored, so a copied marker cannot move a card.
+# GitHub logins whose unit issues, pull requests, and reports count: the dispatcher
+# profile's login (it opens the issues), and the account the coding agent posts as (for
+# Claude Code on the web, usually the owner). Events by anyone else are ignored, so a
+# copied marker cannot move a card.
 trusted_authors:
   - OWNER-LOGIN
 
@@ -66,7 +67,7 @@ read_only_tools:
 profiles:
   dispatcher:
     terminal_allow:
-      - '(~/\.hermes/bin/)?team-kit-gh (open-issue|report-status|read|show|needs-human|kit-check)( [A-Za-z0-9_./:#=@~-]+)*'
+      - '(~/\.hermes/bin/)?team-kit-gh (open-issue|report-status|read|show|pr-state|needs-human|kit-check)( [A-Za-z0-9_./:#=@~-]+)*'
     write_paths:
       - "~/.hermes/team-kit/briefs/*"
   launcher:

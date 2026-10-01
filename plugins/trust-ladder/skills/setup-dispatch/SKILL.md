@@ -39,7 +39,7 @@ Pick one full 40-character commit of the kit. Both sides run it.
 - Codex cloud: the environment's setup script runs `install-kit-skills.sh --ref` with that commit.
 - Claude Code cloud sessions load the kit from the marketplace in `.claude/settings.json`, which follows the kit's default branch. Pick a commit on that branch, and move `kit_ref` when the team takes a newer kit.
 
-`team-kit-gh` refuses to open an issue while this machine's kit commit does not start with `kit_ref`.
+`team-kit-gh` refuses to open an issue unless `kit_ref` is the full commit and equals this machine's kit commit.
 
 ## 3. Write the repository config in a pull request
 

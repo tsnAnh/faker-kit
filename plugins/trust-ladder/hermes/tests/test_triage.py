@@ -65,6 +65,16 @@ def test_checks_finished_on_a_unit_pr_triggers_a_drain(payload, team_kit_home):
     assert (found["event"], found["card"], found["pr"], found["conclusion"]) == ("checks_finished", "t_1a2b", "2", "success")
 
 
+def test_check_events_find_each_of_several_unit_prs(payload, team_kit_home):
+    for number, card in ((2, "t_a"), (5, "t_b")):
+        event = unit_pr(payload, "opened", card=card)
+        event["pull_request"]["number"] = number
+        triage(event, team_kit_home)
+    suite = payload("check_suite.completed")
+    suite["check_suite"]["pull_requests"][0]["number"] = 5
+    assert triage(suite, team_kit_home)["card"] == "t_b"
+
+
 def other_repo(event):
     event["repository"]["full_name"] = "someone/else"
     return event

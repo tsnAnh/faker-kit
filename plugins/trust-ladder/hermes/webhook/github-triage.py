@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -55,24 +56,29 @@ def load_trust() -> Trust:
 
 
 class PrIndex:
-    """PR number to card and issue, learned from PR bodies, so check events can find their unit."""
+    """PR number to card and issue, learned from PR bodies, so check events can find their unit.
 
-    def __init__(self, path: Path):
-        self.path = path
-        try:
-            self.data = json.loads(path.read_text())
-        except (OSError, ValueError):
-            self.data = {}
+    One file per pull request, written atomically, so triage runs that overlap never lose an entry.
+    """
+
+    def __init__(self, directory: Path):
+        self.directory = directory
+
+    def _file(self, repo: str, pr: int) -> Path:
+        return self.directory / f"{repo.lower().replace('/', '__')}__{int(pr)}.json"
 
     def remember(self, repo: str, pr: int, card: str, issue: int) -> None:
-        self.data[f"{repo.lower()}#{pr}"] = {"card": card, "issue": issue}
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, sort_keys=True))
-        tmp.replace(self.path)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        target = self._file(repo, pr)
+        tmp = target.with_name(f".{target.name}.{os.getpid()}.{threading.get_ident()}")
+        tmp.write_text(json.dumps({"card": card, "issue": issue}))
+        tmp.replace(target)
 
     def lookup(self, repo: str, pr: int) -> dict | None:
-        return self.data.get(f"{repo.lower()}#{pr}")
+        try:
+            return json.loads(self._file(repo, pr).read_text())
+        except (OSError, ValueError):
+            return None
 
 
 def classify(payload: dict, trust: Trust, index: PrIndex) -> UnitEvent | None:
@@ -117,7 +123,7 @@ def classify(payload: dict, trust: Trust, index: PrIndex) -> UnitEvent | None:
 
 def main() -> int:
     payload = json.loads(sys.stdin.read() or "{}")
-    found = classify(payload, load_trust(), PrIndex(home() / "pr-cards.json"))
+    found = classify(payload, load_trust(), PrIndex(home() / "pr-cards"))
     print(json.dumps({"team_kit": asdict(found)}) if found else SILENT)
     return 0
 

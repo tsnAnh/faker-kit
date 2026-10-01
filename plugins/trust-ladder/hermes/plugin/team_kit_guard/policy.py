@@ -6,6 +6,7 @@ Pure logic. The Hermes hook wiring lives in __init__.py.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import html
 import json
 import os
@@ -137,9 +138,14 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
         return {
             "action": "approve",
             "message": f"This turn read untrusted content. Approve {tool_name} only if you asked for it.",
-            "rule_key": f"team-kit-taint:{tool_name}",
+            "rule_key": f"team-kit-taint:{tool_name}:{call_digest(args)}",
         }
     return None
+
+
+def call_digest(args: dict) -> str:
+    """Scopes an approval to one exact call, so "always" never covers a different one."""
+    return hashlib.sha256(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
 def reader_source(policy: Policy, tool_name: str, args: dict) -> str | None:

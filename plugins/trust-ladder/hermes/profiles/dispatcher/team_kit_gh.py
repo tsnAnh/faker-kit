@@ -5,6 +5,7 @@
   report-status --repo R --issue N                          the latest report's parsed header, nothing else
   read          --repo R --issue N | --pr N                 the body and comments (untrusted; the guard wraps it)
   show          --repo R --path P                           a file from the default branch (the owner's repo; trusted)
+  pr-state      --repo R --pr N                             state, merged, and head SHA of a pull request, nothing else
   needs-human   --repo R --issue N                          add the agent:needs-human label
   kit-check     --repo R                                    compare this machine's kit commit with kit_ref
 """
@@ -15,6 +16,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -35,6 +37,9 @@ from team_kit_contracts import (  # noqa: E402
     parse_report,
 )
 
+SHA = re.compile(r"\A[0-9a-f]{40}\Z")
+SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
+REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
 HUMAN_LABEL = "agent:needs-human"
 
@@ -76,6 +81,8 @@ class Gh:
         self.repo, self.run, self.config = repo, run, config
 
     def file(self, path: str) -> str:
+        if not REPO_PATH.match(path):
+            raise Refused(f"{path!r} is not a plain path inside the repository")
         data = json.loads(self.run(["api", f"repos/{self.repo}/contents/{path}"]))
         return base64.b64decode(data["content"]).decode()
 
@@ -87,8 +94,10 @@ class Gh:
 
     def kit_check(self, local_commit: str) -> dict:
         pinned = str(self.dispatch_config().get("kit_ref", ""))
-        if not pinned or not local_commit.startswith(pinned):
-            raise Refused(f"kit commit {local_commit[:12]} differs from kit_ref {pinned[:12] or '(unset)'}; update one side first")
+        if not SHA.match(pinned):
+            raise Refused("kit_ref in .agents/dispatch.json must be a full 40-character commit")
+        if local_commit != pinned:
+            raise Refused(f"kit commit {local_commit[:12]} differs from kit_ref {pinned[:12]}; update one side first")
         return {"kit": local_commit, "kit_ref": pinned}
 
     def in_flight(self) -> int:
@@ -130,9 +139,20 @@ class Gh:
             return {"issue": issue, "status": "none"}
         try:
             report = parse_report(reports[-1]["body"])
-        except ContractError as err:
-            return {"issue": issue, "status": "unreadable", "why": str(err)}
-        return {"issue": issue, "status": report.status, "pr": report.pr, "head": report.head}
+        except ContractError:
+            return {"issue": issue, "status": "unreadable"}
+        pr_url = re.compile(rf"\Ahttps://github\.com/{re.escape(self.repo)}/pull/[0-9]+\Z", re.I)
+        return {
+            "issue": issue,
+            "status": report.status,
+            "pr": report.pr if report.pr and pr_url.match(report.pr) else None,
+            "head": report.head if report.head and SHORT_SHA.match(report.head) else None,
+        }
+
+    def pr_state(self, pr: int) -> dict:
+        data = json.loads(self.run(["pr", "view", str(pr), "-R", self.repo, "--json", "state,mergedAt,headRefOid"]))
+        head = str(data.get("headRefOid") or "")
+        return {"pr": pr, "state": str(data.get("state", "")).lower(), "merged": bool(data.get("mergedAt")), "head": head if SHA.match(head) else None}
 
     def read(self, issue: int | None, pr: int | None) -> str:
         kind, number = ("pr", pr) if pr else ("issue", issue)
@@ -146,7 +166,7 @@ class Gh:
 def main(argv: list[str] | None = None, run: Runner = run_gh) -> int:
     parser = argparse.ArgumentParser(prog="team-kit-gh")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("open-issue", "report-status", "read", "show", "needs-human", "kit-check"):
+    for name in ("open-issue", "report-status", "read", "show", "pr-state", "needs-human", "kit-check"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--repo", required=True)
         if name == "open-issue":
@@ -158,6 +178,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh) -> int:
             cmd.add_argument("--pr", type=int)
         elif name == "show":
             cmd.add_argument("--path", required=True)
+        elif name == "pr-state":
+            cmd.add_argument("--pr", type=int, required=True)
         elif name != "kit-check":
             cmd.add_argument("--issue", type=int, required=True)
     args = parser.parse_args(argv)
@@ -176,6 +198,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh) -> int:
         elif args.command == "show":
             print(gh.file(args.path), end="")
             return 0
+        elif args.command == "pr-state":
+            out = gh.pr_state(args.pr)
         elif args.command == "needs-human":
             out = gh.needs_human(args.issue)
         else:

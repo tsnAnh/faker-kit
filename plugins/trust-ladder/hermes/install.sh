@@ -151,7 +151,7 @@ exec $py "$scripts/team_kit_gh.py" "\$@"
 SH
 chmod 755 "$root/bin/team-kit-gh"
 
-existing=$(hermes -p dispatcher cron list 2>/dev/null || true)
+existing=$(hermes -p dispatcher cron list --all 2>/dev/null || true)
 while IFS=$'\t' read -r name schedule deliver skill prompt_file; do
   if grep -qw -- "$name" <<<"$existing"; then
     printf 'cron job %s exists; left as is\n' "$name"

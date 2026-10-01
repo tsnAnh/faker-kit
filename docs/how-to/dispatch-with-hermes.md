@@ -60,7 +60,7 @@ GitHub must reach the gateway's port, 8644, over HTTPS. Use a tunnel or a revers
 None of these uses a model to decide. Each is code or configuration.
 
 1. **Desktop is the only way in.** No chat platform is connected. Webhooks wake only the drain job.
-2. **Least privilege per profile.** The dispatcher has Kanban, a terminal, files, `clarify`, and skills. The launcher has Kanban and a terminal. The webhook route has Kanban only.
+2. **Least privilege per profile.** The dispatcher has Kanban, a terminal, files, `clarify`, and skills. The launcher has Kanban and a terminal. The webhook route runs no agent. It only fires the drain job, which runs as the dispatcher under the guard.
 3. **The guard blocks.** The `team_kit_guard` plugin checks every tool call against `guard.yaml`. The dispatcher may run only `team-kit-gh` and write only briefs. The launcher may run only the exact launch commands. Merges, pushes to `main`, force-pushes, and deletes are denied for both. Any error, a timeout, or a missing `guard.yaml` blocks the call.
 4. **Untrusted text is marked.** Output from `team-kit-gh read` and web tools arrives wrapped in `<untrusted source=...>` and taints the turn. After that, every tool that changes something asks you to approve it in Desktop. Cron runs deny approvals, so a drain cannot act on text it should not trust.
 5. **Briefs come only from you and the repository.** The dispatcher writes briefs from your message and the repository's files. The coding agent works only issues written by a login in `trusted_dispatchers` that start with the brief marker. The webhook counts only pull requests and reports by a login in `trusted_authors` in `guard.yaml`, so a copied marker cannot move a card.
@@ -87,7 +87,9 @@ The `dispatch-status` job sends three lines at 9:00, 13:00, and 17:00 in the dis
 ## Where this differs from the design
 
 - **Launch commands use single quotes.** Inside double quotes the shell would expand `$faker-mode`.
-- **The webhook route uses `cron_job` without `coalesce`.** Hermes does not allow both. Hermes runs a cron job at most once at a time, and the drain re-reads every open unit each run, so bursts of events are harmless.
-- **Gates and digests go to Bot Chat.** Hermes cron delivers to `bot-chat:<profile>`, the profile's Desktop Bot Chat, and cannot target another named session. Hermes has no desktop notification of its own.
+- **The webhook route uses `cron_job` without `coalesce`.** Hermes does not allow both. The drain re-reads every open unit each run, so bursts of events are harmless.
+- **Gates and digests go to Bot Chat.** Hermes cron delivers to `bot-chat:<profile>`, the profile's Desktop Bot Chat, and cannot target another named session. Hermes has no desktop notification of its own. Bot Chat delivery arrives as a turn the dispatcher answers, so every delivered line starts with `team-kit notice:`, and the guard taints any turn that contains it.
+- **The webhook route sets no toolsets.** A route with `cron_job` runs no agent, so Hermes ignores its toolsets. The drain runs with the dispatcher profile's toolsets, under the guard.
+- **Events during a drain are dropped, not queued.** Hermes refuses to start a cron job that is already running. The drain sweeps every open unit, including merged pull requests through `team-kit-gh pr-state`, and its two-hour schedule catches what a dropped event missed.
 - **`codex_env` was added** to `.agents/dispatch.json`. `codex cloud exec` needs the Codex environment id.
 - **Cards use Kanban's default retry limit.** The `kanban_create` tool takes no per-card retry count. To change the limit for every card, set `kanban.failure_limit` in the dispatcher profile's config, which the gateway reads.
