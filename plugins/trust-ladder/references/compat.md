@@ -27,6 +27,8 @@ The pstack, team-workflows, thermos, advisor, continual-learning, agent-compatib
 | Custom Mode pin (`mode: true`) | trust-ladder's hook keeps `/faker-mode` on until you say "exit faker mode" | Same hook | trust-ladder's Pi extension does the same |
 | Origin CLI | `gh` | `gh` | `gh` |
 
+When you spawn `faker-agent`, start the prompt with `/faker-mode` (Claude Code) or `$faker-mode` (Codex). The `faker-mode` skill is `disable-model-invocation`, so the subagent cannot load it through the Skill tool; a user-style command is what runs it.
+
 ### Models
 
 Each teammate runs one agent: Claude Code on Claude Opus 5.5 at max effort, or Codex on GPT-6 Sol at high effort in the standard service tier (never the fast tier, which costs 1.5x quota).
