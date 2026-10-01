@@ -37,7 +37,11 @@ The prompt always starts with `/faker-mode` or `$faker-mode`. The `faker-mode` s
 Run [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md). It walks through both sides and proves the loop with one small unit. The short version:
 
 - **The repository.** `.agents/dispatch.json` and `.agents/dispatch.md` from [`templates/dispatch/`](../../plugins/trust-ladder/templates/dispatch/), committed through a pull request. Branch protection with required checks. The labels `agent-task` and `agent:needs-human`.
-- **The Hermes machine.** From a clone of the kit, `bash plugins/trust-ladder/hermes/install.sh --ref <commit>`. Then fill `repos` and `trusted_authors` in `~/.hermes/team-kit/guard.yaml`, give each profile its own `GH_TOKEN`, and point a GitHub webhook at the gateway.
+- **The Hermes machine.** From a clone of the kit, `bash plugins/trust-ladder/hermes/install.sh --ref <commit>`. Then fill `repos` and `trusted_authors` in `~/.hermes/team-kit/guard.yaml`, give each profile its own `GH_TOKEN`, and point a GitHub webhook at the gateway. New scheduled jobs are installed paused; resume them only after these prerequisites and the repository's cloud-agent setup are verified.
+
+The installer and skill linker work with macOS's bundled Bash 3. They need a Python 3.9+ executable that can import PyYAML. The installer checks the Python shebang on Hermes, then `python3` on `PATH`; managed Hermes shell launchers are not treated as Python executables. If neither candidate can import PyYAML, install it in a helper Python and pass that executable as `HERMES_PYTHON`. An explicit override is validated and never silently replaced. Hermes configuration is applied through `hermes config set`, with readback checks rather than direct YAML rewrites.
+
+An existing route named `team-kit-github` must belong to this same dispatcher setup; a conflicting static or dynamic route stops installation instead of being overwritten. A standalone dispatcher must be explicitly migrated to the shared gateway first. Back up the profiles before migration and follow the current Hermes gateway documentation; the installer does not silently change gateway topology.
 
 ### Pin the same commit on both sides
 
@@ -45,7 +49,7 @@ Run [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md).
 
 ### Desktop and the background gateway
 
-You chat in Hermes Desktop with the `dispatcher` profile. The gateway runs as a background service under that profile only for the webhook route `team-kit-github`, the cron jobs, and the Kanban dispatcher. No chat platform is connected. Questions and gates reach you as messages in the dispatcher's Desktop Bot Chat.
+You chat in Hermes Desktop with the `dispatcher` profile. Current Hermes runs one background gateway from the default profile and serves both `dispatcher` and `launcher` through it. The installer registers the `team-kit-github` route on that shared listener, explicitly bound to `dispatcher`; a route only in the dispatcher's config is not enough. The kit does not connect a chat platform or change existing messaging channels. Questions and gates reach you as messages in the dispatcher's Desktop Bot Chat.
 
 ### Use an always-on machine
 
@@ -53,7 +57,20 @@ Cron, the webhook, and the Kanban dispatcher run only while the gateway runs. Pu
 
 ### The webhook tunnel
 
-GitHub must reach the gateway's port, 8644, over HTTPS. Use a tunnel or a reverse proxy with TLS, such as Cloudflare Tunnel or Tailscale Funnel, and expose only that port. The webhook URL is `https://<public host>/webhooks/team-kit-github`, signed with the secret in `~/.hermes/team-kit/webhook-secret`.
+GitHub must reach the shared webhook listener over HTTPS (port 8644 on a fresh install). Use a tunnel or a reverse proxy with TLS, such as Cloudflare Tunnel or Tailscale Funnel, and expose only that listener. The webhook URL is `https://<public host>/p/dispatcher/webhooks/team-kit-github`, signed with the secret in `~/.hermes/team-kit/webhook-secret`. Do not omit the profile prefix: the route's signature is bound to the dispatcher execution target.
+
+Check `http://localhost:8644/health` for listener health, not `/p/dispatcher/health`. A signed GitHub `ping` to the route should return 200 with `status: ignored`; a request without a signature must return 401. If the host already has a webhook listener, use its configured port rather than changing it for team-kit.
+
+### Activate the scheduled jobs
+
+After the repository, credentials, backend login, and public webhook are ready, find the two job IDs with `hermes -p dispatcher cron list --all`, then resume them:
+
+```bash
+hermes -p dispatcher cron resume <dispatcher-drain-job-id>
+hermes -p dispatcher cron resume <dispatch-status-job-id>
+```
+
+Reinstalling does not resume paused jobs or pause jobs you already activated. Keep them paused if you are only installing the machine-side components, rather than completing dispatch onboarding.
 
 ## Safety layers
 
@@ -83,6 +100,8 @@ The `dispatch-status` job sends three lines at 9:00, 13:00, and 17:00 in the dis
 - **A card does not complete though checks are green.** The repository has no required checks, or the launcher's `GH_TOKEN` cannot read them. Kanban reads checks as the launcher.
 - **Desktop keeps asking you to approve tool calls.** That turn read untrusted text. Approve only a call you asked for. Otherwise deny it and ask again in a new turn, without the untrusted read.
 - **Approvals never appear.** `approvals.mode` is `off`, or Hermes runs with `--yolo`. Set it to `manual` or `smart`. With `off`, Hermes approves the guard's requests by itself.
+- **The health endpoint works but the route returns 404.** Check that `team-kit-github` is registered on the default profile's shared listener with `profile: dispatcher`, and use `/p/dispatcher/webhooks/team-kit-github`. A profile-local route alone is not registered on the shared listener.
+- **No scheduled work runs after installation.** New jobs are intentionally paused. Finish onboarding, then resume both job IDs as above. Check `hermes -p dispatcher cron status` and manage the shared service with `hermes gateway status` from the default profile.
 
 ## Where this differs from the design
 

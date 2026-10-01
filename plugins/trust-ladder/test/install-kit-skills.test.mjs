@@ -22,7 +22,8 @@ function fakeKit(skills) {
 }
 
 function install(kit, work, ...extra) {
-  return spawnSync(SCRIPT, ["--source", kit, "--ref", "HEAD", "--checkout", path.join(work, "kit"), "--dest", path.join(work, "skills"), ...extra], { encoding: "utf8" });
+  // Exercise Apple's Bash 3 on macOS, even when Homebrew Bash is first on PATH.
+  return spawnSync("/bin/bash", [SCRIPT, "--source", kit, "--ref", "HEAD", "--checkout", path.join(work, "kit"), "--dest", path.join(work, "skills"), ...extra], { encoding: "utf8" });
 }
 
 const owner = (work, name) => /description: (.*)/.exec(fs.readFileSync(path.join(work, "skills", name, "SKILL.md"), "utf8"))[1];
@@ -47,6 +48,18 @@ describe("install-kit-skills", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("removed stale");
     expect(fs.readdirSync(path.join(work, "skills"))).toEqual(["start-here"]);
+  });
+
+  test("trust-ladder keeps precedence even when its destination conflicts", () => {
+    const kit = fakeKit([["trust-ladder", "shared"], ["pstack", "shared"]]);
+    const work = tmp();
+    fs.mkdirSync(path.join(work, "skills"), { recursive: true });
+    fs.symlinkSync(path.join(work, "missing-user-skill"), path.join(work, "skills", "shared"));
+    const result = install(kit, work);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("links elsewhere; left as is");
+    expect(result.stdout).toContain("skipped shared from pstack: trust-ladder already provides it");
+    expect(fs.readlinkSync(path.join(work, "skills", "shared"))).toBe(path.join(work, "missing-user-skill"));
   });
 
   test("never replaces a skill the user already has", () => {

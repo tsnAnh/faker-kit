@@ -1,6 +1,8 @@
-# Merged into ~/.hermes/profiles/dispatcher/config.yaml by install.sh, so the dispatcher's
-# background gateway serves only this webhook. install.sh replaces the secret placeholder
-# with a generated secret it keeps in ~/.hermes/team-kit/webhook-secret.
+# Applied through Hermes config set to the default host profile by install.sh.
+# The shared listener owns this route; install.sh adds profile: dispatcher so the
+# script and cron job run in the restricted dispatcher profile, exposed at
+# /p/dispatcher/webhooks/team-kit-github. The generated secret is retained in
+# ~/.hermes/team-kit/webhook-secret.
 #
 # The route runs no agent of its own, so it has no toolsets: github-triage.py drops every
 # event that does not change a unit's state, and a kept event fires the dispatcher-drain

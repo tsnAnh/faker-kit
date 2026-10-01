@@ -91,8 +91,11 @@ bash plugins/trust-ladder/hermes/install.sh --ref <kit commit> \
 - installs `team-kit-gh` at `~/.hermes/bin/team-kit-gh`, and the webhook script in the dispatcher's `scripts/team-kit/`,
 - writes a sample `~/.hermes/team-kit/guard.yaml` once, and never overwrites it,
 - generates the webhook secret into `~/.hermes/team-kit/webhook-secret`,
-- adds the `team-kit-github` webhook route and the `dispatcher-drain` and `dispatch-status` cron jobs,
-- installs and starts the dispatcher's gateway.
+- registers the `team-kit-github` webhook route on the default profile's shared listener, explicitly bound to `dispatcher`,
+- adds the `dispatcher-drain` and `dispatch-status` cron jobs paused, without changing existing jobs' activation state,
+- installs and starts the default-profile gateway, which serves both profiles.
+
+The installer supports macOS's system Bash 3. It validates a Python 3.9+ executable with PyYAML from the Hermes shebang or `python3` on `PATH`; for a managed shell launcher without a usable helper Python, install PyYAML in a helper environment and set `HERMES_PYTHON` to that executable. All config updates use `hermes config set` and are read back. A conflicting host webhook route or a standalone dispatcher stops installation; resolve that ownership or migrate the topology explicitly before retrying.
 
 The Hermes side never gets faker-mode, lint packs, or any skill that writes code.
 
@@ -135,11 +138,11 @@ The launcher also needs the coding agent's own login on this machine. For `claud
 
 ## 10. Point a GitHub webhook at the gateway
 
-The gateway listens on port 8644. GitHub must reach it over HTTPS through a tunnel or a reverse proxy with TLS, such as Cloudflare Tunnel or Tailscale Funnel. Expose only that port.
+The shared webhook listener uses port 8644 on a fresh install; if the host already has a webhook listener, use its existing port. GitHub must reach it over HTTPS through a tunnel or a reverse proxy with TLS, such as Cloudflare Tunnel or Tailscale Funnel. Expose only that listener.
 
 In the repository's settings, add a webhook:
 
-- Payload URL: `https://<public host>/webhooks/team-kit-github`.
+- Payload URL: `https://<public host>/p/dispatcher/webhooks/team-kit-github`.
 - Content type: `application/json`.
 - Secret: the contents of `~/.hermes/team-kit/webhook-secret`.
 - Events: Pull requests, Issue comments, and Check suites only.
@@ -150,9 +153,11 @@ In both profiles, `approvals.mode` must stay `manual` or `smart`, and `approvals
 
 ## 12. Prove it
 
+First verify the repository allowlist, scoped credentials, cloud-agent login, and public webhook. New jobs are deliberately paused until these are ready. Run `hermes -p dispatcher cron list --all`, then `hermes -p dispatcher cron resume <job-id>` for both `dispatcher-drain` and `dispatch-status`. Reinstallation preserves the state of existing jobs.
+
 Open the `dispatcher` profile in Hermes Desktop and walk one small unit through. Check each item.
 
-- [ ] `curl http://localhost:8644/health` returns ok on the machine, and the webhook's Recent Deliveries in GitHub show a 2xx for its ping.
+- [ ] `curl http://localhost:8644/health` returns ok on the machine (use the existing listener's port if different). A signed ping to `/p/dispatcher/webhooks/team-kit-github` returns 200 with `status: ignored`, an unsigned request returns 401, and GitHub's Recent Deliveries show a 2xx for its ping. The profile-prefixed `/health` is not a health endpoint.
 - [ ] `hermes -p dispatcher cron list` shows `dispatcher-drain` and `dispatch-status`.
 - [ ] `team-kit-gh kit-check --repo OWNER/REPO` prints the kit commit and `kit_ref`, with no refusal.
 - [ ] In the dispatcher, ask for one small change, such as a typo fix in the README. It restates one `small` unit and asks to confirm.

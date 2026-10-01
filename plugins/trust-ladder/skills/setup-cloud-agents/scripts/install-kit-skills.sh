@@ -58,17 +58,26 @@ done
 [ -d "$checkout/plugins/team-workflows" ] && plugins+=(team-workflows)
 
 linked=0 problems=0
-declare -A seen=()
+# Parallel indexed arrays work on macOS's system Bash 3 as well as newer Bash.
+seen_names=() seen_plugins=()
 for plugin in "${plugins[@]}"; do
   for skill in "$checkout/plugins/$plugin/skills"/*/; do
     skill=${skill%/}
     [ -f "$skill/SKILL.md" ] || continue
     name=${skill##*/}
-    if [ -n "${seen[$name]:-}" ]; then
-      printf 'skipped %s from %s: %s already provides it\n' "$name" "$plugin" "${seen[$name]}"
+    provider=''
+    for ((i = 0; i < ${#seen_names[@]}; i++)); do
+      if [ "${seen_names[$i]}" = "$name" ]; then
+        provider=${seen_plugins[$i]}
+        break
+      fi
+    done
+    if [ -n "$provider" ]; then
+      printf 'skipped %s from %s: %s already provides it\n' "$name" "$plugin" "$provider"
       continue
     fi
-    seen[$name]=$plugin
+    seen_names+=("$name")
+    seen_plugins+=("$plugin")
     target="$dest/$name"
     if [ -L "$target" ]; then
       case "$(readlink "$target")" in
