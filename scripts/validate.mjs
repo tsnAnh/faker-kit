@@ -112,7 +112,7 @@ function checkOwnMarkdown() {
   for (const file of files) checkLinks(file);
 }
 
-const OWN_ROOTS = ["README.md", "NOTICE.md", "AGENTS.md", "CLAUDE.md", "package.json", ".claude-plugin", ".github", "docs", "scripts", `plugins/${OWN_PLUGIN}`, "upstream/agent-hooks"];
+const OWN_ROOTS = ["README.md", "NOTICE.md", "AGENTS.md", "CLAUDE.md", "package.json", ".claude-plugin", ".github", "docs", "site", "deploy", "scripts", `plugins/${OWN_PLUGIN}`, "upstream/agent-hooks"];
 
 function textFiles(full) {
   if (!fs.existsSync(full)) return [];

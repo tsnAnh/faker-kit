@@ -41,7 +41,7 @@ Then type `/start-here` (Codex: `$start-here`, Pi: `/skill:start-here`). Details
 
 Designers, marketers, and founders need nothing installed once an engineer has run `/setup-cloud-agents`, in Claude Code on the web or Codex cloud: [use the kit from a browser or your phone](docs/how-to/use-the-kit-from-the-browser.md).
 
-All documentation: [docs/](docs/README.md).
+All documentation: [docs/](docs/README.md), also published as a docs site with a quick start and a full guide for each role ([deploying it](deploy/README.md)).
 
 ## The trust ladder
 
@@ -64,6 +64,8 @@ Every time you correct an agent, `/correct` puts the fix in the strongest layer 
 | `plugins/trust-ladder/` | This kit's plugin: 20 skills, templates, lint packs, hooks, and the Pi extension |
 | `plugins/pstack/` and seven others | Vendored from the MIT-licensed upstream repository named in `upstream/source.json`, byte-identical except model names and the `faker-mode` rename, without the `make-bot-ui` skill (it only drives the upstream editor's bot), plus generated manifests and hook files ([what changed](upstream/CHANGES.md)) |
 | `docs/` | Usage instructions for every role |
+| `site/` | The Mintlify docs site built from `docs/` |
+| `deploy/` | The docs site's nginx image and k3s manifests |
 | `upstream/` | The pinned upstream commit, the model map, the team's renames, the hook adapter, and the change list |
 | `scripts/` | Sync, validation, catalog generation, and the test runners CI uses |
 

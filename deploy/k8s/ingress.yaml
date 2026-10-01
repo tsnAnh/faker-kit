@@ -1,0 +1,18 @@
+# Plain HTTP through k3s's bundled Traefik. The deploy workflow replaces __HOST__.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: team-kit-docs
+  namespace: team-kit-docs
+spec:
+  rules:
+    - host: __HOST__
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: team-kit-docs
+                port:
+                  name: http

@@ -1,0 +1,56 @@
+---
+title: "Product and marketing: quick start"
+sidebarTitle: "Product and marketing"
+description: "Change copy, report bugs so they get reproduced for you, and get straight answers about how the product works."
+---
+
+You can change text in the app, report bugs, and ask how things work, without waiting for an engineer's time. Everything you change goes through a pull request an engineer reviews, so nothing goes live by accident.
+
+## Before you start
+
+<Steps>
+  <Step title="Open the agent">
+    Nothing to install. Open [claude.ai/code](https://claude.ai/code) or [chatgpt.com/codex](https://chatgpt.com/codex), or either phone app, and pick the repository. [Step-by-step instructions](/how-to/use-the-kit-from-the-browser).
+  </Step>
+  <Step title="Say what you want">
+    Type `/start-here` (`$start-here` in Codex) and describe what you want in plain words. It picks the right skill.
+  </Step>
+</Steps>
+
+## Your first three tasks
+
+<AccordionGroup>
+  <Accordion title="Change text in the app" icon="pen" defaultOpen>
+    ```text
+    /request-a-change the onboarding headline should say "Plan your week in two minutes"
+    ```
+    The agent restates the change, updates every language the app supports with a real translation, takes before and after screenshots, and opens a pull request.
+  </Accordion>
+  <Accordion title="Report a bug" icon="bug">
+    ```text
+    /request-a-change after changing the language to Vietnamese, the plan names still show in English
+    ```
+    Say what you did, what you saw, and what you expected. The agent reproduces it in the running app, finds the cause, and opens a fix with proof. If it cannot reproduce it, it tells you what it tried.
+  </Accordion>
+  <Accordion title="Ask how something works" icon="circle-question">
+    ```text
+    /how does the free trial end?
+    ```
+    Add `/bro` if the answer is too technical.
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+No agent open? If the repository has the **Request a change** issue form, fill it in on GitHub. An agent picks it up and links the pull request on the issue.
+</Tip>
+
+## Next
+
+<CardGroup cols={2}>
+  <Card title="Full product and marketing guide" icon="book-open" href="/guides/product-and-marketing">
+    Copy, bugs, bigger changes, writing, summaries, and learning.
+  </Card>
+  <Card title="Prompts to copy" icon="copy" href="/reference/prompts">
+    Ready-made prompts for every role.
+  </Card>
+</CardGroup>

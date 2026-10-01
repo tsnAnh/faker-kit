@@ -1,0 +1,114 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "team-kit",
+  "description": "Agent skills for Claude Code, Codex, and Pi that make coding agents trustworthy enough to run many at once, and safe enough for anyone on the team to use.",
+  "colors": {
+    "primary": "#1E6B58",
+    "light": "#5DC2A3",
+    "dark": "#1E6B58"
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Get started",
+        "groups": [
+          {
+            "group": "Welcome",
+            "pages": ["index"]
+          },
+          {
+            "group": "Quick starts",
+            "pages": [
+              "quickstart/engineers",
+              "quickstart/designers",
+              "quickstart/product-and-marketing",
+              "quickstart/founders-and-leads"
+            ]
+          },
+          {
+            "group": "Full guides",
+            "pages": [
+              "guides/engineers",
+              "guides/designers",
+              "guides/product-and-marketing",
+              "guides/founders-and-leads"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "How-to guides",
+        "groups": [
+          {
+            "group": "Get going",
+            "pages": [
+              "how-to/use-the-kit-from-the-browser",
+              "how-to/install",
+              "how-to/models",
+              "how-to/set-up-a-repo",
+              "how-to/roll-out-to-a-team"
+            ]
+          },
+          {
+            "group": "Everyday work",
+            "pages": [
+              "how-to/design-before-building",
+              "how-to/build-review-ship",
+              "how-to/build-a-verification-skill",
+              "how-to/correct-an-agent",
+              "how-to/capture-lessons",
+              "how-to/garden-the-codebase",
+              "how-to/run-many-agents"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/skills",
+              "reference/prompts",
+              "reference/playbooks",
+              "reference/lint-packs",
+              "reference/models",
+              "reference/coverage"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Explanations",
+        "groups": [
+          {
+            "group": "Why it works",
+            "pages": [
+              "explanation/trust-ladder",
+              "explanation/verification-is-all-you-need",
+              "explanation/plan-with-code",
+              "explanation/scaling-agents",
+              "explanation/why-non-engineers-can-ship-safely"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/tsnAnh/team-kit"
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/tsnAnh/team-kit"
+    }
+  }
+}
