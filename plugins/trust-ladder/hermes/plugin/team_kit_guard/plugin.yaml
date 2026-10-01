@@ -1,0 +1,8 @@
+name: team_kit_guard
+version: "0.1.0"
+description: "team-kit dispatch guard. Blocks the deny rules and anything outside a profile's allowlist in ~/.hermes/team-kit/guard.yaml, fails closed, wraps untrusted readers' output, and asks the owner to approve side-effecting tools in a turn that read it."
+author: "team-kit"
+provides_hooks:
+  - pre_tool_call
+  - transform_tool_result
+  - on_session_end
