@@ -38,6 +38,7 @@ As more corrections land in layers 1 and 2, the same mistake stops coming back, 
 - [Design before building](how-to/design-before-building.md)
 - [Build, review, and ship a change](how-to/build-review-ship.md)
 - [Run many agents](how-to/run-many-agents.md)
+- [Dispatch work with Hermes](how-to/dispatch-with-hermes.md), so cloud agents turn what you ask for into pull requests you only merge
 - [Garden the codebase](how-to/garden-the-codebase.md)
 - [Capture lessons from past sessions](how-to/capture-lessons.md)
 - [Roll the kit out to a team](how-to/roll-out-to-a-team.md)

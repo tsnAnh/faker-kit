@@ -60,7 +60,8 @@
               "how-to/correct-an-agent",
               "how-to/capture-lessons",
               "how-to/garden-the-codebase",
-              "how-to/run-many-agents"
+              "how-to/run-many-agents",
+              "how-to/dispatch-with-hermes"
             ]
           }
         ]

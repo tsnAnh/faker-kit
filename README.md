@@ -28,6 +28,8 @@ for p in trust-ladder pstack team-workflows thermos continual-learning cli-for-a
 pi install git:github.com/tsnAnh/team-kit
 ```
 
+**Hermes**, to dispatch work to cloud agents from Hermes Desktop. From a clone of this repository, run `bash plugins/trust-ladder/hermes/install.sh --ref <commit>`. See [Dispatch work with Hermes](docs/how-to/dispatch-with-hermes.md).
+
 Then type `/start-here` (Codex: `$start-here`, Pi: `/skill:start-here`). Details, team-wide setup, and updating: [Install the kit](docs/how-to/install.md).
 
 ## Start with your role
@@ -61,7 +63,7 @@ Every time you correct an agent, `/correct` puts the fix in the strongest layer 
 
 | Path | Contents |
 |---|---|
-| `plugins/trust-ladder/` | This kit's plugin: 20 skills, templates, lint packs, hooks, and the Pi extension |
+| `plugins/trust-ladder/` | This kit's plugin: 23 skills, templates, lint packs, hooks, and the Pi extension |
 | `plugins/pstack/` and seven others | Vendored from the MIT-licensed upstream repository named in `upstream/source.json`, byte-identical except model names and the `faker-mode` rename, without the `make-bot-ui` skill (it only drives the upstream editor's bot), plus generated manifests and hook files ([what changed](upstream/CHANGES.md)) |
 | `docs/` | Usage instructions for every role |
 | `site/` | The Mintlify docs site built from `docs/` |

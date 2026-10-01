@@ -2,7 +2,7 @@
 
 # Skills
 
-Every skill in the kit: 93 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 96 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
@@ -147,6 +147,9 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 |---|---|---|---|---|
 | [setup-cloud-agents](../../plugins/trust-ladder/skills/setup-cloud-agents/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-cloud-agents` | Make the repository start, build, test, and run its app in a fresh cloud container, so engineers can run agents in parallel and designers, marketers, and founders can use the kit from a browser or phone with nothing... |
 | [setup-routines](../../plugins/trust-ladder/skills/setup-routines/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-routines run the gardener and the verification-skill upkeep every night` | Put the team's upkeep on a schedule so it happens without anyone remembering. |
+| [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-dispatch for OWNER/REPO with Claude Code as the backend` | Set up Hermes dispatch for one repository, so the owner states work in Hermes Desktop and cloud coding agents turn it into pull requests the owner only merges. |
+| [dispatch](../../plugins/trust-ladder/skills/dispatch/SKILL.md) | trust-ladder | Engineers, Leads | `/dispatch add CSV export to the orders page, then a test for the empty case` | Turn the owner's intent in Hermes Desktop into Kanban unit cards, briefs, and GitHub issues that cloud coding agents work. |
+| [follow-brief](../../plugins/trust-ladder/skills/follow-brief/SKILL.md) | trust-ladder | Engineers, Leads | `/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill` | Work one unit a Hermes dispatcher handed to a cloud coding agent, from its GitHub issue to a pull request and a report. |
 | [swarm](../../plugins/pstack/skills/swarm/SKILL.md) | pstack | Engineers | `take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win` | Fan out N parallel workers, drain them, and return one report. |
 
 ## Dormant: the benny automation pack
