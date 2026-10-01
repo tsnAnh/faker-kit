@@ -1,0 +1,29 @@
+# Merged into ~/.hermes/profiles/dispatcher/config.yaml by install.sh, so the dispatcher's
+# background gateway serves only this webhook. install.sh replaces the secret placeholder
+# with a generated secret it keeps in ~/.hermes/team-kit/webhook-secret.
+#
+# The route has no shell toolset, and runs no agent of its own: github-triage.py drops
+# every event that does not change a unit's state, and a kept event fires the
+# dispatcher-drain cron job with the prompt below as its context. Hermes refuses
+# `coalesce` together with `cron_job`; the job runs at most once at a time and re-reads
+# all state, so a burst of events needs no coalescing.
+platforms:
+  webhook:
+    enabled: true
+    extra:
+      port: 8644
+      routes:
+        team-kit-github:
+          events: [pull_request, issue_comment, check_suite]
+          secret: "@TEAM_KIT_WEBHOOK_SECRET@"
+          script: team-kit/github-triage.py
+          toolsets: [kanban]
+          cron_job: dispatcher-drain
+          prompt: |
+            team-kit unit event: {team_kit.event}
+            repo: {team_kit.repo}
+            card: {team_kit.card}
+            issue: {team_kit.issue}
+            pr: {team_kit.pr}
+            status: {team_kit.status}
+            conclusion: {team_kit.conclusion}
