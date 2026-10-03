@@ -40,7 +40,7 @@
       ],
       "from": "poteto-mode",
       "to": "faker-mode",
-      "count": 152
+      "count": 154
     },
     {
       "id": "rename-poteto-agent",
