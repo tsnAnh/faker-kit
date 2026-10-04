@@ -8,7 +8,7 @@ description: Prepare one repository for team-kit dispatch, so a Hermes project b
 Dispatch has two sides, and both run the same kit commit.
 
 - **The repository**, this skill. It holds `.agents/dispatch.json`, `.agents/dispatch.md`, and, in the project's home repository, `PROJECT.md`.
-- **The Hermes machine**, set up by the `hermes/` module of the kit: `hermes/install.sh` once per machine, then the bootstrap bot per project. It labels the repository, points its webhook at the machine, and protects its default branch with `team-kit-admin`. See [hermes/README.md](https://github.com/tsnAnh/team-kit/blob/main/hermes/README.md).
+- **The Hermes machine**, set up by the `hermes/` module of the kit: `hermes/install.sh` once per machine, then the bootstrap bot per project. It labels the repository and protects its default branch with `team-kit-admin`. See [hermes/README.md](https://github.com/tsnAnh/team-kit/blob/main/hermes/README.md).
 
 You need these values. The bootstrap bot's prompt gives them all. If you run this skill by hand, ask the owner for each:
 
@@ -38,12 +38,19 @@ If one is missing, do that skill now, on the same branch, so the one pull reques
 Copy `templates/dispatch/dispatch.json` and fill it:
 
 - `backend` and `kit_ref` from the values.
-- `max_in_flight`: how many units may run here at once. Start at 1 or 2. The machine has its own total across projects.
+- `max_in_flight`: how many units may run here at once, from the repository's trust score. Run `/trust-audit` (Codex: `$trust-audit`) and use its lowest layer, as in [Run many agents](https://github.com/tsnAnh/team-kit/blob/main/docs/how-to/run-many-agents.md):
+
+  | Lowest layer | `max_in_flight` |
+  |---|---|
+  | Below 2, or `scripts/check.sh` fails | 1 |
+  | 2 or more | 3 to 10, more for faster `check` and fewer shared files |
+
+  Put the score and the top items `/trust-audit` lists in the pull request, so the owner knows what raises the limit. The machine has its own total across projects.
 - `forbidden_paths`: paths no unit may touch. Keep the template's and add the repository's own, such as generated code or vendored files.
 - `trusted_dispatchers` from the values. Coding agents follow only issues these logins wrote.
 - `codex_env` for `codex`. Delete the key for `claude`.
 
-A Codex cloud task cannot push or open a pull request unless its environment allows it. Until a pull request with the marker exists, the unit stays "waiting for PR". Say so in the pull request for `codex`.
+A Codex cloud task cannot push or open a pull request unless its environment allows it. Then the agent reports `partial`, which opens a gate, and the owner opens the pull request from the task. Say so in the pull request for `codex`.
 
 Claude Code cloud sessions load the kit from the marketplace in `.claude/settings.json`, which follows the kit's default branch. `kit_ref` must be a commit on that branch.
 

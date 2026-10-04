@@ -3,7 +3,7 @@
 # The model is set separately: install.sh --bootstrap-bot NAME --model M, or
 # `hermes -p NAME config set model.default <model>`.
 #
-# The bootstrap bot has no file, web, or kanban tools. Its only side effects are team-kit-admin
+# The bootstrap bot has no file, web, or Kanban tools. Its only side effects are team-kit-admin
 # commands, and the guard asks the owner to approve each one but `status`.
 toolsets: [terminal, clarify, skills]
 approvals:

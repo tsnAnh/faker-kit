@@ -7,7 +7,7 @@ This repository is a team kit of agent skills for Claude Code, Codex, and Pi. Re
 - `plugins/<name>/` for every name in `upstream/source.json`: vendored from the upstream repository in `upstream/source.json`. Byte-identical to upstream except the rules in `upstream/model-map.json`, `upstream/compat-patches.json`, and `upstream/renames.json`, plus generated `.claude-plugin/plugin.json` and `agent-hooks/` files.
 - `upstream/agent-hooks/hook-adapter.mjs`: runs a vendored plugin's upstream hooks from Claude Code and Codex hooks. The sync script copies it into each plugin that has a `hooks/hooks.json`.
 - `plugins/trust-ladder/`: this repo's own plugin. Skills, templates, lint packs, the Pi extension, and helper scripts.
-- `hermes/`: the Hermes module, this repo's own. The bootstrap and project bots' skills, profiles, guard plugin, `team-kit-gh`, `team-kit-admin`, webhook triage, and `install.sh`. It loads only in Hermes bots, never in a coding agent, so it is not a plugin. Its skills follow the trust-ladder naming rules but need no `docs/catalog.json` entry, and must not reuse a plugin skill's name. See `hermes/README.md`.
+- `hermes/`: the Hermes module, this repo's own. The bootstrap and project bots' skills, profiles, guard plugin, `team-kit-gh`, `team-kit-admin`, scheduled jobs, and `install.sh`. It loads only in Hermes bots, never in a coding agent, so it is not a plugin. Its skills follow the trust-ladder naming rules but need no `docs/catalog.json` entry, and must not reuse a plugin skill's name. See `hermes/README.md`.
 - `docs/`: usage instructions. `docs/reference/{skills,coverage,playbooks,lint-packs}.md` are generated from `docs/catalog.json`, each SKILL.md, faker-mode's playbook list, and each `pack.json`.
 - `site/`: the Mintlify docs site, deployed to the team's k3s server by `.github/workflows/docs-site.yml` using the image and manifests in `deploy/` (setup: `deploy/README.md`). The home page, `quickstart/`, `guides/`, and `docs.json` are hand-written. `node scripts/gen-site.mjs` generates `how-to/`, `explanation/`, and `reference/` from `docs/` (gitignored). Edit `docs/`, never the generated copies. A new `docs/` page needs an entry in `site/docs.json`. Preview with `cd site && npx mint dev`.
 - `scripts/`: `sync-upstream.mjs`, `validate.mjs`, and the generators and test runners.
@@ -44,7 +44,7 @@ node scripts/gen-catalog.mjs --check     # generated docs are current
 node scripts/gen-site.mjs                # docs site pages, links, and navigation resolve
 bun test plugins/trust-ladder            # trust-ladder scripts and the Pi extension
 bun test upstream/agent-hooks            # upstream hooks run in Claude Code and Codex
-python -m pytest hermes                  # Hermes guard, team-kit-gh, team-kit-admin, triage, install
+python -m pytest hermes                  # Hermes guard, team-kit-gh, team-kit-admin, install
 bash scripts/test-packs.sh               # lint packs fail on bad fixtures, pass on good
 claude plugin validate .                 # Claude Code marketplace schema
 ```

@@ -98,7 +98,6 @@ def test_a_missing_bots_yaml_means_no_bots(tmp_path):
         ({"version": 2}, "max_in_flight_total"),
         ({"version": 2, "max_in_flight_total": 0}, "max_in_flight_total"),
         ({"version": 2, "max_in_flight_total": True}, "max_in_flight_total"),
-        ({"version": 2, "max_in_flight_total": 2, "webhook_base_url": "http://x.example"}, "https"),
         ({"version": 2, "max_in_flight_total": 2, "deny": [{"oops": 1}]}, "deny"),
     ],
 )
@@ -179,7 +178,7 @@ def test_untrusted_reader_output_is_wrapped_and_cannot_close_the_wrapper():
 
 def test_other_tool_results_are_left_alone_and_do_not_taint():
     g = guard("meo-beo")
-    assert g.transform_tool_result(tool_name="kanban_show", args={}, result="card", session_id="s1", turn_id="t1") is None
+    assert g.transform_tool_result(tool_name="clarify", args={}, result="answer", session_id="s1", turn_id="t1") is None
     assert g.transform_tool_result(**terminal("team-kit-gh report-status --repo acme/shop-web --issue 7"), result='{"status": "done"}') is None
     assert not g.is_tainted("s1", "t1")
 
@@ -188,22 +187,22 @@ def test_a_tainted_turn_needs_approval_for_side_effects_only():
     g = guard("meo-beo")
     g.transform_tool_result(**READ, result="text")
     assert g.is_tainted("s1", "t1")
-    verdict = g.pre_tool_call(tool_name="kanban_create", args={"title": "x"}, session_id="s1", turn_id="t1")
+    verdict = g.pre_tool_call(tool_name="write_file", args={"path": "~/.hermes/team-kit/briefs/meo-beo/t_1.md", "content": "x"}, session_id="s1", turn_id="t1")
     assert verdict["action"] == "approve"
-    assert verdict["rule_key"].startswith("team-kit-taint:kanban_create:")
-    other = g.pre_tool_call(tool_name="kanban_create", args={"title": "y"}, session_id="s1", turn_id="t1")
+    assert verdict["rule_key"].startswith("team-kit-taint:write_file:")
+    other = g.pre_tool_call(tool_name="write_file", args={"path": "~/.hermes/team-kit/briefs/meo-beo/t_2.md", "content": "y"}, session_id="s1", turn_id="t1")
     assert other["rule_key"] != verdict["rule_key"], "an always-approval covers only the exact call"
-    assert g.pre_tool_call(**terminal("team-kit-gh needs-human --repo acme/shop-web --issue 7"))["action"] == "approve"
-    assert g.pre_tool_call(tool_name="kanban_show", args={}, session_id="s1", turn_id="t1") is None
+    assert g.pre_tool_call(**terminal("team-kit-gh launch --repo acme/shop-web --issue 7"))["action"] == "approve"
+    assert g.pre_tool_call(tool_name="clarify", args={}, session_id="s1", turn_id="t1") is None
 
 
 def test_taint_stays_in_its_turn_and_ends_with_it():
     g = guard("meo-beo")
     g.transform_tool_result(**READ, result="text")
-    assert g.pre_tool_call(tool_name="kanban_create", args={}, session_id="s1", turn_id="t2") is None
-    assert g.pre_tool_call(tool_name="kanban_create", args={}, session_id="s2", turn_id="t1") is None
+    assert g.pre_tool_call(tool_name="write_file", args={"path": "~/.hermes/team-kit/briefs/meo-beo/t_1.md", "content": "x"}, session_id="s1", turn_id="t2") is None
+    assert g.pre_tool_call(tool_name="write_file", args={"path": "~/.hermes/team-kit/briefs/meo-beo/t_1.md", "content": "x"}, session_id="s2", turn_id="t1") is None
     g.end_turn(session_id="s1", turn_id="t1")
-    assert g.pre_tool_call(tool_name="kanban_create", args={}, session_id="s1", turn_id="t1") is None
+    assert g.pre_tool_call(tool_name="write_file", args={"path": "~/.hermes/team-kit/briefs/meo-beo/t_1.md", "content": "x"}, session_id="s1", turn_id="t1") is None
 
 
 def test_deny_beats_approval_in_a_tainted_turn():
@@ -217,8 +216,8 @@ def test_when_classifying_a_result_fails_it_is_treated_as_untrusted():
         raise RuntimeError("boom")
 
     g = guard(load=explode)
-    out = g.transform_tool_result(tool_name="kanban_show", args={}, result="card", session_id="s1", turn_id="t1")
-    assert out.startswith('<untrusted source="kanban_show">')
+    out = g.transform_tool_result(tool_name="clarify", args={}, result="answer", session_id="s1", turn_id="t1")
+    assert out.startswith('<untrusted source="clarify">')
     assert g.is_tainted("s1", "t1")
 
 
@@ -227,8 +226,11 @@ def test_when_classifying_a_result_fails_it_is_treated_as_untrusted():
     [
         ("team-kit-gh project", True),
         ("team-kit-gh report-status --repo acme/shop-web --issue 7", True),
-        ("team-kit-gh launch --repo acme/shop-web --issue 7 --size small", True),
-        ("~/.hermes/bin/team-kit-gh open-issue --repo acme/shop-web --card t_1 --size small --brief-file ~/.hermes/team-kit/briefs/meo-beo/t_1.md", True),
+        ("team-kit-gh launch --repo acme/shop-web --issue 7", True),
+        ("~/.hermes/bin/team-kit-gh dispatch --repo acme/shop-web --unit t_1 --size small --brief-file ~/.hermes/team-kit/briefs/meo-beo/t_1.md", True),
+        ("team-kit-gh tick", True),
+        ("team-kit-gh status", True),
+        ("team-kit-gh open-issue --repo acme/shop-web --card t_1", False),
         ("team-kit-gh show --repo acme/shop-web --path .agents/dispatch.md", True),
         ("team-kit-admin status", False),
         ("gh issue create -R acme/shop-web --title x", False),
@@ -268,8 +270,8 @@ def test_a_project_bot_writes_only_its_own_briefs():
         ("team-kit-admin status", None),
         ("~/.hermes/bin/team-kit-admin status", None),
         ("team-kit-admin add-project --bot meo-beo --project shop --repos acme/shop-web,acme/shop-api", "approve"),
-        ("team-kit-admin add-repo --project shop --repo acme/shop-web", "approve"),
-        ("team-kit-admin bootstrap-repo --project shop --repo acme/shop-web --backend claude", "approve"),
+        ("team-kit-admin setup-repo --project shop --repo acme/shop-web --backend claude", "approve"),
+        ("team-kit-admin add-repo --project shop --repo acme/shop-web", "block"),
         ("team-kit-admin protect --repo acme/shop-web --check check", "approve"),
         ("team-kit-admin activate --bot meo-beo", "approve"),
         ("team-kit-admin sync", "block"),
@@ -293,7 +295,7 @@ def test_the_bootstrap_bot_has_no_file_or_kanban_tools():
     assert g.pre_tool_call(tool_name="clarify", args={"question": "name?"}) is None
 
 
-@pytest.mark.parametrize("tool", ["execute_code_v2", "memory", "browser_navigate", "send_message", "image_generate"])
+@pytest.mark.parametrize("tool", ["kanban_create", "execute_code_v2", "memory", "browser_navigate", "send_message", "image_generate"])
 def test_a_project_bot_gets_only_its_roles_tools(tool):
     verdict = guard("meo-beo").pre_tool_call(tool_name=tool, args={})
     assert verdict["action"] == "block" and "may not use" in verdict["message"]
@@ -339,9 +341,9 @@ def test_a_project_bot_reads_only_its_briefs_and_the_kit(path, allowed):
 
 def test_a_cron_notice_delivered_as_a_turn_is_tainted():
     g = guard("meo-beo")
-    out = g.check_message(user_message="Cronjob Response: dispatch-status\nteam-kit notice: In flight: 1.", session_id="s1", turn_id="t9")
+    out = g.check_message(user_message="Cronjob Response: team-kit-status\nteam-kit notice: In flight: 1.", session_id="s1", turn_id="t9")
     assert "not a request from the owner" in out["context"]
-    assert g.pre_tool_call(tool_name="kanban_complete", args={}, session_id="s1", turn_id="t9")["action"] == "approve"
+    assert g.pre_tool_call(**{**terminal("team-kit-gh launch --repo acme/shop-web --issue 7"), "turn_id": "t9"})["action"] == "approve"
 
 
 def test_an_owner_message_is_not_tainted():

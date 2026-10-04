@@ -6,8 +6,8 @@ usage() {
 Usage: install.sh --ref COMMIT [--source URL_OR_DIR] [--bootstrap-bot NAME] [--model M] [--no-gateway]
 
 Install the team-kit Hermes module on this machine, pinned to one kit commit. Run it again
-with a new commit to move every bot to it; it keeps guard.yaml, bots.yaml, the webhook
-secret, job state, and anything in a profile it does not own.
+with a new commit to move every bot to it; it keeps guard.yaml, bots.yaml, job state, and
+anything in a profile it does not own.
 
   --ref COMMIT           Full 40-character kit commit. Each repository's .agents/dispatch.json
                          kit_ref must equal it before a project bot launches work there.
@@ -24,7 +24,6 @@ It writes, under ~/.hermes:
   team-kit/kit/            the kit at COMMIT; every bot's files come from here
   team-kit/guard.yaml      the policy, written once from hermes/templates/guard.yaml
   team-kit/bots.yaml       each bot's role, project, and repositories; only team-kit-admin writes it
-  team-kit/webhook-secret  generated once, mode 600
   bin/team-kit-gh          a project bot's only GitHub command
   bin/team-kit-admin       the bootstrap bot's only command
   profiles/<bot>/          for each bot in bots.yaml: SOUL.md, config, the guard plugin, its skill
@@ -90,9 +89,6 @@ bash "$here/../plugins/trust-ladder/skills/setup-cloud-agents/scripts/install-ki
 pkg=$kit/hermes
 [ -f "$pkg/bin/team_kit_admin.py" ] || die "kit $ref has no hermes/ module; pin a newer commit"
 
-if [ ! -f "$kit_home/webhook-secret" ]; then
-  (umask 077; "$py" -c 'import secrets; print(secrets.token_hex(32))' > "$kit_home/webhook-secret")
-fi
 if [ ! -f "$kit_home/guard.yaml" ]; then
   install -m 600 "$pkg/templates/guard.yaml" "$kit_home/guard.yaml"
   printf 'wrote %s; set trusted_authors to your GitHub login\n' "$kit_home/guard.yaml"

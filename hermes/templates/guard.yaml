@@ -1,6 +1,6 @@
 # team-kit guard policy for one machine. Lives at ~/.hermes/team-kit/guard.yaml.
-# Read by the team_kit_guard Hermes plugin on every tool call, and by team-kit-gh,
-# team-kit-admin, and the webhook triage script. If this file is missing or invalid,
+# Read by the team_kit_guard Hermes plugin on every tool call, and by team-kit-gh and
+# team-kit-admin. If this file is missing or invalid,
 # the guard blocks every tool call of every team-kit bot.
 #
 # Which Hermes profiles are bots, their roles, and each project's repositories live in
@@ -13,16 +13,12 @@ version: 2
 # max_in_flight in .agents/dispatch.json. A launch needs room under both.
 max_in_flight_total: 3
 
-# GitHub logins whose unit issues, pull requests, and reports count: the login each project
-# bot opens issues as, and the account the coding agent posts as (for Claude Code on the web,
-# usually the owner). Events by anyone else are ignored, so a copied marker cannot move a card.
-# team-kit-admin bootstrap-repo writes these logins into each repository's trusted_dispatchers.
+# GitHub logins whose unit issues and reports count: the login each project bot opens issues as,
+# and the account the coding agent posts as (for Claude Code on the web, usually the owner).
+# Reports by anyone else are ignored, so a copied report cannot move a unit.
+# team-kit-admin setup-repo writes these logins into each repository's trusted_dispatchers.
 trusted_authors:
   - OWNER-LOGIN
-
-# The public HTTPS address of this machine's webhook listener (port 8644 behind a tunnel or a
-# reverse proxy). team-kit-admin add-repo points each repository's GitHub webhook here.
-# webhook_base_url: https://hermes.example.ts.net
 
 # Refuse to open an issue whose body is not a parsed brief with the team-kit marker.
 require_brief_marker: true
@@ -60,9 +56,6 @@ deny:
 read_only_tools:
   - read_file
   - search_files
-  - kanban_show
-  - kanban_list
-  - kanban_attachments
   - skills_list
   - skill_view
   - session_search

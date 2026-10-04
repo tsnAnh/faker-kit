@@ -43,9 +43,8 @@ def test_installs_the_module_and_the_bootstrap_bot_pinned_to_the_commit(kit_sour
     assert (home / "skills" / "bootstrap").resolve() == (kit / "hermes" / "skills" / "bootstrap").resolve()
     assert not (root / "skills").exists(), "the host profile gets no team-kit skills"
 
-    secret = (root / "team-kit" / "webhook-secret").read_text().strip()
-    assert len(secret) == 64
-    assert stat.S_IMODE((root / "team-kit" / "webhook-secret").stat().st_mode) == 0o600
+    assert not (root / "team-kit" / "webhook-secret").exists(), "nothing listens, so there is no secret"
+    assert stat.S_IMODE((root / "team-kit").stat().st_mode) == 0o700
     assert yaml.safe_load((root / "team-kit" / "guard.yaml").read_text())["version"] == 2
     for name in ("team-kit-gh", "team-kit-admin"):
         wrapper = (root / "bin" / name).read_text()
@@ -53,21 +52,19 @@ def test_installs_the_module_and_the_bootstrap_bot_pinned_to_the_commit(kit_sour
     log = hermes_calls(root)
     assert ["-p", "default", "gateway", "install"] in log
     assert not any(c[2:4] == ["cron", "create"] for c in log), "the bootstrap bot has no jobs"
-    assert secret not in done.stdout + done.stderr
+    assert not (root / "config.yaml").exists(), "the host profile's config is never touched"
 
 
-def test_a_second_run_keeps_guard_yaml_bots_yaml_and_the_secret(kit_source, machine):
+def test_a_second_run_keeps_guard_yaml_and_bots_yaml(kit_source, machine):
     root, _ = machine
     assert install(kit_source, machine, "--no-gateway", "--bootstrap-bot", "ong-xay").returncode == 0
     guard = root / "team-kit" / "guard.yaml"
     guard.write_text(guard.read_text().replace("max_in_flight_total: 3", "max_in_flight_total: 5"))
-    secret = (root / "team-kit" / "webhook-secret").read_text()
     bots = (root / "team-kit" / "bots.yaml").read_text()
     (root / "profiles" / "ong-xay" / "SOUL.md").write_text("my own soul")
     done = install(kit_source, machine, "--no-gateway")
     assert done.returncode == 0, done.stderr
     assert "max_in_flight_total: 5" in guard.read_text()
-    assert (root / "team-kit" / "webhook-secret").read_text() == secret
     assert (root / "team-kit" / "bots.yaml").read_text() == bots
     assert (root / "profiles" / "ong-xay" / "SOUL.md.bak").read_text() == "my own soul"
     assert not any("gateway" in c for c in hermes_calls(root))

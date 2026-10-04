@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 """team-kit-gh: the only GitHub access a project bot has, and only for its own project's repositories.
 
-  project                                                   this bot's project, repositories, home repository, and running units
-  open-issue    --repo R --card C --size S --brief-file F   check the pin and the brief, open the issue
-  launch        --repo R --issue N --size S                 start the cloud coding agent for an opened unit
+  project                                                   this bot's project, repositories, and home repository
+  dispatch      --repo R --unit U --size S --brief-file F   open the unit's issue, then launch it or queue it
+  launch        --repo R --issue N                          launch one queued or gated unit now (the owner asked)
+  tick                                                      launch queued units, open gates, free slots; notices only
+  status                                                    the three-line digest, grouped by repository
   report-status --repo R --issue N                          the latest report's parsed header, nothing else
+  pr-state      --repo R --pr N                             state, merged, head SHA, and checks of a pull request
   read          --repo R --issue N | --pr N                 the body and comments (untrusted; the guard wraps it)
   show          --repo R --path P                           a file from the default branch (the owner's repo; trusted)
-  pr-state      --repo R --pr N                             state, merged, and head SHA of a pull request, nothing else
-  needs-human   --repo R --issue N                          add the agent:needs-human label
   kit-check     --repo R                                    compare this machine's kit commit with kit_ref
+
+GitHub holds every unit's state, as labels on its issue:
+
+  agent-task          queued: waiting for its dependencies or a free slot
+  agent:running       a cloud coding agent is working it
+  agent:review        the agent reported done and the checks passed; the owner merges
+  agent:needs-human   a gate: the agent stopped and needs the owner
+  (closed)            done: its pull request merged
 
 Which bot is running comes from the Hermes profile (HERMES_HOME). Which repositories it may
 touch comes from bots.yaml. The guard lets a project bot run this command and nothing else.
@@ -20,6 +29,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import datetime as dt
 import fcntl
 import json
 import os
@@ -45,6 +55,8 @@ from team_kit_contracts import (  # noqa: E402
     parse_brief,
     parse_depends,
     parse_report,
+    parse_size,
+    size_marker,
 )
 from team_kit_guard.policy import Bot, Policy, PolicyError, load_policy  # noqa: E402
 
@@ -53,13 +65,36 @@ SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
 REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
 RUNNING_LABEL = "agent:running"
+REVIEW_LABEL = "agent:review"
 HUMAN_LABEL = "agent:needs-human"
+SILENT = "[SILENT]"
+NOTICE = "team-kit notice:"
+# A running unit with no report this long after its launch is a gate: its session died. The same
+# for checks still pending this long after a done report.
+REPORT_DEADLINE_SECONDS = 24 * 3600
+# A done report on a pull request with no checks at all waits this long for workflows to register
+# before the unit counts as ready.
+NO_CHECKS_GRACE_SECONDS = 3600
+FAILED_CHECKS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
+PENDING_CHECKS = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 
 Runner = Callable[..., str]
 
 
 class Refused(Exception):
     pass
+
+
+class Unfit(Refused):
+    """A refusal about the unit itself, which only the owner can fix. tick opens a gate for it."""
+
+
+class Waiting(Refused):
+    """A refusal that only means "not yet": dependencies or a limit. The unit stays queued."""
+
+    def __init__(self, message: str, scope: str):
+        super().__init__(message)
+        self.scope = scope  # "unit", "repo", or "machine"
 
 
 def run_gh(args: list[str], input: str | None = None) -> str:
@@ -81,6 +116,37 @@ def kit_commit(policy: Policy) -> str:
     return done.stdout.strip()
 
 
+def reason(err: Exception) -> str:
+    text = str(err) if isinstance(err, (Refused, ContractError)) else f"unexpected {type(err).__name__}"
+    return text[:200]
+
+
+def labels_of(issue: dict) -> set[str]:
+    return {str(label.get("name", "")).lower() for label in issue.get("labels") or []}
+
+
+def timestamp(value: str | None) -> float | None:
+    try:
+        return dt.datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def checks_state(rollup) -> str:
+    """`passed`, `failed`, `pending`, or `none`, from a pull request's statusCheckRollup."""
+    states = []
+    for item in rollup or []:
+        conclusion = str(item.get("conclusion") or "").upper()
+        state = str(item.get("state") or "").upper()
+        status = str(item.get("status") or "").upper()
+        if conclusion in FAILED_CHECKS or state in FAILED_CHECKS:
+            return "failed"
+        states.append("pending" if (status and status != "COMPLETED") or state in PENDING_CHECKS else "passed")
+    if not states:
+        return "none"
+    return "pending" if "pending" in states else "passed"
+
+
 def in_flight(run: Runner, repo: str) -> int:
     issues = json.loads(run(["issue", "list", "-R", repo, "--label", RUNNING_LABEL, "--state", "open", "--json", "number", "--limit", "200"]))
     return len(issues)
@@ -88,10 +154,9 @@ def in_flight(run: Runner, repo: str) -> int:
 
 # Each project bot's GitHub login sees only its own repositories, so a bot cannot count another
 # project's running units. Instead every project bot writes its own count to in-flight/<bot>.json
-# whenever it counts (team-kit-gh project, which every drain runs first, and launch), and reads the
-# other bots' files for the machine total. team-kit-admin status, which sees every repository,
-# refreshes all of them. A launch holds a machine-wide lock from counting to labelling.
-# A count older than this is ignored: no cloud session runs that long.
+# whenever it counts, and reads the other bots' files for the machine total. team-kit-admin status,
+# which sees every repository, refreshes all of them. A launch holds a machine-wide lock from
+# counting to labelling. A count older than this is ignored: no cloud session runs that long.
 IN_FLIGHT_FRESH_SECONDS = 24 * 3600
 
 
@@ -134,13 +199,17 @@ class InFlight:
 
 
 class Gh:
-    def __init__(self, policy: Policy, bot: Bot, repo: str, run: Runner):
+    """One repository of the bot's project."""
+
+    def __init__(self, policy: Policy, bot: Bot, repo: str, run: Runner, now: Callable[[], float] = time.time):
         if bot.role != "project":
             raise Refused(f"{bot.name} is a {bot.role} bot; team-kit-gh is for project bots")
         if not bot.owns(repo):
             raise Refused(f"{repo} is not a repository of project {bot.project}")
-        self.policy, self.bot, self.run = policy, bot, run
+        self.policy, self.bot, self.run, self.now = policy, bot, run, now
         self.repo = next(r for r in bot.repos if r.lower() == repo.lower())
+
+    # reading ------------------------------------------------------------------------------------
 
     def file(self, path: str) -> str:
         if not REPO_PATH.match(path):
@@ -175,110 +244,298 @@ class Gh:
             raise Refused(f"Depends on names issues outside project {self.bot.project}: {', '.join(outside)}")
         return refs
 
-    def open_issue(self, card: str, size: str, brief_text: str, local_commit: str) -> dict:
-        if size not in UNIT_ATTEMPTS:
-            raise Refused(f"size must be one of {', '.join(UNIT_ATTEMPTS)}")
-        self.kit_check(local_commit)
-        standing = self.file(".agents/dispatch.md") if self.policy.require_brief_marker else None
-        brief = parse_brief(brief_text, standing_orders=standing)
-        if brief.card != card:
-            raise Refused(f"brief marker names card {brief.card}, not {card}")
-        refs = self.depends(brief)
-        url = self.run(["issue", "create", "-R", self.repo, "--title", brief.title, "--body", brief_text, "--label", TASK_LABEL]).strip()
-        number = int(url.rstrip("/").rsplit("/", 1)[-1])
-        return {"issue": number, "url": url, "card": card, "depends": [f"{r}#{n}" for r, n in refs]}
-
     def issue(self, number: int, repo: str | None = None) -> dict:
         return json.loads(self.run(["api", f"repos/{repo or self.repo}/issues/{int(number)}"]))
 
-    def waiting_for(self, refs: list[tuple[str, int]]) -> list[str]:
-        waiting = []
-        for repo, number in refs:
-            dep = self.issue(number, repo)
-            if dep.get("state") != "closed" or dep.get("state_reason") not in (None, "completed"):
-                waiting.append(f"{repo}#{number}")
-        return waiting
-
-    def launch(self, number: int, size: str, local_commit: str, cloud: Cloud, now: Callable[[], float] = time.time) -> dict:
-        if size not in UNIT_ATTEMPTS:
-            raise Refused(f"size must be one of {', '.join(UNIT_ATTEMPTS)}")
-        config = self.dispatch_config()
-        self.kit_check(local_commit, config)
-        issue = self.issue(number)
-        labels = {str(label.get("name", "")).lower() for label in issue.get("labels") or []}
-        author = str((issue.get("user") or {}).get("login") or "").lower()
-        if "pull_request" in issue or issue.get("state") != "open" or TASK_LABEL not in labels:
-            raise Refused(f"#{number} is not an open {TASK_LABEL} issue")
-        if RUNNING_LABEL in labels:
-            raise Refused(f"#{number} is already launched ({RUNNING_LABEL}); never launch a unit twice")
-        if author not in {str(d).lower() for d in config.get("trusted_dispatchers") or []}:
-            raise Refused(f"#{number} was written by {author or 'nobody'}, who is not in trusted_dispatchers")
-        brief = parse_brief(issue.get("body") or "")
-        waiting = self.waiting_for(self.depends(brief))
-        if waiting:
-            raise Refused(f"waiting for dependencies: {', '.join(waiting)} must be closed by a merged pull request")
-        limit = int(config.get("max_in_flight", 1))
-        argv = launch_argv(config["backend"], self.repo, number, size, config.get("codex_env"))
-        owner, name = self.repo.split("/")
-        workdir = self.policy.home / "checkouts" / f"{owner}__{name}" / str(number)
-        counter = InFlight(self.policy, self.bot, self.run, now)
-        with counter.lock():
-            counts = counter.count_own()
-            if counts[self.repo] >= limit:
-                raise Refused(f"repo limit: {limit} unit(s) already in flight in {self.repo} (max_in_flight); wait for one to merge")
-            total = sum(counts.values()) + counter.others()
-            if total >= self.policy.max_in_flight_total:
-                raise Refused(f"machine limit: {total} unit(s) already in flight on this machine (max_in_flight_total); wait for one to merge")
-            self.run(["issue", "edit", str(number), "-R", self.repo, "--add-label", RUNNING_LABEL])
-            counter.write({**counts, self.repo: counts[self.repo] + 1})
-        try:
-            session = cloud.start(config["backend"], self.repo, argv, workdir)
-        except Exception as err:
-            # Any failure, a missing `claude` binary included, must free the unit again.
-            self.run(["issue", "edit", str(number), "-R", self.repo, "--remove-label", RUNNING_LABEL])
-            counter.write(counts)
-            reason = str(err) if isinstance(err, (CloudError, Refused)) else type(err).__name__ + (f": {err.filename}" if getattr(err, "filename", None) else "")
-            raise Refused(f"launch failed: {reason}") from err
-        body = f"{LAUNCHED_MARKER}\nsession: {session}\nbackend: {config['backend']}\n"
-        self.run(["issue", "comment", str(number), "-R", self.repo, "--body", body])
-        return {"issue": number, "card": brief.card, "backend": config["backend"], "session": session}
+    def units(self, state: str = "open", search: str | None = None) -> list[dict]:
+        args = ["issue", "list", "-R", self.repo, "--label", TASK_LABEL, "--state", state,
+                "--json", "number,title,labels,createdAt,closedAt,stateReason", "--limit", "200"]
+        if search:
+            args += ["--search", search]
+        return sorted(json.loads(self.run(args)), key=lambda i: int(i["number"]))
 
     def comments(self, issue: int) -> list[dict]:
         return json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/issues/{issue}/comments"]))
 
-    def report_status(self, issue: int) -> dict:
-        authors = self.policy.trusted_authors
-        reports = [
-            c for c in self.comments(issue)
-            if (c.get("body") or "").lstrip().startswith(REPORT_MARKER) and ((c.get("user") or {}).get("login") or "").lower() in authors
-        ]
+    def trusted(self, comment: dict) -> bool:
+        return ((comment.get("user") or {}).get("login") or "").lower() in self.policy.trusted_authors
+
+    def last_launch(self, comments: list[dict]) -> int:
+        """The index of the latest trusted launch comment, or -1."""
+        found = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(LAUNCHED_MARKER) and self.trusted(c)]
+        return found[-1] if found else -1
+
+    def report_status(self, issue: int, comments: list[dict] | None = None, since_launch: bool = False) -> dict:
+        """The latest trusted report. With since_launch, only one posted after the latest launch counts,
+        so a relaunched unit is never judged by the report its previous agent left."""
+        comments = comments if comments is not None else self.comments(issue)
+        if since_launch:
+            comments = comments[self.last_launch(comments) + 1:]
+        reports = [c for c in comments if (c.get("body") or "").lstrip().startswith(REPORT_MARKER) and self.trusted(c)]
         if not reports:
             return {"issue": issue, "status": "none"}
         try:
             report = parse_report(reports[-1]["body"])
         except ContractError:
             return {"issue": issue, "status": "unreadable"}
-        pr_url = re.compile(rf"\Ahttps://github\.com/{re.escape(self.repo)}/pull/[0-9]+\Z", re.I)
+        pr_url = re.compile(rf"\Ahttps://github\.com/{re.escape(self.repo)}/pull/([0-9]+)\Z", re.I)
         return {
             "issue": issue,
             "status": report.status,
             "pr": report.pr if report.pr and pr_url.match(report.pr) else None,
             "head": report.head if report.head and SHORT_SHA.match(report.head) else None,
+            "at": reports[-1].get("created_at"),
         }
 
     def pr_state(self, pr: int) -> dict:
-        data = json.loads(self.run(["pr", "view", str(pr), "-R", self.repo, "--json", "state,mergedAt,headRefOid"]))
+        data = json.loads(self.run(["pr", "view", str(pr), "-R", self.repo, "--json", "state,mergedAt,headRefOid,statusCheckRollup"]))
         head = str(data.get("headRefOid") or "")
-        return {"pr": pr, "state": str(data.get("state", "")).lower(), "merged": bool(data.get("mergedAt")), "head": head if SHA.match(head) else None}
+        return {"pr": pr, "state": str(data.get("state", "")).lower(), "merged": bool(data.get("mergedAt")),
+                "head": head if SHA.match(head) else None, "checks": checks_state(data.get("statusCheckRollup"))}
 
     def read(self, issue: int | None, pr: int | None) -> str:
         kind, number = ("pr", pr) if pr else ("issue", issue)
         return self.run([kind, "view", str(number), "-R", self.repo, "--comments"])
 
-    def needs_human(self, issue: int) -> dict:
-        """The agent stopped (it reported, or never started), so its slot is freed for queued units."""
-        self.run(["issue", "edit", str(issue), "-R", self.repo, "--add-label", HUMAN_LABEL, "--remove-label", RUNNING_LABEL])
-        return {"issue": issue, "label": HUMAN_LABEL, "removed": RUNNING_LABEL}
+    # writing ------------------------------------------------------------------------------------
+
+    def relabel(self, issue: int, add: str | None = None, remove: tuple[str, ...] = ()) -> None:
+        args = ["issue", "edit", str(issue), "-R", self.repo]
+        if add:
+            args += ["--add-label", add]
+        for name in remove:
+            args += ["--remove-label", name]
+        self.run(args)
+
+    def dispatch(self, unit: str, size: str, brief_text: str, local_commit: str, cloud: Cloud) -> dict:
+        """Open the unit's issue, then launch it now or leave it queued for tick."""
+        if size not in UNIT_ATTEMPTS:
+            raise Refused(f"size must be one of {', '.join(UNIT_ATTEMPTS)}")
+        config = self.dispatch_config()
+        self.kit_check(local_commit, config)
+        standing = self.file(".agents/dispatch.md") if self.policy.require_brief_marker else None
+        brief = parse_brief(brief_text, standing_orders=standing)
+        if brief.card != unit:
+            raise Refused(f"brief marker names unit {brief.card}, not {unit}")
+        refs = self.depends(brief)
+        body = brief_text.rstrip("\n") + "\n\n" + size_marker(size) + "\n"
+        url = self.run(["issue", "create", "-R", self.repo, "--title", brief.title, "--body", body, "--label", TASK_LABEL]).strip()
+        number = int(url.rstrip("/").rsplit("/", 1)[-1])
+        out = {"issue": number, "url": url, "unit": unit, "depends": [f"{r}#{n}" for r, n in refs]}
+        try:
+            launched = self.launch(number, local_commit, cloud)
+        except Waiting as wait:
+            return {**out, "state": "queued", "why": str(wait)}
+        except Refused as err:
+            # The issue exists either way; tick retries it, so the bot never opens a second one.
+            return {**out, "state": "queued", "why": f"launch failed: {err}"}
+        return {**out, "state": "running", "session": launched["session"]}
+
+    def launch(self, number: int, local_commit: str, cloud: Cloud) -> dict:
+        config = self.dispatch_config()
+        self.kit_check(local_commit, config)
+        issue = self.launchable(number, config)
+        body = issue.get("body") or ""
+        try:
+            brief = parse_brief(body)
+            size = parse_size(body)
+            refs = self.depends(brief)
+        except (ContractError, Refused) as err:
+            raise Unfit(str(err)) from None
+        waiting, dropped = self.waiting_for(refs)
+        if dropped:
+            raise Unfit(f"dependency {', '.join(dropped)} was closed without merging; change the brief or reopen it")
+        if waiting:
+            raise Waiting(f"waiting for dependencies: {', '.join(waiting)} must be closed by a merged pull request", "unit")
+        argv = launch_argv(config["backend"], self.repo, number, size, config.get("codex_env"))
+        owner, name = self.repo.split("/")
+        workdir = self.policy.home / "checkouts" / f"{owner}__{name}" / str(number)
+        limit = int(config.get("max_in_flight", 1))
+        counter = InFlight(self.policy, self.bot, self.run, self.now)
+        with counter.lock():
+            # Read the labels again under the lock, so a chat launch and a tick never both start it.
+            labels = labels_of(self.launchable(number, config))
+            counts = counter.count_own()
+            if counts[self.repo] >= limit:
+                raise Waiting(f"repo limit: {limit} unit(s) already running in {self.repo} (max_in_flight)", "repo")
+            total = sum(counts.values()) + counter.others()
+            if total >= self.policy.max_in_flight_total:
+                raise Waiting(f"machine limit: {total} unit(s) already running on this machine (max_in_flight_total)", "machine")
+            self.relabel(number, add=RUNNING_LABEL, remove=(HUMAN_LABEL,) if HUMAN_LABEL in labels else ())
+            counter.write({**counts, self.repo: counts[self.repo] + 1})
+        try:
+            session = cloud.start(config["backend"], self.repo, argv, workdir)
+        except Exception as err:
+            # Any failure, a missing `claude` binary included, must free the unit again.
+            self.relabel(number, remove=(RUNNING_LABEL,))
+            counter.write(counts)
+            reason = str(err) if isinstance(err, (CloudError, Refused)) else type(err).__name__ + (f": {err.filename}" if getattr(err, "filename", None) else "")
+            raise Refused(f"launch failed: {reason}") from err
+        try:
+            self.run(["issue", "comment", str(number), "-R", self.repo, "--body", f"{LAUNCHED_MARKER}\nsession: {session}\nbackend: {config['backend']}\n"])
+        except Exception:  # noqa: BLE001 - the agent is running; a missing comment must not undo that
+            pass
+        return {"issue": number, "unit": brief.card, "backend": config["backend"], "session": session}
+
+    def launchable(self, number: int, config: dict) -> dict:
+        issue = self.issue(number)
+        labels = labels_of(issue)
+        author = str((issue.get("user") or {}).get("login") or "").lower()
+        if "pull_request" in issue or issue.get("state") != "open" or TASK_LABEL not in labels:
+            raise Unfit(f"#{number} is not an open {TASK_LABEL} issue")
+        if RUNNING_LABEL in labels:
+            raise Refused(f"#{number} is already launched ({RUNNING_LABEL}); never launch a unit twice")
+        if REVIEW_LABEL in labels:
+            raise Refused(f"#{number} is done and waits for the owner to merge ({REVIEW_LABEL})")
+        if author not in {str(d).lower() for d in config.get("trusted_dispatchers") or []}:
+            raise Unfit(f"#{number} was written by {author or 'nobody'}, who is not in trusted_dispatchers")
+        return issue
+
+    def waiting_for(self, refs: list[tuple[str, int]]) -> tuple[list[str], list[str]]:
+        """Dependencies still open, and those closed without completing."""
+        waiting, dropped = [], []
+        for repo, number in refs:
+            dep = self.issue(number, repo)
+            if dep.get("state") != "closed":
+                waiting.append(f"{repo}#{number}")
+            elif dep.get("state_reason") not in (None, "completed"):
+                dropped.append(f"{repo}#{number}")
+        return waiting, dropped
+
+    def gate(self, issue: dict, why: str) -> str:
+        """The agent stopped and needs the owner. Frees the unit's slot."""
+        running = RUNNING_LABEL in labels_of(issue)
+        self.relabel(int(issue["number"]), add=HUMAN_LABEL, remove=(RUNNING_LABEL,) if running else ())
+        return f"{NOTICE} {self.repo.split('/')[1]}#{issue['number']} needs you: {why}. https://github.com/{self.repo}/issues/{issue['number']}"
+
+    def check_running(self, issue: dict) -> str | None:
+        """One running unit: free its slot when its agent has finished. Returns a notice, or None."""
+        number = int(issue["number"])
+        comments = self.comments(number)
+        report = self.report_status(number, comments, since_launch=True)
+        status = report["status"]
+        if status == "none":
+            launch = self.last_launch(comments)
+            started = timestamp(comments[launch].get("created_at")) if launch >= 0 else timestamp(issue.get("createdAt"))
+            if started is not None and self.now() - started > REPORT_DEADLINE_SECONDS:
+                return self.gate(issue, "no report 24 hours after launch; check its session")
+            return None
+        if status != "done":
+            return self.gate(issue, f"the agent reported {status}")
+        if not report["pr"]:
+            return self.gate(issue, "the agent reported done without a pull request; open it from its session")
+        pr = self.pr_state(int(report["pr"].rsplit("/", 1)[1]))
+        reported = timestamp(report.get("at")) or self.now()
+        if pr["merged"]:
+            return self.gate(issue, f"{report['pr']} merged but the issue is still open; close it as completed")
+        if pr["state"] == "closed":
+            return self.gate(issue, f"{report['pr']} was closed without merging")
+        if pr["checks"] == "failed":
+            return self.gate(issue, f"checks failed on {report['pr']} after a done report")
+        waiting = pr["checks"] == "pending" or (pr["checks"] == "none" and self.now() - reported < NO_CHECKS_GRACE_SECONDS)
+        if waiting:
+            if self.now() - reported > REPORT_DEADLINE_SECONDS:
+                return self.gate(issue, f"checks on {report['pr']} are still pending a day after a done report")
+            return None
+        self.relabel(number, add=REVIEW_LABEL, remove=(RUNNING_LABEL,))
+        checks = "checks passed" if pr["checks"] == "passed" else "no checks ran"
+        return f"{NOTICE} {self.repo.split('/')[1]}#{number} is ready for you to merge ({checks}): {report['pr']}"
+
+
+class Project:
+    """Every repository of the bot's project, for tick and status."""
+
+    def __init__(self, policy: Policy, bot: Bot, run: Runner, now: Callable[[], float] = time.time):
+        self.policy, self.bot, self.run, self.now = policy, bot, run, now
+        self.repos = [Gh(policy, bot, repo, run, now) for repo in bot.repos]
+
+    def tick(self, local_commit: str, cloud: Cloud) -> list[str]:
+        notices: list[str] = []
+        problems: dict[str, str] = {}
+        queued: list[tuple[Gh, dict]] = []
+        for gh in self.repos:
+            try:
+                units = gh.units()
+            except Exception as err:  # noqa: BLE001 - one repository's trouble never stops the others
+                problems[gh.repo] = reason(err)
+                continue
+            for issue in units:
+                labels = labels_of(issue)
+                if RUNNING_LABEL in labels:
+                    try:
+                        notice = gh.check_running(issue)
+                    except Exception as err:  # noqa: BLE001
+                        problems[f"{gh.repo}#{issue['number']}"] = reason(err)
+                        continue
+                    if notice:
+                        notices.append(notice)
+                elif not labels & {REVIEW_LABEL, HUMAN_LABEL}:
+                    queued.append((gh, issue))
+        # Oldest first across the whole project, so no repository starves another.
+        queued.sort(key=lambda pair: (pair[1].get("createdAt") or "", pair[0].repo, int(pair[1]["number"])))
+        skip: set[str] = set()
+        for gh, issue in queued:
+            if gh.repo in skip:
+                continue
+            try:
+                gh.launch(int(issue["number"]), local_commit, cloud)
+            except Waiting as wait:
+                if wait.scope == "machine":
+                    break
+                if wait.scope == "repo":
+                    skip.add(gh.repo)
+            except Unfit as err:
+                notices.append(gh.gate(issue, f"it could not launch: {err}"))
+            except Exception as err:  # noqa: BLE001 - a pin mismatch or a GitHub hiccup is not the unit's fault
+                problems[gh.repo] = reason(err)
+                skip.add(gh.repo)
+        try:
+            # Refresh this bot's count for the other bots, whatever launched or did not.
+            InFlight(self.policy, self.bot, self.run, self.now).count_own()
+        except Exception as err:  # noqa: BLE001
+            problems["count"] = reason(err)
+        return notices + self.new_problems(problems)
+
+    def new_problems(self, problems: dict[str, str]) -> list[str]:
+        """A notice for each problem tick has not reported yet, so a lasting one is said once."""
+        path = self.policy.home / "tick" / f"{self.bot.name}.json"
+        try:
+            seen = json.loads(path.read_text())
+        except (OSError, ValueError):
+            seen = {}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(problems))
+        return [f"{NOTICE} tick could not handle {where}: {why}" for where, why in sorted(problems.items()) if seen.get(where) != why]
+
+    def status(self) -> list[str]:
+        marker = self.policy.home / "status" / f"{self.bot.name}.json"
+        try:
+            since = float(json.loads(marker.read_text())["at"])
+        except (OSError, ValueError, KeyError, TypeError):
+            since = self.now() - 24 * 3600
+        since_iso = dt.datetime.fromtimestamp(since, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        flight, waiting, done = [], [], []
+        for gh in self.repos:
+            short = gh.repo.split("/")[1]
+            for issue in gh.units():
+                labels, ref = labels_of(issue), f"{short}#{issue['number']} {issue['title']}"
+                if RUNNING_LABEL in labels:
+                    flight.append(f"{ref} (running)")
+                elif HUMAN_LABEL in labels:
+                    waiting.append(f"{ref} (gate)")
+                elif REVIEW_LABEL in labels:
+                    waiting.append(f"{ref} (merge)")
+                else:
+                    flight.append(f"{ref} (queued)")
+            for issue in gh.units("closed", search=f"closed:>={since_iso}"):
+                if (timestamp(issue.get("closedAt")) or 0) >= since and str(issue.get("stateReason") or "").upper() in ("", "COMPLETED"):
+                    done.append(f"{short}#{issue['number']} {issue['title']}")
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"at": self.now()}))
+        if not (flight or waiting or done):
+            return [SILENT]
+        line = lambda name, items: f"{NOTICE} {name}: {len(items)}. " + ("; ".join(items) if items else "none") + "."  # noqa: E731
+        return [line("In flight", flight), line("Waiting on you", waiting), line("Done since last", done)]
 
 
 def brief_text(policy: Policy, bot: Bot, path: str) -> str:
@@ -296,17 +553,15 @@ def brief_text(policy: Policy, bot: Bot, path: str) -> str:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="team-kit-gh")
     sub = top.add_subparsers(dest="command", required=True)
-    sub.add_parser("project")
-    for name in ("open-issue", "launch", "report-status", "read", "show", "pr-state", "needs-human", "kit-check"):
+    for name in ("project", "tick", "status"):
+        sub.add_parser(name)
+    for name in ("dispatch", "launch", "report-status", "read", "show", "pr-state", "kit-check"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--repo", required=True)
-        if name == "open-issue":
-            cmd.add_argument("--card", required=True)
+        if name == "dispatch":
+            cmd.add_argument("--unit", required=True)
             cmd.add_argument("--size", required=True, choices=list(UNIT_ATTEMPTS))
             cmd.add_argument("--brief-file", required=True)
-        elif name == "launch":
-            cmd.add_argument("--issue", type=int, required=True)
-            cmd.add_argument("--size", required=True, choices=list(UNIT_ATTEMPTS))
         elif name == "read":
             cmd.add_argument("--issue", type=int)
             cmd.add_argument("--pr", type=int)
@@ -314,49 +569,47 @@ def parser() -> argparse.ArgumentParser:
             cmd.add_argument("--path", required=True)
         elif name == "pr-state":
             cmd.add_argument("--pr", type=int, required=True)
-        elif name != "kit-check":
+        elif name in ("launch", "report-status"):
             cmd.add_argument("--issue", type=int, required=True)
     return top
 
 
-def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = None, cloud: Cloud | None = None, commit: Callable[[Policy], str] = kit_commit) -> int:
+def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = None, cloud: Cloud | None = None,
+         commit: Callable[[Policy], str] = kit_commit, now: Callable[[], float] = time.time) -> int:
     args = parser().parse_args(argv)
     try:
         policy = load_policy()
         me = policy.bot(bot or current_bot())
+        if me.role != "project":
+            raise Refused(f"{me.name} is a {me.role} bot; team-kit-gh is for project bots")
+        cloud = cloud or Cloud(run_gh=run)
         if args.command == "project":
-            if me.role != "project":
-                raise Refused(f"{me.name} is a {me.role} bot; team-kit-gh is for project bots")
-            out = {"bot": me.name, "project": me.project, "repos": list(me.repos), "home": me.home}
-            try:
-                out["in_flight"] = InFlight(policy, me, run).count_own()
-            except (Refused, ValueError) as err:
-                # No GitHub login yet, or GitHub is down. The project itself is still known.
-                out["in_flight"] = f"unknown: {err}"[:200]
-            print(json.dumps(out))
+            out: object = {"bot": me.name, "project": me.project, "repos": list(me.repos), "home": me.home}
+        elif args.command in ("tick", "status"):
+            project = Project(policy, me, run, now)
+            lines = project.tick(commit(policy), cloud) if args.command == "tick" else project.status()
+            print("\n".join(lines) if lines else SILENT)
             return 0
-        gh = Gh(policy, me, args.repo, run)
-        if args.command == "open-issue":
-            text = brief_text(policy, me, args.brief_file)
-            out = gh.open_issue(args.card, args.size, text, commit(policy))
-        elif args.command == "launch":
-            out = gh.launch(args.issue, args.size, commit(policy), cloud or Cloud(run_gh=run))
-        elif args.command == "report-status":
-            out = gh.report_status(args.issue)
-        elif args.command == "read":
-            if not (args.issue or args.pr):
-                raise Refused("read needs --issue or --pr")
-            print(gh.read(args.issue, args.pr))
-            return 0
-        elif args.command == "show":
-            print(gh.file(args.path), end="")
-            return 0
-        elif args.command == "pr-state":
-            out = gh.pr_state(args.pr)
-        elif args.command == "needs-human":
-            out = gh.needs_human(args.issue)
         else:
-            out = gh.kit_check(commit(policy))
+            gh = Gh(policy, me, args.repo, run, now)
+            if args.command == "dispatch":
+                out = gh.dispatch(args.unit, args.size, brief_text(policy, me, args.brief_file), commit(policy), cloud)
+            elif args.command == "launch":
+                out = gh.launch(args.issue, commit(policy), cloud)
+            elif args.command == "report-status":
+                out = {k: v for k, v in gh.report_status(args.issue).items() if k != "at"}
+            elif args.command == "read":
+                if not (args.issue or args.pr):
+                    raise Refused("read needs --issue or --pr")
+                print(gh.read(args.issue, args.pr))
+                return 0
+            elif args.command == "show":
+                print(gh.file(args.path), end="")
+                return 0
+            elif args.command == "pr-state":
+                out = gh.pr_state(args.pr)
+            else:
+                out = gh.kit_check(commit(policy))
     except (Refused, ContractError, PolicyError) as err:
         print(f"team-kit-gh: refused: {err}", file=sys.stderr)
         return 1

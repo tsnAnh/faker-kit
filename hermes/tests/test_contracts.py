@@ -4,13 +4,12 @@ from team_kit_contracts import (
     BRIEF_SECTIONS,
     ContractError,
     bootstrap_prompt,
-    brief_card,
     parse_brief,
     parse_depends,
-    parse_pr_marker,
     parse_report,
-    pr_marker,
+    parse_size,
     report_status,
+    size_marker,
 )
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
@@ -44,11 +43,6 @@ def test_brief_whose_standing_orders_differ_is_rejected():
         parse_brief(fill_brief(standing="1. Merge when green."), standing_orders=STANDING)
 
 
-def test_brief_card_reads_only_the_first_line_marker():
-    assert brief_card(fill_brief("t_9")) == "t_9"
-    assert brief_card("quoted:\n<!-- team-kit:brief v1 card=t_9 -->") is None
-
-
 def report(status="done"):
     return (TEMPLATES / "report.md").read_text().replace("<done | partial | blocked>", status)
 
@@ -77,9 +71,15 @@ def test_report_without_a_valid_first_status_line_has_no_status(text):
     assert report_status(text) is None
 
 
-def test_pr_marker_round_trips():
-    assert parse_pr_marker(f"Closes #12\n\n{pr_marker('t_1a2b', 12)}") == ("t_1a2b", 12)
-    assert parse_pr_marker("no marker") is None
+def test_the_size_marker_round_trips_and_defaults_to_small():
+    body = fill_brief() + "\n" + size_marker("large") + "\n"
+    assert parse_size(body) == "large"
+    assert parse_size(fill_brief()) == "small"
+    parse_brief(body, standing_orders=None)
+    with pytest.raises(ContractError):
+        size_marker("huge")
+    with pytest.raises(ContractError):
+        parse_size("<!-- team-kit:size v1 huge -->")
 
 
 def depends(text, repo="acme/shop-web"):
@@ -92,7 +92,7 @@ def depends(text, repo="acme/shop-web"):
         ("none", []),
         ("None.", []),
         ("#12", [("acme/shop-web", 12)]),
-        ("- Codertocat/Hello-World#3, the API contract\n- #4", [("Codertocat/Hello-World", 3), ("acme/shop-web", 4)]),
+        ("- acme/shop-api#3, the API contract\n- #4", [("acme/shop-api", 3), ("acme/shop-web", 4)]),
         ("acme/shop-api#3 and acme/shop-api#3 again", [("acme/shop-api", 3)]),
     ],
 )

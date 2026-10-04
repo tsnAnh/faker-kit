@@ -7,7 +7,7 @@ description: Work one unit a Hermes project bot handed to a cloud coding agent, 
 
 A Hermes project bot opened a GitHub issue that holds one unit of work, and started you with a prompt like `/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill` (Codex: `$faker-mode ...`). You are already in faker-mode. Do not invoke faker-mode again.
 
-Nobody is watching this session. The owner sees only your pull request and your report comment. Hermes reads only the report's status line and the pull request's marker.
+Nobody is watching this session. The owner sees only your pull request and your report comment. Hermes reads only the report's header lines and the pull request's checks.
 
 ## 1. Read the issue and check it is a brief
 
@@ -63,7 +63,7 @@ Open one pull request from your branch to the default branch, with the faker-mod
 Closes #<n>
 ```
 
-Hermes finds the unit through that marker. Without it the card waits forever.
+`Closes #<n>` makes the merge close the issue, which releases the units that depend on this one. The marker names the unit for anyone reading the pull request.
 
 Fix failing checks on your branch before you report. Never merge, approve, or enable auto-merge. The owner merges.
 
@@ -95,4 +95,4 @@ A Codex cloud task may not be allowed to push, open a pull request, or comment. 
 1. End the task with a final message holding the pull request title, the body with the PR marker and `Closes #<n>`, a summary of the diff, and the filled report with `status: partial`.
 2. If you can comment but not push, post that report on the issue too.
 
-The owner then opens the pull request from the task and keeps the PR marker in its body. Until then the card stays blocked "waiting for PR".
+The `partial` report opens a gate, and the owner opens the pull request from the task, keeping the PR marker and `Closes #<n>` in its body.

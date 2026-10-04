@@ -36,19 +36,8 @@ elif args[:2] == ["issue", "list"]:
 elif args[0] == "api":
     method = args[args.index("-X") + 1] if "-X" in args else "GET"
     path = next(a for a in args[1:] if a.startswith("repos/"))
-    hooks = load("hooks.json", {})
     repo = "/".join(path.split("/")[1:3])
-    if path.endswith("/hooks") and method == "GET":
-        print(json.dumps(hooks.get(repo, [])))
-    elif path.endswith("/hooks") and method == "POST":
-        hook = json.loads(body)
-        hook["id"] = len(hooks.get(repo, [])) + 1
-        hooks.setdefault(repo, []).append(hook)
-        save("hooks.json", hooks)
-        print(json.dumps(hook))
-    elif "/deliveries" in path:
-        print(json.dumps([{"status_code": 200}]))
-    elif path.endswith("/protection") and method == "PUT":
+    if path.endswith("/protection") and method == "PUT":
         protection = load("protection.json", {})
         protection[path] = json.loads(body)
         save("protection.json", protection)

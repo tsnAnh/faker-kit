@@ -10,13 +10,11 @@ HERMES = Path(__file__).resolve().parent.parent
 KIT = HERMES.parent
 TEMPLATES = KIT / "plugins" / "trust-ladder" / "templates" / "dispatch"
 GUARD_TEMPLATE = HERMES / "templates" / "guard.yaml"
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "github"
 
 for path in (HERMES / "lib", HERMES / "bin", HERMES / "plugin"):
     sys.path.insert(0, str(path))
 
-# The recorded GitHub payloads are for Codertocat/Hello-World, so that is the shop project's home.
-SHOP = ("Codertocat/Hello-World", "acme/shop-web", "acme/shop-mobile")
+SHOP = ("acme/shop-api", "acme/shop-web", "acme/shop-mobile")
 BOTS = {
     "version": 1,
     "bots": {
@@ -27,11 +25,8 @@ BOTS = {
 }
 
 
-def guard_text(url="https://hermes.example.ts.net"):
-    text = GUARD_TEMPLATE.read_text().replace("  - OWNER-LOGIN", "  - Codertocat\n  - meo-beo-gh")
-    if url:
-        text = text.replace("# webhook_base_url: https://hermes.example.ts.net", f"webhook_base_url: {url}")
-    return text
+def guard_text():
+    return GUARD_TEMPLATE.read_text().replace("  - OWNER-LOGIN", "  - Codertocat\n  - meo-beo-gh")
 
 
 @pytest.fixture
@@ -55,14 +50,6 @@ def kit(team_kit_home):
     git("init", "-q")
     git("commit", "-q", "--allow-empty", "-m", "kit")
     return git("rev-parse", "HEAD").stdout.strip()
-
-
-@pytest.fixture
-def payload():
-    def load(name):
-        return json.loads((FIXTURES / f"{name}.json").read_text())
-
-    return load
 
 
 def fill_brief(card="t_1a2b", standing=None, depends=None):
@@ -134,5 +121,5 @@ def gh_calls(root):
     return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
-def fill_guard(root, url="https://hermes.example.ts.net"):
-    (root / "team-kit" / "guard.yaml").write_text(guard_text(url))
+def fill_guard(root):
+    (root / "team-kit" / "guard.yaml").write_text(guard_text())

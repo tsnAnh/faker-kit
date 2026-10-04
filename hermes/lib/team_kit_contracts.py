@@ -1,4 +1,4 @@
-"""The text contracts between Hermes and the coding agent: brief, report, PR marker, launch command.
+"""The text contracts between Hermes and the coding agent: brief, unit size, report, launch command.
 
 Every reader here is deterministic. Nothing in this module calls a model or the network.
 """
@@ -11,7 +11,6 @@ from dataclasses import dataclass
 BRIEF_MARKER = re.compile(r"\A<!-- team-kit:brief v1 card=(?P<card>[A-Za-z0-9_-]+) -->[ \t]*$", re.M)
 REPORT_MARKER = "<!-- team-kit:report v1 -->"
 LAUNCHED_MARKER = "<!-- team-kit:launched v1 -->"
-PR_MARKER = re.compile(r"<!-- team-kit:pr v1 card=(?P<card>[A-Za-z0-9_-]+) issue=(?P<issue>[0-9]+) -->")
 
 BRIEF_SECTIONS = ("Goal", "Scope", "Context", "Acceptance", "Verify", "Timebox", "Forbidden", "Depends on", "Standing orders")
 REPORT_STATUSES = ("done", "partial", "blocked")
@@ -88,11 +87,6 @@ def parse_brief(text: str, standing_orders: str | None = None) -> Brief:
     return Brief(card=marker.group("card"), sections=sections)
 
 
-def brief_card(text: str) -> str | None:
-    marker = BRIEF_MARKER.match(text or "")
-    return marker.group("card") if marker else None
-
-
 def parse_depends(brief: Brief, repo: str) -> list[tuple[str, int]]:
     """The issues this unit waits for, from its Depends on section.
 
@@ -110,6 +104,25 @@ def parse_depends(brief: Brief, repo: str) -> list[tuple[str, int]]:
     if not found:
         raise ContractError("Depends on must be \"none\" or list issues as OWNER/REPO#n or #n")
     return found
+
+
+SIZE_MARKER = re.compile(r"^<!-- team-kit:size v1 (?P<size>[a-z]+) -->[ \t]*$", re.M)
+
+
+def size_marker(size: str) -> str:
+    """The line team-kit-gh dispatch appends to the issue body, so a later launch knows the unit's size."""
+    if size not in UNIT_ATTEMPTS:
+        raise ContractError(f"size must be one of {', '.join(UNIT_ATTEMPTS)}")
+    return f"<!-- team-kit:size v1 {size} -->"
+
+
+def parse_size(text: str) -> str:
+    """The unit's size from its issue body. An issue without the line gets the smallest."""
+    found = SIZE_MARKER.findall(text or "")
+    size = found[-1] if found else "small"
+    if size not in UNIT_ATTEMPTS:
+        raise ContractError(f"size {size!r} is not one of {', '.join(UNIT_ATTEMPTS)}")
+    return size
 
 
 def parse_report(text: str) -> Report:
@@ -137,15 +150,6 @@ def report_status(text: str) -> str | None:
         return parse_report(text).status
     except ContractError:
         return None
-
-
-def pr_marker(card: str, issue: int) -> str:
-    return f"<!-- team-kit:pr v1 card={card} issue={issue} -->"
-
-
-def parse_pr_marker(text: str) -> tuple[str, int] | None:
-    match = PR_MARKER.search(text or "")
-    return (match.group("card"), int(match.group("issue"))) if match else None
 
 
 def launch_prompt(backend: str, repo: str, issue: int) -> str:

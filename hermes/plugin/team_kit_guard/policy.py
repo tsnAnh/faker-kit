@@ -6,7 +6,7 @@ bots.yaml; nothing else does. A bot's name is free: its role comes from bots.yam
 name.
 
 Pure logic, standard library plus PyYAML. The Hermes hook wiring lives in __init__.py. The
-team-kit-gh, team-kit-admin, and triage scripts import this module too, so every part of the
+team-kit-gh and team-kit-admin import this module too, so every part of the
 machine reads the same policy.
 """
 
@@ -26,7 +26,7 @@ BOTS_VERSION = 1
 ROLES = ("bootstrap", "project")
 
 DEFAULT_READ_ONLY_TOOLS = (
-    "read_file", "search_files", "kanban_show", "kanban_list", "kanban_attachments",
+    "read_file", "search_files",
     "skills_list", "skill_view", "session_search", "clarify", "todo_list",
     "web_search", "web_extract", "vision_analyze",
 )
@@ -35,7 +35,7 @@ READ_TOOLS = {"read_file": "path", "search_files": "path"}
 # Each role's tools, as globs over Hermes tool names. Anything else is blocked, whatever the
 # profile's toolsets or guard.yaml say, so a toolset change cannot widen a bot.
 ROLE_TOOLS = {
-    "project": ("kanban_*", "terminal", "read_file", "search_files", "write_file", "patch", "clarify",
+    "project": ("terminal", "read_file", "search_files", "write_file", "patch", "clarify",
                 "skills_list", "skill_view", "todo_*", "session_search"),
     "bootstrap": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search"),
 }
@@ -47,8 +47,8 @@ NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
 RESERVED_NAMES = frozenset({"default"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
-PROJECT_COMMANDS = ("project", "open-issue", "launch", "report-status", "read", "show", "pr-state", "needs-human", "kit-check")
-BOOTSTRAP_COMMANDS = ("status", "add-project", "add-repo", "bootstrap-repo", "protect", "activate")
+PROJECT_COMMANDS = ("project", "dispatch", "launch", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
+BOOTSTRAP_COMMANDS = ("status", "add-project", "setup-repo", "protect", "activate")
 BOOTSTRAP_READ_ONLY = ("status",)
 ARG = r"[A-Za-z0-9_./:#=@~,+-]+"
 
@@ -131,7 +131,6 @@ class Policy:
     trusted_authors: frozenset[str]
     max_in_flight_total: int
     require_brief_marker: bool = True
-    webhook_base_url: str | None = None
     bots: dict[str, Bot] = field(default_factory=dict)
     home: Path = field(default_factory=team_kit_home)
 
@@ -204,9 +203,6 @@ def parse_policy(data, bots=None, home: Path | None = None) -> Policy:
     total = data.get("max_in_flight_total")
     if not isinstance(total, int) or isinstance(total, bool) or total < 1:
         raise PolicyError("guard.yaml max_in_flight_total must be a whole number of 1 or more")
-    url = data.get("webhook_base_url")
-    if url is not None and not re.match(r"\Ahttps://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?\Z", str(url)):
-        raise PolicyError("guard.yaml webhook_base_url must be an https URL with no query string")
     return Policy(
         deny=tuple(_rule(e, "deny") for e in data.get("deny") or []),
         untrusted_readers=tuple(_rule(e, "untrusted_readers") for e in data.get("untrusted_readers") or []),
@@ -214,7 +210,6 @@ def parse_policy(data, bots=None, home: Path | None = None) -> Policy:
         trusted_authors=frozenset(str(a).lower() for a in data.get("trusted_authors") or []),
         max_in_flight_total=total,
         require_brief_marker=bool(data.get("require_brief_marker", True)),
-        webhook_base_url=str(url).rstrip("/") if url else None,
         bots=parse_bots(bots),
         home=home or team_kit_home(),
     )

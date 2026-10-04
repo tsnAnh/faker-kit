@@ -1,20 +1,15 @@
 """Hermes configuration adapter for install.sh and team-kit-admin: read YAML, write through the Hermes CLI.
 
-Every ordinary write goes through `hermes ... config set` and is read back, so a CLI that ignores
-or coerces a value is caught. A value that holds a secret, such as the webhook routes, never goes
-on a command line, where `ps` would show it: config_set_private writes that one key into the YAML
-file in place, atomically, keeping every other key and the file's mode. Error messages name the
-key, never the value.
+Every write goes through `hermes ... config set` and is read back, so a CLI that ignores or
+coerces a value is caught. Error messages name the key, never the value.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -85,25 +80,6 @@ def config_set(root: Path, profile: str, keys, value) -> None:
         raise InstallError(f"Hermes config set did not persist {profile}: {key} with the expected type/value")
 
 
-def config_set_private(root: Path, profile: str, keys, value) -> None:
-    path = profile_home(root, profile) / "config.yaml"
-    config = mapping(path)
-    node = config
-    for key in keys[:-1]:
-        child = node.setdefault(key, {})
-        if not isinstance(child, dict):
-            raise InstallError(f"expected mapping at {'.'.join(keys)} in {profile}")
-        node = child
-    node[keys[-1]] = value
-    tmp = path.with_name(f".{path.name}.team-kit.{os.getpid()}")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as out:
-        yaml.safe_dump(config, out, sort_keys=False, allow_unicode=True)
-    tmp.replace(path)
-    if value_at(mapping(path), keys) != value:
-        raise InstallError(f"could not write {profile}: {'.'.join(keys)}")
-
-
 def apply_profile(root: Path, profile: str, snippet: Path) -> None:
     current = mapping(profile_home(root, profile) / "config.yaml")
     if section(current, "gateway").get("standalone") is True:
@@ -120,33 +96,6 @@ def apply_profile(root: Path, profile: str, snippet: Path) -> None:
         updates.append((keys, value))
     for keys, value in updates:
         config_set(root, profile, keys, value)
-
-
-def webhook_updates(root: Path, name: str, route: dict, port: int = 8644) -> list[tuple[tuple[str, ...], Any]]:
-    """The host config writes that add route `name`. Refuses to shadow a route someone else owns.
-
-    The routes value holds every route's secret, so write it with config_set_private."""
-    host = mapping(root / "config.yaml")
-    webhook = section(host, "platforms", "webhook")
-    if name in mapping(root / "webhook_subscriptions.json"):
-        raise InstallError(f"conflicting dynamic webhook route {name}; left unchanged")
-    if not route.get("secret"):
-        raise InstallError("webhook-secret is empty; supply a nonempty HMAC secret before installing")
-    extra = section(webhook, "extra")
-    # Preserve both the direct spelling and the extra spelling accepted by Hermes.
-    # Extra takes precedence; do not silently shadow a conflicting owned route.
-    direct_routes, extra_routes = section(webhook, "routes"), section(extra, "routes")
-    for routes in (direct_routes, extra_routes):
-        existing = routes.get(name)
-        if existing is not None and (not isinstance(existing, dict) or any(
-                existing.get(key) != route[key] for key in ("profile", "script", "cron_job", "secret"))):
-            raise InstallError(f"conflicting host webhook route {name}; left unchanged")
-    routes = {**direct_routes, **extra_routes, name: route}
-    updates: list[tuple[tuple[str, ...], Any]] = [(("platforms", "webhook", "enabled"), True)]
-    if "port" not in extra and "port" not in webhook:
-        updates.append((("platforms", "webhook", "extra", "port"), port))
-    updates.append((("platforms", "webhook", "extra", "routes"), routes))
-    return updates
 
 
 def cron_jobs(text: str) -> dict[str, dict]:
