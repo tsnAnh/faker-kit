@@ -28,7 +28,7 @@ for p in trust-ladder pstack team-workflows thermos continual-learning cli-for-a
 pi install git:github.com/tsnAnh/team-kit
 ```
 
-**Hermes**, to dispatch work to cloud agents from Hermes Desktop. From a clone of this repository, run `bash plugins/trust-ladder/hermes/install.sh --ref <commit>`. See [Dispatch work with Hermes](docs/how-to/dispatch-with-hermes.md).
+**Hermes**, to dispatch work to cloud agents from Hermes Desktop. From a clone of this repository, run `bash hermes/install.sh --ref <commit> --bootstrap-bot <name>`, then ask the bootstrap bot for a project. See [Dispatch work with Hermes](docs/how-to/dispatch-with-hermes.md).
 
 Then type `/start-here` (Codex: `$start-here`, Pi: `/skill:start-here`). Details, team-wide setup, and updating: [Install the kit](docs/how-to/install.md).
 

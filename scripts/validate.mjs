@@ -94,6 +94,27 @@ function checkSkills(pluginNames) {
   }
 }
 
+// Hermes skills load only in team-kit bots, never in coding agents, so they live outside plugins/.
+// They follow the trust-ladder naming rules and must not shadow any plugin skill.
+function checkHermesSkills(pluginNames) {
+  const pluginSkills = new Set(pluginNames.flatMap((p) => skillDirs(path.join(ROOT, "plugins", p)).map((d) => path.basename(d))));
+  for (const dir of skillDirs(path.join(ROOT, "hermes"))) {
+    const file = path.join(dir, "SKILL.md");
+    const fields = parseFrontmatter(fs.readFileSync(file, "utf8"));
+    const where = rel(file);
+    const dirName = path.basename(dir);
+    if (!fields) {
+      report(where, "missing YAML frontmatter");
+      continue;
+    }
+    if (fields.name !== dirName) report(where, `name "${fields.name}" must equal directory "${dirName}"`);
+    if (!SKILL_NAME.test(fields.name ?? "")) report(where, `name "${fields.name}" must be lowercase letters, digits, and single hyphens`);
+    if (!fields.description) report(where, "frontmatter has no description");
+    if ((fields.description ?? "").length > 1024) report(where, "description is longer than 1024 characters");
+    if (pluginSkills.has(dirName)) report(where, `skill "${dirName}" is also a plugin skill; give the Hermes skill another name`);
+  }
+}
+
 function checkPiManifest() {
   const pkg = readJson("package.json");
   if (!pkg.keywords?.includes("pi-package")) report("package.json", 'keywords must include "pi-package"');
@@ -107,12 +128,13 @@ function checkOwnMarkdown() {
   const files = [
     ...markdownFiles(path.join(ROOT, "plugins", OWN_PLUGIN)),
     ...markdownFiles(path.join(ROOT, "docs")),
+    ...markdownFiles(path.join(ROOT, "hermes")),
     ...["README.md", "AGENTS.md", "NOTICE.md"].map((f) => path.join(ROOT, f)).filter((f) => fs.existsSync(f)),
   ];
   for (const file of files) checkLinks(file);
 }
 
-const OWN_ROOTS = ["README.md", "NOTICE.md", "AGENTS.md", "CLAUDE.md", "package.json", ".claude-plugin", ".github", "docs", "site", "deploy", "scripts", `plugins/${OWN_PLUGIN}`, "upstream/agent-hooks"];
+const OWN_ROOTS = ["README.md", "NOTICE.md", "AGENTS.md", "CLAUDE.md", "package.json", ".claude-plugin", ".github", "docs", "site", "deploy", "scripts", `plugins/${OWN_PLUGIN}`, "hermes", "upstream/agent-hooks"];
 
 function textFiles(full) {
   if (!fs.existsSync(full)) return [];
@@ -155,6 +177,7 @@ function checkOwnPathReferences() {
 function main() {
   const pluginNames = checkMarketplace();
   checkSkills(pluginNames);
+  checkHermesSkills(pluginNames);
   checkPiManifest();
   checkOwnMarkdown();
   checkOwnPathReferences();

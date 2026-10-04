@@ -32,8 +32,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Hermes dispatch guard, webhook triage, contracts, and install
-        run: pip install pytest pyyaml && python -m pytest plugins/trust-ladder/hermes
+      - name: Hermes module guard, commands, webhook triage, and install
+        run: pip install pytest pyyaml && python -m pytest hermes
       - name: pstack script tests
         working-directory: plugins/pstack/skills/faker-mode/scripts
         run: bun install --frozen-lockfile && bun test orch watch-pr

@@ -1,9 +1,0 @@
-# Merged into ~/.hermes/profiles/launcher/config.yaml by install.sh. Keys here win.
-# The model is set separately: install.sh --launcher-model, or
-# `hermes -p launcher config set model.default <model>`. A cheap model is enough.
-toolsets: [kanban, terminal]
-approvals:
-  mode: manual
-  cron_mode: deny
-plugins:
-  enabled: [team_kit_guard]

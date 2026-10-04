@@ -3,6 +3,6 @@
   "kit_ref": "<full commit SHA of team-kit that both sides run>",
   "max_in_flight": 2,
   "forbidden_paths": [".github/workflows/", "infra/", "*.lock"],
-  "trusted_dispatchers": ["<owner's GitHub login>"],
+  "trusted_dispatchers": ["<project bot's GitHub login>", "<owner's GitHub login>"],
   "codex_env": "<Codex cloud environment id; only when backend is codex>"
 }

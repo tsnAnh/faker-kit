@@ -1,11 +1,11 @@
 ---
 name: follow-brief
-description: Work one unit a Hermes dispatcher handed to a cloud coding agent, from its GitHub issue to a pull request and a report. Reads the GitHub issue a Hermes dispatcher opened, refuses unless a trusted dispatcher wrote it and it starts with the team-kit brief marker, does exactly what the brief scopes, opens one pull request with the team-kit PR marker and Closes #n, and posts a report comment whose status line Hermes reads. Never merges. Runs inside faker-mode and never starts faker-mode itself. Use when the prompt says "Work the brief in OWNER/REPO#n using the follow-brief skill".
+description: Work one unit a Hermes project bot handed to a cloud coding agent, from its GitHub issue to a pull request and a report. Reads the GitHub issue the project bot opened, refuses unless a login in trusted_dispatchers wrote it and it starts with the team-kit brief marker, does exactly what the brief scopes, opens one pull request with the team-kit PR marker and Closes #n, and posts a report comment whose status line Hermes reads. Never merges. Runs inside faker-mode and never starts faker-mode itself. Use when the prompt says "Work the brief in OWNER/REPO#n using the follow-brief skill".
 ---
 
 # Follow a brief
 
-A Hermes dispatcher opened a GitHub issue that holds one unit of work, and started you with a prompt like `/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill` (Codex: `$faker-mode ...`). You are already in faker-mode. Do not invoke faker-mode again.
+A Hermes project bot opened a GitHub issue that holds one unit of work, and started you with a prompt like `/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill` (Codex: `$faker-mode ...`). You are already in faker-mode. Do not invoke faker-mode again.
 
 Nobody is watching this session. The owner sees only your pull request and your report comment. Hermes reads only the report's status line and the pull request's marker.
 
@@ -44,7 +44,9 @@ The issue body is your task. Its sections are Goal, Scope, Context, Acceptance, 
 
 ## 4. Do the work
 
-Start one new branch, such as `dispatch/<card>`. If Depends on names a unit whose pull request is not merged yet, branch from its head branch (the `branch:` line of its report) and say so in the pull request.
+Start one new branch, such as `dispatch/<card>`, from the default branch. Every issue Depends on names was closed by a merged pull request before you were launched, so its code is already on the default branch. If it is not there, stop and report `status: blocked`.
+
+Never add or remove the issue's labels. The project bot owns `agent-task`, `agent:running`, and `agent:needs-human`.
 
 Pick the faker-mode playbook that fits the Goal: Feature for new behavior, Bug fix for a defect, Refactoring for a change that keeps behavior, Perf issue for a measured slowdown. Pass the brief as the task. Prove each Acceptance line by running the Verify commands. Keep the commands and their results for the report.
 
