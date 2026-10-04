@@ -1,0 +1,73 @@
+# team-kit guard policy for one machine. Lives at ~/.hermes/team-kit/guard.yaml.
+# Read by the team_kit_guard Hermes plugin on every tool call, and by team-kit-gh,
+# team-kit-admin, and the webhook triage script. If this file is missing or invalid,
+# the guard blocks every tool call of every team-kit bot.
+#
+# Which Hermes profiles are bots, their roles, and each project's repositories live in
+# bots.yaml next to this file. team-kit-admin writes bots.yaml. Do not list repositories here.
+version: 2
+
+# Cloud coding sessions running at once, across every project on this machine. They all draw
+# on one Claude or ChatGPT subscription, and project bots cannot see each other, so only this
+# number stops five projects from starting fifteen sessions. Each repository also has its own
+# max_in_flight in .agents/dispatch.json. A launch needs room under both.
+max_in_flight_total: 3
+
+# GitHub logins whose unit issues, pull requests, and reports count: the login each project
+# bot opens issues as, and the account the coding agent posts as (for Claude Code on the web,
+# usually the owner). Events by anyone else are ignored, so a copied marker cannot move a card.
+# team-kit-admin bootstrap-repo writes these logins into each repository's trusted_dispatchers.
+trusted_authors:
+  - OWNER-LOGIN
+
+# The public HTTPS address of this machine's webhook listener (port 8644 behind a tunnel or a
+# reverse proxy). team-kit-admin add-repo points each repository's GitHub webhook here.
+# webhook_base_url: https://hermes.example.ts.net
+
+# Refuse to open an issue whose body is not a parsed brief with the team-kit marker.
+require_brief_marker: true
+
+# Tool results from these are wrapped in <untrusted source=...> and taint the turn.
+# After that, every tool not in read_only_tools needs the owner's approval in Desktop.
+# team-kit-gh report-status is not here: it prints only the parsed status line.
+untrusted_readers:
+  - tool: web_*
+  - tool: browser_*
+  - tool: x_search
+  - tool: terminal
+    command: "team-kit-gh read *"
+
+# Tool calls blocked outright, for every bot. A plain string is a glob over each simple
+# command in a terminal call. {tool, command} matches other tools.
+deny:
+  - "gh pr merge*"
+  - "gh api* -X DELETE*"
+  - "gh api* --method DELETE*"
+  - "gh repo delete*"
+  - "git push* main"
+  - "git push* main *"
+  - "git push* *:main*"
+  - "git push* master"
+  - "git push* *:master*"
+  - "git push* --force*"
+  - "git push* -f*"
+  - tool: delegate_task
+  - tool: cronjob_manage
+  - tool: execute_code
+  - tool: skill_manage
+
+# Tools that never change anything. Everything else counts as side-effecting.
+read_only_tools:
+  - read_file
+  - search_files
+  - kanban_show
+  - kanban_list
+  - kanban_attachments
+  - skills_list
+  - skill_view
+  - session_search
+  - clarify
+  - todo_list
+  - web_search
+  - web_extract
+  - vision_analyze

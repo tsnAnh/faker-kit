@@ -1,7 +1,7 @@
 <!-- team-kit:compat:start -->
 ## Running the upstream skills in Claude Code, Codex, and Pi
 
-The pstack, team-workflows, thermos, advisor, continual-learning, agent-compatibility, and teaching skills were written for another editor and are kept close to word for word. When one of them uses that editor's terms, do the equivalent below in the agent you are running in. The Hermes column is for the Hermes dispatch profiles, which run no coding skills.
+The pstack, team-workflows, thermos, advisor, continual-learning, agent-compatibility, and teaching skills were written for another editor and are kept close to word for word. When one of them uses that editor's terms, do the equivalent below in the agent you are running in. The Hermes column is for the bots of the kit's `hermes/` module (the bootstrap bot and the project bots), which run no coding skills.
 
 | The skill says | Claude Code | Codex | Pi | Hermes |
 |---|---|---|---|---|
@@ -21,14 +21,14 @@ The pstack, team-workflows, thermos, advisor, continual-learning, agent-compatib
 | The agent's built-in `create-skill` | The `skill-creator` skill, else the faker-mode "Authoring a skill" playbook | `$skill-creator` | The "Authoring a skill" playbook | Not used on the Hermes side |
 | The agent's built-in `babysit` | The faker-mode Babysit playbook | Same | Same | Not used on the Hermes side |
 | `/loop` | `/loop` | The faker-mode Autonomous run playbook | Same as Codex | Not used on the Hermes side |
-| Cloud agents, `environment: "cloud"` | Claude Code on the web sessions | Codex cloud tasks | A pi-subagents background run in its own worktree | The launcher runs `claude --cloud` or `codex cloud exec`, per `backend` in `.agents/dispatch.json` |
+| Cloud agents, `environment: "cloud"` | Claude Code on the web sessions | Codex cloud tasks | A pi-subagents background run in its own worktree | A Hermes project bot runs `claude --cloud` or `codex cloud exec` with `team-kit-gh launch`, per `backend` in `.agents/dispatch.json` |
 | Automations | Claude Code routines (`setup-routines`) | Codex app scheduled tasks, which run while that computer is on | A teammate's Claude Code routine or Codex scheduled task | Hermes cron jobs, which run while the gateway runs |
 | Bugbot, agentic security review | A review routine with a GitHub trigger, or Claude Code Review (`setup-review-bots`) | Codex code review, automatic or `@codex review` | The team's PR review bots | Not used on the Hermes side |
 | Custom Mode pin (`mode: true`) | trust-ladder's hook keeps `/faker-mode` on until you say "exit faker mode" | Same hook | trust-ladder's Pi extension does the same | Not used on the Hermes side |
 | Hooks, such as `afterFileEdit` and `stop` | Plugin hooks, through each plugin's `agent-hooks/` | The same, after you trust them with `/hooks` | Upstream hooks do not run. See Upstream hooks below | Hermes plugin hooks `pre_tool_call` and `transform_tool_result`, as in the `team_kit_guard` plugin |
 | Origin CLI | `gh` | `gh` | `gh` | `team-kit-gh`, in the dispatcher profile only |
 
-When you spawn `faker-agent`, start the prompt with `/faker-mode` (Claude Code) or `$faker-mode` (Codex). The `faker-mode` skill is `disable-model-invocation`, so the subagent cannot load it through the Skill tool; a user-style command is what runs it. Any prompt that hands work to a coding agent, such as the launch command a Hermes dispatcher writes, always starts with `/faker-mode` (Claude Code) or `$faker-mode` (Codex).
+When you spawn `faker-agent`, start the prompt with `/faker-mode` (Claude Code) or `$faker-mode` (Codex). The `faker-mode` skill is `disable-model-invocation`, so the subagent cannot load it through the Skill tool; a user-style command is what runs it. Any prompt that hands work to a coding agent, such as the cloud session `team-kit-gh launch` starts for a Hermes project bot, always starts with `/faker-mode` (Claude Code) or `$faker-mode` (Codex).
 
 ### Models
 

@@ -1,0 +1,16 @@
+# Merged into each project bot's profile config by team-kit-admin add-project. Keys here win;
+# lists are replaced, except plugins.enabled, which gains team_kit_guard.
+# The model is set separately: add-project --model M, or
+# `hermes -p NAME config set model.default <model>`.
+#
+# add-project also writes HERMES_KANBAN_BOARD=<project> to the profile's .env, so the bot's
+# Kanban tools see only its own project's board.
+toolsets: [kanban, terminal, file, clarify, skills]
+approvals:
+  mode: manual
+  cron_mode: deny
+plugins:
+  enabled: [team_kit_guard]
+kanban:
+  auto_decompose: false
+timezone: Asia/Saigon
