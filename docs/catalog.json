@@ -81,6 +81,8 @@
     "pstack/recall": { "layer": "4", "audience": ["engineer"], "prompt": "/recall the work i did yesterday on virtualization and then read this bug report", "mentioned": ["pt2"] },
     "pstack/arena": { "layer": "4", "audience": ["engineer"], "prompt": "/arena take my prompt to the arena verbatim. i want to compare their proposals with yours.", "mentioned": [] },
     "pstack/figure-it-out": { "layer": "4", "audience": ["engineer"], "prompt": "/faker-mode i'm stepping away. migrate every caller to the new async store; i want to trust it when i'm back.", "mentioned": [] },
+    "pstack/benchmark-checklist": { "layer": "4", "audience": ["engineer"], "prompt": "/benchmark-checklist vet the export benchmark before we report the speedup", "mentioned": [] },
+    "pstack/principle-explain-the-number": { "layer": "4", "audience": ["engineer"], "prompt": "explain the number: identify the limiter and rule out errors or skipped work before reporting this latency", "mentioned": [] },
     "pstack/tdd": { "layer": "4", "audience": ["engineer"], "prompt": "/tdd implement", "mentioned": [] },
     "pstack/show-me-your-work": { "layer": "4", "audience": ["engineer", "lead"], "prompt": "/show-me-your-work keep a decision trail i can review when i'm back", "mentioned": [] },
     "pstack/reflect": { "layer": "4", "audience": ["engineer"], "prompt": "/reflect that took too long. capture what we learned so the next run doesn't repeat it.", "mentioned": [] },

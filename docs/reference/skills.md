@@ -2,7 +2,7 @@
 
 # Skills
 
-Every skill in the kit: 96 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 98 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
@@ -77,6 +77,8 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 | [recall](../../plugins/pstack/skills/recall/SKILL.md) | pstack | Engineers | `/recall the work i did yesterday on virtualization and then read this bug report` | Reconstruct your recent working context from your own chat history, live state, and the shared record (user reports, prior fixes, incidents), then hand back a tight current-state brief. |
 | [arena](../../plugins/pstack/skills/arena/SKILL.md) | pstack | Engineers | `/arena take my prompt to the arena verbatim. i want to compare their proposals with yours.` | Spawn N parallel candidates at the same task, pick a base, graft the strongest parts of the losers into it. |
 | [figure-it-out](../../plugins/pstack/skills/figure-it-out/SKILL.md) | pstack | Engineers | `/faker-mode i'm stepping away. migrate every caller to the new async store; i want to trust it when i'm back.` | Design an auditable playbook when no narrower one fits: a large migration, an ambitious multi-part change, or work a human reviews after stepping away. |
+| [benchmark-checklist](../../plugins/pstack/skills/benchmark-checklist/SKILL.md) | pstack | Engineers | `/benchmark-checklist vet the export benchmark before we report the speedup` | Vet a perf measurement (limiter, tuning, limits, errors, repeatability, relevance, and whether the work happened) before you report or act on it. |
+| [principle-explain-the-number](../../plugins/pstack/skills/principle-explain-the-number/SKILL.md) | pstack | Engineers | `explain the number: identify the limiter and rule out errors or skipped work before reporting this latency` | Apply before you trust, report, or act on a number you measured: a speedup, a regression, a throughput, a latency, or an eval result. |
 | [tdd](../../plugins/pstack/skills/tdd/SKILL.md) | pstack | Engineers | `/tdd implement` | Use only when the user explicitly asks for TDD, a failing test, or a regression test, OR when the bug has an obvious cheap local test target. |
 | [show-me-your-work](../../plugins/pstack/skills/show-me-your-work/SKILL.md) | pstack | Engineers, Leads | `/show-me-your-work keep a decision trail i can review when i'm back` | Keep a reviewable decision trail for long-running or unattended work: a TSV log with one row per decision (what, why, evidence, result). |
 | [reflect](../../plugins/pstack/skills/reflect/SKILL.md) | pstack | Engineers | `/reflect that took too long. capture what we learned so the next run doesn't repeat it.` | Spawn three parallel review subagents over the active transcript, surface learnings, and route each to a concrete edit on an existing skill. |

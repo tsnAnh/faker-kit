@@ -32,7 +32,7 @@
 
 ## Principles
 
-pstack's 23 principles are skills that playbooks call by name, such as "the **prove-it-works** principle skill". Name one in a prompt to apply it on purpose.
+pstack's 24 principles are skills that playbooks call by name, such as "the **prove-it-works** principle skill". Name one in a prompt to apply it on purpose.
 
 | Principle | When to apply it |
 |---|---|
@@ -42,6 +42,7 @@ pstack's 23 principles are skills that playbooks call by name, such as "the **pr
 | [principle-encode-lessons-in-structure](../../plugins/pstack/skills/principle-encode-lessons-in-structure/SKILL.md) | Apply when you catch yourself writing the same instruction a second time, or notice a recurring correction. |
 | [principle-exhaust-the-design-space](../../plugins/pstack/skills/principle-exhaust-the-design-space/SKILL.md) | Apply when facing a novel UI interaction or architectural decision with no precedent in the codebase. |
 | [principle-experience-first](../../plugins/pstack/skills/principle-experience-first/SKILL.md) | Apply when product, UX, or feature-scope tradeoffs come up. |
+| [principle-explain-the-number](../../plugins/pstack/skills/principle-explain-the-number/SKILL.md) | Apply before you trust, report, or act on a number you measured: a speedup, a regression, a throughput, a latency, or an eval result. |
 | [principle-fix-root-causes](../../plugins/pstack/skills/principle-fix-root-causes/SKILL.md) | Apply when debugging. |
 | [principle-foundational-thinking](../../plugins/pstack/skills/principle-foundational-thinking/SKILL.md) | Apply before writing logic: choosing core types and data structures, sequencing scaffold-vs-feature work, asking what concurrent actors share. |
 | [principle-guard-the-context-window](../../plugins/pstack/skills/principle-guard-the-context-window/SKILL.md) | Apply when context is filling up: large outputs, long files, repeated reads, fan-out planning. |

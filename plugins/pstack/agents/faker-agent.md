@@ -1,6 +1,6 @@
 ---
 name: faker-agent
-description: Routing target for `/faker-mode` and any request for poteto's style. Resume an existing `faker-agent` for the conversation rather than spawning a sibling. Reads the `faker-mode` skill's `SKILL.md` in full before any work, including its inline Principles index. Substituting `generalPurpose` skips that read and drifts.
+description: Routing target for `/faker-mode` and any request for poteto's style. Spawn a fresh `faker-agent` for each new task, and resume one only in the strict cases that faker-mode's Subagents section names. Reads the `faker-mode` skill's `SKILL.md` in full before any work, including its inline Principles index. Substituting `generalPurpose` skips that read and drifts.
 is_background: true
 ---
 
