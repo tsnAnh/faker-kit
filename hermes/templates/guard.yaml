@@ -1,6 +1,6 @@
 # team-kit guard policy for one machine. Lives at ~/.hermes/team-kit/guard.yaml.
-# Read by the team_kit_guard Hermes plugin on every tool call, and by team-kit-gh and
-# team-kit-admin. If this file is missing or invalid,
+# Read by the team_kit_guard Hermes plugin on every tool call, and by team-kit-gh,
+# team-kit-admin, team-kit-chief, and team-kit-slack. If this file is missing or invalid,
 # the guard blocks every tool call of every team-kit bot.
 #
 # Which Hermes profiles are bots, their roles, and each project's one repository live in
@@ -22,6 +22,18 @@ trusted_authors:
 
 # Refuse to open an issue whose body is not a parsed brief with the team-kit marker.
 require_brief_marker: true
+
+# Optional outbound-only Slack relay. The relay connects to Slack Socket Mode over a WebSocket
+# it opens itself; it does not create a public route or a webhook. Put token values only in the
+# named environment variables, usually in the configured bot profile's .env.
+slack:
+  enabled: false
+  bot: meo-beo
+  channel_id: C0123456789
+  channel_name: team-kit
+  app_token_env: TEAM_KIT_SLACK_APP_TOKEN
+  bot_token_env: TEAM_KIT_SLACK_BOT_TOKEN
+  mirror_notices: false
 
 # Tool results from these are wrapped in <untrusted source=...> and taint the turn.
 # After that, every tool not in read_only_tools needs the owner's approval in Desktop.

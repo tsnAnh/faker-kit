@@ -46,7 +46,7 @@ def test_installs_the_module_and_the_bootstrap_bot_pinned_to_the_commit(kit_sour
     assert not (root / "team-kit" / "webhook-secret").exists(), "nothing listens, so there is no secret"
     assert stat.S_IMODE((root / "team-kit").stat().st_mode) == 0o700
     assert yaml.safe_load((root / "team-kit" / "guard.yaml").read_text())["version"] == 2
-    for name in ("team-kit-gh", "team-kit-admin", "team-kit-chief"):
+    for name in ("team-kit-gh", "team-kit-admin", "team-kit-chief", "team-kit-slack"):
         wrapper = (root / "bin" / name).read_text()
         assert str(kit / "hermes" / "bin") in wrapper and "TEAM_KIT_HOME" in wrapper
     log = hermes_calls(root)

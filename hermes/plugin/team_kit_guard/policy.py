@@ -6,8 +6,8 @@ bots.yaml; nothing else does. A bot's name is free: its role comes from bots.yam
 name.
 
 Pure logic, standard library plus PyYAML. The Hermes hook wiring lives in __init__.py. The
-team-kit-gh, team-kit-admin, and team-kit-chief import this module too, so every part of the
-machine reads the same policy.
+team-kit-gh, team-kit-admin, team-kit-chief, and team-kit-slack import this module too, so every
+part of the machine reads the same policy.
 """
 
 from __future__ import annotations
@@ -44,11 +44,14 @@ ROLE_TOOLS = {
 ROLE_COMMAND = {"project": "team-kit-gh", "bootstrap": "team-kit-admin", "chief": "team-kit-chief"}
 SEGMENT_SPLIT = re.compile(r"\|\||&&|[;|&\n]|\$\(|`|\)")
 ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
+ENV_NAME = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
 
 NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
 # `default` is the owner's own Hermes profile, whose home is ~/.hermes itself.
 RESERVED_NAMES = frozenset({"default"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+SLACK_CHANNEL_ID = re.compile(r"\A[CG][A-Z0-9]{2,}\Z")
+SLACK_CHANNEL_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,79}\Z")
 
 PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
 BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon")
@@ -131,6 +134,17 @@ class Bot:
 
 
 @dataclass(frozen=True)
+class SlackConfig:
+    enabled: bool
+    bot: str | None = None
+    channel_id: str | None = None
+    channel_name: str | None = None
+    app_token_env: str = "TEAM_KIT_SLACK_APP_TOKEN"
+    bot_token_env: str = "TEAM_KIT_SLACK_BOT_TOKEN"
+    mirror_notices: bool = False
+
+
+@dataclass(frozen=True)
 class Policy:
     deny: tuple[ToolRule, ...]
     untrusted_readers: tuple[ToolRule, ...]
@@ -138,6 +152,7 @@ class Policy:
     trusted_authors: frozenset[str]
     max_in_flight_total: int
     require_brief_marker: bool = True
+    slack: SlackConfig | None = None
     bots: dict[str, Bot] = field(default_factory=dict)
     home: Path = field(default_factory=team_kit_home)
 
@@ -163,6 +178,12 @@ def _rule(entry, where: str) -> ToolRule:
     if isinstance(entry, dict) and set(entry) <= {"tool", "command"} and entry:
         return ToolRule(tool=str(entry.get("tool", "terminal")), command=entry.get("command"))
     raise PolicyError(f"{where}: each entry is a command glob or {{tool, command}}")
+
+
+def _bool(value, where: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise PolicyError(f"{where} must be true or false")
 
 
 def parse_bots(data) -> dict[str, Bot]:
@@ -200,6 +221,47 @@ def parse_bots(data) -> dict[str, Bot]:
     return bots
 
 
+def parse_slack(data, bots: dict[str, Bot]) -> SlackConfig | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise PolicyError("guard.yaml slack must be a mapping")
+    allowed = {"enabled", "bot", "channel_id", "channel_name", "app_token_env", "bot_token_env", "mirror_notices"}
+    extra = sorted(set(data) - allowed)
+    if extra:
+        raise PolicyError(f"guard.yaml slack may hold only {', '.join(sorted(allowed))}; got {', '.join(extra)}")
+    enabled = _bool(data.get("enabled", False), "guard.yaml slack.enabled")
+    mirror = _bool(data.get("mirror_notices", False), "guard.yaml slack.mirror_notices")
+    app_token_env = str(data.get("app_token_env") or "TEAM_KIT_SLACK_APP_TOKEN")
+    bot_token_env = str(data.get("bot_token_env") or "TEAM_KIT_SLACK_BOT_TOKEN")
+    for key, value in (("app_token_env", app_token_env), ("bot_token_env", bot_token_env)):
+        if not ENV_NAME.match(value):
+            raise PolicyError(f"guard.yaml slack.{key} must be an environment variable name, not a token value")
+    bot = str(data.get("bot") or "")
+    channel_id = str(data.get("channel_id") or "")
+    channel_name = str(data.get("channel_name") or "").removeprefix("#")
+    if channel_id and not SLACK_CHANNEL_ID.match(channel_id):
+        raise PolicyError("guard.yaml slack.channel_id must be a Slack channel id like C012ABCDEF or G012ABCDEF")
+    if channel_name and not SLACK_CHANNEL_NAME.match(channel_name):
+        raise PolicyError("guard.yaml slack.channel_name must be a lowercase Slack channel name without #")
+    if enabled:
+        if not channel_id:
+            raise PolicyError("guard.yaml slack.channel_id is required when slack.enabled is true")
+        if not channel_name:
+            raise PolicyError("guard.yaml slack.channel_name is required when slack.enabled is true")
+        if bot not in bots:
+            raise PolicyError("guard.yaml slack.bot must name a bot from bots.yaml when slack.enabled is true")
+    return SlackConfig(
+        enabled=enabled,
+        bot=bot or None,
+        channel_id=channel_id or None,
+        channel_name=channel_name or None,
+        app_token_env=app_token_env,
+        bot_token_env=bot_token_env,
+        mirror_notices=mirror,
+    )
+
+
 def parse_policy(data, bots=None, home: Path | None = None) -> Policy:
     if isinstance(data, dict) and data.get("version") == 1:
         raise PolicyError(MIGRATE_V1)
@@ -208,6 +270,7 @@ def parse_policy(data, bots=None, home: Path | None = None) -> Policy:
     total = data.get("max_in_flight_total")
     if not isinstance(total, int) or isinstance(total, bool) or total < 1:
         raise PolicyError("guard.yaml max_in_flight_total must be a whole number of 1 or more")
+    parsed_bots = parse_bots(bots)
     return Policy(
         deny=tuple(_rule(e, "deny") for e in data.get("deny") or []),
         untrusted_readers=tuple(_rule(e, "untrusted_readers") for e in data.get("untrusted_readers") or []),
@@ -215,7 +278,8 @@ def parse_policy(data, bots=None, home: Path | None = None) -> Policy:
         trusted_authors=frozenset(str(a).lower() for a in data.get("trusted_authors") or []),
         max_in_flight_total=total,
         require_brief_marker=bool(data.get("require_brief_marker", True)),
-        bots=parse_bots(bots),
+        slack=parse_slack(data.get("slack"), parsed_bots),
+        bots=parsed_bots,
         home=home or team_kit_home(),
     )
 

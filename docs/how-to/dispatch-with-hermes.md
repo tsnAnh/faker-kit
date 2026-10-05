@@ -76,7 +76,7 @@ From a clone of the kit on that machine:
 bash hermes/install.sh --ref <kit commit> --bootstrap-bot <name>
 ```
 
-`--ref` is a full 40-character kit commit. Every repository's `kit_ref` must equal it. The script fetches the kit at that commit, writes `guard.yaml` once, installs `team-kit-gh` and `team-kit-admin` in `~/.hermes/bin/`, creates the bootstrap bot, refreshes every existing bot from the new kit, and restarts the gateway. Run it again with a new commit to move every bot to it, then ask the bootstrap bot to vendor the new commit into each project's repository (below).
+`--ref` is a full 40-character kit commit. Every repository's `kit_ref` must equal it. The script fetches the kit at that commit, writes `guard.yaml` once, installs `team-kit-gh`, `team-kit-admin`, `team-kit-chief`, and `team-kit-slack` in `~/.hermes/bin/`, creates the bootstrap bot, refreshes every existing bot from the new kit, and restarts the gateway. Run it again with a new commit to move every bot to it, then ask the bootstrap bot to vendor the new commit into each project's repository (below).
 
 Then edit `~/.hermes/team-kit/guard.yaml`:
 
@@ -86,6 +86,68 @@ Then edit `~/.hermes/team-kit/guard.yaml`:
 The bootstrap bot runs `gh` with its own login. Put a token with Administration, Issues, Contents, and Pull requests read and write on your repositories in `~/.hermes/profiles/<bootstrap bot>/.env` as `GH_TOKEN`, or sign `gh` in on the machine. Sign in the coding agent too: `claude` for Claude Code cloud, `codex` for Codex cloud.
 
 The installer works with macOS's bundled Bash 3. It needs a Python 3.9+ that can import PyYAML: it tries the Python in Hermes's shebang, then `python3` on `PATH`. Otherwise, install PyYAML in a helper Python and pass it as `HERMES_PYTHON`. Hermes configuration is changed only through `hermes config set` and read back.
+
+### Optional Slack relay
+
+Slack is a relay, not an authority. It opens one outbound Socket Mode WebSocket to Slack, listens only for app mentions in one configured channel, and delivers them to one project bot's Bot Chat as notices like:
+
+```text
+team-kit notice: proposal from @x in #team-kit: <untrusted source="slack:C123...">...</untrusted>
+```
+
+The notice taints the turn. The bot must not dispatch from it, and any side-effecting tool call would ask for your approval. To turn it on:
+
+1. In `~/.hermes/team-kit/guard.yaml`, set the `slack` block:
+
+   ```yaml
+   slack:
+     enabled: true
+     bot: meo-beo
+     channel_id: C0123456789
+     channel_name: team-kit
+     app_token_env: TEAM_KIT_SLACK_APP_TOKEN
+     bot_token_env: TEAM_KIT_SLACK_BOT_TOKEN
+     mirror_notices: false
+   ```
+
+   `channel_id` is the Slack channel id. `channel_name` is the display name used in notices. The token fields are variable names only; the guard rejects token-looking values.
+
+2. Put the token values in the configured bot profile's `.env`, not in chat or `guard.yaml`:
+
+   ```bash
+   printf '%s\n' \
+     'TEAM_KIT_SLACK_APP_TOKEN=<app-level-token>' \
+     'TEAM_KIT_SLACK_BOT_TOKEN=<bot-token>' \
+     >> ~/.hermes/profiles/meo-beo/.env
+   chmod 600 ~/.hermes/profiles/meo-beo/.env
+   ```
+
+   The app token needs Socket Mode. The bot token is needed only for optional outbound mirroring with `mirror_notices: true`.
+
+3. Validate without network:
+
+   ```bash
+   ~/.hermes/bin/team-kit-slack check
+   ```
+
+4. Install a user service. On Linux with systemd user services:
+
+   ```bash
+   mkdir -p ~/.config/systemd/user
+   ~/.hermes/bin/team-kit-slack service --format systemd > ~/.config/systemd/user/team-kit-slack.service
+   systemctl --user daemon-reload
+   systemctl --user enable --now team-kit-slack.service
+   ```
+
+   On macOS with launchd:
+
+   ```bash
+   mkdir -p ~/Library/LaunchAgents ~/.hermes/team-kit/logs
+   ~/.hermes/bin/team-kit-slack service --format launchd > ~/Library/LaunchAgents/team-kit.slack.plist
+   launchctl load -w ~/Library/LaunchAgents/team-kit.slack.plist
+   ```
+
+There is no public callback URL, inbound listener, webhook secret, or Slack text on a command line. To optionally copy Hermes notices back to Slack, enable `mirror_notices` and pipe a notice file through `team-kit-slack mirror --file <path>` from an operator-controlled script.
 
 ### 2. Each project
 
@@ -104,19 +166,19 @@ Then add the project bot in Bot Mode and ask it for one small change, such as a 
 
 None of these uses a model to decide. Each is code or configuration.
 
-1. **Desktop is the only way in.** No chat platform and no webhook is connected. The machine listens to nothing from outside.
+1. **No public way in.** Hermes needs no inbound route, public callback, tunnel, or webhook. The optional Slack relay is outbound-only Socket Mode and produces untrusted notices, not commands.
 2. **Roles come from one file.** The guard looks up the calling profile in `bots.yaml`. A profile that is not there gets nothing. Each role has a fixed list of tools, whatever its toolsets say. A project bot may run only `team-kit-gh`, write only its own briefs, and read only its briefs and the kit, so it cannot read a token or another bot's files. The bootstrap bot may run only `team-kit-admin`, and every command but `status` waits for your approval.
 3. **Projects are walled off.** `team-kit-gh` works only on the bot's own repository, including in a brief's Depends on, and each bot's GitHub token covers only that repository.
 4. **The guard fails closed.** The `team_kit_guard` plugin checks every tool call against `guard.yaml` and `bots.yaml`. Merges, pushes to `main`, force-pushes, and deletes are denied for every bot. Any error, a timeout, or a missing or invalid file blocks the call.
-5. **Untrusted text is marked.** Output from `team-kit-gh read` and web tools arrives wrapped in `<untrusted source=...>` and taints the turn. After that, every tool that changes something asks you to approve it in Desktop.
+5. **Untrusted text is marked.** Output from `team-kit-gh read`, web tools, and optional Slack proposals arrives wrapped in `<untrusted source=...>` and taints the turn. After that, every tool that changes something asks you to approve it in Desktop.
 6. **Briefs come only from you and the repository.** The coding agent works only issues written by a login in `trusted_dispatchers` that start with the brief marker. `dispatch` reads a brief only from the bot's own briefs directory.
-7. **The scheduled jobs decide nothing.** `tick` and `status` are code. Their output reaches Bot Chat as notices, and the guard taints any turn that contains one, so a notice cannot make the bot act.
+7. **Notices decide nothing.** `tick` and `status` are code. Their output reaches Bot Chat as notices, and the Slack relay also produces only notices. The guard taints any turn that contains one, so a notice cannot make the bot act.
 8. **Checks and a human merge.** A unit is ready to merge only when its pull request's checks pass. Only you merge.
 9. **An andon cord stops the line.** One for each project and one for the machine. While either is pulled, nothing new starts, and cloud agents at work stop before their next push. Closing the GitHub issue never clears it; only a Hermes command does.
 
 ## What you do
 
-- **State work** in a project bot's Bot Chat, and confirm the units it restates.
+- **State work** in a project bot's Bot Chat, and confirm the units it restates. A Slack mention is only a proposal notice; restate the work in Desktop before dispatching.
 - **Answer gates.** You get one line saying why. Read the report on the issue, put your answer in the issue body under Context, and ask the bot to launch it again, or tell it to change the plan.
 - **Merge** pull requests you get a "ready to merge" line for. Each carries a risk label and its reasons, scored by rules in code from what the pull request changed: `risk:high` for sensitive paths (auth, migrations, payments, CI, infrastructure, secrets) or a large change, `risk:medium` for dependencies, config, removed tests, weaker verification, or no checks. Read the high ones yourself, or ask a suggested reviewer; Hermes never approves or requests a review. Add your repository's own sensitive paths as `risk_paths_high` or `risk_paths_medium` in `.agents/dispatch.json`.
 - **Pull the andon cord** when something is going wrong: tell a project bot "stop", or the bootstrap bot "stop everything". The bot runs `team-kit-gh andon raise <reason>` (or `team-kit-admin andon raise <reason>`), which opens an `agent:andon` issue that every agent at work checks before it pushes. You can open such an issue on GitHub yourself, too; the next tick adopts it. Agents that stop post a `blocked` report, so each becomes a gate. When it is fixed, ask the bot to clear the cord and to relaunch the gated units.
@@ -139,8 +201,9 @@ Each project bot's `team-kit-status` job sends three lines at 9:00, 13:00, and 1
 - **Desktop keeps asking you to approve tool calls.** That turn read untrusted text. Approve only a call you asked for. Otherwise deny it and ask again in a new turn.
 - **Approvals never appear.** `approvals.mode` is `off`, or Hermes runs with `--yolo`. Set it to `manual` or `smart`. With `off`, Hermes approves the guard's requests by itself.
 - **No scheduled work runs.** A new project's jobs stay paused until `team-kit-admin activate`. Check with `hermes -p <project bot> cron list --all`, and manage the shared gateway with `hermes gateway status` from the default profile.
+- **Slack mentions do not arrive.** Run `team-kit-slack check`, confirm `slack.enabled`, the bot profile's `.env` token variable names, and the channel id. Then check the user service logs. Do not add a Slack webhook or public route.
 
 ## Where this differs from the design
 
 - **Polling, not webhooks.** Updates arrive on the next tick, up to 30 minutes later, instead of at once. In exchange the machine needs no public address, tunnel, or webhook secret, and a missed event can never strand a unit: every tick reads the current state.
-- **Gates and digests go to Bot Chat.** Hermes delivers scheduled job output to `bot-chat:<profile>` and cannot target another named session. That delivery arrives as a turn the bot answers, so every delivered line starts with `team-kit notice:`, and the guard taints any turn that contains it.
+- **Gates, digests, and Slack proposals go to Bot Chat.** Hermes delivers scheduled job output to `bot-chat:<profile>` and cannot target another named session. The Slack relay uses the same Bot Chat path. That delivery arrives as a turn the bot answers, so every delivered line starts with `team-kit notice:`, and the guard taints any turn that contains it.

@@ -27,6 +27,7 @@ It writes, under ~/.hermes:
   bin/team-kit-gh          a project bot's only GitHub command
   bin/team-kit-admin       the bootstrap bot's only command
   bin/team-kit-chief       the chief of staff's only command; it only reads
+  bin/team-kit-slack       the outbound-only Slack Socket Mode relay command
   profiles/<bot>/          for each bot in bots.yaml: SOUL.md, config, the guard plugin, its skill
 USAGE
 }
@@ -100,7 +101,7 @@ fi
 
 # The wrappers run the pinned kit's commands with the helper Python. %q quotes paths that
 # contain spaces or shell metacharacters.
-for name in gh admin chief; do
+for name in gh admin chief slack; do
   printf '#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%q\nexec %q %q "$@"\n' \
     "$kit_home" "$py" "$pkg/bin/team_kit_$name.py" > "$root/bin/team-kit-$name"
   chmod 755 "$root/bin/team-kit-$name"

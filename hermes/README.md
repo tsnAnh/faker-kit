@@ -8,7 +8,7 @@ It does one level of the kit's [Run many agents](../docs/how-to/run-many-agents.
 
 ## How it keeps track
 
-GitHub holds every unit's state, as labels on its issue: `agent-task` (queued), `agent:running`, `agent:verifying` (done and checks passed; a separate verifier session is checking the pull request), `agent:review` (verified, the owner merges), and `agent:needs-human` (a gate). A closed issue is done. An open issue labelled `agent:andon` is the andon cord: while it, or the machine's cord, is pulled, nothing new starts and cloud agents at work stop at their next push. Only `team-kit-gh andon clear` (a project) or `team-kit-admin andon clear` (the machine) clears it; closing the issue on GitHub does not. One open issue labelled `agent:security` collects the daily security reviews of the default branch, and an issue labelled `agent:incident` tracks each incident the `team-kit-incidents` job finds by polling the default branch's checks and the project's health URLs. There is no Kanban board, no webhook, and no public address: each project bot's `team-kit-tick` job runs `team-kit-gh tick` every 30 minutes, which reads the labels and reports, launches what can start, and opens gates, all in code.
+GitHub holds every unit's state, as labels on its issue: `agent-task` (queued), `agent:running`, `agent:verifying` (done and checks passed; a separate verifier session is checking the pull request), `agent:review` (verified, the owner merges), and `agent:needs-human` (a gate). A closed issue is done. An open issue labelled `agent:andon` is the andon cord: while it, or the machine's cord, is pulled, nothing new starts and cloud agents at work stop at their next push. Only `team-kit-gh andon clear` (a project) or `team-kit-admin andon clear` (the machine) clears it; closing the issue on GitHub does not. One open issue labelled `agent:security` collects the daily security reviews of the default branch, and an issue labelled `agent:incident` tracks each incident the `team-kit-incidents` job finds by polling the default branch's checks and the project's health URLs. There is no Kanban board, no webhook, and no public address: each project bot's `team-kit-tick` job runs `team-kit-gh tick` every 30 minutes, which reads the labels and reports, launches what can start, and opens gates, all in code. The optional Slack relay is outbound-only Socket Mode; it turns mentions into untrusted `team-kit notice:` proposals in Bot Chat and never dispatches work itself.
 
 ## Install
 
@@ -32,9 +32,11 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `bin/team_kit_admin.py` | `team-kit-admin`: the bootstrap bot's only command, and the installer's helper | `~/.hermes/bin/team-kit-admin` (a wrapper) |
 | `bin/team_kit_gh.py` | `team-kit-gh`: a project bot's only GitHub access, and what its jobs run | `~/.hermes/bin/team-kit-gh` (a wrapper) |
 | `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and changes nothing | `~/.hermes/bin/team-kit-chief` (a wrapper) |
+| `bin/team_kit_slack.py` | `team-kit-slack`: the optional outbound-only Slack Socket Mode relay | `~/.hermes/bin/team-kit-slack` (a wrapper) |
 | `lib/team_kit_contracts.py` | The brief, size, report, and launch markers, and the cloud command lines | read from the kit checkout |
 | `lib/team_kit_cloud.py` | Starts a `claude --cloud` or `codex cloud exec` session and waits for its id | read from the kit checkout |
 | `lib/team_kit_andon.py` | The andon cords: the local records, and the `agent:andon` issue body | read from the kit checkout |
+| `lib/team_kit_slack_relay.py` | Slack Socket Mode, Bot Chat delivery, service unit generation, and optional notice mirroring | read from the kit checkout |
 | `lib/team_kit_risk.py` | The risk score of a ready pull request and its suggested reviewers, from rules in code | read from the kit checkout |
 | `lib/install_config.py` | Reads Hermes config, writes it only through `hermes config set` | read from the kit checkout |
 | `plugin/team_kit_guard/` | The Hermes plugin that checks every tool call against `guard.yaml` and `bots.yaml` | each bot's `plugins/` |
@@ -54,6 +56,7 @@ Under `~/.hermes/team-kit/`:
 - `verify/<bot>/`, one private record per verifier: its commit and the key that signs its verdict.
 - `incidents/<bot>.json`, each open incident, its triage session's key, and the last green commit.
 - `security/<bot>.json`, the last commit a security review covered, and the running review's range and key.
+- `slack/`, transient `team-kit-slack` Bot Chat notice files, deleted after delivery.
 - `checkouts/`, shallow clones `claude --cloud` starts from. Pruned after 3 days.
 - `in-flight/<bot>.json`, each project bot's count of running units, for `max_in_flight_total`.
 - `status/<bot>.json`, when the bot's last digest ran, for "Done since last".
@@ -62,6 +65,7 @@ Under `~/.hermes/team-kit/`:
 
 - Merge pull requests, including each project's kit-vendoring pull request.
 - Put each bot's GitHub token in its profile's `.env`. No bot ever sees a token in chat.
+- If you enable Slack, put the Slack app-level and bot tokens in the configured bot profile's `.env` under the variable names in `guard.yaml`. Token values never go in `guard.yaml`, chat, argv, or service unit files.
 - Sign the coding agent in on the machine.
 - Approve each `team-kit-admin` command the bootstrap bot runs.
 
