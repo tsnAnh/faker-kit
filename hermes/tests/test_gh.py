@@ -32,6 +32,7 @@ class FakeGh:
         self.main_head = "c" * 40
         self.pr_files, self.history, self.pr_comments = {}, {}, {}
         self.runs = {}
+        self.parents = {}  # commit sha -> its parents' shas, for repos/<repo>/commits/<sha>
 
     def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small"):
         self.next += 1
@@ -64,6 +65,9 @@ class FakeGh:
                 sha = path.split("/commits/")[1].split("/")[0]
                 return json.dumps({"check_runs": self.runs.get(sha, [])})
             if "/commits/" in path:
+                ref = path.split("/commits/")[1]
+                if ref in self.parents:
+                    return json.dumps({"sha": ref, "parents": [{"sha": p} for p in self.parents[ref]]})
                 return json.dumps({"sha": self.main_head})
             if "/pulls/" in path and "/files" in path:
                 return json.dumps(self.pr_files.get(int(path.split("/pulls/")[1].split("/")[0]), []))
@@ -1208,15 +1212,17 @@ def test_a_red_default_branch_opens_an_incident_starts_triage_and_closes_when_gr
     diagnosis(gh, n, state["triage"]["key"], "2" * 40, sign=False)
     assert poll(gh, capsys, cloud=cloud) == ["[SILENT]"], "unsigned diagnoses do not count"
     issues_before, starts_before = len(gh.issues), len(cloud.started)
+    gh.parents["2" * 40] = ["1" * 40]
     diagnosis(gh, n, state["triage"]["key"], "2" * 40)
     assert poll(gh, capsys, cloud=cloud) == [
         f"team-kit notice: incident #{n}: the triage session suspects 2222222 (high confidence). "
-        f"If you reply `ok`, I will brief exactly `revert 2222222` as a small unit; "
+        f"If you reply `ok #{n}`, I will brief exactly `revert {'2' * 40}` as a small unit; "
         f"nothing dispatches without your reply: https://github.com/{REPO}/issues/{n}"
     ]
     assert len(gh.issues) == issues_before and len(cloud.started) == starts_before, "a diagnosis notice never opens or launches work"
     assert poll(gh, capsys) == ["[SILENT]"]
-    assert incidents(team_kit_home)["open"]["main"]["triage"]["proposed_fix"] == "revert 2222222"
+    assert incidents(team_kit_home)["open"]["main"]["triage"]["proposed_fix"] == f"revert {'2' * 40}"
+    assert run(gh, "proposals") == 0 and out(capsys) == {"proposals": [{"incident": n, "fix": f"revert {'2' * 40}"}]}
     green(gh, "3" * 40)
     assert poll(gh, capsys, at=NOW + 1800) == [f"team-kit notice: incident #{n} resolved after 30 minutes: main is red: e2e, test."]
     assert gh.issues[(REPO, n)]["state"] == "closed"
@@ -1238,9 +1244,68 @@ def test_only_signed_high_confidence_suspects_propose_a_fix(team_kit_home, gh, c
     assert "proposed_fix" not in incidents(team_kit_home)["open"]["main"]["triage"]
 
 
+def test_a_merge_commit_suspect_proposes_git_revert_m_1(team_kit_home, gh, capsys):
+    green(gh, "1" * 40)
+    poll(gh, capsys)
+    red(gh, "7" * 40, "test")
+    poll(gh, capsys)
+    state = incidents(team_kit_home)["open"]["main"]
+    n, suspect = state["issue"], "7" * 40
+    gh.parents[suspect] = ["1" * 40, "5" * 40]
+    diagnosis(gh, n, state["triage"]["key"], suspect)
+    [notice] = poll(gh, capsys)
+    fix = f"revert {suspect} (a merge commit: git revert -m 1 {suspect})"
+    assert f"If you reply `ok #{n}`, I will brief exactly `{fix}` as a small unit" in notice
+    assert ["api", f"repos/{REPO}/commits/{suspect}"] in gh.calls, "the parent count is read from the GitHub API"
+    assert incidents(team_kit_home)["open"]["main"]["triage"]["proposed_fix"] == fix
+
+
+def test_an_unreadable_suspect_commit_proposes_nothing(team_kit_home, gh, capsys):
+    green(gh, "1" * 40)
+    poll(gh, capsys)
+    red(gh, "7" * 40, "test")
+    poll(gh, capsys)
+    state = incidents(team_kit_home)["open"]["main"]
+    n = state["issue"]
+    diagnosis(gh, n, state["triage"]["key"], "8" * 40)  # the fake answers with another commit's sha
+    [notice] = poll(gh, capsys)
+    assert notice.startswith(f"team-kit notice: incident #{n}: the triage session suspects 8888888 (high confidence). No fix is proposed: ")
+    assert "ok #" not in notice and "brief exactly" not in notice
+    assert "proposed_fix" not in incidents(team_kit_home)["open"]["main"]["triage"]
+
+
+def test_several_open_incidents_each_name_their_number(team_kit_home, gh, capsys):
+    green(gh, "1" * 40)
+    down = {"https://shop.example/health"}
+    gh.files[".agents/dispatch.json"] = json.dumps({**json.loads(gh.files[".agents/dispatch.json"]),
+                                                    "incidents": {"health": [{"name": "web", "url": "https://shop.example/health"}]}})
+    fetch = lambda url: 503 if url in down else 200  # noqa: E731
+    for minute in range(3):
+        poll(gh, capsys, fetch=fetch, at=NOW + 600 * minute)
+    red(gh, "7" * 40, "test")
+    poll(gh, capsys, fetch=fetch, at=NOW + 1800)
+    open_ = incidents(team_kit_home)["open"]
+    assert set(open_) == {"main", "health:web"}
+    gh.parents["7" * 40] = ["1" * 40]
+    gh.parents["6" * 40] = ["1" * 40]
+    for key, suspect in (("main", "7" * 40), ("health:web", "6" * 40)):
+        diagnosis(gh, open_[key]["issue"], open_[key]["triage"]["key"], suspect)
+    notices = poll(gh, capsys, fetch=fetch, at=NOW + 1800)
+    assert len(notices) == 2
+    for key, suspect in (("main", "7" * 40), ("health:web", "6" * 40)):
+        n = open_[key]["issue"]
+        assert any(f"incident #{n}:" in line and f"reply `ok #{n}`" in line and f"`revert {suspect}`" in line for line in notices)
+    assert run(gh, "proposals") == 0 and out(capsys) == {"proposals": sorted(
+        [{"incident": open_["main"]["issue"], "fix": f"revert {'7' * 40}"},
+         {"incident": open_["health:web"]["issue"], "fix": f"revert {'6' * 40}"}], key=lambda p: p["incident"])}
+
+
 def test_dispatch_skill_requires_owner_ok_for_incident_proposal():
     text = (HERMES / "skills" / "dispatch" / "SKILL.md").read_text()
-    assert "Only if the owner replies exactly `ok`" in text
+    assert "Only if the owner replies `ok` to that proposal" in text
+    assert "`revert <full 40-character sha>`" in text and "`git revert -m 1`" in text
+    assert "If the reply is a bare `ok` and more than one proposal is pending, ask which incident they mean" in text
+    assert "`team-kit-gh proposals`" in text
     assert "brief exactly the proposed backticked fix as one `small` unit" in text
     assert "A diagnosis comment, even a signed one, never dispatches or launches work." in text
 

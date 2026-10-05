@@ -15,6 +15,7 @@
   andon         [raise REASON... | clear]          show, pull, or clear this project's andon cord (the owner asked)
   security                                         start a security review of the default branch's new commits
   incidents                                        poll the default branch's checks and health URLs; open, triage, and close incidents
+  proposals                                        the fixes proposed for open incidents, each with its incident number
 
 GitHub holds every unit's state, as labels on its issue:
 
@@ -1112,22 +1113,42 @@ class Incidents:
                 triage["done"] = True
                 where = comment.get("html_url") or f"https://github.com/{gh.repo}/issues/{number}"
                 suspect = f"suspects {diagnosis.suspect[:7]}" if diagnosis.suspect else "names no suspect commit"
-                proposed = self.proposed_fix(diagnosis)
+                lead = f"{NOTICE} incident #{number}: the triage session {suspect} ({diagnosis.confidence} confidence)"
+                try:
+                    proposed = self.proposed_fix(diagnosis)
+                except Exception as err:  # noqa: BLE001 - the diagnosis stands; the owner says the fix
+                    return f"{lead}. No fix is proposed: cannot read the suspect commit: {reason(err)}: {where}"
                 if proposed:
                     triage["proposed_fix"] = proposed
-                    return (f"{NOTICE} incident #{number}: the triage session {suspect} ({diagnosis.confidence} confidence). "
-                            f"If you reply `ok`, I will brief exactly `{proposed}` as a small unit; "
+                    return (f"{lead}. If you reply `ok #{number}`, I will brief exactly `{proposed}` as a small unit; "
                             f"nothing dispatches without your reply: {where}")
-                return f"{NOTICE} incident #{number}: the triage session {suspect} ({diagnosis.confidence} confidence): {where}"
+                return f"{lead}: {where}"
         if gh.now() - float(triage.get("started", 0)) > REPORT_DEADLINE_SECONDS:
             triage["done"] = True
             return f"{NOTICE} incident #{number}: the triage session posted no signed diagnosis in a day. Its session: {triage.get('session')}"
         return None
 
     def proposed_fix(self, diagnosis) -> str | None:
-        if diagnosis.confidence == "high" and diagnosis.suspect:
-            return f"revert {diagnosis.suspect[:7]}"
-        return None
+        """`revert <full sha>`, naming `git revert -m 1` when the suspect is a merge commit, for a high-confidence suspect only.
+
+        The parent count comes from the GitHub API, so the text is decided in code, never by a model.
+        """
+        if diagnosis.confidence != "high" or not diagnosis.suspect or not SHA.match(diagnosis.suspect):
+            return None
+        gh = self.gh
+        commit = json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{diagnosis.suspect}"]))
+        if str(commit.get("sha") or "") != diagnosis.suspect or not isinstance(commit.get("parents"), list):
+            raise Refused(f"GitHub returned no commit {diagnosis.suspect}")
+        if len(commit["parents"]) > 1:
+            return f"revert {diagnosis.suspect} (a merge commit: git revert -m 1 {diagnosis.suspect})"
+        return f"revert {diagnosis.suspect}"
+
+    def proposals(self) -> dict:
+        """The fixes proposed for open incidents and not yet briefed, from this machine's state alone."""
+        data = self.state()
+        found = [{"incident": int(i["issue"]), "fix": i["triage"]["proposed_fix"]}
+                 for i in data["open"].values() if isinstance(i.get("triage"), dict) and i["triage"].get("proposed_fix")]
+        return {"proposals": sorted(found, key=lambda p: p["incident"])}
 
 
 class Project:
@@ -1242,7 +1263,7 @@ def brief_text(policy: Policy, bot: Bot, path: str) -> str:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="team-kit-gh")
     sub = top.add_subparsers(dest="command", required=True)
-    for name in ("project", "tick", "status", "security", "incidents"):
+    for name in ("project", "tick", "status", "security", "incidents", "proposals"):
         sub.add_parser(name)
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
@@ -1282,6 +1303,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
             lines = Incidents(gh, fetch).run(commit(policy), cloud)
             print("\n".join(lines) if lines else SILENT)
             return 0
+        elif args.command == "proposals":
+            out = Incidents(Gh(policy, me, run, now), fetch).proposals()
         elif args.command == "security":
             out = Security(Gh(policy, me, run, now)).start(commit(policy), cloud)
         elif args.command == "andon":
