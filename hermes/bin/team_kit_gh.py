@@ -14,7 +14,7 @@
   kit-check                                        compare this machine's kit commit with kit_ref and the vendored kit
   andon         [raise REASON... | clear]          show, pull, or clear this project's andon cord (the owner asked)
   security                                         start a security review of the default branch's new commits
-  incidents                                        poll the default branch's checks and health URLs; open, triage, and close incidents
+  incidents                                        poll checks, health URLs, and alert sources; open, triage, and close incidents
 
 GitHub holds every unit's state, as labels on its issue:
 
@@ -50,7 +50,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 HERE = Path(__file__).resolve().parent
 for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
@@ -59,6 +59,12 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
 
 from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord, clean_reason, issue_body  # noqa: E402
 from team_kit_cloud import Cloud, CloudError  # noqa: E402
+from team_kit_incident_sources import (  # noqa: E402
+    IncidentSourceError,
+    fetch_json as fetch_incident_json,
+    poll_sources,
+    validate_sources,
+)
 from team_kit_risk import CODEOWNERS_PATHS, RISK_LABELS, Risk, owners_for, parse_codeowners, pick_reviewers, score  # noqa: E402
 from team_kit_contracts import (  # noqa: E402
     DEFAULT_ACCEPTED,
@@ -284,13 +290,17 @@ class Gh:
         if security == "codex" and not config.get("codex_env"):
             raise Refused(".agents/dispatch.json security_backend codex needs codex_env, the Codex cloud environment id")
         incidents = config.get("incidents", {})
-        if not isinstance(incidents, dict) or not set(incidents) <= {"main_checks", "health", "andon_on_red", "triage_backend"}:
-            raise Refused(".agents/dispatch.json incidents may hold only main_checks, health, andon_on_red, and triage_backend")
+        if not isinstance(incidents, dict) or not set(incidents) <= {"main_checks", "health", "sources", "andon_on_red", "triage_backend"}:
+            raise Refused(".agents/dispatch.json incidents may hold only main_checks, health, sources, andon_on_red, and triage_backend")
         health = incidents.get("health", [])
         if not isinstance(health, list) or not all(
                 isinstance(h, dict) and set(h) <= {"name", "url"} and HEALTH_NAME.match(str(h.get("name", "")))
                 and str(h.get("url", "")).startswith("https://") for h in health):
             raise Refused(".agents/dispatch.json incidents.health must list {name, url} with an https URL and a short name")
+        try:
+            validate_sources(incidents.get("sources", []))
+        except IncidentSourceError as err:
+            raise Refused(f".agents/dispatch.json incidents.sources {err}") from None
         triage = incidents.get("triage_backend", config["backend"])
         if triage not in VERIFIER_BACKENDS or (triage == "codex" and not config.get("codex_env")):
             raise Refused(".agents/dispatch.json incidents.triage_backend must be claude, codex (with codex_env), or none")
@@ -942,7 +952,7 @@ def plain(text: str, limit: int = 120) -> str:
 
 
 class Incidents:
-    """Polling, never a webhook: the default branch's checks and the repository's health URLs.
+    """Polling, never a webhook: checks, health URLs, and configured external alert sources.
 
     A failing source opens an issue labelled agent:incident and tells the owner. A read-only triage
     session looks for the cause and posts a signed diagnosis there. When the source passes again,
@@ -951,8 +961,10 @@ class Incidents:
     The state lives in policy.home/incidents/<bot>.json.
     """
 
-    def __init__(self, gh: Gh, fetch: Callable[[str], int | None] = fetch_status):
-        self.gh, self.fetch = gh, fetch
+    def __init__(self, gh: Gh, fetch: Callable[[str], int | None] = fetch_status,
+                 fetch_api: Callable[[str, dict[str, str]], object] = fetch_incident_json,
+                 env: Mapping[str, str] | None = None):
+        self.gh, self.fetch, self.fetch_api, self.env = gh, fetch, fetch_api, env or os.environ
         self.path = gh.policy.home / "incidents" / f"{gh.bot.name}.json"
 
     def state(self) -> dict:
@@ -973,12 +985,17 @@ class Incidents:
         tmp.write_text(json.dumps(data))
         tmp.replace(self.path)
 
-    def main_checks(self, branch: str) -> tuple[str, bool | None, str]:
-        """The default branch's head, whether its checks fail (None while any runs), and which failed."""
+    def branch_head(self, branch: str) -> str:
         gh = self.gh
         head = str(json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{branch}"])).get("sha") or "")
         if not SHA.match(head):
             raise Refused(f"cannot read the head of {branch}")
+        return head
+
+    def main_checks(self, branch: str) -> tuple[str, bool | None, str]:
+        """The default branch's head, whether its checks fail (None while any runs), and which failed."""
+        gh = self.gh
+        head = self.branch_head(branch)
         runs = json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{head}/check-runs?per_page=100"])).get("check_runs") or []
         failed = sorted({str(r.get("name") or "check") for r in runs if str(r.get("conclusion") or "").upper() in FAILED_CHECKS})
         if failed:
@@ -1019,6 +1036,8 @@ class Incidents:
             failing = status is None or not 200 <= status < 300
             what = f"health check {check['name']} " + ("does not answer" if status is None else f"returns HTTP {status}")
             observed.append((f"health:{check['name']}", what, failing, HEALTH_STREAK))
+        for source in poll_sources(settings.get("sources", []), self.fetch_api, self.env):
+            observed.append((source.key, source.title, source.failing, HEALTH_STREAK))
         for key, title, failing, needed in observed:
             streak = data["streaks"].get(key, 0)
             if failing is None:
@@ -1027,6 +1046,8 @@ class Incidents:
             data["streaks"][key] = streak
             incident = data["open"].get(key)
             if failing and incident is None and streak >= needed:
+                if head is None and settings.get("triage_backend", config["backend"]) != "none":
+                    head = self.branch_head(branch)
                 notices += self.open(data, key, title, branch, head, settings, config, cloud)
             elif failing and incident is not None and key == "main" and head and incident.get("head") != head:
                 incident["head"] = head  # still red on a newer commit
@@ -1256,7 +1277,8 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = None, cloud: Cloud | None = None,
          commit: Callable[[Policy], str] = kit_commit, now: Callable[[], float] = time.time,
-         fetch: Callable[[str], int | None] = fetch_status) -> int:
+         fetch: Callable[[str], int | None] = fetch_status,
+         fetch_api: Callable[[str, dict[str, str]], object] = fetch_incident_json) -> int:
     args = parser().parse_args(argv)
     try:
         policy = load_policy()
@@ -1268,7 +1290,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
             out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
         elif args.command == "incidents":
             gh = Gh(policy, me, run, now)
-            lines = Incidents(gh, fetch).run(commit(policy), cloud)
+            lines = Incidents(gh, fetch, fetch_api).run(commit(policy), cloud)
             print("\n".join(lines) if lines else SILENT)
             return 0
         elif args.command == "security":

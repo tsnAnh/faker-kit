@@ -142,6 +142,19 @@ class FakeCloud:
         return f"https://claude.ai/code/session_0{len(self.started)}ABCDEF"
 
 
+class FakeIncidentApis:
+    def __init__(self, responses):
+        self.responses = responses
+        self.calls = []
+
+    def __call__(self, url, headers):
+        self.calls.append({"url": url, "headers": dict(headers)})
+        for pattern, response in self.responses.items():
+            if pattern in url:
+                return response
+        raise AssertionError(f"unexpected incident API call {url}")
+
+
 @pytest.fixture
 def gh(kit):
     return FakeGh(kit)
@@ -1176,8 +1189,25 @@ def poll(gh, capsys, cloud=None, fetch=lambda url: 200, at=NOW):
     return lines(capsys)
 
 
+def poll_with_apis(gh, capsys, api, cloud=None, fetch=lambda url: 200, at=NOW):
+    assert main(["incidents"], run=gh, bot="meo-beo", cloud=cloud or FakeCloud(), now=lambda: at, fetch=fetch, fetch_api=api) == 0
+    return lines(capsys)
+
+
 def incidents(team_kit_home):
     return json.loads((team_kit_home / "incidents" / "meo-beo.json").read_text())
+
+
+def alert_sources():
+    return [
+        {"type": "sentry", "name": "sentry-prod", "organization": "acme", "project": "api", "environment": "production",
+         "min_level": "error", "token_env": "SENTRY_TOKEN"},
+        {"type": "pagerduty", "name": "pager-api", "service_id": "P12345", "token_env": "PAGERDUTY_TOKEN"},
+        {"type": "datadog", "name": "dd-api", "site": "datadoghq.com", "monitor_tags": ["service:api"],
+         "token_env": "DATADOG_API_KEY", "app_key_env": "DATADOG_APP_KEY"},
+        {"type": "grafana", "name": "grafana-prod", "url": "https://grafana.example.com", "org_id": 1,
+         "token_env": "GRAFANA_TOKEN"},
+    ]
 
 
 def test_a_red_default_branch_opens_an_incident_starts_triage_and_closes_when_green(team_kit_home, gh, capsys):
@@ -1230,6 +1260,72 @@ def test_a_health_check_needs_two_failures_to_open_and_two_passes_to_close(team_
     assert "resolved after 10 minutes: health check api returns HTTP 502." in resolved
 
 
+def test_external_alert_source_settings_are_accepted(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, incidents={"main_checks": False, "sources": alert_sources()})
+    assert run(gh, "kit-check") == 0
+    assert out(capsys)["kit_ref"] == kit
+
+
+def test_external_alert_sources_use_existing_streaks_triage_and_close_without_leaking_tokens(team_kit_home, kit, capsys, monkeypatch):
+    secrets = {
+        "SENTRY_TOKEN": "sentry-secret-value",
+        "PAGERDUTY_TOKEN": "pagerduty-secret-value",
+        "DATADOG_API_KEY": "datadog-api-secret-value",
+        "DATADOG_APP_KEY": "datadog-app-secret-value",
+        "GRAFANA_TOKEN": "grafana-secret-value",
+    }
+    for name, value in secrets.items():
+        monkeypatch.setenv(name, value)
+    gh = FakeGh(kit, incidents={"main_checks": False, "sources": alert_sources()})
+    api = FakeIncidentApis({
+        "sentry.io/api/0/organizations/acme/issues/": [
+            {"level": "error", "title": f"checkout {secrets['SENTRY_TOKEN']}"},
+            {"shortId": "API-8", "level": "warning", "title": "below threshold"},
+        ],
+        "pagerduty.com/incidents": {
+            "incidents": [{"id": "PD1", "status": "triggered", "title": f"page {secrets['PAGERDUTY_TOKEN']}"}],
+        },
+        "api.datadoghq.com/api/v1/monitor": [
+            {"id": 12, "name": f"latency {secrets['DATADOG_API_KEY']} {secrets['DATADOG_APP_KEY']}", "overall_state": "Alert"},
+        ],
+        "grafana.example.com/api/prometheus/grafana/api/v1/alerts": {
+            "status": "success",
+            "data": {"alerts": [{"state": "firing", "labels": {"alertname": f"burn {secrets['GRAFANA_TOKEN']}"}}]},
+        },
+    })
+    cloud = FakeCloud()
+    assert poll_with_apis(gh, capsys, api, cloud=cloud) == ["[SILENT]"], "external sources use the health-check streak"
+    opened = poll_with_apis(gh, capsys, api, cloud=cloud)
+    state = incidents(team_kit_home)
+    assert sorted(state["open"]) == ["datadog:dd-api", "grafana:grafana-prod", "pagerduty:pager-api", "sentry:sentry-prod"]
+    assert len(opened) == 4 and all("incident #" in line and "opened:" in line for line in opened)
+    assert len(cloud.started) == 4
+    assert all(record.get("head") == "c" * 40 and record.get("triage", {}).get("key") for record in state["open"].values())
+    for call in api.calls:
+        assert not any(secret in call["url"] for secret in secrets.values())
+    headers = json.dumps([call["headers"] for call in api.calls])
+    assert all(secret in headers for secret in secrets.values())
+    persisted = "\n".join([
+        json.dumps(gh.calls),
+        str(gh.issues),
+        str(gh.comments),
+        json.dumps(state, default=str),
+        str(cloud.started),
+    ])
+    assert not any(secret in persisted for secret in secrets.values())
+
+    api.responses = {
+        "sentry.io/api/0/organizations/acme/issues/": [],
+        "pagerduty.com/incidents": {"incidents": []},
+        "api.datadoghq.com/api/v1/monitor": [],
+        "grafana.example.com/api/prometheus/grafana/api/v1/alerts": {"status": "success", "data": {"alerts": []}},
+    }
+    assert poll_with_apis(gh, capsys, api, cloud=cloud, at=NOW + 300) == ["[SILENT]"]
+    resolved = poll_with_apis(gh, capsys, api, cloud=cloud, at=NOW + 600)
+    assert len(resolved) == 4 and all("resolved after 10 minutes" in line for line in resolved)
+    assert incidents(team_kit_home)["open"] == {}
+
+
 def test_a_red_branch_pulls_the_andon_cord_when_asked_and_clears_only_its_own(team_kit_home, kit, capsys):
     gh = FakeGh(kit, incidents={"andon_on_red": True, "triage_backend": "none"})
     red(gh, "5" * 40, "test")
@@ -1273,6 +1369,14 @@ def test_a_lasting_polling_problem_is_said_once(team_kit_home, gh, capsys):
     {"health": [{"name": "Bad Name", "url": "https://x.example"}]},
     {"pager": True},
     {"triage_backend": "codex"},
+    {"sources": {"type": "sentry"}},
+    {"sources": [{"type": "sentry", "name": "sentry-prod", "organization": "acme", "project": "api",
+                  "min_level": "critical", "token_env": "SENTRY_TOKEN"}]},
+    {"sources": [{"type": "pagerduty", "name": "pager-api", "token_env": "PAGERDUTY_TOKEN"}]},
+    {"sources": [{"type": "datadog", "name": "dd-api", "site": "https://api.datadoghq.com",
+                  "token_env": "DATADOG_API_KEY", "app_key_env": "DATADOG_APP_KEY"}]},
+    {"sources": [{"type": "grafana", "name": "grafana-prod", "url": "http://grafana.example.com",
+                  "token_env": "GRAFANA_TOKEN"}]},
 ])
 def test_bad_incident_settings_are_refused(team_kit_home, kit, capsys, incidents_setting):
     gh = FakeGh(kit, incidents=incidents_setting)
