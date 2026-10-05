@@ -114,7 +114,7 @@ Run it once per unit. Never dispatch the same brief twice. When all are dispatch
 
 ### 4. The owner merges
 
-The coding agent follows the `follow-brief` skill under faker-mode and opens one pull request. When its report says done and the checks pass, a verifier session that did not write the change checks the pull request with the `verify-unit` skill. When its verdict is one `accept_verifications` in `.agents/dispatch.json` lists, the unit moves to `agent:review` and the owner gets a notice. Nobody but the owner merges. The merge closes the issue, which frees its slot and releases the units that depend on it.
+The coding agent follows the `follow-brief` skill under faker-mode, opens one pull request, and babysits it to green (conflicts, review comments, CI) before it reports. When its report says done and the checks pass, a verifier session that did not write the change checks the pull request with the `verify-unit` skill. When its verdict is one `accept_verifications` in `.agents/dispatch.json` lists, the unit moves to `agent:review` and the owner gets a notice. Nobody but the owner merges. The merge closes the issue, which frees its slot and releases the units that depend on it.
 
 ## Gates
 
