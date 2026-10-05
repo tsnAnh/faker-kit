@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """team-kit-gh: the only GitHub access a project bot has, and only for its project's one repository.
 
+Cross-project dependencies use unit-state files other project bots publish locally, never their
+GitHub tokens.
+
   project                                          this bot's project and repository
   dispatch      --unit U --size S --brief-file F   open the unit's issue, then launch it or queue it
   launch        --issue N                          launch one queued or gated unit now (the owner asked)
@@ -204,6 +207,7 @@ def in_flight(run: Runner, repo: str) -> int:
 # which sees every repository, refreshes all of them. A launch holds a machine-wide lock from
 # counting to labelling. A count older than this is ignored: no cloud session runs that long.
 IN_FLIGHT_FRESH_SECONDS = 24 * 3600
+UNIT_STATE_FRESH_SECONDS = 24 * 3600
 
 
 class InFlight:
@@ -242,6 +246,64 @@ class InFlight:
             except (OSError, ValueError, KeyError, TypeError, AttributeError):
                 continue
         return total
+
+
+class UnitStates:
+    """Machine-local unit states published by each project bot for cross-project dependencies."""
+
+    def __init__(self, policy: Policy, bot: Bot, now: Callable[[], float] = time.time):
+        self.policy, self.bot, self.now = policy, bot, now
+        self.directory = policy.home / "units"
+
+    def publish(self, open_units: list[dict], closed_units: list[dict]) -> None:
+        units: dict[str, dict] = {}
+        for issue in open_units:
+            units[str(int(issue["number"]))] = self.entry(issue, "open")
+        for issue in closed_units:
+            units[str(int(issue["number"]))] = self.entry(issue, "closed")
+        self.directory.mkdir(parents=True, exist_ok=True)
+        target = self.directory / f"{self.bot.name}.json"
+        tmp = target.with_name(f".{target.name}.{os.getpid()}")
+        tmp.write_text(json.dumps({"at": self.now(), "repo": self.bot.repo, "units": units}, sort_keys=True))
+        tmp.replace(target)
+
+    def entry(self, issue: dict, state: str) -> dict:
+        reason_value = issue.get("stateReason", issue.get("state_reason"))
+        reason_text = str(reason_value or "").lower()
+        return {
+            "state": state,
+            "state_reason": reason_text,
+            "labels": sorted(labels_of(issue)),
+            "closed_at": issue.get("closedAt"),
+        }
+
+    def dependency(self, repo: str, number: int) -> tuple[str, str]:
+        owner = self.policy.owner_of(repo)
+        if owner is None:
+            return "unknown", f"{repo}#{number} has no project bot in bots.yaml"
+        path = self.directory / f"{owner.name}.json"
+        try:
+            data = json.loads(path.read_text())
+            at = float(data["at"])
+            published_repo = str(data["repo"])
+            units = data["units"]
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return "waiting", f"{repo}#{number} state is unknown; {owner.name} has not published unit states yet"
+        if published_repo.lower() != owner.repo.lower():
+            return "waiting", f"{repo}#{number} state is unknown; {owner.name}'s published unit states name {published_repo}"
+        if self.now() - at > UNIT_STATE_FRESH_SECONDS:
+            return "waiting", f"{repo}#{number} state is stale; {owner.name} last published unit states more than 24 hours ago"
+        try:
+            unit = units[str(int(number))]
+        except (KeyError, TypeError, ValueError):
+            return "waiting", f"{repo}#{number} state is unknown in {owner.name}'s published unit states"
+        if not isinstance(unit, dict):
+            return "waiting", f"{repo}#{number} state is unknown in {owner.name}'s published unit states"
+        if str(unit.get("state") or "").lower() != "closed":
+            return "waiting", f"{repo}#{number} is still open according to {owner.name}'s published unit states"
+        if str(unit.get("state_reason") or "").lower() not in ("", "completed"):
+            return "dropped", f"{repo}#{number}"
+        return "merged", f"{repo}#{number}"
 
 
 class Gh:
@@ -320,10 +382,21 @@ class Gh:
 
     def depends(self, brief) -> list[tuple[str, int]]:
         refs = parse_depends(brief, self.repo)
-        outside = [f"{r}#{n}" for r, n in refs if not self.bot.owns(r)]
-        if outside:
-            raise Refused(f"Depends on names another repository's issues: {', '.join(outside)}; a project is one repository, so list its own issues as #n")
-        return refs
+        out, unknown = [], []
+        for repo, number in refs:
+            if self.bot.owns(repo):
+                ref = (self.repo, number)
+            else:
+                owner = self.policy.owner_of(repo)
+                if owner is None:
+                    unknown.append(f"{repo}#{number}")
+                    continue
+                ref = (owner.repo, number)
+            if ref not in out:
+                out.append(ref)
+        if unknown:
+            raise Refused(f"Depends on names repositories with no project bot in bots.yaml: {', '.join(unknown)}")
+        return out
 
     def issue(self, number: int, repo: str | None = None) -> dict:
         return json.loads(self.run(["api", f"repos/{repo or self.repo}/issues/{int(number)}"]))
@@ -571,12 +644,22 @@ class Gh:
     def waiting_for(self, refs: list[tuple[str, int]]) -> tuple[list[str], list[str]]:
         """Dependencies still open, and those closed without completing."""
         waiting, dropped = [], []
+        unit_states = UnitStates(self.policy, self.bot, self.now)
         for repo, number in refs:
-            dep = self.issue(number, repo)
-            if dep.get("state") != "closed":
-                waiting.append(f"{repo}#{number}")
-            elif dep.get("state_reason") not in (None, "completed"):
-                dropped.append(f"{repo}#{number}")
+            if self.bot.owns(repo):
+                dep = self.issue(number, repo)
+                if dep.get("state") != "closed":
+                    waiting.append(f"{repo}#{number}")
+                elif dep.get("state_reason") not in (None, "completed"):
+                    dropped.append(f"{repo}#{number}")
+                continue
+            state, detail = unit_states.dependency(repo, number)
+            if state == "waiting":
+                waiting.append(detail)
+            elif state == "unknown":
+                waiting.append(detail)
+            elif state == "dropped":
+                dropped.append(detail)
         return waiting, dropped
 
     def gate(self, issue: dict, why: str) -> str:
@@ -1133,8 +1216,14 @@ class Project:
         notices.extend(andon_notices)
         try:
             units = gh.units()
+            closed_units = gh.units("closed")
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
             units, problems[gh.repo] = [], reason(err)
+        else:
+            try:
+                UnitStates(self.policy, self.bot, self.now).publish(units, closed_units)
+            except Exception as err:  # noqa: BLE001 - reported once, retried next tick
+                problems["units"] = reason(err)
         for issue in units:
             labels = labels_of(issue)
             if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:

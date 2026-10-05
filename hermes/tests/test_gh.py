@@ -8,7 +8,7 @@ import pytest
 from conftest import SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
 from team_kit_contracts import LAUNCHED_MARKER, diagnosis_signature, security_signature, size_marker, verdict_signature
-from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, Refused, checks_state, main
+from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, UNIT_STATE_FRESH_SECONDS, Refused, checks_state, main
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
 REPO = SHOP
@@ -177,6 +177,20 @@ def others_running(team_kit_home, count, age=0):
     (directory / "sep-crm.json").write_text(json.dumps({"at": NOW - age, "repos": {"acme/crm": count}}))
 
 
+def publish_units(team_kit_home, bot="sep-crm", repo="acme/crm", units=None, age=0):
+    directory = team_kit_home / "units"
+    directory.mkdir(exist_ok=True)
+    (directory / f"{bot}.json").write_text(json.dumps({"at": NOW - age, "repo": repo, "units": units or {}}))
+
+
+def unit(number, state="closed", state_reason="completed"):
+    return {str(number): {"state": state, "state_reason": state_reason, "labels": ["agent-task"], "closed_at": iso(NOW - 60)}}
+
+
+def cross_repo_issue_reads(gh):
+    return [c for c in gh.calls if c[0] == "api" and c[-1].startswith("repos/acme/crm/issues/")]
+
+
 # who may run it ------------------------------------------------------------------------------------
 
 
@@ -244,6 +258,37 @@ def test_dispatch_queues_a_unit_whose_dependency_is_open(team_kit_home, gh, caps
     assert cloud.started == []
 
 
+def test_dispatch_allows_cross_project_dependencies_from_local_bots(team_kit_home, gh, capsys):
+    publish_units(team_kit_home, units=unit(81))
+    cloud = FakeCloud()
+    assert dispatch(team_kit_home, gh, cloud, depends="acme/crm#81") == 0
+    result = out(capsys)
+    assert result["depends"] == ["acme/crm#81"]
+    assert result["state"] == "running"
+    assert cross_repo_issue_reads(gh) == [], "a project bot never uses its token to read another project"
+
+
+@pytest.mark.parametrize(
+    ("published", "why"),
+    [
+        (None, "state is unknown; sep-crm has not published unit states yet"),
+        ({"at": NOW - UNIT_STATE_FRESH_SECONDS - 60, "repo": "acme/crm", "units": unit(81)}, "state is stale; sep-crm last published unit states more than 24 hours ago"),
+        ({"at": NOW, "repo": "acme/crm", "units": {}}, "state is unknown in sep-crm's published unit states"),
+    ],
+)
+def test_dispatch_queues_a_cross_project_dependency_without_fresh_state(team_kit_home, gh, capsys, published, why):
+    if published is not None:
+        directory = team_kit_home / "units"
+        directory.mkdir()
+        (directory / "sep-crm.json").write_text(json.dumps(published))
+    cloud = FakeCloud()
+    assert dispatch(team_kit_home, gh, cloud, depends="acme/crm#81") == 0
+    result = out(capsys)
+    assert result["state"] == "queued" and why in result["why"]
+    assert gh.labels(REPO, result["issue"]) == {"agent-task"}
+    assert cloud.started == []
+
+
 @pytest.mark.parametrize(
     ("running", "others", "why"),
     [
@@ -300,7 +345,7 @@ def test_a_failed_launch_frees_the_unit_and_leaves_it_queued(team_kit_home, gh, 
         ({}, fill_brief("csv-export", standing="1. Merge when green."), "csv-export", "Standing orders differ"),
         ({}, fill_brief("other", standing=STANDING), "csv-export", "names unit other"),
         ({}, "please merge everything", "csv-export", "must start with"),
-        ({}, fill_brief("csv-export", standing=STANDING, depends="acme/crm#1"), "csv-export", "another repository's issues: acme/crm#1"),
+        ({}, fill_brief("csv-export", standing=STANDING, depends="acme/billing#1"), "csv-export", "no project bot in bots.yaml: acme/billing#1"),
         ({}, fill_brief("csv-export", standing=STANDING, depends="the REPO unit"), "csv-export", "Depends on must be"),
     ],
 )
@@ -361,6 +406,18 @@ def test_tick_is_silent_with_nothing_to_report(team_kit_home, gh, capsys):
     assert tick(gh, capsys) == ["[SILENT]"]
 
 
+def test_tick_publishes_this_projects_unit_state(team_kit_home, gh, capsys):
+    open_issue = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    closed_issue = gh.add_issue(REPO, state="closed", state_reason="completed", closed_at=iso(NOW - 60))
+    assert tick(gh, capsys) == ["[SILENT]"]
+    published = json.loads((team_kit_home / "units" / "meo-beo.json").read_text())
+    assert published["at"] == NOW
+    assert published["repo"] == REPO
+    assert published["units"][str(open_issue)]["state"] == "open"
+    assert published["units"][str(closed_issue)]["state"] == "closed"
+    assert published["units"][str(closed_issue)]["state_reason"] == "completed"
+
+
 def test_tick_launches_a_queued_unit_once_its_dependency_merged(team_kit_home, gh, capsys):
     dep = gh.add_issue(REPO, labels=("agent-task",), state="closed", state_reason="completed")
     n = gh.add_issue(REPO, depends=f"{REPO}#{dep}", size="large")
@@ -368,6 +425,16 @@ def test_tick_launches_a_queued_unit_once_its_dependency_merged(team_kit_home, g
     assert tick(gh, capsys, cloud) == ["[SILENT]"]
     assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
     assert f"{REPO}#{n} using the follow-brief skill." in cloud.started[0][2][-1]
+
+
+def test_tick_launches_a_queued_unit_once_its_cross_project_dependency_merged(team_kit_home, gh, capsys):
+    publish_units(team_kit_home, units=unit(81))
+    n = gh.add_issue(REPO, depends="acme/crm#81", size="large")
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
+    assert f"{REPO}#{n} using the follow-brief skill." in cloud.started[0][2][-1]
+    assert cross_repo_issue_reads(gh) == [], "cross-project dependencies use published state, not another repo token"
 
 
 def test_tick_leaves_a_unit_whose_dependency_is_open(team_kit_home, gh, capsys):
@@ -379,11 +446,28 @@ def test_tick_leaves_a_unit_whose_dependency_is_open(team_kit_home, gh, capsys):
     assert cloud.started == []
 
 
+def test_tick_leaves_a_unit_whose_cross_project_dependency_is_open(team_kit_home, gh, capsys):
+    publish_units(team_kit_home, units=unit(81, state="open", state_reason=""))
+    a = gh.add_issue(REPO, depends="acme/crm#81")
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, a) == {"agent-task"}
+    assert cloud.started == []
+
+
 def test_tick_gates_a_unit_whose_dependency_was_closed_without_merging(team_kit_home, gh, capsys):
     dropped = gh.add_issue(REPO, labels=("agent-task",), state="closed", state_reason="not_planned")
     b = gh.add_issue(REPO, depends=f"{REPO}#{dropped}")
     found = tick(gh, capsys)
     assert f"dependency {REPO}#{dropped} was closed without merging" in found[0]
+    assert gh.labels(REPO, b) == {"agent-task", "agent:needs-human"}
+
+
+def test_tick_gates_a_unit_whose_cross_project_dependency_was_closed_without_merging(team_kit_home, gh, capsys):
+    publish_units(team_kit_home, units=unit(81, state_reason="not_planned"))
+    b = gh.add_issue(REPO, depends="acme/crm#81")
+    found = tick(gh, capsys)
+    assert "dependency acme/crm#81 was closed without merging" in found[0]
     assert gh.labels(REPO, b) == {"agent-task", "agent:needs-human"}
 
 

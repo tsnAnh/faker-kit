@@ -89,7 +89,8 @@ BRANCH = re.compile(r"\A(?!.*\.\.)(?!/)(?!.*/\Z)[A-Za-z0-9_./-]{1,100}\Z")
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 ENV_ID = re.compile(r"\A[A-Za-z0-9_-]+\Z")
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
-DEPENDENCY = re.compile(r"(?<![A-Za-z0-9_.#/-])(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<issue>[0-9]+)\b")
+DEPENDENCY = re.compile(r"\A(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<issue>[1-9][0-9]*)\Z")
+DEPENDENCY_BULLET = re.compile(r"\A[-*]\s+")
 NONE_WORDS = {"none", "none.", "-", "n/a"}
 
 
@@ -181,20 +182,24 @@ def parse_brief(text: str, standing_orders: str | None = None) -> Brief:
 def parse_depends(brief: Brief, repo: str) -> list[tuple[str, int]]:
     """The issues this unit waits for, from its Depends on section.
 
-    `#12` names an issue in this unit's repository, as does `OWNER/REPO#12` (team-kit-gh refuses any
-    other repository), and
+    `#12` names an issue in this unit's repository; `OWNER/REPO#12` names one explicitly.
     "none" means no dependency. Anything else is an error, so a typo cannot drop a dependency.
     """
     text = brief.sections["Depends on"].strip()
     if text.lower() in NONE_WORDS:
         return []
     found: list[tuple[str, int]] = []
-    for match in DEPENDENCY.finditer(text):
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for raw in lines:
+        line = DEPENDENCY_BULLET.sub("", raw).strip()
+        match = DEPENDENCY.match(line)
+        if not match:
+            raise ContractError('Depends on must be "none" or list one issue per line as #n or OWNER/REPO#n')
         ref = (match.group("repo") or repo, int(match.group("issue")))
         if ref not in found:
             found.append(ref)
     if not found:
-        raise ContractError("Depends on must be \"none\" or list issues as #n")
+        raise ContractError('Depends on must be "none" or list one issue per line as #n or OWNER/REPO#n')
     return found
 
 

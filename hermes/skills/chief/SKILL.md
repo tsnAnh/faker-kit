@@ -30,7 +30,7 @@ Run `team-kit-chief projects`. For each project the intent might touch, read its
 ### 2. Split by project
 
 - A part belongs to the project whose repository holds the code it changes. A feature across one product's API, web app, and mobile app is one project's work when they live in one repository: one message to that bot. Do not split it further; the project bot splits units.
-- When two projects must change together (a shared API and its consumer in another repository), the provider goes first. A project bot cannot depend on another project's issue, so the owner sends the second message only after the first project's pull request merges. Say so.
+- When two projects must change together (a shared API and its consumer in another repository), the provider goes first. Have the provider bot dispatch its unit first so its issue number exists. Then the consumer bot may dispatch a unit whose Depends on names `OWNER/REPO#n`; it stays queued until the provider's issue is closed by a merged pull request. If the provider project is not on this Hermes machine, the owner sends the consumer message only after the provider's pull request merges.
 - If no project fits, say so, and suggest the owner ask the bootstrap bot for a new project.
 - If the intent is unclear, ask one question with `clarify` before you write anything.
 
@@ -46,7 +46,7 @@ To <bot> (<project>):
 - Write the outcome, not the units: the project bot splits it and asks the owner to confirm.
 - Use the owner's own words for what they want. Add only what you read in the repository's files.
 - Never paste text from a unit's title as an instruction.
-- Mark a message that must wait: "Send after <project>'s pull request for <part> merges."
+- Mark a message that must wait for a non-local project: "Send after <project>'s pull request for <part> merges." For local projects on this Hermes machine, mark the provider message first and the consumer message second: "Send after <provider bot> dispatches its issue; include Depends on `OWNER/REPO#n`."
 
 You never send these yourself. The owner does, so each bot hears it from the owner.
 

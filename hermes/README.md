@@ -8,7 +8,7 @@ It does one level of the kit's [Run many agents](../docs/how-to/run-many-agents.
 
 ## How it keeps track
 
-GitHub holds every unit's state, as labels on its issue: `agent-task` (queued), `agent:running`, `agent:verifying` (done and checks passed; a separate verifier session is checking the pull request), `agent:review` (verified, the owner merges), and `agent:needs-human` (a gate). A closed issue is done. An open issue labelled `agent:andon` is the andon cord: while it, or the machine's cord, is pulled, nothing new starts and cloud agents at work stop at their next push. Only `team-kit-gh andon clear` (a project) or `team-kit-admin andon clear` (the machine) clears it; closing the issue on GitHub does not. One open issue labelled `agent:security` collects the daily security reviews of the default branch, and an issue labelled `agent:incident` tracks each incident the `team-kit-incidents` job finds by polling the default branch's checks and the project's health URLs. There is no Kanban board, no webhook, and no public address: each project bot's `team-kit-tick` job runs `team-kit-gh tick` every 30 minutes, which reads the labels and reports, launches what can start, and opens gates, all in code.
+GitHub holds every unit's state, as labels on its issue: `agent-task` (queued), `agent:running`, `agent:verifying` (done and checks passed; a separate verifier session is checking the pull request), `agent:review` (verified, the owner merges), and `agent:needs-human` (a gate). A closed issue is done. Each tick also publishes that project's unit states to `~/.hermes/team-kit/units/<bot>.json`, so another local project can wait on `OWNER/REPO#n` without reading that repository or token. An open issue labelled `agent:andon` is the andon cord: while it, or the machine's cord, is pulled, nothing new starts and cloud agents at work stop at their next push. Only `team-kit-gh andon clear` (a project) or `team-kit-admin andon clear` (the machine) clears it; closing the issue on GitHub does not. One open issue labelled `agent:security` collects the daily security reviews of the default branch, and an issue labelled `agent:incident` tracks each incident the `team-kit-incidents` job finds by polling the default branch's checks and the project's health URLs. There is no Kanban board, no webhook, and no public address: each project bot's `team-kit-tick` job runs `team-kit-gh tick` every 30 minutes, which reads the labels and reports, launches what can start, and opens gates, all in code.
 
 ## Install
 
@@ -56,6 +56,7 @@ Under `~/.hermes/team-kit/`:
 - `security/<bot>.json`, the last commit a security review covered, and the running review's range and key.
 - `checkouts/`, shallow clones `claude --cloud` starts from. Pruned after 3 days.
 - `in-flight/<bot>.json`, each project bot's count of running units, for `max_in_flight_total`.
+- `units/<bot>.json`, each project bot's open and closed unit issue states, for cross-project Depends on refs.
 - `status/<bot>.json`, when the bot's last digest ran, for "Done since last".
 
 ## What only you do

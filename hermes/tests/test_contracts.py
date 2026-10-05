@@ -104,16 +104,16 @@ def depends(text, repo="acme/shop"):
         ("none", []),
         ("None.", []),
         ("#12", [("acme/shop", 12)]),
-        ("- #3, the API endpoint\n- #4", [("acme/shop", 3), ("acme/shop", 4)]),
-        ("#3 and #3 again", [("acme/shop", 3)]),
+        ("- #3\n- #4", [("acme/shop", 3), ("acme/shop", 4)]),
         ("acme/shop#5", [("acme/shop", 5)]),
+        ("acme/crm#6", [("acme/crm", 6)]),
     ],
 )
 def test_depends_on_lists_issues(text, expected):
     assert depends(text) == expected
 
 
-@pytest.mark.parametrize("text", ["the API unit", "card t_1a2b", "OWNER/REPO#n", "https://example.com/x#12"])
+@pytest.mark.parametrize("text", ["the API unit", "card t_1a2b", "OWNER/REPO#n", "https://example.com/x#12", "#0", "#3 and #3 again", "- #3, the API endpoint"])
 def test_depends_on_without_an_issue_is_rejected_so_a_typo_cannot_drop_a_dependency(text):
     with pytest.raises(ContractError, match="Depends on"):
         depends(text)
