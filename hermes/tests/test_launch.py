@@ -5,7 +5,7 @@ import time
 
 import pytest
 from conftest import HERMES, KIT
-from team_kit_cloud import Cloud, CloudError, codex_cloud_result_capability
+from team_kit_cloud import Cloud, CloudError
 from team_kit_contracts import LAUNCH_PROMPTS, ContractError, cloud_argv, launch_argv
 
 PREFIXES = ("/faker-mode ", "$faker-mode ")
@@ -22,39 +22,6 @@ CLAUDE = ("/faker-mode Work the brief in acme/shop#123 using the follow-brief sk
 CODEX = ("$faker-mode Work the brief in acme/shop#123 using the follow-brief skill. "
          "If the follow-brief skill is not available in this session, stop and say the team-kit skills did not load.")
 
-CODEX_CLOUD_HELP = """[EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally
-
-Usage: codex cloud [OPTIONS] [COMMAND]
-
-Commands:
-  exec    Submit a new Codex Cloud task without launching the TUI
-  status  Show the status of a Codex Cloud task
-  list    List Codex Cloud tasks
-  apply   Apply the diff for a Codex Cloud task locally
-  diff    Show the unified diff for a Codex Cloud task
-  help    Print this message or the help of the given subcommand(s)
-"""
-
-CODEX_CLOUD_LIST_HELP = """List Codex Cloud tasks
-
-Usage: codex cloud list [OPTIONS]
-
-Options:
-      --limit <N>
-      --json
-          Emit JSON instead of plain text
-"""
-
-CODEX_CLOUD_STATUS_HELP = """Show the status of a Codex Cloud task
-
-Usage: codex cloud status [OPTIONS] <TASK_ID>
-
-Arguments:
-  <TASK_ID>
-          Codex Cloud task identifier to inspect
-"""
-
-
 @pytest.mark.parametrize(
     ("backend", "size", "expected"),
     [
@@ -70,22 +37,60 @@ def test_launch_argv_is_exact_and_needs_no_shell(backend, size, expected):
     assert argv[-1].startswith(PREFIXES)
 
 
-def test_codex_cloud_result_capability_documents_the_installed_cli_surface():
-    found = codex_cloud_result_capability("codex-cli 0.158.0", CODEX_CLOUD_HELP, CODEX_CLOUD_LIST_HELP, CODEX_CLOUD_STATUS_HELP)
-    assert found.commands == ("exec", "status", "list", "apply", "diff", "help")
-    assert found.list_json is True
-    assert found.status_json is False
-    assert found.final_message_command is None
-    assert found.can_read_final_message is False
-    assert found.summary() == ("codex-cli 0.158.0: codex cloud commands: exec, status, list, apply, diff, help; "
-                               "no final-message subcommand; status has no --json; list --json lists tasks only")
+def status_cloud(output, calls=None, error=None):
+    def run_status(argv):
+        if calls is not None:
+            calls.append(argv)
+        if error:
+            raise error
+        return output
+
+    return Cloud(run_gh=lambda *a, **k: "", run_status=run_status)
 
 
-def test_codex_cloud_result_capability_would_notice_a_supported_final_message_command():
-    help_text = CODEX_CLOUD_HELP.replace("  help    Print this message", "  final-message  Show the final message for a finished task\n  help    Print this message")
-    found = codex_cloud_result_capability("codex-cli future", help_text, CODEX_CLOUD_LIST_HELP, CODEX_CLOUD_STATUS_HELP)
-    assert found.can_read_final_message is True
-    assert found.final_message_command == "final-message"
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ("[PENDING] Verify acme/shop#123\nenv-1  \u2022  3s ago\nno diff\n", "pending"),
+        ("[READY] Verify acme/shop#123\nEnv  \u2022  1m ago\n+5/-2 \u2022 3 files\n", "ready"),
+        ("[APPLIED] Work the brief\nEnv  \u2022  1h ago\nno diff\n", "applied"),
+        ("\x1b[31m[ERROR]\x1b[0m Work the brief\n", "error"),
+        ("", "unknown"),
+        ("Error: not signed in\n", "unknown"),
+        ("run [READY] anything\n", "unknown"),
+    ],
+)
+def test_task_status_reads_only_the_label_codex_cloud_status_prints(output, expected):
+    assert status_cloud(output).task_status("codex", "task_abc123") == expected
+
+
+def test_task_status_runs_exactly_codex_cloud_status_with_the_task_id():
+    calls = []
+    cloud = status_cloud("[READY] t\n", calls)
+    assert cloud.task_status("codex", "task_abc123") == "ready"
+    assert cloud.task_status("codex", "https://chatgpt.com/codex/tasks/task_e_9Zy-1?x=1#top") == "ready"
+    assert calls == [["codex", "cloud", "status", "task_abc123"], ["codex", "cloud", "status", "task_e_9Zy-1"]]
+
+
+@pytest.mark.parametrize(
+    ("backend", "session"),
+    [
+        ("claude", "https://claude.ai/code/session_01ABCDEF"),
+        ("codex", "https://claude.ai/code/session_01ABCDEF"),
+        ("codex", "task_abc; rm -rf /"),
+        ("codex", "--help"),
+        ("codex", ""),
+    ],
+)
+def test_task_status_never_calls_the_cli_for_anything_but_a_codex_task_id(backend, session):
+    calls = []
+    assert status_cloud("[READY] t\n", calls).task_status(backend, session) == "unknown"
+    assert calls == []
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError("codex"), subprocess.TimeoutExpired("codex", 30), OSError("boom")])
+def test_task_status_is_unknown_when_the_cli_cannot_be_run(error):
+    assert status_cloud("", error=error).task_status("codex", "task_abc123") == "unknown"
 
 
 def test_a_claude_session_without_the_kit_posts_a_report_tick_can_read():

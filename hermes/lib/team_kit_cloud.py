@@ -27,49 +27,27 @@ SESSION = re.compile(
     r"|\b(?:session|cse|task)_[A-Za-z0-9]{6,}\b"
 )
 KEEP_SECONDS = 3 * 24 * 3600
+# `codex cloud status <TASK_ID>` prints `[PENDING|READY|APPLIED|ERROR] <title>` first (codex-rs
+# cloud-tasks) and exits 1 for anything but READY. It has no --json option, and the title is
+# free text, so only the bracketed label is read.
+STATUS_LABEL = re.compile(r"\A\[(PENDING|READY|APPLIED|ERROR)\]")
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+TASK_ID = re.compile(r"(?:\A|/codex/tasks/)(task_[A-Za-z0-9_-]+)\Z")
+STATUS_TIMEOUT_SECONDS = 30
+FINISHED = frozenset({"ready", "applied", "error"})
 
 Runner = Callable[..., str]
+StatusRunner = Callable[[list[str]], str]
+
+
+def run_codex_status(argv: list[str]) -> str:
+    """Standard output of a `codex cloud status` call. Its exit code carries nothing the label does not."""
+    done = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=STATUS_TIMEOUT_SECONDS, check=False)
+    return done.stdout
 
 
 class CloudError(Exception):
     pass
-
-
-@dataclass(frozen=True)
-class CodexCloudResultCapability:
-    version: str
-    commands: tuple[str, ...]
-    list_json: bool
-    status_json: bool
-    final_message_command: str | None
-
-    @property
-    def can_read_final_message(self) -> bool:
-        return self.final_message_command is not None
-
-    def summary(self) -> str:
-        version = self.version or "unknown Codex CLI"
-        commands = ", ".join(self.commands) if self.commands else "none discovered"
-        if self.can_read_final_message:
-            return f"{version}: codex cloud commands: {commands}; final messages via {self.final_message_command}"
-        details = ["no final-message subcommand"]
-        if not self.status_json:
-            details.append("status has no --json")
-        if self.list_json:
-            details.append("list --json lists tasks only")
-        return f"{version}: codex cloud commands: {commands}; {'; '.join(details)}"
-
-
-def codex_cloud_result_capability(version: str, cloud_help: str, list_help: str, status_help: str) -> CodexCloudResultCapability:
-    commands = tuple(re.findall(r"^  ([a-z][a-z-]*)\s+", cloud_help, re.M))
-    final_message = next((name for name in commands if name in {"final-message", "result", "results"}), None)
-    return CodexCloudResultCapability(
-        version=version.strip(),
-        commands=commands,
-        list_json=bool(re.search(r"^\s+--json\b", list_help, re.M)),
-        status_json=bool(re.search(r"^\s+--json\b", status_help, re.M)),
-        final_message_command=final_message,
-    )
 
 
 @dataclass
@@ -80,6 +58,24 @@ class Cloud:
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     now: Callable[[], float] = field(default=time.time)
+    run_status: StatusRunner = run_codex_status
+
+    def task_status(self, backend: str, session: str) -> str:
+        """pending, ready, applied, or error for a Codex cloud task; unknown for anything else.
+
+        Unknown covers a Claude session, a session that is not a Codex task, a missing or signed-out
+        codex binary, a timeout, and output with no label. Callers then keep their one-day fallback.
+        """
+        found = TASK_ID.search(str(session).strip().split("?")[0].split("#")[0]) if backend == "codex" else None
+        if not found:
+            return "unknown"
+        try:
+            out = self.run_status(["codex", "cloud", "status", found.group(1)])
+        except Exception:  # noqa: BLE001 - nothing it says may reach a notice, a log, or an error message
+            return "unknown"
+        first = next((line.strip() for line in ANSI.sub("", out or "").splitlines() if line.strip()), "")
+        label = STATUS_LABEL.match(first)
+        return label.group(1).lower() if label else "unknown"
 
     def start(self, backend: str, repo: str, argv: list[str], workdir: Path) -> str:
         """Run argv for repo with workdir as its directory. Returns the session URL or id."""
