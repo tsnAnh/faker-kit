@@ -53,8 +53,54 @@ def test_recent_revert_or_hotfix_history_is_medium_risk():
     assert risk.level == "medium"
     assert risk.reasons == ("recent revert or hotfix touched src/cart.py",)
     assert is_repair_commit({"commit": {"message": "Revert \"checkout tax rounding\""}})
-    assert is_repair_commit({"commit": {"message": "Hot-fix production checkout crash"}})
+    assert is_repair_commit({"commit": {"message": "hotfix: production checkout crash"}})
     assert not is_repair_commit({"commit": {"message": "Polish checkout copy"}})
+
+
+@pytest.mark.parametrize("message", [
+    'Revert "checkout tax rounding"\n\nThis reverts commit abc1234.',
+    "revert: checkout tax rounding",
+    "revert(cart): drop rounding change",
+    "hotfix: production checkout crash",
+    "Hotfix checkout crash",
+    "HOTFIX(payments): double charge",
+    "fix!: stop double charge",
+    "fix(cart)!: stop double charge",
+])
+def test_repair_commits_are_reverts_and_hotfix_markers_at_the_start_of_the_subject(message):
+    assert is_repair_commit({"commit": {"message": message}})
+
+
+@pytest.mark.parametrize("message", [
+    "add rollback support",
+    "feat: add rollback support to deploys",
+    "Reverting the layout is now possible",
+    "feat: revert button in the editor",
+    "fix: hotfix banner overlaps the header",
+    "fix(cart): rounding",
+    "Fix revert of cart totals",
+    "docs: explain how to revert a release",
+    "Polish checkout copy\n\nRevert the font change later.",
+    "hotfixes-page: new layout",
+])
+def test_feature_and_ordinary_fix_commits_are_not_repairs(message):
+    assert not is_repair_commit({"commit": {"message": message}})
+
+
+def test_bracketed_paths_match_themselves_for_repairs_and_codeowners():
+    path = "app/[id]/page.tsx"
+    risk = score(files((path, "modified", 1, 1)), "unit-test-verified", recent_repair_paths=(path,), codeowners_unowned_paths=(path,))
+    assert risk.level == "medium"
+    assert risk.reasons == (f"recent revert or hotfix touched {path}", f"CODEOWNERS has no owner for {path}")
+    # As a glob, `app/[id]/page.tsx` would match `app/i/page.tsx`; exact paths must not.
+    other = score(files(("app/i/page.tsx", "modified", 1, 1)), "unit-test-verified", recent_repair_paths=(path,), codeowners_unowned_paths=(path,))
+    assert other.level == "low" and other.reasons == ()
+
+
+def test_an_unchecked_repair_history_is_named_in_the_reasons_without_raising_the_level():
+    risk = score(files(("src/cart.py", "modified", 1, 1)), "unit-test-verified", repair_history_unchecked=4)
+    assert risk.level == "low"
+    assert risk.reasons == ("revert and hotfix history checked for the 25 most-changed files only, 4 more not checked",)
 
 
 def test_risk_overrides_add_repository_rules_and_are_validated():

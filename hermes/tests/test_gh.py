@@ -1147,6 +1147,40 @@ def test_recent_revert_or_hotfix_history_makes_a_pull_request_medium_risk(team_k
     assert any(c[0] == "api" and "/commits?path=src/cart.ts&per_page=30&since=" in c[-1] for c in gh.calls)
 
 
+def test_a_bracketed_path_with_a_recent_revert_matches_itself(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    gh.pr_files[7] = files(("app/[id]/page.tsx", "modified", 6, 2))
+    gh.history["app/[id]/page.tsx"] = [{"author": {"login": "lan"}, "commit": {"message": "revert: id page cache"}}]
+    verdict(gh, n, team_kit_home, verification="unit-test-verified", at=NOW)
+    [notice] = tick(gh, capsys)
+    assert "risk medium (recent revert or hotfix touched app/[id]/page.tsx), suggested reviewers @lan)" in notice
+
+
+def test_a_feature_commit_that_mentions_rollback_is_not_a_repair(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    gh.pr_files[7] = files(("src/deploy.ts", "modified", 6, 2))
+    gh.history["src/deploy.ts"] = [{"author": {"login": "lan"}, "commit": {"message": "add rollback support"}}]
+    verdict(gh, n, team_kit_home, verification="unit-test-verified", at=NOW)
+    [notice] = tick(gh, capsys)
+    assert "risk low" in notice and "revert or hotfix touched" not in notice
+
+
+def test_revert_history_lookups_are_capped_to_the_most_changed_files(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    # 30 changed files, f00.ts changed least and f29.ts most, plus one added file with no history.
+    gh.pr_files[7] = files(*[(f"src/f{i:02}.ts", "modified", i + 1, 0) for i in range(30)], ("src/new.ts", "added", 1, 0))
+    gh.history["src/f00.ts"] = [{"author": {"login": "lan"}, "commit": {"message": "Revert \"f00\""}}]
+    verdict(gh, n, team_kit_home, verification="unit-test-verified", at=NOW)
+    [notice] = tick(gh, capsys)
+    looked_up = [urllib.parse.parse_qs(c[-1].split("?", 1)[1])["path"][0]
+                 for c in gh.calls if c[0] == "api" and "/commits?" in c[-1] and "since=" in c[-1]]
+    assert len(looked_up) == 25
+    assert set(looked_up) == {f"src/f{i:02}.ts" for i in range(5, 30)}
+    # f00.ts was not looked up, so its revert is not seen, and the notice says the cap was hit.
+    assert "revert or hotfix touched" not in notice
+    assert "revert and hotfix history checked for the 25 most-changed files only, 5 more not checked" in notice
+
+
 def test_codeowners_with_unowned_changed_paths_makes_a_pull_request_medium_risk(team_kit_home, gh, capsys):
     n = verifying_unit(gh, team_kit_home)
     gh.pr_files[7] = files(("src/cart.ts", "modified", 6, 2), ("docs/guide.md", "modified", 1, 1))

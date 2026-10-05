@@ -62,6 +62,7 @@ from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord,
 from team_kit_cloud import Cloud, CloudError  # noqa: E402
 from team_kit_risk import (  # noqa: E402
     CODEOWNERS_PATHS,
+    REPAIR_HISTORY_FILES,
     RISK_LABELS,
     Risk,
     is_repair_commit,
@@ -669,10 +670,12 @@ class Gh:
             break
         since = dt.datetime.fromtimestamp(self.now(), dt.timezone.utc) - dt.timedelta(days=RECENT_REPAIR_DAYS)
         recent_repairs: list[str] = []
-        for f in files:
+        # Files with history, most-changed first; only the first REPAIR_HISTORY_FILES are looked up.
+        with_history = sorted((f for f in files if str(f.get("filename") or "") and f.get("status") != "added"),
+                              key=lambda f: -(int(f.get("additions") or 0) + int(f.get("deletions") or 0)))
+        unchecked = max(0, len(with_history) - REPAIR_HISTORY_FILES)
+        for f in with_history[:REPAIR_HISTORY_FILES]:
             path = str(f.get("filename") or "")
-            if not path or f.get("status") == "added":
-                continue
             try:
                 commits = self.commits_for_path(path, per_page=30, since=since.strftime("%Y-%m-%dT%H:%M:%SZ"))
             except (Refused, ValueError):
@@ -680,7 +683,8 @@ class Gh:
             if any(isinstance(c, dict) and is_repair_commit(c) for c in commits):
                 recent_repairs.append(path)
         found = score(files, verification, tuple(config.get("risk_paths_high", [])), tuple(config.get("risk_paths_medium", [])), checks,
-                      normalize_risk_overrides(config.get("risk_overrides", [])), tuple(recent_repairs), tuple(codeowners_unowned))
+                      normalize_risk_overrides(config.get("risk_overrides", [])), tuple(recent_repairs), tuple(codeowners_unowned),
+                      unchecked)
         if not candidates:
             # No CODEOWNERS: whoever last changed the files this pull request changes most.
             biggest = sorted(files, key=lambda f: -(int(f.get("additions") or 0) + int(f.get("deletions") or 0)))[:3]

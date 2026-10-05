@@ -38,7 +38,18 @@ SMALL_LINES, LARGE_LINES = 150, 600
 MANY_FILES = 25
 CODEOWNERS_PATHS = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
 MAX_REVIEWERS = 3
-REPAIR_COMMIT = re.compile(r"\b(revert(?:ed|s|ing)?|hot[- ]?fix(?:ed|es)?|roll ?back(?:ed|s|ing)?)\b", re.I)
+# At most this many changed files get a `commits?path=` history lookup for reverts and hotfixes,
+# the most-changed first, so a huge pull request cannot spend the API rate limit.
+REPAIR_HISTORY_FILES = 25
+# A repair commit is one whose subject line (the first line of the message) starts with a marker
+# that only reverts and hotfixes use, so a feature commit such as "add rollback support" or
+# "Reverting the old layout is now possible" never counts:
+#   - `Revert ...`, the subject `git revert` writes ("Revert \"cart total rounding\"");
+#   - `revert:` or `revert(scope):`, the conventional-commit revert type;
+#   - `hotfix` in any case, alone or as `hotfix:` / `hotfix(scope):` / `Hotfix checkout crash`;
+#   - `fix!:` or `fix(scope)!:`, a conventional breaking fix, which teams use to mark a hotfix.
+# A plain `fix:` is an ordinary bug fix and does not count.
+REPAIR_COMMIT = re.compile(r"\A(?:Revert\b|revert(?:\([^)]*\))?:|[Hh][Oo][Tt][Ff][Ii][Xx]\b|fix(?:\([^)]*\))?!:)")
 OVERRIDE_REASON = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9 _.,:/@+-]{0,119}\Z")
 
 
@@ -115,9 +126,11 @@ def normalize_risk_overrides(value: Any) -> tuple[RiskOverride, ...]:
 
 
 def score(files: list[dict], verification: str | None, high_paths=(), medium_paths=(), checks: str = "passed",
-          risk_overrides=(), recent_repair_paths=(), codeowners_unowned_paths=()) -> Risk:
+          risk_overrides=(), recent_repair_paths=(), codeowners_unowned_paths=(), repair_history_unchecked: int = 0) -> Risk:
     """files: the pull request's files, each {filename, status, additions, deletions}.
-    verification: the verifier's verdict, or None when nobody verified it. checks: passed or none."""
+    verification: the verifier's verdict, or None when nobody verified it. checks: passed or none.
+    recent_repair_paths and codeowners_unowned_paths are exact file paths, never patterns.
+    repair_history_unchecked: how many changed files had no revert or hotfix history looked up."""
     paths = [str(f.get("filename") or "") for f in files]
     lines = sum(int(f.get("additions") or 0) + int(f.get("deletions") or 0) for f in files)
     overrides = normalize_risk_overrides(risk_overrides)
@@ -148,10 +161,16 @@ def score(files: list[dict], verification: str | None, high_paths=(), medium_pat
         hit = first_hit(paths, override.paths)
         if hit:
             bump(1, listed_paths(f"{override.reason}: ", hit))
-    recent_repairs = first_hit(paths, tuple(recent_repair_paths))
+    # Exact paths, compared as strings: a path such as `app/[id]/page.tsx` is not a glob.
+    repaired = set(recent_repair_paths)
+    recent_repairs = sorted({p for p in paths if p in repaired})
     if recent_repairs:
         bump(1, listed_paths("recent revert or hotfix touched ", recent_repairs))
-    unowned = first_hit(paths, tuple(codeowners_unowned_paths))
+    if repair_history_unchecked > 0:
+        reasons.append(f"revert and hotfix history checked for the {REPAIR_HISTORY_FILES} most-changed files only, "
+                       f"{repair_history_unchecked} more not checked")
+    unowned_set = set(codeowners_unowned_paths)
+    unowned = sorted({p for p in paths if p in unowned_set})
     if unowned:
         bump(1, listed_paths("CODEOWNERS has no owner for ", unowned))
     removed_tests = [f["filename"] for f in files if f.get("status") == "removed" and TEST_PATH.search(str(f.get("filename") or ""))]
@@ -172,7 +191,8 @@ def score(files: list[dict], verification: str | None, high_paths=(), medium_pat
 
 def is_repair_commit(commit: dict) -> bool:
     message = str(((commit.get("commit") or {}).get("message")) or commit.get("message") or "")
-    return bool(REPAIR_COMMIT.search(message))
+    subject = message.lstrip().split("\n", 1)[0].strip()
+    return bool(REPAIR_COMMIT.match(subject))
 
 
 def parse_codeowners(text: str) -> list[tuple[str, tuple[str, ...]]]:
