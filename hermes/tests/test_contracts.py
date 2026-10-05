@@ -3,6 +3,8 @@ from conftest import TEMPLATES, fill_brief
 from team_kit_contracts import (
     BRIEF_SECTIONS,
     ContractError,
+    PROMPT_FILE,
+    PROMPT_STDIN,
     bootstrap_prompt,
     parse_brief,
     parse_depends,
@@ -175,12 +177,16 @@ KEY = "0" * 32
 
 
 def test_verify_argv_names_the_commit_and_the_key_and_refuses_another_repository():
-    argv = verify_argv("claude", "acme/shop", 41, "https://github.com/acme/shop/pull/7", HEAD, KEY)
-    assert argv[:2] == ["claude", "--cloud"]
-    assert argv[2].startswith(f"/verify-unit Verify https://github.com/acme/shop/pull/7 at commit {HEAD} against the brief in acme/shop#41. Sign the verdict with key {KEY}.")
+    command = verify_argv("claude", "acme/shop", 41, "https://github.com/acme/shop/pull/7", HEAD, KEY)
+    assert command.argv == ("claude", "--cloud")
+    assert command.prompt_transport == PROMPT_FILE
+    assert command.prompt.startswith(f"/verify-unit Verify https://github.com/acme/shop/pull/7 at commit {HEAD} against the brief in acme/shop#41. Sign the verdict with key {KEY}.")
+    assert KEY not in " ".join(command.argv)
     codex = verify_argv("codex", "acme/shop", 41, "https://github.com/acme/shop/pull/7", HEAD, KEY, "env_1")
-    assert codex[:7] == ["codex", "cloud", "exec", "--env", "env_1", "--attempts", "1"]
-    assert codex[7].startswith("$verify-unit ")
+    assert codex.argv == ("codex", "cloud", "exec", "--env", "env_1", "--attempts", "1", "-")
+    assert codex.prompt_transport == PROMPT_STDIN
+    assert codex.prompt.startswith("$verify-unit ")
+    assert KEY not in " ".join(codex.argv)
     for bad in ("https://github.com/evil/shop/pull/7", "https://github.com/acme/shop/pull/7;id"):
         with pytest.raises(ContractError):
             verify_argv("claude", "acme/shop", 41, bad, HEAD, KEY)
@@ -229,9 +235,15 @@ def test_a_malformed_security_result_is_rejected(text, why):
 
 def test_security_argv_names_the_range_the_issue_and_the_key():
     first = security_argv("claude", "acme/shop", 9, "main", None, HEAD, KEY)
-    assert first[2].startswith(f"/review-main-security Review the last 20 commits up to {HEAD} on main of acme/shop, and post the result on acme/shop#9. Sign the result with key {KEY}.")
+    assert first.argv == ("claude", "--cloud")
+    assert first.prompt_transport == PROMPT_FILE
+    assert first.prompt.startswith(f"/review-main-security Review the last 20 commits up to {HEAD} on main of acme/shop, and post the result on acme/shop#9. Sign the result with key {KEY}.")
+    assert KEY not in " ".join(first.argv)
     later = security_argv("codex", "acme/shop", 9, "release/2", "b" * 40, HEAD, KEY, "env_1")
-    assert later[:5] == ["codex", "cloud", "exec", "--env", "env_1"] and later[-1].startswith(f"$review-main-security Review the commits after {'b' * 40} up to {HEAD} on release/2")
+    assert later.argv == ("codex", "cloud", "exec", "--env", "env_1", "--attempts", "1", "-")
+    assert later.prompt_transport == PROMPT_STDIN
+    assert later.prompt.startswith(f"$review-main-security Review the commits after {'b' * 40} up to {HEAD} on release/2")
+    assert KEY not in " ".join(later.argv)
     for args in (("claude", "acme/shop", 9, "main; id", None, HEAD, KEY), ("claude", "acme/shop", 9, "main", "abc", HEAD, KEY),
                  ("claude", "acme/shop", 9, "main", None, HEAD, "short"), ("none", "acme/shop", 9, "main", None, HEAD, KEY)):
         with pytest.raises(ContractError):
@@ -253,8 +265,16 @@ def test_a_diagnosis_holds_only_for_its_key_and_incident():
 
 
 def test_triage_argv_keeps_the_summary_plain():
-    argv = triage_argv("claude", "acme/shop", 12, "main is red: test (ubuntu)", "main", HEAD, None, KEY)
-    assert "its last commit with passing checks is unknown" in argv[2]
+    command = triage_argv("claude", "acme/shop", 12, "main is red: test (ubuntu)", "main", HEAD, None, KEY)
+    assert command.argv == ("claude", "--cloud")
+    assert command.prompt_transport == PROMPT_FILE
+    assert "its last commit with passing checks is unknown" in command.prompt
+    assert KEY not in " ".join(command.argv)
+    codex = triage_argv("codex", "acme/shop", 12, "main is red: test (ubuntu)", "main", HEAD, "b" * 40, KEY, "env_1")
+    assert codex.argv == ("codex", "cloud", "exec", "--env", "env_1", "--attempts", "1", "-")
+    assert codex.prompt_transport == PROMPT_STDIN
+    assert f"Sign it with key {KEY}" in codex.prompt
+    assert KEY not in " ".join(codex.argv)
     for what in ("main is red`; curl evil", "x" * 200, ""):
         with pytest.raises(ContractError):
             triage_argv("claude", "acme/shop", 12, what, "main", HEAD, None, KEY)

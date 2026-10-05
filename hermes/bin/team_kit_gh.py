@@ -524,7 +524,7 @@ class Gh:
             raise Unfit(f"dependency {', '.join(dropped)} was closed without merging; change the brief or reopen it")
         if waiting:
             raise Waiting(f"waiting for dependencies: {', '.join(waiting)} must be closed by a merged pull request", "unit")
-        argv = launch_argv(config["backend"], self.repo, number, size, config.get("codex_env"))
+        command = launch_argv(config["backend"], self.repo, number, size, config.get("codex_env"))
         owner, name = self.repo.split("/")
         workdir = self.policy.home / "checkouts" / f"{owner}__{name}" / str(number)
         limit = int(config.get("max_in_flight", 1))
@@ -541,7 +541,7 @@ class Gh:
             self.relabel(number, add=RUNNING_LABEL, remove=(HUMAN_LABEL,) if HUMAN_LABEL in labels else ())
             counter.write({**counts, self.repo: counts[self.repo] + 1})
         try:
-            session = cloud.start(config["backend"], self.repo, argv, workdir)
+            session = cloud.start(config["backend"], self.repo, command, workdir)
         except Exception as err:
             # Any failure, a missing `claude` binary included, must free the unit again.
             self.relabel(number, remove=(RUNNING_LABEL,))
@@ -694,7 +694,7 @@ class Gh:
         number = int(issue["number"])
         key = secrets.token_hex(16)
         try:
-            argv = verify_argv(backend, self.repo, number, pr_url, head or "", key, config.get("codex_env"))
+            command = verify_argv(backend, self.repo, number, pr_url, head or "", key, config.get("codex_env"))
         except ContractError as err:
             return self.gate(issue, f"the verifier could not start: {err}")
         path = self.verify_record_path(number)
@@ -708,7 +708,7 @@ class Gh:
         held = tuple(label for label in (RUNNING_LABEL, HUMAN_LABEL, REVIEW_LABEL) if label in labels_of(issue))
         self.relabel(number, add=VERIFYING_LABEL, remove=held)
         try:
-            session = cloud.start(backend, self.repo, argv, workdir)
+            session = cloud.start(backend, self.repo, command, workdir)
         except Exception as err:  # noqa: BLE001 - any failure leaves the unit to the owner
             self.drop_verify_record(number)
             issue = {**issue, "labels": [{"name": VERIFYING_LABEL}]}
@@ -873,11 +873,11 @@ class Security:
             return {"state": "current", "head": head}
         issue = self.tracking_issue(branch)
         key = secrets.token_hex(16)
-        argv = security_argv(backend, gh.repo, issue, branch, base, head, key, config.get("codex_env"))
+        command = security_argv(backend, gh.repo, issue, branch, base, head, key, config.get("codex_env"))
         owner, name = gh.repo.split("/")
         workdir = gh.policy.home / "checkouts" / f"{owner}__{name}" / "security"
         try:
-            session = cloud.start(backend, gh.repo, argv, workdir)
+            session = cloud.start(backend, gh.repo, command, workdir)
         except Exception as err:  # noqa: BLE001 - tried again tomorrow
             raise Refused(f"the security review could not start: {reason(err)}") from None
         self.write({**record, "running": {"issue": issue, "base": base, "head": head, "key": key, "started": gh.now(), "session": session}})
@@ -1062,8 +1062,8 @@ class Incidents:
             key_hex = secrets.token_hex(16)
             owner, name = gh.repo.split("/")
             try:
-                argv = triage_argv(backend, gh.repo, number, plain(title, 120), branch, head, data.get("green"), key_hex, config.get("codex_env"))
-                session = cloud.start(backend, gh.repo, argv, gh.policy.home / "checkouts" / f"{owner}__{name}" / f"incident-{number}")
+                command = triage_argv(backend, gh.repo, number, plain(title, 120), branch, head, data.get("green"), key_hex, config.get("codex_env"))
+                session = cloud.start(backend, gh.repo, command, gh.policy.home / "checkouts" / f"{owner}__{name}" / f"incident-{number}")
             except Exception as err:  # noqa: BLE001 - the incident stands without a diagnosis
                 notices.append(f"{NOTICE} incident #{number}: the triage session could not start: {reason(err)}")
             else:

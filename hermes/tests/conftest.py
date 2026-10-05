@@ -75,7 +75,20 @@ def executable(path, text):
     path.chmod(0o755)
 
 
-FAKE_CLAUDE = "#!/bin/sh\necho \"$PWD\" > \"$HOME/.fake-claude-cwd\"\nprintf '%s\\n' \"$@\" > \"$HOME/.fake-claude-args\"\necho 'Started https://claude.ai/code/session_01BOOTstrap'\n"
+FAKE_CLAUDE = """import os
+import pathlib
+import stat
+import sys
+
+home = pathlib.Path(os.environ["HOME"])
+(home / ".fake-claude-cwd").write_text(os.getcwd())
+(home / ".fake-claude-args").write_text("\\n".join(sys.argv[1:]))
+if len(sys.argv) > 2 and sys.argv[2].startswith("@"):
+    prompt = pathlib.Path(sys.argv[2][1:])
+    (home / ".fake-claude-prompt").write_text(prompt.read_text())
+    (home / ".fake-claude-prompt-mode").write_text(oct(stat.S_IMODE(prompt.stat().st_mode)))
+print("Started https://claude.ai/code/session_01BOOTstrap")
+"""
 
 
 @pytest.fixture(scope="session")
@@ -102,7 +115,7 @@ def machine(tmp_path):
     tests = Path(__file__).resolve().parent
     executable(bin_dir / "hermes", f"#!{sys.executable}\n" + (tests / "fake_hermes.py").read_text())
     executable(bin_dir / "gh", f"#!{sys.executable}\n" + (tests / "fake_gh.py").read_text())
-    executable(bin_dir / "claude", FAKE_CLAUDE)
+    executable(bin_dir / "claude", f"#!{sys.executable}\n" + FAKE_CLAUDE)
     env = {"HOME": str(home), "PATH": f"{bin_dir}:/usr/bin:/bin", "TMPDIR": str(tmp_path), "TEAM_KIT_SOURCE_URL": "https://github.com/tsnAnh/team-kit.git"}
     return home / ".hermes", env
 
