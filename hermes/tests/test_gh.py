@@ -2,10 +2,13 @@ import base64
 import contextlib
 import io
 import json
+import os
+import subprocess
+import sys
 import time
 
 import pytest
-from conftest import SHOP, TEMPLATES, fill_brief
+from conftest import HERMES, SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
 from team_kit_contracts import LAUNCHED_MARKER, diagnosis_signature, review_signature, security_signature, size_marker, verdict_signature
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, Refused, checks_state, main
@@ -453,6 +456,94 @@ def test_tick_starts_one_pr_review_for_a_new_unit_pr_head(team_kit_home, kit, ca
     assert (team_kit_home / "reviews" / "meo-beo" / f"{n}.json").stat().st_mode & 0o077 == 0
     assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
     assert len(cloud.started) == 1, "same PR head already has one review in flight"
+
+
+def test_pr_review_start_is_locked_across_processes(tmp_path):
+    script = r'''
+import multiprocessing as mp
+import queue
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from team_kit_gh import Review
+
+ctx = mp.get_context("fork")
+barrier = ctx.Barrier(2)
+started = ctx.Queue()
+results = ctx.Queue()
+
+
+class StubGh:
+    def __init__(self, root):
+        self.policy = SimpleNamespace(home=Path(root))
+        self.bot = SimpleNamespace(name="bot")
+        self.repo = "acme/shop"
+
+    def now(self):
+        return 1000.0
+
+    def gate(self, issue, why):
+        return why
+
+    def run(self, args):
+        return ""
+
+    def comments(self, number):
+        return []
+
+    def trusted(self, comment):
+        return True
+
+
+class CountingCloud:
+    def start(self, backend, repo, command, workdir):
+        started.put((backend, repo, command.argv))
+        return "session"
+
+
+class RacingReview(Review):
+    def __init__(self, gh):
+        super().__init__(gh)
+        self.initial_read = True
+
+    def record(self, number):
+        value = super().record(number)
+        if self.initial_read:
+            self.initial_read = False
+            barrier.wait()
+        return value
+
+
+def worker(root):
+    review = RacingReview(StubGh(root))
+    issue = {"number": 7, "labels": [{"name": "agent:running"}]}
+    result = review.ensure(issue, "https://github.com/acme/shop/pull/9", "a" * 40, "claude", {}, CountingCloud(), False)
+    results.put(result)
+
+
+processes = [ctx.Process(target=worker, args=(sys.argv[1],)) for _ in range(2)]
+for process in processes:
+    process.start()
+for process in processes:
+    process.join(10)
+    if process.is_alive():
+        process.terminate()
+        process.join()
+        raise SystemExit("review lock regression hung")
+launches = []
+while True:
+    try:
+        launches.append(started.get_nowait())
+    except queue.Empty:
+        break
+outcomes = [results.get(timeout=1) for _ in range(2)]
+print(f"same_head_process_launches={len(launches)}; exit_codes={[p.exitcode for p in processes]}; outcomes={outcomes}")
+assert len(launches) == 1
+assert [p.exitcode for p in processes] == [0, 0]
+'''
+    env = {**os.environ, "PYTHONPATH": f"{HERMES / 'bin'}:{HERMES / 'lib'}"}
+    done = subprocess.run([sys.executable, "-c", script, str(tmp_path)], text=True, capture_output=True, env=env, check=True)
+    assert "same_head_process_launches=1" in done.stdout
 
 
 def test_tick_starts_a_new_pr_review_when_the_head_moves(team_kit_home, kit, capsys):

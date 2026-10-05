@@ -867,6 +867,14 @@ class Review:
     def path(self, number: int) -> Path:
         return self.gh.policy.home / "reviews" / self.gh.bot.name / f"{int(number)}.json"
 
+    @contextlib.contextmanager
+    def lock(self, number: int):
+        path = self.path(number)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path.with_suffix(".lock"), "w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
+
     def record(self, number: int) -> dict | None:
         try:
             data = json.loads(self.path(number).read_text())
@@ -916,22 +924,31 @@ class Review:
 
     def start(self, issue: dict, pr_url: str, head: str, backend: str, config: dict, cloud: Cloud) -> tuple[str, str | None]:
         number = int(issue["number"])
-        key = secrets.token_hex(16)
-        try:
-            command = review_argv(backend, self.gh.repo, number, pr_url, head, key, config.get("codex_env"))
-        except ContractError as err:
-            return "gate", self.gh.gate(issue, f"the PR review could not start: {err}")
-        self.write(number, {"pr": pr_url, "head": head, "key": key, "backend": backend, "started": self.gh.now()})
+        with self.lock(number):
+            current = self.record(number)
+            if current and current.get("pr") == pr_url and current.get("head") == head:
+                return "wait", None
+            key = secrets.token_hex(16)
+            try:
+                command = review_argv(backend, self.gh.repo, number, pr_url, head, key, config.get("codex_env"))
+            except ContractError as err:
+                return "gate", self.gh.gate(issue, f"the PR review could not start: {err}")
+            self.write(number, {"pr": pr_url, "head": head, "key": key, "backend": backend, "started": self.gh.now()})
         owner, name = self.gh.repo.split("/")
         workdir = self.gh.policy.home / "checkouts" / f"{owner}__{name}" / f"{number}-review"
         try:
             session = cloud.start(backend, self.gh.repo, command, workdir)
         except Exception as err:  # noqa: BLE001 - any failure leaves the unit to the owner
-            self.drop(number)
+            with self.lock(number):
+                current = self.record(number)
+                if current and current.get("key") == key:
+                    self.drop(number)
             why = str(err) if isinstance(err, (CloudError, Refused)) else type(err).__name__
             return "gate", self.gh.gate(issue, f"the PR review could not start: {why}")
-        record = {**(self.record(number) or {}), "session": session}
-        self.write(number, record)
+        with self.lock(number):
+            current = self.record(number) or {}
+            if current.get("key") == key and current.get("pr") == pr_url and current.get("head") == head:
+                self.write(number, {**current, "session": session})
         try:
             self.gh.run(["issue", "comment", str(number), "-R", self.gh.repo, "--body",
                          f"{REVIEW_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\npr: {pr_url}\nhead: {head}\n"])
