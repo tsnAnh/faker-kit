@@ -44,11 +44,12 @@ On its GitHub issue, as labels. `team-kit-gh` sets them; you never do.
 |---|---|
 | `agent-task` only | Queued: waiting for its dependencies or a free slot. `team-kit-tick` launches it |
 | `agent:running` | A cloud agent is working it |
-| `agent:review` | The agent reported done and the checks passed. The owner merges |
+| `agent:verifying` | The agent reported done and the checks passed. A separate verifier session is checking the pull request |
+| `agent:review` | Verified (or `verifier_backend` is `none`) and the checks passed. The owner merges |
 | `agent:needs-human` | A gate. The agent stopped and needs the owner |
 | closed as completed | Done: its pull request merged |
 
-`team-kit-tick` runs every 30 minutes. It launches what can start, and when an agent reports, it moves the unit to `agent:review` or opens a gate and frees the slot.
+`team-kit-tick` runs every 30 minutes. It launches what can start. When an agent reports done and the checks pass, it starts a verifier session on the pull request, which keeps the unit's slot. When the verdict arrives, it moves the unit to `agent:review` or opens a gate and frees the slot.
 
 ## Trust
 
@@ -109,7 +110,7 @@ Run it once per unit. Never dispatch the same brief twice. When all are dispatch
 
 ### 4. The owner merges
 
-The coding agent follows the `follow-brief` skill under faker-mode and opens one pull request. When its report says done and the checks pass, the unit moves to `agent:review` and the owner gets a notice. Nobody but the owner merges. The merge closes the issue, which frees its slot and releases the units that depend on it.
+The coding agent follows the `follow-brief` skill under faker-mode and opens one pull request. When its report says done and the checks pass, a verifier session that did not write the change checks the pull request with the `verify-unit` skill. When its verdict is one `accept_verifications` in `.agents/dispatch.json` lists, the unit moves to `agent:review` and the owner gets a notice. Nobody but the owner merges. The merge closes the issue, which frees its slot and releases the units that depend on it.
 
 ## Gates
 
@@ -128,7 +129,8 @@ When `team-kit-gh` refuses, do not retry with changed arguments. Tell the owner 
 
 - **Kit pin mismatch.** "kit commit X differs from kit_ref Y", "the vendored kit X differs from kit_ref Y", or "has no vendored kit". This machine, `kit_ref`, and the repository's vendored copy of the kit must be the same commit, because cloud agents get the kit's skills only from that copy. Ask the owner to have the bootstrap bot run `team-kit-admin vendor` for this project and to merge its pull request, which moves both. Confirm with `team-kit-gh kit-check`.
 - **Brief rejected.** Missing sections, a unit id that does not match the marker, a Depends on line that names no issue or another repository's issue, or Standing orders that differ from `.agents/dispatch.md`. Fix the brief file and dispatch again. If Standing orders differ, read `.agents/dispatch.md` again with `team-kit-gh show` and paste it verbatim.
-- **Already launched, or waiting for review.** `launch` refuses a running unit or one in `agent:review`. Nothing to do.
+- **Already launched, or waiting for review.** `launch` refuses a running or verifying unit, or one in `agent:review`. Nothing to do.
+- **The verifier fell short.** "the verifier reported verifier-failed" or another value. Read its verdict comment on the issue and tell the owner what failed. To retry after a fix, `launch` the unit again: a new coding agent works the brief, then a new verifier checks it.
 
 Work for another project goes to that project's bot.
 

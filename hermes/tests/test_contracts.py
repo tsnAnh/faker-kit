@@ -8,8 +8,10 @@ from team_kit_contracts import (
     parse_depends,
     parse_report,
     parse_size,
+    parse_verdict,
     report_status,
     size_marker,
+    verify_argv,
 )
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
@@ -132,3 +134,36 @@ def test_bootstrap_prompt_reads_the_vendored_kit_and_asks_for_one_pull_request()
 def test_bootstrap_prompt_refuses_unsafe_or_missing_parts(args):
     with pytest.raises(ContractError):
         bootstrap_prompt(*args)
+
+
+def test_the_verdict_template_parses():
+    verdict = parse_verdict((TEMPLATES / "verdict.md").read_text().replace("<one of: live-ui-verified | unit-test-verified | type-check-only | verifier-blocked | verifier-failed>", "unit-test-verified"))
+    assert verdict.verification == "unit-test-verified"
+
+
+def test_a_verdict_reads_its_header_and_tolerates_backticks():
+    verdict = parse_verdict("<!-- team-kit:verdict v1 -->\nverification: live-ui-verified\npr: https://github.com/acme/shop/pull/7\nhead: `abc1234`\n\n## Execution\nhead: ignored\n")
+    assert (verdict.verification, verdict.pr, verdict.head) == ("live-ui-verified", "https://github.com/acme/shop/pull/7", "abc1234")
+
+
+@pytest.mark.parametrize(
+    ("text", "why"),
+    [
+        ("verification: live-ui-verified", "must start with"),
+        ("<!-- team-kit:verdict v1 -->\npr: x\nverification: live-ui-verified", "first line"),
+        ("<!-- team-kit:verdict v1 -->\nverification: pass", "is not one of"),
+    ],
+)
+def test_a_malformed_verdict_is_rejected(text, why):
+    with pytest.raises(ContractError, match=why):
+        parse_verdict(text)
+
+
+def test_verify_argv_names_the_pull_request_and_refuses_another_repository():
+    argv = verify_argv("claude", "acme/shop", 41, "https://github.com/acme/shop/pull/7")
+    assert argv[:2] == ["claude", "--cloud"] and argv[2].startswith("/verify-unit Verify https://github.com/acme/shop/pull/7 against the brief in acme/shop#41.")
+    codex = verify_argv("codex", "acme/shop", 41, "https://github.com/acme/shop/pull/7", "env_1")
+    assert codex[:7] == ["codex", "cloud", "exec", "--env", "env_1", "--attempts", "1"]
+    for bad in ("https://github.com/evil/shop/pull/7", "https://github.com/acme/shop/pull/7;id"):
+        with pytest.raises(ContractError):
+            verify_argv("claude", "acme/shop", 41, bad)

@@ -11,6 +11,14 @@ from dataclasses import dataclass
 BRIEF_MARKER = re.compile(r"\A<!-- team-kit:brief v1 card=(?P<card>[A-Za-z0-9_-]+) -->[ \t]*$", re.M)
 REPORT_MARKER = "<!-- team-kit:report v1 -->"
 LAUNCHED_MARKER = "<!-- team-kit:launched v1 -->"
+VERIFY_LAUNCHED_MARKER = "<!-- team-kit:verify-launched v1 -->"
+VERDICT_MARKER = "<!-- team-kit:verdict v1 -->"
+# Strongest claim first. The verify-unit skill defines each; a verifier never rounds up.
+VERIFICATIONS = ("live-ui-verified", "unit-test-verified", "type-check-only", "verifier-blocked", "verifier-failed")
+# The verdicts that let a unit wait for the owner's merge, unless .agents/dispatch.json says otherwise.
+DEFAULT_ACCEPTED = ("live-ui-verified", "unit-test-verified")
+VERDICT_FIELDS = ("verification", "pr", "head")
+VERIFIER_BACKENDS = ("claude", "codex", "none")
 
 BRIEF_SECTIONS = ("Goal", "Scope", "Context", "Acceptance", "Verify", "Timebox", "Forbidden", "Depends on", "Standing orders")
 REPORT_STATUSES = ("done", "partial", "blocked")
@@ -29,6 +37,16 @@ LAUNCH_PROMPTS = {
                "say the team-kit skills did not load, and stop."),
     "codex": ("$faker-mode Work the brief in {repo}#{issue} using the follow-brief skill. "
               "If the follow-brief skill is not available in this session, stop and say the team-kit skills did not load."),
+}
+# A verifier is a separate session that did not write the change. It checks out the pull request's
+# head, proves each Acceptance line, never edits or pushes, and posts a verdict comment.
+VERIFY_PROMPTS = {
+    "claude": ("/verify-unit Verify {pr} against the brief in {repo}#{issue}. "
+               "If the verify-unit skill is not available in this session, comment on the issue with "
+               "`<!-- team-kit:verdict v1 -->` as the first line and `verification: verifier-blocked` as the second, "
+               "say the team-kit skills did not load, and stop."),
+    "codex": ("$verify-unit Verify {pr} against the brief in {repo}#{issue}. "
+              "If the verify-unit skill is not available in this session, stop and say the team-kit skills did not load."),
 }
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 ENV_ID = re.compile(r"\A[A-Za-z0-9_-]+\Z")
@@ -51,6 +69,13 @@ class Brief:
         goal = " ".join(self.sections["Goal"].split())
         first = re.split(r"(?<=[.!?])\s", goal, maxsplit=1)[0]
         return first if len(first) <= 80 else first[:77].rstrip() + "..."
+
+
+@dataclass(frozen=True)
+class Verdict:
+    verification: str
+    pr: str | None
+    head: str | None
 
 
 @dataclass(frozen=True)
@@ -152,6 +177,38 @@ def parse_report(text: str) -> Report:
     if status not in REPORT_STATUSES:
         raise ContractError(f"report status {status!r} is not one of {', '.join(REPORT_STATUSES)}")
     return Report(status=status, branch=fields.get("branch"), head=fields.get("head"), pr=fields.get("pr"))
+
+
+def parse_verdict(text: str) -> Verdict:
+    """Read a verifier's verdict header. The verification line is the first line after the marker."""
+    body = (text or "").lstrip()
+    if not body.startswith(VERDICT_MARKER):
+        raise ContractError("verdict must start with <!-- team-kit:verdict v1 -->")
+    lines = body[len(VERDICT_MARKER):].strip().splitlines()
+    fields: dict[str, str] = {}
+    for line in lines:
+        match = re.match(r"^([a-z]+):\s*(\S.*?)\s*$", line)
+        if not match or match.group(1) not in VERDICT_FIELDS:
+            break
+        fields[match.group(1)] = match.group(2).strip("`")
+    if not lines or not lines[0].startswith("verification:"):
+        raise ContractError("verdict's first line must be `verification: <value>`")
+    verification = fields.get("verification", "")
+    if verification not in VERIFICATIONS:
+        raise ContractError(f"verification {verification!r} is not one of {', '.join(VERIFICATIONS)}")
+    return Verdict(verification=verification, pr=fields.get("pr"), head=fields.get("head"))
+
+
+def verify_argv(backend: str, repo: str, issue: int, pr_url: str, env_id: str | None = None) -> list[str]:
+    """The command that starts a verifier session for one unit's pull request."""
+    if backend not in VERIFY_PROMPTS:
+        raise ContractError(f"verifier_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
+    if not REPO.match(repo):
+        raise ContractError(f"repo {repo!r} is not OWNER/REPO")
+    if not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/[0-9]+", pr_url, re.I):
+        raise ContractError(f"{pr_url!r} is not a pull request in {repo}")
+    prompt = VERIFY_PROMPTS[backend].format(repo=repo, issue=int(issue), pr=pr_url)
+    return cloud_argv(backend, prompt, 1, env_id)
 
 
 def report_status(text: str) -> str | None:

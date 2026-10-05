@@ -6,7 +6,7 @@ import yaml
 from conftest import fill_guard, gh_calls, hermes_calls, install
 
 SHOP = "acme/shop"
-LABELS = ["agent-task", "agent:running", "agent:review", "agent:needs-human"]
+LABELS = ["agent-task", "agent:running", "agent:verifying", "agent:review", "agent:needs-human"]
 
 
 @pytest.fixture

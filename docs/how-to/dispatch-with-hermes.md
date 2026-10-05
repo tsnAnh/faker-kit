@@ -28,7 +28,8 @@ The bot that maintains the kit itself is not part of this module. Keep using wha
 2. Per unit, it writes the brief and runs `team-kit-gh dispatch`. That opens the issue, labeled `agent-task`, then launches the cloud agent and labels the issue `agent:running`. A unit whose dependencies have not merged, or that has no free slot, stays queued.
 3. The coding agent checks the issue came from a trusted login with the brief marker, does the work, opens a pull request that closes the issue, and comments a report.
 4. Every 30 minutes the bot's `team-kit-tick` job runs `team-kit-gh tick`, which is code, not a model:
-   - a `done` report whose pull request passed its checks moves the unit to `agent:review`, and you get a "ready to merge" line;
+   - a `done` report whose pull request passed its checks starts a verifier: a separate cloud session, on `verifier_backend`, that did not write the change. It checks out the pull request with the `verify-unit` skill, proves each Acceptance line on the real app, and comments a verdict. The unit is labeled `agent:verifying` and keeps its slot;
+   - a verdict listed in `accept_verifications` (by default `live-ui-verified` or `unit-test-verified`) for the pull request's current head moves the unit to `agent:review`, and you get a "ready to merge" line. Any other verdict, a verdict for an older commit, or none within a day opens a gate;
    - a `partial` or `blocked` report, failed checks, no pull request, or no report within a day opens a gate (`agent:needs-human`), and you get a line saying why;
    - a done report whose checks are still running waits for them;
    - either way the slot frees, and queued units that can start now are launched.
@@ -51,7 +52,7 @@ A unit is one pull request. The bot splits work only when one pull request would
 
 ### How the agent proves its work
 
-The agent drives the real app with the repository's verification skill, named as `verification_skill` in `.agents/dispatch.json` and in each brief's Verify section, and puts the evidence in its report. Without one it proves the change with tests only; the setup pull request then lists `/create-verification-skill` for you. A cloud session runs on Linux, so iOS builds cannot run there; the repository's `AGENTS.md` says what a cloud session cannot prove.
+The agent drives the real app with the repository's verification skill, named as `verification_skill` in `.agents/dispatch.json` and in each brief's Verify section, and puts the evidence in its report. Then a second session checks it: the agent that wrote a change never grades it. Set `verifier_backend` to the other agent from `backend` when you have both, so a second model family looks at every change; `none` turns verification off. Without a verification skill both prove the change with tests only, which reaches `unit-test-verified` at most; the setup pull request then lists `/create-verification-skill` for you. A cloud session runs on Linux, so iOS builds cannot run there; the repository's `AGENTS.md` says what a cloud session cannot prove.
 
 ### How many run at once
 
@@ -89,7 +90,7 @@ The installer works with macOS's bundled Bash 3. It needs a Python 3.9+ that can
 
 Open the bootstrap bot in Hermes Desktop Bot Mode and say "set up project shop for acme/shop". It asks for the bot's name and the coding agent, then, with your approval at each step:
 
-1. `team-kit-admin add-project` creates the project bot and its two jobs, paused, and the four labels in the repository.
+1. `team-kit-admin add-project` creates the project bot and its two jobs, paused, and the five labels in the repository.
 2. `team-kit-admin vendor` opens a pull request that copies the kit, at the machine's commit, into the repository's `.agents/team-kit/` and links its skills into `.claude/skills/` and `.agents/skills/`. Cloud sessions start from a clone of the repository, and cannot install plugins or fetch a private kit, so this copy is where they get the kit's skills. The repository's own skills keep their place. You review and merge it.
 3. `team-kit-admin setup-repo` starts one cloud session. It runs faker-mode and the [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md) skill, scores the repository with `/trust-audit`, and opens one pull request: `.agents/dispatch.json` (with the `verification_skill`), `.agents/dispatch.md`, a Layout section in `AGENTS.md`, and any kit setup the repository lacks. You review and merge it.
 4. `team-kit-admin protect` makes the CI check that runs `scripts/check.sh` required on the default branch.

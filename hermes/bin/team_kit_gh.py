@@ -16,7 +16,9 @@ GitHub holds every unit's state, as labels on its issue:
 
   agent-task          queued: waiting for its dependencies or a free slot
   agent:running       a cloud coding agent is working it
-  agent:review        the agent reported done and the checks passed; the owner merges
+  agent:verifying     the agent reported done and the checks passed; a separate verifier session
+                      is checking its pull request
+  agent:review        verified (or verification is off) and the checks passed; the owner merges
   agent:needs-human   a gate: the agent stopped and needs the owner
   (closed)            done: its pull request merged
 
@@ -47,16 +49,23 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
 
 from team_kit_cloud import Cloud, CloudError  # noqa: E402
 from team_kit_contracts import (  # noqa: E402
+    DEFAULT_ACCEPTED,
     LAUNCHED_MARKER,
     REPORT_MARKER,
     UNIT_ATTEMPTS,
+    VERDICT_MARKER,
+    VERIFICATIONS,
+    VERIFIER_BACKENDS,
+    VERIFY_LAUNCHED_MARKER,
     ContractError,
     launch_argv,
     parse_brief,
     parse_depends,
     parse_report,
     parse_size,
+    parse_verdict,
     size_marker,
+    verify_argv,
 )
 from team_kit_guard.policy import Bot, Policy, PolicyError, load_policy  # noqa: E402
 
@@ -65,6 +74,7 @@ SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
 REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
 RUNNING_LABEL = "agent:running"
+VERIFYING_LABEL = "agent:verifying"
 REVIEW_LABEL = "agent:review"
 HUMAN_LABEL = "agent:needs-human"
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
@@ -149,8 +159,12 @@ def checks_state(rollup) -> str:
 
 
 def in_flight(run: Runner, repo: str) -> int:
-    issues = json.loads(run(["issue", "list", "-R", repo, "--label", RUNNING_LABEL, "--state", "open", "--json", "number", "--limit", "200"]))
-    return len(issues)
+    """Units holding a slot: a coding agent or a verifier is running for each."""
+    numbers: set[int] = set()
+    for label in (RUNNING_LABEL, VERIFYING_LABEL):
+        issues = json.loads(run(["issue", "list", "-R", repo, "--label", label, "--state", "open", "--json", "number", "--limit", "200"]))
+        numbers.update(int(i["number"]) for i in issues)
+    return len(numbers)
 
 
 # Each project bot's GitHub login sees only its own repository, so a bot cannot count another
@@ -226,6 +240,11 @@ class Gh:
             raise Refused(".agents/dispatch.json is not valid JSON") from None
         if not isinstance(config, dict) or config.get("backend") not in ("claude", "codex"):
             raise Refused(".agents/dispatch.json backend must be claude or codex")
+        if config.get("verifier_backend", config["backend"]) not in VERIFIER_BACKENDS:
+            raise Refused(f".agents/dispatch.json verifier_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
+        accepted = config.get("accept_verifications", list(DEFAULT_ACCEPTED))
+        if not isinstance(accepted, list) or not accepted or any(v not in VERIFICATIONS[:3] for v in accepted):
+            raise Refused(f".agents/dispatch.json accept_verifications must list some of {', '.join(VERIFICATIONS[:3])}")
         return config
 
     def kit_check(self, local_commit: str, config: dict | None = None) -> dict:
@@ -389,8 +408,8 @@ class Gh:
         author = str((issue.get("user") or {}).get("login") or "").lower()
         if "pull_request" in issue or issue.get("state") != "open" or TASK_LABEL not in labels:
             raise Unfit(f"#{number} is not an open {TASK_LABEL} issue")
-        if RUNNING_LABEL in labels:
-            raise Refused(f"#{number} is already launched ({RUNNING_LABEL}); never launch a unit twice")
+        if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
+            raise Refused(f"#{number} is already launched ({RUNNING_LABEL} or {VERIFYING_LABEL}); never launch a unit twice")
         if REVIEW_LABEL in labels:
             raise Refused(f"#{number} is done and waits for the owner to merge ({REVIEW_LABEL})")
         if author not in {str(d).lower() for d in config.get("trusted_dispatchers") or []}:
@@ -410,11 +429,11 @@ class Gh:
 
     def gate(self, issue: dict, why: str) -> str:
         """The agent stopped and needs the owner. Frees the unit's slot."""
-        running = RUNNING_LABEL in labels_of(issue)
-        self.relabel(int(issue["number"]), add=HUMAN_LABEL, remove=(RUNNING_LABEL,) if running else ())
+        held = tuple(label for label in (RUNNING_LABEL, VERIFYING_LABEL) if label in labels_of(issue))
+        self.relabel(int(issue["number"]), add=HUMAN_LABEL, remove=held)
         return f"{NOTICE} #{issue['number']} needs you: {why}. https://github.com/{self.repo}/issues/{issue['number']}"
 
-    def check_running(self, issue: dict) -> str | None:
+    def check_running(self, issue: dict, cloud: Cloud | None = None) -> str | None:
         """One running unit: free its slot when its agent has finished. Returns a notice, or None."""
         number = int(issue["number"])
         comments = self.comments(number)
@@ -443,9 +462,66 @@ class Gh:
             if self.now() - reported > REPORT_DEADLINE_SECONDS:
                 return self.gate(issue, f"checks on {report['pr']} are still pending a day after a done report")
             return None
-        self.relabel(number, add=REVIEW_LABEL, remove=(RUNNING_LABEL,))
         checks = "checks passed" if pr["checks"] == "passed" else "no checks ran"
-        return f"{NOTICE} #{number} is ready for you to merge ({checks}): {report['pr']}"
+        config = self.dispatch_config()
+        verifier = config.get("verifier_backend", config["backend"])
+        if verifier == "none" or cloud is None:
+            self.relabel(number, add=REVIEW_LABEL, remove=(RUNNING_LABEL,))
+            return f"{NOTICE} #{number} is ready for you to merge ({checks}, not independently verified): {report['pr']}"
+        return self.start_verifier(issue, report["pr"], pr["head"], verifier, config, cloud)
+
+    def start_verifier(self, issue: dict, pr_url: str, head: str | None, backend: str, config: dict, cloud: Cloud) -> str | None:
+        """Hand the unit's slot from its coding agent to a verifier session that did not write the change."""
+        number = int(issue["number"])
+        try:
+            argv = verify_argv(backend, self.repo, number, pr_url, config.get("codex_env"))
+        except ContractError as err:
+            return self.gate(issue, f"the verifier could not start: {err}")
+        owner, name = self.repo.split("/")
+        workdir = self.policy.home / "checkouts" / f"{owner}__{name}" / f"{number}-verify"
+        self.relabel(number, add=VERIFYING_LABEL, remove=(RUNNING_LABEL,))
+        try:
+            session = cloud.start(backend, self.repo, argv, workdir)
+        except Exception as err:  # noqa: BLE001 - any failure leaves the unit to the owner
+            issue = {**issue, "labels": [{"name": VERIFYING_LABEL}]}
+            why = str(err) if isinstance(err, (CloudError, Refused)) else type(err).__name__
+            return self.gate(issue, f"the verifier could not start: {why}")
+        try:
+            self.run(["issue", "comment", str(number), "-R", self.repo, "--body",
+                      f"{VERIFY_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\npr: {pr_url}\nhead: {head or 'unknown'}\n"])
+        except Exception:  # noqa: BLE001 - the verifier is running; a missing comment must not undo that
+            pass
+        return None
+
+    def check_verifying(self, issue: dict) -> str | None:
+        """One unit under verification: move it on when its verdict arrives. Returns a notice, or None."""
+        number = int(issue["number"])
+        comments = self.comments(number)
+        launches = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(VERIFY_LAUNCHED_MARKER) and self.trusted(c)]
+        start = launches[-1] if launches else -1
+        verdicts = [c for c in comments[start + 1:] if (c.get("body") or "").lstrip().startswith(VERDICT_MARKER) and self.trusted(c)]
+        if not verdicts:
+            started = timestamp(comments[start].get("created_at")) if start >= 0 else None
+            if started is not None and self.now() - started > REPORT_DEADLINE_SECONDS:
+                return self.gate(issue, "no verdict 24 hours after the verifier started; check its session")
+            return None
+        try:
+            verdict = parse_verdict(verdicts[-1]["body"])
+        except ContractError as err:
+            return self.gate(issue, f"the verifier's verdict is unreadable: {err}")
+        report = self.report_status(number, comments, since_launch=True)
+        if not report.get("pr"):
+            return self.gate(issue, "the verifier answered, but the unit's report names no pull request")
+        pr = self.pr_state(int(report["pr"].rsplit("/", 1)[1]))
+        if pr["merged"] or pr["state"] == "closed":
+            return self.gate(issue, f"{report['pr']} was {'merged' if pr['merged'] else 'closed'} during verification")
+        if not verdict.head or not pr["head"] or not pr["head"].startswith(verdict.head.lower()):
+            return self.gate(issue, f"{report['pr']} changed after the verifier checked {verdict.head or 'an unnamed commit'}; launch it again to re-verify")
+        accepted = self.dispatch_config().get("accept_verifications", list(DEFAULT_ACCEPTED))
+        if verdict.verification not in accepted:
+            return self.gate(issue, f"the verifier reported {verdict.verification}; read its verdict on the issue")
+        self.relabel(number, add=REVIEW_LABEL, remove=(VERIFYING_LABEL,))
+        return f"{NOTICE} #{number} is ready for you to merge (checks passed, verified: {verdict.verification}): {report['pr']}"
 
 
 class Project:
@@ -464,9 +540,9 @@ class Project:
             units, problems[gh.repo] = [], reason(err)
         for issue in units:
             labels = labels_of(issue)
-            if RUNNING_LABEL in labels:
+            if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
                 try:
-                    notice = gh.check_running(issue)
+                    notice = gh.check_verifying(issue) if VERIFYING_LABEL in labels else gh.check_running(issue, cloud)
                 except Exception as err:  # noqa: BLE001 - one broken unit never stops the others
                     problems[f"{gh.repo}#{issue['number']}"] = reason(err)
                     continue
@@ -516,6 +592,8 @@ class Project:
             labels, ref = labels_of(issue), f"#{issue['number']} {issue['title']}"
             if RUNNING_LABEL in labels:
                 flight.append(f"{ref} (running)")
+            elif VERIFYING_LABEL in labels:
+                flight.append(f"{ref} (verifying)")
             elif HUMAN_LABEL in labels:
                 waiting.append(f"{ref} (gate)")
             elif REVIEW_LABEL in labels:

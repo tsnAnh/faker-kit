@@ -385,12 +385,117 @@ def pr(gh, number, state="OPEN", merged=False, checks=("SUCCESS",)):
     return f"https://github.com/{REPO}/pull/{number}"
 
 
-def test_tick_moves_a_done_unit_with_passing_checks_to_review(team_kit_home, gh, capsys):
+def verdict(gh, n, verification="live-ui-verified", head="a" * 12, login="Codertocat", at=NOW - 60):
+    gh.comment(REPO, n, f"<!-- team-kit:verdict v1 -->\nverification: {verification}\npr: https://github.com/{REPO}/pull/7\nhead: {head}\n\n## Execution\n- ran it\n", login=login, at=at)
+
+
+def test_a_done_unit_with_passing_checks_goes_to_a_verifier_then_to_review(team_kit_home, gh, capsys):
     n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
     gh.report(REPO, n, "done", pr=pr(gh, 7))
-    assert tick(gh, capsys) == [f"team-kit notice: #{n} is ready for you to merge (checks passed): https://github.com/{REPO}/pull/7"]
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"}
+    [(backend, _, argv, workdir)] = cloud.started
+    assert backend == "claude" and argv[:2] == ["claude", "--cloud"]
+    assert argv[2].startswith(f"/verify-unit Verify https://github.com/{REPO}/pull/7 against the brief in {REPO}#{n}.")
+    assert workdir.name == f"{n}-verify"
+    launch = gh.comments[(REPO, n)][-1]["body"]
+    assert launch.startswith("<!-- team-kit:verify-launched v1 -->") and f"head: {'a' * 40}" in launch
+    assert run(gh, "status") == 0 and f"#{n} A unit (verifying)" in capsys.readouterr().out
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"], "no verdict yet"
+    verdict(gh, n, at=NOW)
+    assert tick(gh, capsys) == [f"team-kit notice: #{n} is ready for you to merge (checks passed, verified: live-ui-verified): https://github.com/{REPO}/pull/7"]
     assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
     assert tick(gh, capsys) == ["[SILENT]"], "a unit in review is never reported or launched again"
+    assert len(cloud.started) == 1
+
+
+def test_a_verifying_unit_keeps_its_slot(team_kit_home, gh, capsys):
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:verifying"))
+    gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    queued = gh.add_issue(REPO)
+    cloud = FakeCloud()
+    tick(gh, capsys, cloud=cloud)
+    assert gh.labels(REPO, queued) == {"agent-task"}, "max_in_flight is 2 and both slots are taken"
+    assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"}
+
+
+def verifying_unit(gh, launched_at=NOW - 600):
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:verifying"))
+    gh.report(REPO, n, "done", pr=pr(gh, 7), at=launched_at - 60)
+    gh.comment(REPO, n, f"<!-- team-kit:verify-launched v1 -->\nsession: s\nbackend: claude\npr: https://github.com/{REPO}/pull/7\nhead: {'a' * 40}\n", at=launched_at)
+    return n
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "why"),
+    [
+        ({"verification": "verifier-failed"}, "the verifier reported verifier-failed"),
+        ({"verification": "type-check-only"}, "the verifier reported type-check-only"),
+        ({"head": "b" * 12}, "changed after the verifier checked bbbbbbbbbbbb"),
+    ],
+)
+def test_a_verdict_that_falls_short_or_is_stale_opens_a_gate(team_kit_home, gh, capsys, kwargs, why):
+    n = verifying_unit(gh)
+    verdict(gh, n, **kwargs)
+    [notice] = tick(gh, capsys)
+    assert why in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+
+
+def test_only_a_trusted_verdict_after_the_verifier_started_counts(team_kit_home, gh, capsys):
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:verifying"))
+    gh.report(REPO, n, "done", pr=pr(gh, 7), at=NOW - 7200)
+    verdict(gh, n, at=NOW - 3600)  # from an earlier verifier
+    gh.comment(REPO, n, f"<!-- team-kit:verify-launched v1 -->\nsession: s\nbackend: claude\npr: https://github.com/{REPO}/pull/7\nhead: {'a' * 40}\n", at=NOW - 600)
+    verdict(gh, n, login="stranger")
+    assert tick(gh, capsys) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"}
+
+
+def test_no_verdict_a_day_after_the_verifier_started_opens_a_gate(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, launched_at=NOW - REPORT_DEADLINE_SECONDS - 60)
+    assert "no verdict 24 hours after the verifier started" in tick(gh, capsys)[0]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+
+
+def test_a_verifier_that_cannot_start_opens_a_gate(team_kit_home, gh, capsys):
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.report(REPO, n, "done", pr=pr(gh, 7))
+    [notice] = tick(gh, capsys, cloud=FakeCloud(fail="claude: not signed in"))
+    assert "the verifier could not start: claude: not signed in" in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+
+
+def test_accept_verifications_and_a_codex_verifier_come_from_dispatch_json(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, verifier_backend="codex", codex_env="env_1", accept_verifications=["live-ui-verified", "unit-test-verified", "type-check-only"])
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.report(REPO, n, "done", pr=pr(gh, 7))
+    cloud = FakeCloud()
+    tick(gh, capsys, cloud=cloud)
+    [(backend, _, argv, _)] = cloud.started
+    assert backend == "codex" and argv[:5] == ["codex", "cloud", "exec", "--env", "env_1"] and argv[-1].startswith("$verify-unit ")
+    verdict(gh, n, verification="type-check-only", at=NOW)
+    assert "verified: type-check-only" in tick(gh, capsys)[0]
+
+
+def test_verification_can_be_turned_off(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, verifier_backend="none")
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.report(REPO, n, "done", pr=pr(gh, 7))
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == [f"team-kit notice: #{n} is ready for you to merge (checks passed, not independently verified): https://github.com/{REPO}/pull/7"]
+    assert not cloud.started and gh.labels(REPO, n) == {"agent-task", "agent:review"}
+
+
+@pytest.mark.parametrize("config", [{"verifier_backend": "gemini"}, {"accept_verifications": ["verifier-blocked"]}, {"accept_verifications": []}])
+def test_a_bad_verifier_setting_is_refused(team_kit_home, kit, capsys, config):
+    gh = FakeGh(kit, **config)
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.report(REPO, n, "done", pr=pr(gh, 7))
+    [notice] = tick(gh, capsys)
+    assert "tick could not handle" in notice and ("verifier_backend" in notice or "accept_verifications" in notice)
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
 
 
 @pytest.mark.parametrize(
@@ -409,10 +514,11 @@ def test_tick_waits_for_pending_checks_and_gates_failed_ones(team_kit_home, gh, 
     assert (found == ["[SILENT]"]) if notice is None else (notice in found[0])
 
 
-def test_a_done_report_with_no_checks_is_ready_after_an_hour(team_kit_home, gh, capsys):
+def test_a_done_report_with_no_checks_is_ready_after_an_hour(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, verifier_backend="none")
     n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
     gh.report(REPO, n, "done", pr=pr(gh, 7, checks=()), at=NOW - 2 * 3600)
-    assert "ready for you to merge (no checks ran)" in tick(gh, capsys)[0]
+    assert "ready for you to merge (no checks ran, not independently verified)" in tick(gh, capsys)[0]
     assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
 
 
