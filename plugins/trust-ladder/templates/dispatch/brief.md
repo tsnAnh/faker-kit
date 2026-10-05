@@ -24,7 +24,7 @@ Source: <link>
 <The `verification_skill` from `.agents/dispatch.json` and the path to drive through the app, plus exact commands and known gotchas. With no verification skill, exact commands.>
 
 ## Timebox
-<Rough cap on agent time.> On expiry, push what is verified, open the pull request as a draft, and report `status: partial`.
+<Rough cap on agent time, including getting the checks green.> On expiry, push what is verified. If every Acceptance line is proven and no check has failed, report `status: done`; otherwise open the pull request as a draft and report `status: partial`.
 
 ## Forbidden
 No merge. No push to the default branch. No force-push. No rebase of others' branches. No edits outside Scope. No secrets in code, logs, or comments.

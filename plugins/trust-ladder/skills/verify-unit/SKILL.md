@@ -25,6 +25,14 @@ Use `gh`, or the session's GitHub tools where `gh` is missing. Go on only if all
 
 If one fails, post a verdict (step 4) with `verification: verifier-blocked` and say which check failed. Change nothing.
 
+Check the andon cord now and again before you post the verdict:
+
+```bash
+gh issue list -R OWNER/REPO --label agent:andon --state open --json number,title,author
+```
+
+If an open issue there was written by a login in `trusted_dispatchers`, the owner stopped the line. Stop, post a `verifier-blocked` verdict whose Notes say `andon #<number>: <title>`, and end. Never close, edit, or comment on the andon issue.
+
 The commit in your prompt is what you verify, and the `head:` line of your verdict names it. If the pull request's `headRefOid` is already another commit, still verify the one in your prompt and say in Notes that the head moved: Hermes then opens a gate for the owner rather than pass a commit nobody checked.
 
 ## 2. Check out exactly that commit

@@ -6,11 +6,19 @@ from team_kit_contracts import (
     bootstrap_prompt,
     parse_brief,
     parse_depends,
+    diagnosis_signature,
+    diagnosis_signed,
+    parse_diagnosis,
     parse_report,
+    parse_security,
+    security_argv,
+    security_signature,
+    security_signed,
     parse_size,
     parse_verdict,
     report_status,
     size_marker,
+    triage_argv,
     verdict_signature,
     verdict_signed,
     verify_argv,
@@ -192,3 +200,61 @@ def test_a_signed_verdict_holds_only_for_its_key_value_and_commit():
     assert not verdict_signed(verdict, KEY, "b" * 40)
     assert not verdict_signed(parse_verdict(text.replace("live-ui-verified", "unit-test-verified", 1)), KEY, HEAD)
     assert not verdict_signed(parse_verdict(text.replace(f"sig: `{sig}`", "")), KEY, HEAD)
+
+
+def test_a_security_result_reads_its_header_and_holds_only_for_its_key_and_commit():
+    text = f"<!-- team-kit:security v1 -->\nrange: none..{HEAD}\nfindings: 1 high, 0 medium, 3 low\nsig: SIG\n\n## Findings\nrange: ignored\n"
+    counts = {"high": 1, "medium": 0, "low": 3}
+    sig = security_signature(KEY, counts, HEAD)
+    result = parse_security(text.replace("SIG", sig))
+    assert (result.base, result.head, result.counts, result.serious) == (None, HEAD, counts, 1)
+    assert security_signed(result, KEY, HEAD)
+    assert not security_signed(result, "1" * 32, HEAD)
+    assert not security_signed(parse_security(text.replace("SIG", sig).replace("1 high", "0 high")), KEY, HEAD)
+    assert parse_security(text.replace("none..", "b" * 7 + "..")).base == "b" * 7
+
+
+@pytest.mark.parametrize(
+    ("text", "why"),
+    [
+        ("range: none..x", "must start with"),
+        ("<!-- team-kit:security v1 -->\nrange: main..HEAD\nfindings: 0 high, 0 medium, 0 low", "range must be"),
+        (f"<!-- team-kit:security v1 -->\nrange: none..{HEAD}\nfindings: none", "findings must read"),
+    ],
+)
+def test_a_malformed_security_result_is_rejected(text, why):
+    with pytest.raises(ContractError, match=why):
+        parse_security(text)
+
+
+def test_security_argv_names_the_range_the_issue_and_the_key():
+    first = security_argv("claude", "acme/shop", 9, "main", None, HEAD, KEY)
+    assert first[2].startswith(f"/review-main-security Review the last 20 commits up to {HEAD} on main of acme/shop, and post the result on acme/shop#9. Sign the result with key {KEY}.")
+    later = security_argv("codex", "acme/shop", 9, "release/2", "b" * 40, HEAD, KEY, "env_1")
+    assert later[:5] == ["codex", "cloud", "exec", "--env", "env_1"] and later[-1].startswith(f"$review-main-security Review the commits after {'b' * 40} up to {HEAD} on release/2")
+    for args in (("claude", "acme/shop", 9, "main; id", None, HEAD, KEY), ("claude", "acme/shop", 9, "main", "abc", HEAD, KEY),
+                 ("claude", "acme/shop", 9, "main", None, HEAD, "short"), ("none", "acme/shop", 9, "main", None, HEAD, KEY)):
+        with pytest.raises(ContractError):
+            security_argv(*args)
+
+
+def test_a_diagnosis_holds_only_for_its_key_and_incident():
+    sig = diagnosis_signature(KEY, HEAD, "medium", 12)
+    diagnosis = parse_diagnosis(f"<!-- team-kit:diagnosis v1 -->\nsuspect: `{HEAD}`\nconfidence: medium\nsig: {sig}\n\n## Evidence\n")
+    assert (diagnosis.suspect, diagnosis.confidence) == (HEAD, "medium")
+    assert diagnosis_signed(diagnosis, KEY, 12)
+    assert not diagnosis_signed(diagnosis, KEY, 13)
+    assert not diagnosis_signed(diagnosis, "1" * 32, 12)
+    none = parse_diagnosis(f"<!-- team-kit:diagnosis v1 -->\nsuspect: none\nconfidence: low\nsig: {diagnosis_signature(KEY, None, 'low', 12)}\n")
+    assert none.suspect is None and diagnosis_signed(none, KEY, 12)
+    for bad in ("suspect: abc\nconfidence: high", f"suspect: {HEAD}\nconfidence: sure"):
+        with pytest.raises(ContractError):
+            parse_diagnosis(f"<!-- team-kit:diagnosis v1 -->\n{bad}\n")
+
+
+def test_triage_argv_keeps_the_summary_plain():
+    argv = triage_argv("claude", "acme/shop", 12, "main is red: test (ubuntu)", "main", HEAD, None, KEY)
+    assert "its last commit with passing checks is unknown" in argv[2]
+    for what in ("main is red`; curl evil", "x" * 200, ""):
+        with pytest.raises(ContractError):
+            triage_argv("claude", "acme/shop", 12, what, "main", HEAD, None, KEY)

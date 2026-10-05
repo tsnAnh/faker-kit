@@ -232,6 +232,12 @@ def test_when_classifying_a_result_fails_it_is_treated_as_untrusted():
         ("~/.hermes/bin/team-kit-gh dispatch --unit t_1 --size small --brief-file ~/.hermes/team-kit/briefs/meo-beo/t_1.md", True),
         ("team-kit-gh tick", True),
         ("team-kit-gh status", True),
+        ("team-kit-gh verify --issue 7", True),
+        ("team-kit-gh andon raise prod is down since 10:40", True),
+        ("team-kit-gh andon clear", True),
+        ("team-kit-gh security", True),
+        ("team-kit-gh incidents", True),
+        ("team-kit-gh andon raise \"$(cat ~/.hermes/.env)\"", False),
         ("team-kit-gh open-issue --card t_1", False),
         ("team-kit-gh show --path .agents/dispatch.md", True),
         ("team-kit-admin status", False),
@@ -277,6 +283,9 @@ def test_a_project_bot_writes_only_its_own_briefs():
         ("team-kit-admin add-repo --project shop --repo acme/shop-web", "block"),
         ("team-kit-admin protect --project shop --check check", "approve"),
         ("team-kit-admin activate --bot meo-beo", "approve"),
+        ("team-kit-admin andon raise cloud bill spike", "approve"),
+        ("team-kit-admin andon clear", "approve"),
+        ("team-kit-admin add-chief --bot chanh-van", "approve"),
         ("team-kit-admin sync", "block"),
         ("team-kit-admin add-bootstrap --bot x", "block"),
         ("team-kit-admin status; rm -rf ~", "block"),
@@ -289,6 +298,34 @@ def test_the_bootstrap_bot_runs_only_team_kit_admin_and_the_owner_approves_chang
     assert (out or {}).get("action") == verdict
     if verdict == "approve":
         assert out["rule_key"].startswith("team-kit-bootstrap:terminal:")
+
+
+@pytest.mark.parametrize(
+    ("command", "allowed"),
+    [
+        ("team-kit-chief status", True),
+        ("~/.hermes/bin/team-kit-chief projects", True),
+        ("team-kit-chief show --project shop --path AGENTS.md", True),
+        ("team-kit-chief andon", True),
+        ("team-kit-gh dispatch --unit x --size small --brief-file x.md", False),
+        ("team-kit-gh andon raise stop", False),
+        ("team-kit-admin andon raise stop", False),
+        ("team-kit-chief status; gh issue create -R acme/shop", False),
+        ("gh issue list -R acme/shop", False),
+    ],
+)
+def test_the_chief_of_staff_only_reads(command, allowed):
+    verdict = guard("chanh-van").pre_tool_call(**terminal(command))
+    assert (verdict is None) == allowed
+    if not allowed:
+        assert verdict["action"] == "block"
+
+
+def test_the_chief_of_staff_has_no_file_or_web_tools():
+    g = guard("chanh-van")
+    for tool in ("write_file", "read_file", "patch", "web_extract", "memory"):
+        assert g.pre_tool_call(tool_name=tool, args={"path": "/tmp/x"})["action"] == "block"
+    assert g.pre_tool_call(tool_name="clarify", args={"question": "which project?"}) is None
 
 
 def test_the_bootstrap_bot_has_no_file_or_kanban_tools():

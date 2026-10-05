@@ -6,7 +6,7 @@ bots.yaml; nothing else does. A bot's name is free: its role comes from bots.yam
 name.
 
 Pure logic, standard library plus PyYAML. The Hermes hook wiring lives in __init__.py. The
-team-kit-gh and team-kit-admin import this module too, so every part of the
+team-kit-gh, team-kit-admin, and team-kit-chief import this module too, so every part of the
 machine reads the same policy.
 """
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 GUARD_VERSION = 2
 BOTS_VERSION = 1
-ROLES = ("bootstrap", "project")
+ROLES = ("bootstrap", "project", "chief")
 
 DEFAULT_READ_ONLY_TOOLS = (
     "read_file", "search_files",
@@ -38,7 +38,10 @@ ROLE_TOOLS = {
     "project": ("terminal", "read_file", "search_files", "write_file", "patch", "clarify",
                 "skills_list", "skill_view", "todo_*", "session_search"),
     "bootstrap": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search"),
+    "chief": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search"),
 }
+# Each role's one command.
+ROLE_COMMAND = {"project": "team-kit-gh", "bootstrap": "team-kit-admin", "chief": "team-kit-chief"}
 SEGMENT_SPLIT = re.compile(r"\|\||&&|[;|&\n]|\$\(|`|\)")
 ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
 
@@ -47,9 +50,11 @@ NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
 RESERVED_NAMES = frozenset({"default"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
-PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
-BOOTSTRAP_COMMANDS = ("status", "add-project", "vendor", "setup-repo", "protect", "activate")
+PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
+BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon")
 BOOTSTRAP_READ_ONLY = ("status",)
+# The chief of staff reads every project and changes nothing, so it has no write command at all.
+CHIEF_COMMANDS = ("projects", "status", "show", "andon")
 ARG = r"[A-Za-z0-9_./:#=@~,+-]+"
 
 MIGRATE_V1 = (
@@ -111,9 +116,8 @@ class Bot:
         return bool(self.repo) and repo.lower() == self.repo.lower()
 
     def terminal_allow(self) -> re.Pattern:
-        if self.role == "project":
-            return re.compile(rf"(~/\.hermes/bin/)?team-kit-gh ({'|'.join(PROJECT_COMMANDS)})( {ARG})*")
-        return re.compile(rf"(~/\.hermes/bin/)?team-kit-admin ({'|'.join(BOOTSTRAP_COMMANDS)})( {ARG})*")
+        commands = {"project": PROJECT_COMMANDS, "bootstrap": BOOTSTRAP_COMMANDS, "chief": CHIEF_COMMANDS}[self.role]
+        return re.compile(rf"(~/\.hermes/bin/)?{ROLE_COMMAND[self.role]} ({'|'.join(commands)})( {ARG})*")
 
     def write_paths(self, home: Path) -> tuple[str, ...]:
         return (str(home / "briefs" / self.name / "*"),) if self.role == "project" else ()
@@ -174,9 +178,9 @@ def parse_bots(data) -> dict[str, Bot]:
         if not NAME.match(name) or name in RESERVED_NAMES:
             raise PolicyError(f"bots.yaml: {name!r} is not a bot profile name (lowercase letters, digits, - and _, and not default)")
         if not isinstance(raw, dict) or raw.get("role") not in ROLES:
-            raise PolicyError(f"bots.yaml: {name} needs role: {' or '.join(ROLES)}")
-        if raw["role"] == "bootstrap":
-            bots[name] = Bot(name=name, role="bootstrap")
+            raise PolicyError(f"bots.yaml: {name} needs role: {', '.join(ROLES)}")
+        if raw["role"] in ("bootstrap", "chief"):
+            bots[name] = Bot(name=name, role=raw["role"])
             continue
         project = str(raw.get("project") or "")
         if not NAME.match(project):
@@ -256,8 +260,7 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
     command = str(args.get("command", ""))
     if tool_name in ("terminal", "process_manage"):
         if tool_name == "process_manage" or not bot.terminal_allow().fullmatch(command):
-            tool = "team-kit-gh" if bot.role == "project" else "team-kit-admin"
-            return block(f"{bot.role} bot {profile} may only run {tool}")
+            return block(f"{bot.role} bot {profile} may only run {ROLE_COMMAND[bot.role]}")
     if tool_name == "patch" and (args.get("mode") not in (None, "replace") or "patch" in args):
         # A multi-file patch names its targets in its body, out of reach of the path check.
         return block("patch may only replace text in one file (mode replace)")

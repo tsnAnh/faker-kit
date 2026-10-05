@@ -12,6 +12,10 @@ The bootstrap bot may run these, and the guard asks the owner to approve each on
                                                              start one cloud session that prepares the repository
   protect       --project P --check NAME [--check NAME ...]  require those checks on the default branch
   activate      --bot B                                      resume a project bot's jobs once its GitHub login is set
+  add-chief     --bot B [--model M]                          create or refresh the chief of staff: a read-only bot
+                                                             that routes the owner's intent across every project
+  andon         [raise REASON... | clear]                    show, pull, or clear the machine's andon cord: nothing
+                                                             new starts in any project, and agents at work stop
 
 A project is one repository. Keep a product's apps (API, web, mobile) in one repository, so one
 cloud agent can carry a feature through all of them in one pull request.
@@ -48,6 +52,7 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
 
 import yaml  # noqa: E402
 from install_config import InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, profile_home  # noqa: E402
+from team_kit_andon import ANDON_LABEL, MACHINE, Andon, AndonError, clean_reason, issue_body  # noqa: E402
 from team_kit_cloud import Cloud, CloudError  # noqa: E402
 from team_kit_contracts import ContractError, bootstrap_prompt, cloud_argv  # noqa: E402
 from team_kit_guard.policy import NAME, REPO, RESERVED_NAMES, Policy, PolicyError, load_policy, team_kit_home  # noqa: E402
@@ -59,8 +64,14 @@ LABELS = (
     ("agent:verifying", "5319e7", "A separate verifier session is checking this unit's pull request"),
     ("agent:review", "0e8a16", "Verified and the checks passed; the owner merges"),
     ("agent:needs-human", "d93f0b", "A dispatched unit needs the owner"),
+    ("agent:security", "0052cc", "The tracking issue where Hermes's daily security reviews of the default branch post their results"),
+    ("agent:incident", "e11d21", "An incident Hermes opened from polling: the default branch is red, or a health check fails"),
+    ("risk:low", "c2e0c6", "Hermes's risk score for this pull request, from rules in code: small change in ordinary paths"),
+    ("risk:medium", "fbca04", "Hermes's risk score for this pull request, from rules in code: read it with care"),
+    ("risk:high", "b60205", "Hermes's risk score for this pull request, from rules in code: sensitive paths or a large change"),
+    (ANDON_LABEL, "b60205", "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"),
 )
-JOBS = ("team-kit-tick", "team-kit-status")
+JOBS = ("team-kit-tick", "team-kit-status", "team-kit-security", "team-kit-incidents")
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
 
 Runner = Callable[..., str]
@@ -150,7 +161,7 @@ class Admin:
         plugin = home / "plugins" / "team_kit_guard"
         shutil.rmtree(plugin, ignore_errors=True)
         shutil.copytree(self.pkg / "plugin" / "team_kit_guard", plugin, ignore=shutil.ignore_patterns("__pycache__"))
-        self.link_skill(home, "dispatch" if role == "project" else "bootstrap")
+        self.link_skill(home, {"project": "dispatch", "bootstrap": "bootstrap", "chief": "chief"}[role])
         if role == "project":
             (self.home / "briefs" / bot).mkdir(parents=True, exist_ok=True)
             # An earlier version kept webhook triage scripts here; nothing uses them now.
@@ -180,6 +191,24 @@ class Admin:
         self.setup_files(bot, "bootstrap", None, model)
         self.write_bots(data)
         return {"bot": bot, "role": "bootstrap"}
+
+    def add_chief(self, bot: str, model: str | None) -> dict:
+        check_name(bot, "bot")
+        data = self.bots_file()
+        current = data["bots"].get(bot)
+        if current and current.get("role") != "chief":
+            raise Refused(f"{bot} is already a {current.get('role')} bot")
+        data["bots"][bot] = {"role": "chief"}
+        load_policy_from(self.home, data)
+        self.setup_files(bot, "chief", None, model)
+        self.write_bots(data)
+        repos = sorted(b.repo for b in self.policy().projects().values())
+        return {
+            "bot": bot, "role": "chief",
+            "next": [f"The owner puts a read-only GitHub token in {profile_home(self.root, bot) / '.env'} as GH_TOKEN: "
+                     "Issues, Contents, and Metadata read on every project's repository" + (f" ({', '.join(repos)})" if repos else ""),
+                     "Add the bot in Hermes Desktop Bot Mode"],
+        }
 
     def add_project(self, bot: str, project: str, repo: str, model: str | None) -> dict:
         check_name(bot, "bot")
@@ -337,6 +366,9 @@ class Admin:
         if vendored != commit:
             found = f"has the kit at {vendored[:12]}" if vendored else "has no vendored kit"
             raise Refused(f"{repo} {default} {found}, not {commit[:12]}; run team-kit-admin vendor --project {project} and merge its pull request first")
+        cord = Andon(self.home).machine()
+        if cord:
+            raise Refused(f"{cord.describe()}; clear it before starting a setup session")
         prompt = bootstrap_prompt(repo, project, backend, commit, sorted(policy.trusted_authors), codex_env)
         argv = cloud_argv(backend, prompt, 1, codex_env)
         owner, name = repo.split("/")
@@ -370,9 +402,65 @@ class Admin:
                 resumed.append(name)
         return {"bot": bot, "resumed": resumed}
 
+    # andon -----------------------------------------------------------------------------------------
+
+    def andon_show(self) -> dict:
+        andon, policy = Andon(self.home), self.policy()
+        machine = andon.read(MACHINE)
+        projects = {name: andon.project(name).reason for name, bot in sorted(policy.bots.items()) if bot.role == "project" and andon.project(name)}
+        return {"machine": None if machine is None else {k: machine.get(k) for k in ("reason", "by", "issues")}, "projects": projects}
+
+    def andon_raise(self, words: list[str], who: str | None) -> dict:
+        why = clean_reason(words)
+        andon, policy = Andon(self.home), self.policy()
+        if andon.machine():
+            raise Refused(f"{andon.machine().describe()}; clear it before pulling it again")
+        # Write the cord first: nothing new starts from here on, whatever GitHub does.
+        record = {"reason": why, "by": who or "the owner", "at": time.time(), "issues": {}}
+        andon.write(MACHINE, record)
+        failed = {}
+        for bot in sorted(policy.bots.values(), key=lambda b: b.name):
+            if bot.role != "project" or not bot.repo:
+                continue
+            try:
+                url = self.run(["issue", "create", "-R", bot.repo, "--title", f"Andon: {why}"[:120], "--label", ANDON_LABEL,
+                                "--body", issue_body("machine", why, "team-kit-admin andon clear")]).strip()
+                record["issues"][bot.repo] = int(url.rstrip("/").rsplit("/", 1)[-1])
+            except Exception as err:  # noqa: BLE001 - the local cord still stops every launch there
+                failed[bot.repo] = str(err)[:200]
+            andon.write(MACHINE, record)
+        out: dict = {"stopped": True, "reason": why, "issues": record["issues"]}
+        if failed:
+            out["no_issue"] = failed
+        return out
+
+    def andon_clear(self) -> dict:
+        andon = Andon(self.home)
+        record = andon.read(MACHINE)
+        if record is None:
+            raise Refused("the machine's andon cord is not pulled")
+        closed, failed = [], {}
+        for repo, number in sorted((record.get("issues") or {}).items()):
+            try:
+                self.run(["issue", "close", str(int(number)), "-R", repo, "--comment", "The owner cleared the machine's andon cord in Hermes. The line runs again."])
+                closed.append(f"{repo}#{number}")
+            except Exception as err:  # noqa: BLE001 - already closed by hand, or gone
+                failed[f"{repo}#{number}"] = str(err)[:200]
+        andon.drop(MACHINE)
+        out: dict = {"stopped": False, "closed": closed}
+        if failed:
+            out["not_closed"] = failed
+        still = self.andon_show()["projects"]
+        if still:
+            out["projects_still_stopped"] = still
+        return out
+
     def status(self) -> dict:
         policy = self.policy()
         out = {"max_in_flight_total": policy.max_in_flight_total, "trusted_authors": sorted(policy.trusted_authors), "bots": []}
+        andon = self.andon_show()
+        if andon["machine"] or andon["projects"]:
+            out["andon"] = andon
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
             item = {"bot": bot.name, "role": bot.role}
             if bot.role == "project":
@@ -394,7 +482,9 @@ class Admin:
         try:
             names = {label["name"] for label in json.loads(self.run(["api", f"repos/{repo}/labels?per_page=100"]))}
             item["labels_missing"] = [n for n, _, _ in LABELS if n not in names]
-            item["running"] = len(json.loads(self.run(["issue", "list", "-R", repo, "--label", "agent:running", "--state", "open", "--json", "number", "--limit", "200"])))
+            # A slot is held by a coding agent or a verifier.
+            item["running"] = len({int(i["number"]) for label in ("agent:running", "agent:verifying")
+                                   for i in json.loads(self.run(["issue", "list", "-R", repo, "--label", label, "--state", "open", "--json", "number", "--limit", "200"]))})
             try:
                 self.run(["api", f"repos/{repo}/contents/.agents/dispatch.json"])
                 item["dispatch_json"] = True
@@ -483,6 +573,12 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--check", action="append", default=[])
     cmd = sub.add_parser("activate")
     cmd.add_argument("--bot", required=True)
+    cmd = sub.add_parser("add-chief")
+    cmd.add_argument("--bot", required=True)
+    cmd.add_argument("--model")
+    cmd = sub.add_parser("andon")
+    cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
+    cmd.add_argument("reason", nargs="*")
     return top
 
 
@@ -515,8 +611,9 @@ def check_caller(admin: Admin, command: str, who: str | None) -> None:
 def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | None = None, who: str | None = ...) -> int:
     args = parser().parse_args(argv)
     admin = Admin(run=run, cloud=cloud)
+    who = caller() if who is ... else who
     try:
-        check_caller(admin, args.command, caller() if who is ... else who)
+        check_caller(admin, args.command, who)
         if args.command == "status":
             out = admin.status()
         elif args.command == "sync":
@@ -525,15 +622,21 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
             out = admin.add_bootstrap(args.bot, args.model)
         elif args.command == "add-project":
             out = admin.add_project(args.bot, args.project, args.repo, args.model)
+        elif args.command == "add-chief":
+            out = admin.add_chief(args.bot, args.model)
         elif args.command == "vendor":
             out = admin.vendor(args.project)
         elif args.command == "setup-repo":
             out = admin.setup_repo(args.project, args.backend, args.codex_env)
         elif args.command == "protect":
             out = admin.protect(args.project, args.check)
+        elif args.command == "andon":
+            if args.action != "raise" and args.reason:
+                raise Refused(f"andon {args.action} takes no reason")
+            out = admin.andon_raise(args.reason, who) if args.action == "raise" else admin.andon_clear() if args.action == "clear" else admin.andon_show()
         else:
             out = admin.activate(args.bot)
-    except (Refused, InstallError, PolicyError, ContractError, yaml.YAMLError) as err:
+    except (Refused, InstallError, PolicyError, ContractError, AndonError, yaml.YAMLError) as err:
         print(f"team-kit-admin: refused: {err}", file=sys.stderr)
         return 1
     except Exception as err:  # noqa: BLE001 - the bot gets one refusal line, never a traceback

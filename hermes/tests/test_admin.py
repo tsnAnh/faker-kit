@@ -6,7 +6,7 @@ import yaml
 from conftest import fill_guard, gh_calls, hermes_calls, install
 
 SHOP = "acme/shop"
-LABELS = ["agent-task", "agent:running", "agent:verifying", "agent:review", "agent:needs-human"]
+LABELS = ["agent-task", "agent:running", "agent:verifying", "agent:review", "agent:needs-human", "agent:security", "agent:incident", "risk:low", "risk:medium", "risk:high", "agent:andon"]
 
 
 @pytest.fixture
@@ -65,7 +65,7 @@ def labels(root):
 def test_add_project_creates_the_project_bot_its_labels_and_paused_jobs(ready):
     root, _ = ready
     out = add_shop(ready)
-    assert sorted(out["jobs_created_paused"]) == ["team-kit-status", "team-kit-tick"]
+    assert sorted(out["jobs_created_paused"]) == ["team-kit-incidents", "team-kit-security", "team-kit-status", "team-kit-tick"]
     assert out["labels"] == LABELS
     assert bots(root)["meo-beo"] == {"role": "project", "project": "shop", "repo": SHOP}
     assert labels(root) == {SHOP: LABELS}
@@ -81,7 +81,8 @@ def test_add_project_creates_the_project_bot_its_labels_and_paused_jobs(ready):
     assert not (home / ".env").exists(), "team-kit writes no .env; the owner puts the token there"
 
     created = {c[4]: c for c in hermes_calls(root) if c[2:4] == ["cron", "create"]}
-    assert sorted(created) == ["0 9,13,17 * * *", "every 30m"]
+    assert sorted(created) == ["0 7 * * *", "0 9,13,17 * * *", "every 10m", "every 30m"]
+    assert created["0 7 * * *"][5].startswith("Run `team-kit-gh security` in the terminal.")
     tick = created["every 30m"]
     assert tick[:2] == ["-p", "meo-beo"]
     assert tick[5].startswith("Run `team-kit-gh tick` in the terminal.")
@@ -97,7 +98,7 @@ def test_a_second_project_gets_its_own_bot_and_jobs(ready):
     code, out = admin(ready, "add-project", "--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm", profile="ong-xay")
     assert code == 0, out
     assert bots(root)["sep-crm"]["repo"] == "acme/crm"
-    assert len(jobs(root, "sep-crm")) == 2 and len(jobs(root, "meo-beo")) == 2
+    assert len(jobs(root, "sep-crm")) == 4 and len(jobs(root, "meo-beo")) == 4
 
 
 def test_add_project_again_refreshes_the_bot_without_duplicating_jobs(ready):
@@ -106,7 +107,7 @@ def test_add_project_again_refreshes_the_bot_without_duplicating_jobs(ready):
     code, out = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP, profile="ong-xay")
     assert code == 0, out
     assert out["jobs_created_paused"] == []
-    assert len(jobs(root, "meo-beo")) == 2
+    assert len(jobs(root, "meo-beo")) == 4
 
 
 def test_a_project_has_one_repository(ready):
@@ -312,7 +313,7 @@ def test_activate_waits_for_the_bots_github_token_then_resumes_its_jobs(ready):
     (root / "profiles" / "meo-beo" / ".env").write_text("GH_TOKEN=github_pat_secret\n")
     code, out = admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay")
     assert code == 0, out
-    assert sorted(out["resumed"]) == ["team-kit-status", "team-kit-tick"]
+    assert sorted(out["resumed"]) == ["team-kit-incidents", "team-kit-security", "team-kit-status", "team-kit-tick"]
     assert all(job["enabled"] for job in jobs(root, "meo-beo"))
     assert "github_pat_secret" not in json.dumps(out)
 
@@ -325,7 +326,7 @@ def test_status_reports_every_bot_and_repository_and_refreshes_counts(ready):
     assert out["trusted_authors"] == ["codertocat", "meo-beo-gh"]
     shop = next(b for b in out["bots"] if b["bot"] == "meo-beo")
     assert shop["github_login"] is False
-    assert shop["jobs"] == {"team-kit-tick": False, "team-kit-status": False}
+    assert shop["jobs"] == {"team-kit-tick": False, "team-kit-status": False, "team-kit-security": False, "team-kit-incidents": False}
     assert shop["repo"] == {"repo": "acme/shop", "labels_missing": [], "running": 0, "dispatch_json": False}
     assert {"bot": "ong-xay", "role": "bootstrap"} in out["bots"]
     counts = json.loads((root / "team-kit" / "in-flight" / "meo-beo.json").read_text())["repos"]
@@ -357,7 +358,7 @@ def test_reinstalling_refreshes_project_bots_and_keeps_their_job_state(ready, ki
     assert done.returncode == 0, done.stderr
     assert (root / "profiles" / "meo-beo" / "SOUL.md").read_text().startswith("You are a team-kit project bot.")
     assert not stale.exists(), "the webhook version's scripts are removed"
-    assert all(job["enabled"] for job in jobs(root, "meo-beo")) and len(jobs(root, "meo-beo")) == 2
+    assert all(job["enabled"] for job in jobs(root, "meo-beo")) and len(jobs(root, "meo-beo")) == 4
     assert (root / "profiles" / "meo-beo" / ".env").read_text() == "GH_TOKEN=x\n"
 
 
@@ -369,3 +370,72 @@ def test_the_gh_calls_never_carry_a_token(ready):
     admin(ready, "status", profile="ong-xay")
     assert all("github_pat_secret" not in json.dumps(c) for c in gh_calls(root))
     assert all("github_pat_secret" not in " ".join(c) for c in hermes_calls(root))
+
+
+def issues(root):
+    path = root.parent / ".fake-gh" / "issues.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def test_the_machine_cord_opens_an_andon_issue_in_every_project_and_stops_setup(ready, kit_source):
+    root, env = ready
+    add_shop(ready)
+    code, out = admin(ready, "andon", "raise", "cloud", "bill", "spike", profile="ong-xay")
+    assert code == 0, out
+    assert out == {"stopped": True, "reason": "cloud bill spike", "issues": {SHOP: 50}}
+    [issue] = issues(root)[SHOP]
+    assert issue["label"] == "agent:andon" and issue["title"] == "Andon: cloud bill spike"
+    assert issue["body"].startswith("<!-- team-kit:andon v1 scope=machine -->") and "team-kit-admin andon clear" in issue["body"]
+    saved = json.loads((root / "team-kit" / "andon" / "_machine.json").read_text())
+    assert saved["by"] == "ong-xay" and saved["issues"] == {SHOP: 50}
+    code, err = admin(ready, "andon", "raise", "again", profile="ong-xay")
+    assert code == 1 and "clear it before" in err
+    vendored(root, subprocess.run(["git", "-C", str(root / "team-kit" / "kit"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip())
+    code, err = admin(ready, "setup-repo", "--project", "shop", "--backend", "claude", profile="ong-xay")
+    assert code == 1 and "andon pulled for this machine by ong-xay: cloud bill spike" in err
+    code, out = admin(ready, "status", profile="ong-xay")
+    assert out["andon"]["machine"]["reason"] == "cloud bill spike"
+    code, out = admin(ready, "andon", "clear", profile="ong-xay")
+    assert code == 0, out
+    assert out == {"stopped": False, "closed": [f"{SHOP}#50"]}
+    assert issues(root)[SHOP][0]["state"] == "closed"
+    assert not (root / "team-kit" / "andon" / "_machine.json").exists()
+    code, err = admin(ready, "andon", "clear", profile="ong-xay")
+    assert code == 1 and "not pulled" in err
+
+
+def test_the_machine_cord_holds_when_github_will_not_open_its_issues(ready):
+    root, env = ready
+    add_shop(ready)
+    env["FAKE_ISSUE_CREATE_FAILS"] = "1"
+    code, out = admin(ready, "andon", "raise", "stop", profile="ong-xay")
+    assert code == 0, out
+    assert out["issues"] == {} and "not found" in out["no_issue"][SHOP]
+    assert json.loads((root / "team-kit" / "andon" / "_machine.json").read_text())["reason"] == "stop"
+
+
+def test_andon_shows_project_cords_and_refuses_a_bare_raise(ready):
+    root, _ = ready
+    add_shop(ready)
+    (root / "team-kit" / "andon").mkdir(exist_ok=True)
+    (root / "team-kit" / "andon" / "meo-beo.json").write_text(json.dumps({"reason": "flaky deploy", "by": "meo-beo", "at": 0}))
+    code, out = admin(ready, "andon", profile="ong-xay")
+    assert out == {"machine": None, "projects": {"meo-beo": "flaky deploy"}}
+    code, err = admin(ready, "andon", "raise", profile="ong-xay")
+    assert code == 1 and "say why" in err
+
+
+def test_add_chief_creates_a_read_only_bot_with_the_chief_skill_and_no_jobs(ready):
+    root, _ = ready
+    add_shop(ready)
+    code, out = admin(ready, "add-chief", "--bot", "chanh-van", profile="ong-xay")
+    assert code == 0, out
+    assert out["role"] == "chief" and "acme/shop" in out["next"][0] and "read" in out["next"][0]
+    assert bots(root)["chanh-van"] == {"role": "chief"}
+    home = root / "profiles" / "chanh-van"
+    assert sorted(p.name for p in (home / "skills").iterdir()) == ["chief"]
+    assert (home / "SOUL.md").read_text().startswith("You are this machine's team-kit chief of staff.")
+    assert (home / "plugins" / "team_kit_guard" / "plugin.yaml").exists()
+    assert not any(c[:2] == ["-p", "chanh-van"] and c[2:4] == ["cron", "create"] for c in hermes_calls(root)), "the chief has no jobs"
+    code, err = admin(ready, "add-chief", "--bot", "meo-beo", profile="ong-xay")
+    assert code == 1 and "already a project bot" in err

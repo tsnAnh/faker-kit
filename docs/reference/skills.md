@@ -2,7 +2,7 @@
 
 # Skills
 
-Every skill in the kit: 99 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 101 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
@@ -151,7 +151,9 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 | [setup-routines](../../plugins/trust-ladder/skills/setup-routines/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-routines run the gardener and the verification-skill upkeep every night` | Put the team's upkeep on a schedule so it happens without anyone remembering. |
 | [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-dispatch for this repo: backend claude, project shop` | Prepare one repository for team-kit dispatch, so a Hermes project bot can brief cloud coding agents there and the owner only merges. |
 | [follow-brief](../../plugins/trust-ladder/skills/follow-brief/SKILL.md) | trust-ladder | Engineers, Leads | `/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill` | Work one unit a Hermes project bot handed to a cloud coding agent, from its GitHub issue to a pull request and a report. |
-| [verify-unit](../../plugins/trust-ladder/skills/verify-unit/SKILL.md) | trust-ladder | Engineers, Leads | `/verify-unit Verify https://github.com/OWNER/REPO/pull/7 against the brief in OWNER/REPO#123` | Independently verify one unit a Hermes project bot dispatched, from its brief and its pull request, without changing either. |
+| [verify-unit](../../plugins/trust-ladder/skills/verify-unit/SKILL.md) | trust-ladder | Engineers, Leads | `/verify-unit Verify https://github.com/OWNER/REPO/pull/7 at commit <sha> against the brief in OWNER/REPO#123. Sign the verdict with key <key>.` | Independently verify one unit a Hermes project bot dispatched, from its brief and its pull request, without changing either. |
+| [triage-incident](../../plugins/trust-ladder/skills/triage-incident/SKILL.md) | trust-ladder | Engineers, Leads | `/triage-incident Investigate the incident in OWNER/REPO#12: main is red: test. The head of main is <sha>; its last commit with passing checks is <sha>. Post the diagnosis on OWNER/REPO#12. Sign it with key <key>.` | Investigate one incident a Hermes project bot opened from polling (the default branch's checks went red, or a health URL fails), without changing anything. |
+| [review-main-security](../../plugins/trust-ladder/skills/review-main-security/SKILL.md) | trust-ladder | Engineers, Leads | `/review-main-security Review the commits after <base> up to <head> on main of OWNER/REPO, and post the result on OWNER/REPO#9. Sign the result with key <key>.` | Review the new commits on a repository's default branch for security issues, from a Hermes project bot's daily job, without changing anything. |
 | [orchestrate](../../plugins/trust-ladder/skills/orchestrate/SKILL.md) | trust-ladder | Engineers, Leads | `/orchestrate migrate every service to the new config loader, workers on Claude Code in the cloud, verifiers on Codex` | Use only when the user explicitly types `/orchestrate <goal>` (Codex `$orchestrate <goal>`) to decompose a large task, run a tree of parallel workers, subplanners, and verifiers as Claude Code or Codex agents, in the... |
 | [swarm](../../plugins/pstack/skills/swarm/SKILL.md) | pstack | Engineers | `take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win` | Fan out N parallel workers, drain them, and return one report. |
 

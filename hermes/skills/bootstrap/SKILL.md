@@ -12,11 +12,13 @@ If the shell does not find `team-kit-admin`, run it as `~/.hermes/bin/team-kit-a
 | Command | Does |
 |---|---|
 | `team-kit-admin status` | Every bot, project, repository, label, and job on this machine. Read-only |
-| `team-kit-admin add-project --bot B --project P --repo R [--model M]` | Creates or refreshes project bot B for repository R: profile, guard, `dispatch` skill, paused jobs, and the five labels |
+| `team-kit-admin add-project --bot B --project P --repo R [--model M]` | Creates or refreshes project bot B for repository R: profile, guard, `dispatch` skill, paused jobs, and the eleven labels |
 | `team-kit-admin vendor --project P` | Opens a pull request that copies the pinned kit into the repository's `.agents/team-kit/`, so cloud sessions there have its skills |
 | `team-kit-admin setup-repo --project P --backend claude\|codex [--codex-env E]` | Starts one cloud session that opens the project's setup pull request |
 | `team-kit-admin protect --project P --check NAME [--check NAME ...]` | Requires those checks on the project's default branch, admins included |
 | `team-kit-admin activate --bot B` | Resumes B's jobs, once its GitHub token is in place |
+| `team-kit-admin add-chief --bot B [--model M]` | Creates or refreshes the chief of staff: a read-only bot that routes the owner's intent across every project |
+| `team-kit-admin andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows the machine's andon cord. Only when the owner asks |
 
 ## Never
 
@@ -107,6 +109,22 @@ Then tell the owner to add the bot in Hermes Desktop Bot Mode and ask it for one
 ## Moving to a new kit commit
 
 After the owner reruns `install.sh` with a new `--ref`, every project bot refuses to launch until its repository's vendored kit and `kit_ref` match the new commit. Run `team-kit-admin vendor --project <project>` for each project. Its pull request moves both; once the owner merges it, the project bot launches again.
+
+## A chief of staff
+
+When the owner wants one bot to route work across projects, or one line per project on what is going on, run `team-kit-admin add-chief --bot <name>`. It creates a bot whose only command, `team-kit-chief`, reads every project and changes nothing; it writes the message the owner sends each project bot. It has no jobs. Then the owner:
+
+1. creates a fine-grained GitHub token with read-only Issues, Contents, and Metadata on every project's repository, and puts it in the bot's profile `.env` as `GH_TOKEN` (the `next` list names the file). A new project needs its repository added to that token;
+2. adds the bot in Hermes Desktop Bot Mode.
+
+## The machine's andon cord
+
+When the owner says to stop everything (a cloud bill spike, a broken default branch everywhere, an incident), run `team-kit-admin andon raise <reason>` with the reason in plain words: letters, digits, and `.,:#@/+-` only. It stops every project at once:
+
+- No project bot launches a coding agent or a verifier, and `setup-repo` refuses. Units already running keep running and keep their slots; their reports are still read.
+- Each project's repository gets an open issue labelled `agent:andon`. Cloud agents check for it before every push and stop with a `blocked` report.
+
+Closing those issues on GitHub does not clear the cord. When the owner says to start again, run `team-kit-admin andon clear`. It closes the issues it opened and lists any project whose own cord is still pulled; that project's bot clears it.
 
 ## Report
 

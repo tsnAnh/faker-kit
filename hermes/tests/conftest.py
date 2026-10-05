@@ -20,6 +20,7 @@ BOTS = {
     "version": 1,
     "bots": {
         "ong-xay": {"role": "bootstrap"},
+        "chanh-van": {"role": "chief"},
         "meo-beo": {"role": "project", "project": "shop", "repo": SHOP},
         "sep-crm": {"role": "project", "project": "crm", "repo": "acme/crm"},
     },
@@ -32,7 +33,7 @@ def guard_text():
 
 @pytest.fixture
 def team_kit_home(tmp_path, monkeypatch):
-    """A ~/.hermes/team-kit with the sample guard.yaml and three bots: a bootstrap bot and two projects."""
+    """A ~/.hermes/team-kit with the sample guard.yaml and four bots: a bootstrap bot, a chief of staff, and two projects."""
     home = tmp_path / ".hermes" / "team-kit"
     home.mkdir(parents=True)
     (home / "guard.yaml").write_text(guard_text())

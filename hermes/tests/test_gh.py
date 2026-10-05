@@ -7,7 +7,7 @@ import time
 import pytest
 from conftest import SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
-from team_kit_contracts import LAUNCHED_MARKER, size_marker, verdict_signature
+from team_kit_contracts import LAUNCHED_MARKER, diagnosis_signature, security_signature, size_marker, verdict_signature
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, Refused, checks_state, main
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
@@ -29,6 +29,9 @@ class FakeGh:
                       ".agents/team-kit/KIT.json": json.dumps({"version": 1, "kit_ref": kit_ref})}
         self.issues, self.comments, self.prs, self.calls = {}, {}, {}, []
         self.next = 40
+        self.main_head = "c" * 40
+        self.pr_files, self.history, self.pr_comments = {}, {}, {}
+        self.runs = {}
 
     def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small"):
         self.next += 1
@@ -55,6 +58,17 @@ class FakeGh:
                 if name not in self.files:
                     raise Refused("gh api failed: Not Found")
                 return json.dumps({"content": base64.b64encode(self.files[name].encode()).decode()})
+            if path.count("/") == 2:
+                return json.dumps({"default_branch": "main"})
+            if path.endswith("/check-runs?per_page=100"):
+                sha = path.split("/commits/")[1].split("/")[0]
+                return json.dumps({"check_runs": self.runs.get(sha, [])})
+            if "/commits/" in path:
+                return json.dumps({"sha": self.main_head})
+            if "/pulls/" in path and "/files" in path:
+                return json.dumps(self.pr_files.get(int(path.split("/pulls/")[1].split("/")[0]), []))
+            if "/commits?path=" in path:
+                return json.dumps([{"author": {"login": a}} for a in self.history.get(path.split("path=")[1].split("&")[0], [])])
             repo, rest = path.removeprefix("repos/").split("/issues/")
             if rest.endswith("/comments"):
                 return json.dumps(self.comments.get((repo, int(rest.split("/")[0])), []))
@@ -66,7 +80,8 @@ class FakeGh:
             label, state = args[args.index("--label") + 1], args[args.index("--state") + 1]
             found = [i for (r, _), i in self.issues.items() if r == repo and label in i["labels"] and i["state"] == state]
             return json.dumps([{"number": i["number"], "title": i["title"], "labels": [{"name": n} for n in sorted(i["labels"])],
-                                "createdAt": i["createdAt"], "closedAt": i["closedAt"], "stateReason": (i["state_reason"] or "").upper()} for i in found])
+                                "createdAt": i["createdAt"], "closedAt": i["closedAt"], "stateReason": (i["state_reason"] or "").upper(),
+                                "body": i["body"], "author": {"login": i["author"]}} for i in found])
         if args[:2] == ["issue", "create"]:
             number = self.add_issue(repo, labels=(args[args.index("--label") + 1],), body=args[args.index("--body") + 1], title=args[args.index("--title") + 1])
             return f"https://github.com/{repo}/issues/{number}\n"
@@ -80,12 +95,35 @@ class FakeGh:
                         raise Refused(f"gh issue failed: label {args[i + 1]} is not on the issue")
                     labels.discard(args[i + 1])
             return ""
+        if args[:2] == ["issue", "close"]:
+            issue = self.issues[(repo, int(args[2]))]
+            if issue["state"] != "open":
+                raise Refused("gh issue failed: already closed")
+            issue["state"], issue["state_reason"] = "closed", "completed"
+            if "--comment" in args:
+                self.comment(repo, int(args[2]), args[args.index("--comment") + 1], at=NOW)
+            return ""
         if args[:2] == ["issue", "comment"]:
             self.comment(repo, int(args[2]), args[args.index("--body") + 1], at=NOW)
             return ""
         if args[:2] == ["pr", "view"]:
             pr = self.prs[(repo, int(args[2]))]
+            pr.setdefault("labels", [])
             return json.dumps({k: v for k, v in pr.items() if k in args[-1].split(",")})
+        if args[:2] == ["pr", "edit"]:
+            pr = self.prs[(repo, int(args[2]))]
+            names = {label["name"] for label in pr.setdefault("labels", [])}
+            for i, word in enumerate(args):
+                if word == "--add-label":
+                    names.add(args[i + 1])
+                elif word == "--remove-label":
+                    assert args[i + 1] in names, "never remove a label that is not there"
+                    names.discard(args[i + 1])
+            pr["labels"] = [{"name": n} for n in sorted(names)]
+            return ""
+        if args[:2] == ["pr", "comment"]:
+            self.pr_comments.setdefault(int(args[2]), []).append(args[args.index("--body") + 1])
+            return ""
         if args[:2] == ["issue", "view"] or args[:2] == ["pr", "view"]:
             return "body and comments"
         raise AssertionError(f"unexpected gh call {args}")
@@ -419,7 +457,9 @@ def test_a_done_unit_with_passing_checks_goes_to_a_verifier_then_to_review(team_
     assert run(gh, "status") == 0 and f"#{n} A unit (verifying)" in capsys.readouterr().out
     assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"], "no verdict yet"
     verdict(gh, n, team_kit_home, at=NOW)
-    assert tick(gh, capsys) == [f"team-kit notice: #{n} is ready for you to merge (checks passed, verified: live-ui-verified): https://github.com/{REPO}/pull/7"]
+    assert tick(gh, capsys) == [f"team-kit notice: #{n} is ready for you to merge (checks passed, verified: live-ui-verified, "
+                                f"risk low (small change in ordinary paths)): https://github.com/{REPO}/pull/7"]
+    assert gh.prs[(REPO, 7)]["labels"] == [{"name": "risk:low"}]
     assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
     assert not (team_kit_home / "verify" / "meo-beo" / f"{n}.json").exists()
     assert tick(gh, capsys) == ["[SILENT]"], "a unit in review is never reported or launched again"
@@ -567,7 +607,8 @@ def test_verification_can_be_turned_off(team_kit_home, kit, capsys):
     n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
     gh.report(REPO, n, "done", pr=pr(gh, 7))
     cloud = FakeCloud()
-    assert tick(gh, capsys, cloud=cloud) == [f"team-kit notice: #{n} is ready for you to merge (checks passed, not independently verified): https://github.com/{REPO}/pull/7"]
+    assert tick(gh, capsys, cloud=cloud) == [f"team-kit notice: #{n} is ready for you to merge (checks passed, not independently verified, "
+                                             f"risk medium (not independently verified)): https://github.com/{REPO}/pull/7"]
     assert not cloud.started and gh.labels(REPO, n) == {"agent-task", "agent:review"}
 
 
@@ -601,7 +642,7 @@ def test_a_done_report_with_no_checks_is_ready_after_an_hour(team_kit_home, kit,
     gh = FakeGh(kit, verifier_backend="none")
     n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
     gh.report(REPO, n, "done", pr=pr(gh, 7, checks=()), at=NOW - 2 * 3600)
-    assert "ready for you to merge (no checks ran, not independently verified)" in tick(gh, capsys)[0]
+    assert "ready for you to merge (no checks ran, not independently verified, risk medium (no checks ran; not independently verified))" in tick(gh, capsys)[0]
     assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
 
 
@@ -852,3 +893,388 @@ def test_an_unexpected_error_is_one_refusal_line(team_kit_home, gh, capsys):
 
     assert run(explode, "kit-check") == 1
     assert capsys.readouterr().err == "team-kit-gh: refused: unexpected RuntimeError; nothing more was done\n"
+
+
+# Andon -------------------------------------------------------------------------------------------
+
+
+def andon_issue(gh, author="Codertocat", title="Andon: prod is down", body="stop everything"):
+    return gh.add_issue(REPO, labels=("agent:andon",), body=body, title=title, author=author)
+
+
+def test_pulling_the_cord_stops_every_launch_until_it_is_cleared(team_kit_home, gh, capsys):
+    assert run(gh, "andon", "raise", "prod", "is", "down") == 0
+    raised = out(capsys)
+    assert raised["stopped"] and raised["reason"] == "prod is down"
+    issue = gh.issues[(REPO, raised["issue"])]
+    assert issue["labels"] == {"agent:andon"} and issue["title"] == "Andon: prod is down"
+    assert issue["body"].startswith("<!-- team-kit:andon v1 -->") and "Do not push" in issue["body"]
+    cloud = FakeCloud()
+    assert dispatch(team_kit_home, gh, cloud) == 0
+    queued = out(capsys)
+    assert queued["state"] == "queued" and "andon pulled for this project" in queued["why"] and "prod is down" in queued["why"]
+    assert run(gh, "launch", "--issue", str(queued["issue"]), cloud=cloud) == 1
+    assert "andon pulled" in capsys.readouterr().err
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"], "the owner pulled it, so tick says nothing"
+    assert cloud.started == [] and gh.labels(REPO, queued["issue"]) == {"agent-task"}
+    assert run(gh, "status") == 0
+    assert capsys.readouterr().out.splitlines()[0] == f"team-kit notice: andon pulled for this project (#{raised['issue']}) by meo-beo: prod is down. Nothing new starts until it is cleared."
+    assert run(gh, "andon", "clear") == 0
+    assert out(capsys) == {"stopped": False, "closed": [raised["issue"]]}
+    assert gh.issues[(REPO, raised["issue"])]["state"] == "closed"
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, queued["issue"]) == {"agent-task", "agent:running"} and len(cloud.started) == 1
+
+
+def test_a_done_unit_keeps_its_slot_and_waits_for_its_verifier_while_the_cord_is_pulled(team_kit_home, gh, capsys):
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.report(REPO, n, "done", pr=pr(gh, 7))
+    assert run(gh, "andon", "raise", "billing", "spike") == 0
+    capsys.readouterr()
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"} and cloud.started == []
+    m = gh.add_issue(REPO, labels=("agent-task", "agent:needs-human"))
+    gh.report(REPO, m, "done", pr=pr(gh, 8))
+    assert run(gh, "verify", "--issue", str(m), cloud=cloud) == 1
+    assert "andon pulled" in capsys.readouterr().err
+    assert run(gh, "andon", "clear") == 0
+    capsys.readouterr()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"} and len(cloud.started) == 1
+
+
+def test_a_cord_the_owner_pulls_on_github_is_adopted_and_never_cleared_there(team_kit_home, gh, capsys):
+    a = andon_issue(gh)
+    queued = gh.add_issue(REPO)
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == [f"team-kit notice: andon pulled on #{a} by Codertocat: prod is down. Nothing new starts here until you ask me to clear it."]
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"], "said once"
+    assert cloud.started == []
+    gh.issues[(REPO, a)]["state"] = "closed"  # a cloud agent, posting as the bot's user, could do this
+    assert tick(gh, capsys, cloud=cloud) == [f"team-kit notice: andon issue #{a} is no longer open, but the line stays stopped until you ask me to clear it (team-kit-gh andon clear)."]
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert cloud.started == [] and gh.labels(REPO, queued) == {"agent-task"}
+    assert run(gh, "andon", "clear") == 0
+    assert out(capsys) == {"stopped": False, "closed": []}
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"] and len(cloud.started) == 1
+
+
+def test_an_andon_issue_from_an_untrusted_login_or_the_machine_is_not_a_project_cord(team_kit_home, gh, capsys):
+    andon_issue(gh, author="mallory")
+    andon_issue(gh, body="<!-- team-kit:andon v1 scope=machine -->\nstopped")
+    n = gh.add_issue(REPO)
+    assert tick(gh, capsys) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
+
+
+def test_the_machine_cord_stops_this_project_too(team_kit_home, gh, capsys):
+    (team_kit_home / "andon").mkdir()
+    (team_kit_home / "andon" / "_machine.json").write_text(json.dumps({"reason": "cloud bill", "by": "jarvis", "at": NOW}))
+    n = gh.add_issue(REPO)
+    assert run(gh, "launch", "--issue", str(n)) == 1
+    assert "andon pulled for this machine by jarvis: cloud bill" in capsys.readouterr().err
+    assert run(gh, "andon") == 0
+    assert out(capsys) == {"stopped": True, "machine": {"reason": "cloud bill", "by": "jarvis", "issue": None}, "project": None}
+    assert run(gh, "andon", "raise", "also", "here") == 0
+    capsys.readouterr()
+    assert run(gh, "andon", "clear") == 0
+    cleared = out(capsys)
+    assert cleared["stopped"] and "the bootstrap bot clears it" in cleared["still"]
+
+
+def test_andon_refusals(team_kit_home, gh, capsys):
+    assert run(gh, "andon", "raise") == 1
+    assert "say why" in capsys.readouterr().err
+    assert run(gh, "andon", "clear") == 1
+    assert "not pulled" in capsys.readouterr().err
+    assert run(gh, "andon", "show", "extra") == 1
+    assert "takes no reason" in capsys.readouterr().err
+    assert run(gh, "andon", "raise", "x") == 0
+    capsys.readouterr()
+    assert run(gh, "andon", "raise", "y") == 1
+    assert "clear it before" in capsys.readouterr().err
+
+
+def test_the_cord_holds_even_when_github_will_not_open_its_issue(team_kit_home, gh, capsys):
+    real = gh.__call__
+
+    def no_create(args, input=None):
+        if args[:2] == ["issue", "create"]:
+            raise Refused("gh issue failed: label agent:andon not found")
+        return real(args, input)
+
+    assert run(no_create, "andon", "raise", "stop") == 0
+    raised = out(capsys)
+    assert raised["issue"] is None and "agents already at work will not see it" in raised["warning"]
+    n = gh.add_issue(REPO)
+    assert run(gh, "launch", "--issue", str(n)) == 1
+    assert "andon pulled" in capsys.readouterr().err
+
+
+# Security review -----------------------------------------------------------------------------------
+
+
+def security_record(team_kit_home):
+    return json.loads((team_kit_home / "security" / "meo-beo.json").read_text())
+
+
+def security_result(gh, team_kit_home, high=0, medium=0, low=0, head=None, key=None, login="Codertocat", sign=True, edited=False):
+    running = security_record(team_kit_home)["running"]
+    head = head or running["head"]
+    counts = {"high": high, "medium": medium, "low": low}
+    sig = security_signature(key or running["key"], counts, head) if sign else "0" * 64
+    base = running["base"] or "none"
+    gh.comment(REPO, running["issue"], f"<!-- team-kit:security v1 -->\nrange: {base}..{head}\nfindings: {high} high, {medium} medium, {low} low\nsig: {sig}\n\n## Findings\n- none\n",
+               login=login, at=NOW)
+    if edited:
+        gh.comments[(REPO, running["issue"])][-1]["updated_at"] = iso(NOW + 5)
+
+
+def test_a_security_review_covers_each_new_commit_once(team_kit_home, gh, capsys):
+    cloud = FakeCloud()
+    assert run(gh, "security", cloud=cloud) == 0
+    started = out(capsys)
+    assert started["state"] == "started" and started["range"] == f"none..{gh.main_head}"
+    tracking = gh.issues[(REPO, started["issue"])]
+    assert tracking["labels"] == {"agent:security"} and tracking["title"] == "Security review: main"
+    [(backend, _, argv, workdir)] = cloud.started
+    running = security_record(team_kit_home)["running"]
+    assert argv[2].startswith(f"/review-main-security Review the last 20 commits up to {gh.main_head} on main of {REPO}, "
+                              f"and post the result on {REPO}#{started['issue']}. Sign the result with key {running['key']}.")
+    assert workdir.name == "security"
+    assert (team_kit_home / "security" / "meo-beo.json").stat().st_mode & 0o077 == 0
+    launched = gh.comments[(REPO, started["issue"])][-1]["body"]
+    assert launched.startswith("<!-- team-kit:security-launched v1 -->") and running["key"] not in launched
+    assert run(gh, "security", cloud=cloud) == 0 and out(capsys)["state"] == "running"
+    assert tick(gh, capsys) == ["[SILENT]"], "no result yet"
+    security_result(gh, team_kit_home, low=2)
+    assert tick(gh, capsys) == ["[SILENT]"], "low findings only: nothing to tell the owner"
+    assert security_record(team_kit_home) == {"reviewed": gh.main_head, "at": NOW}
+    assert run(gh, "security", cloud=cloud) == 0 and out(capsys) == {"state": "current", "head": gh.main_head}
+    old, gh.main_head = gh.main_head, "d" * 40
+    assert run(gh, "security", cloud=cloud) == 0
+    again = out(capsys)
+    assert again["issue"] == started["issue"], "one tracking issue per project"
+    assert cloud.started[-1][2][2].startswith(f"/review-main-security Review the commits after {old} up to {gh.main_head} on main")
+
+
+def test_serious_findings_reach_the_owner_and_only_a_signed_result_counts(team_kit_home, gh, capsys):
+    assert run(gh, "security") == 0
+    issue = out(capsys)["issue"]
+    security_result(gh, team_kit_home, high=3, sign=False)
+    security_result(gh, team_kit_home, high=3, key="1" * 32)
+    security_result(gh, team_kit_home, high=3, login="mallory")
+    security_result(gh, team_kit_home, high=0, edited=True)
+    security_result(gh, team_kit_home, high=0, head="e" * 40)
+    assert tick(gh, capsys) == ["[SILENT]"]
+    security_result(gh, team_kit_home, high=1, medium=2, low=4)
+    assert tick(gh, capsys) == [f"team-kit notice: the security review of none..ccccccc found 1 high, 2 medium: https://github.com/{REPO}/issues/{issue}"]
+    assert "running" not in security_record(team_kit_home)
+
+
+def test_a_security_review_with_no_result_in_a_day_is_said_once_and_retried(team_kit_home, gh, capsys):
+    assert main(["security"], run=gh, bot="meo-beo", cloud=FakeCloud(), now=lambda: NOW - REPORT_DEADLINE_SECONDS - 60) == 0
+    capsys.readouterr()
+    [notice] = tick(gh, capsys)
+    assert notice.startswith("team-kit notice: the security review of none..ccccccc posted no signed result in a day")
+    assert tick(gh, capsys) == ["[SILENT]"]
+    cloud = FakeCloud()
+    assert run(gh, "security", cloud=cloud) == 0 and out(capsys)["range"] == f"none..{gh.main_head}"
+
+
+def test_a_security_review_respects_its_setting_the_andon_cord_and_a_failed_start(team_kit_home, kit, capsys):
+    off = FakeGh(kit, security_backend="none")
+    assert run(off, "security") == 0 and out(capsys)["state"] == "off"
+    gh = FakeGh(kit)
+    assert run(gh, "andon", "raise", "incident") == 0
+    capsys.readouterr()
+    assert run(gh, "security") == 0 and out(capsys)["state"] == "stopped"
+    assert run(gh, "andon", "clear") == 0
+    capsys.readouterr()
+    broken = FakeGh(kit)
+    assert run(broken, "security", cloud=FakeCloud(fail="claude exited 1 before starting a session: not signed in")) == 1
+    assert "could not start" in capsys.readouterr().err
+    assert not (team_kit_home / "security" / "meo-beo.json").exists() or "running" not in security_record(team_kit_home)
+    bad = FakeGh(kit, security_backend="codex")
+    assert run(bad, "security") == 1
+    assert "security_backend codex needs codex_env" in capsys.readouterr().err
+
+
+# Risk ----------------------------------------------------------------------------------------------
+
+
+def files(*entries):
+    return [{"filename": f, "status": st, "additions": a, "deletions": d} for f, st, a, d in entries]
+
+
+def test_a_ready_pull_request_gets_a_risk_label_reasons_and_reviewers_but_never_a_review(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    gh.prs[(REPO, 7)]["labels"] = [{"name": "risk:low"}, {"name": "feature"}]
+    gh.pr_files[7] = files(("apps/api/migrations/0042_add_index.sql", "added", 30, 0), ("apps/api/orders.py", "modified", 40, 10))
+    gh.files[".github/CODEOWNERS"] = "* @Codertocat\n/apps/api/ @dba-dana @api-ana\n*.sql @dba-dana\n"
+    verdict(gh, n, team_kit_home, at=NOW)
+    [notice] = tick(gh, capsys)
+    assert "risk high (touches apps/api/migrations/0042_add_index.sql)" in notice
+    assert notice.endswith(f"suggested reviewers @dba-dana, @api-ana): https://github.com/{REPO}/pull/7"), "the owner and the bots are never suggested"
+    assert gh.prs[(REPO, 7)]["labels"] == [{"name": "feature"}, {"name": "risk:high"}]
+    [comment] = gh.pr_comments[7]
+    assert comment.startswith("<!-- team-kit:risk v1 -->\nrisk: high\nsuggested reviewers: @dba-dana, @api-ana")
+    assert not any(c[:3] == ["pr", "review"] or "requested_reviewers" in " ".join(c) for c in gh.calls), "Hermes never reviews or requests one"
+
+
+def test_without_codeowners_the_last_people_to_change_the_files_are_suggested(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    gh.pr_files[7] = files(("src/cart.ts", "modified", 300, 20), ("src/new.ts", "added", 5, 0))
+    gh.history["src/cart.ts"] = ["meo-beo-gh", "lan", "lan", "minh", "huy", "tuan"]
+    verdict(gh, n, team_kit_home, verification="unit-test-verified", at=NOW)
+    [notice] = tick(gh, capsys)
+    assert "risk medium (325 lines changed), suggested reviewers @lan, @minh, @huy)" in notice
+
+
+def test_a_failed_risk_score_never_holds_a_unit_back(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    real = gh.__call__
+
+    def no_files(args, input=None):
+        if args[0] == "api" and "/files" in args[-1]:
+            raise Refused("gh api failed: HTTP 502")
+        return real(args, input)
+
+    verdict(gh, n, team_kit_home, at=NOW)
+    assert run(no_files, "tick") == 0
+    assert lines(capsys) == [f"team-kit notice: #{n} is ready for you to merge (checks passed, verified: live-ui-verified): https://github.com/{REPO}/pull/7"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
+
+
+def test_risk_paths_in_dispatch_json_add_to_the_defaults_and_are_checked(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, risk_paths_high=["apps/ledger/"])
+    n = verifying_unit(gh, team_kit_home)
+    gh.pr_files[7] = files(("apps/ledger/post.go", "modified", 4, 1))
+    verdict(gh, n, team_kit_home, at=NOW)
+    assert "risk high (touches apps/ledger/post.go)" in tick(gh, capsys)[0]
+    bad = FakeGh(kit, risk_paths_medium="apps/")
+    assert run(bad, "kit-check") == 1
+    assert "risk_paths_medium must be a list" in capsys.readouterr().err
+
+
+# Incidents -----------------------------------------------------------------------------------------
+
+
+def red(gh, sha, *names):
+    gh.main_head = sha
+    gh.runs[sha] = [{"name": n, "status": "completed", "conclusion": "failure"} for n in names] + [{"name": "lint", "status": "completed", "conclusion": "success"}]
+
+
+def green(gh, sha):
+    gh.main_head = sha
+    gh.runs[sha] = [{"name": "test", "status": "completed", "conclusion": "success"}]
+
+
+def poll(gh, capsys, cloud=None, fetch=lambda url: 200, at=NOW):
+    assert main(["incidents"], run=gh, bot="meo-beo", cloud=cloud or FakeCloud(), now=lambda: at, fetch=fetch) == 0
+    return lines(capsys)
+
+
+def incidents(team_kit_home):
+    return json.loads((team_kit_home / "incidents" / "meo-beo.json").read_text())
+
+
+def test_a_red_default_branch_opens_an_incident_starts_triage_and_closes_when_green(team_kit_home, gh, capsys):
+    green(gh, "1" * 40)
+    assert poll(gh, capsys) == ["[SILENT]"]
+    red(gh, "2" * 40, "test", "e2e")
+    cloud = FakeCloud()
+    [opened] = poll(gh, capsys, cloud=cloud)
+    state = incidents(team_kit_home)["open"]["main"]
+    n = state["issue"]
+    assert opened == f"team-kit notice: incident #{n} opened: main is red: e2e, test. https://github.com/{REPO}/issues/{n}"
+    issue = gh.issues[(REPO, n)]
+    assert issue["labels"] == {"agent:incident"} and issue["title"] == "Incident: main is red: e2e, test"
+    [(_, _, argv, workdir)] = cloud.started
+    assert argv[2].startswith(f"/triage-incident Investigate the incident in {REPO}#{n}: main is red: e2e, test. The head of main is {'2' * 40}; "
+                              f"its last commit with passing checks is {'1' * 40}. Post the diagnosis on {REPO}#{n}. Sign it with key {state['triage']['key']}.")
+    assert workdir.name == f"incident-{n}"
+    assert state["triage"]["key"] not in gh.comments[(REPO, n)][-1]["body"]
+    assert poll(gh, capsys, cloud=cloud) == ["[SILENT]"], "one incident per source, and one notice"
+    assert len(cloud.started) == 1
+    sig = diagnosis_signature(state["triage"]["key"], "2" * 40, "high", n)
+    gh.comment(REPO, n, f"<!-- team-kit:diagnosis v1 -->\nsuspect: {'2' * 40}\nconfidence: high\nsig: 0000\n", login="Codertocat", at=NOW)
+    gh.comment(REPO, n, f"<!-- team-kit:diagnosis v1 -->\nsuspect: {'2' * 40}\nconfidence: high\nsig: {sig}\n", login="Codertocat", at=NOW)
+    assert poll(gh, capsys) == [f"team-kit notice: incident #{n}: the triage session suspects 2222222 (high confidence): https://github.com/{REPO}/issues/{n}"]
+    assert poll(gh, capsys) == ["[SILENT]"]
+    green(gh, "3" * 40)
+    assert poll(gh, capsys, at=NOW + 1800) == [f"team-kit notice: incident #{n} resolved after 30 minutes: main is red: e2e, test."]
+    assert gh.issues[(REPO, n)]["state"] == "closed"
+    assert incidents(team_kit_home)["open"] == {} and incidents(team_kit_home)["green"] == "3" * 40
+
+
+def test_running_checks_are_no_news(team_kit_home, gh, capsys):
+    gh.main_head = "4" * 40
+    gh.runs["4" * 40] = [{"name": "test", "status": "in_progress", "conclusion": None}]
+    assert poll(gh, capsys) == ["[SILENT]"]
+    assert incidents(team_kit_home)["open"] == {}
+
+
+def test_a_health_check_needs_two_failures_to_open_and_two_passes_to_close(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, incidents={"main_checks": False, "health": [{"name": "api", "url": "https://api.example.com/healthz"}], "triage_backend": "none"})
+    down, up = (lambda url: 502), (lambda url: 200)
+    assert poll(gh, capsys, fetch=down) == ["[SILENT]"], "one blip pages nobody"
+    [opened] = poll(gh, capsys, fetch=down)
+    assert "opened: health check api returns HTTP 502" in opened
+    assert poll(gh, capsys, fetch=lambda url: None) == ["[SILENT]"]
+    assert poll(gh, capsys, fetch=up) == ["[SILENT]"]
+    assert poll(gh, capsys, fetch=down) == ["[SILENT]"], "a pass then a failure is not yet a recovery"
+    assert poll(gh, capsys, fetch=up) == ["[SILENT]"]
+    [resolved] = poll(gh, capsys, fetch=up, at=NOW + 600)
+    assert "resolved after 10 minutes: health check api returns HTTP 502." in resolved
+
+
+def test_a_red_branch_pulls_the_andon_cord_when_asked_and_clears_only_its_own(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, incidents={"andon_on_red": True, "triage_backend": "none"})
+    red(gh, "5" * 40, "test")
+    [opened] = poll(gh, capsys)
+    assert opened.endswith("The andon cord is pulled until it is green again.")
+    n = incidents(team_kit_home)["open"]["main"]["issue"]
+    queued = gh.add_issue(REPO)
+    assert run(gh, "launch", "--issue", str(queued)) == 1
+    assert f"incident #{n}" in capsys.readouterr().err
+    green(gh, "6" * 40)
+    [resolved] = poll(gh, capsys)
+    assert resolved.endswith("The andon cord it pulled is cleared.")
+    assert run(gh, "andon") == 0 and out(capsys)["stopped"] is False
+    red(gh, "7" * 40, "test")
+    assert run(gh, "andon", "raise", "owner", "stop") == 0
+    capsys.readouterr()
+    [opened] = poll(gh, capsys)
+    assert "andon" not in opened, "the owner's cord is already pulled"
+    green(gh, "8" * 40)
+    [resolved] = poll(gh, capsys)
+    assert "cleared" not in resolved
+    assert run(gh, "andon") == 0 and out(capsys)["project"]["reason"] == "owner stop", "never the owner's cord"
+
+
+def test_a_lasting_polling_problem_is_said_once(team_kit_home, gh, capsys):
+    real = gh.__call__
+
+    def down(args, input=None):
+        if args[0] == "api" and args[-1].endswith("/commits/main"):
+            raise Refused("gh api failed: HTTP 502")
+        return real(args, input)
+
+    assert main(["incidents"], run=down, bot="meo-beo", cloud=FakeCloud(), now=lambda: NOW) == 0
+    assert lines(capsys) == ["team-kit notice: incidents could not poll: gh api failed: HTTP 502"]
+    assert main(["incidents"], run=down, bot="meo-beo", cloud=FakeCloud(), now=lambda: NOW) == 0
+    assert lines(capsys) == ["[SILENT]"]
+
+
+@pytest.mark.parametrize("incidents_setting", [
+    {"health": [{"name": "api", "url": "http://api.example.com"}]},
+    {"health": [{"name": "Bad Name", "url": "https://x.example"}]},
+    {"pager": True},
+    {"triage_backend": "codex"},
+])
+def test_bad_incident_settings_are_refused(team_kit_home, kit, capsys, incidents_setting):
+    gh = FakeGh(kit, incidents=incidents_setting)
+    assert run(gh, "kit-check") == 1
+    assert "incidents" in capsys.readouterr().err

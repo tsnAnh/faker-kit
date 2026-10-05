@@ -12,6 +12,9 @@
   read          --issue N | --pr N                 the body and comments (untrusted; the guard wraps it)
   show          --path P                           a file from the default branch (the owner's repo; trusted)
   kit-check                                        compare this machine's kit commit with kit_ref and the vendored kit
+  andon         [raise REASON... | clear]          show, pull, or clear this project's andon cord (the owner asked)
+  security                                         start a security review of the default branch's new commits
+  incidents                                        poll the default branch's checks and health URLs; open, triage, and close incidents
 
 GitHub holds every unit's state, as labels on its issue:
 
@@ -22,6 +25,9 @@ GitHub holds every unit's state, as labels on its issue:
   agent:review        verified (or verification is off) and the checks passed; the owner merges
   agent:needs-human   a gate: the agent stopped and needs the owner
   (closed)            done: its pull request merged
+
+An open issue labelled agent:andon is a pulled cord: nothing new starts, and agents at work stop
+at their next push. See team_kit_andon.
 
 Which bot is running comes from the Hermes profile (HERMES_HOME). Its repository comes from
 bots.yaml; a project is one repository. The guard lets a project bot run this command and nothing else.
@@ -41,6 +47,8 @@ import secrets
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Callable
 
@@ -49,11 +57,18 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
+from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord, clean_reason, issue_body  # noqa: E402
 from team_kit_cloud import Cloud, CloudError  # noqa: E402
+from team_kit_risk import CODEOWNERS_PATHS, RISK_LABELS, Risk, owners_for, parse_codeowners, pick_reviewers, score  # noqa: E402
 from team_kit_contracts import (  # noqa: E402
     DEFAULT_ACCEPTED,
     LAUNCHED_MARKER,
+    DIAGNOSIS_MARKER,
+    INCIDENT_MARKER,
     REPORT_MARKER,
+    TRIAGE_LAUNCHED_MARKER,
+    SECURITY_LAUNCHED_MARKER,
+    SECURITY_MARKER,
     UNIT_ATTEMPTS,
     VERDICT_MARKER,
     VERIFICATIONS,
@@ -63,10 +78,16 @@ from team_kit_contracts import (  # noqa: E402
     launch_argv,
     parse_brief,
     parse_depends,
+    diagnosis_signed,
+    parse_diagnosis,
     parse_report,
+    parse_security,
     parse_size,
+    security_argv,
+    security_signed,
     parse_verdict,
     size_marker,
+    triage_argv,
     verdict_signed,
     verify_argv,
 )
@@ -80,8 +101,15 @@ RUNNING_LABEL = "agent:running"
 VERIFYING_LABEL = "agent:verifying"
 REVIEW_LABEL = "agent:review"
 HUMAN_LABEL = "agent:needs-human"
+SECURITY_LABEL = "agent:security"
+INCIDENT_LABEL = "agent:incident"
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
 SILENT = "[SILENT]"
+HEALTH_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,31}\Z")
+# A health check opens an incident after this many failed polls in a row, and closes it after as
+# many passing ones, so one blip never pages the owner. A failed check run is definite at once.
+HEALTH_STREAK = 2
+HEALTH_TIMEOUT_SECONDS = 10
 NOTICE = "team-kit notice:"
 # A running unit with no report this long after its launch is a gate: its session died. The same
 # for checks still pending this long after a done report.
@@ -224,6 +252,8 @@ class Gh:
             raise Refused(f"{bot.name} is a {bot.role} bot; team-kit-gh is for project bots")
         self.policy, self.bot, self.run, self.now = policy, bot, run, now
         self.repo = bot.repo
+        self.andon = Andon(policy.home, now)
+        self._cord: tuple[Cord | None] | None = None
 
     # reading ------------------------------------------------------------------------------------
 
@@ -248,6 +278,26 @@ class Gh:
             raise Refused(f".agents/dispatch.json verifier_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
         if verifier == "codex" and not config.get("codex_env"):
             raise Refused(".agents/dispatch.json verifier_backend codex needs codex_env, the Codex cloud environment id")
+        security = config.get("security_backend", config["backend"])
+        if security not in VERIFIER_BACKENDS:
+            raise Refused(f".agents/dispatch.json security_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
+        if security == "codex" and not config.get("codex_env"):
+            raise Refused(".agents/dispatch.json security_backend codex needs codex_env, the Codex cloud environment id")
+        incidents = config.get("incidents", {})
+        if not isinstance(incidents, dict) or not set(incidents) <= {"main_checks", "health", "andon_on_red", "triage_backend"}:
+            raise Refused(".agents/dispatch.json incidents may hold only main_checks, health, andon_on_red, and triage_backend")
+        health = incidents.get("health", [])
+        if not isinstance(health, list) or not all(
+                isinstance(h, dict) and set(h) <= {"name", "url"} and HEALTH_NAME.match(str(h.get("name", "")))
+                and str(h.get("url", "")).startswith("https://") for h in health):
+            raise Refused(".agents/dispatch.json incidents.health must list {name, url} with an https URL and a short name")
+        triage = incidents.get("triage_backend", config["backend"])
+        if triage not in VERIFIER_BACKENDS or (triage == "codex" and not config.get("codex_env")):
+            raise Refused(".agents/dispatch.json incidents.triage_backend must be claude, codex (with codex_env), or none")
+        for key in ("risk_paths_high", "risk_paths_medium"):
+            extra = config.get(key, [])
+            if not isinstance(extra, list) or not all(isinstance(p, str) and p for p in extra):
+                raise Refused(f".agents/dispatch.json {key} must be a list of path patterns")
         accepted = config.get("accept_verifications", list(DEFAULT_ACCEPTED))
         if not isinstance(accepted, list) or not accepted or any(v not in VERIFICATIONS[:3] for v in accepted):
             raise Refused(f".agents/dispatch.json accept_verifications must list some of {', '.join(VERIFICATIONS[:3])}")
@@ -328,6 +378,99 @@ class Gh:
         kind, number = ("pr", pr) if pr else ("issue", issue)
         return self.run([kind, "view", str(number), "-R", self.repo, "--comments"])
 
+    # andon --------------------------------------------------------------------------------------
+
+    def andon_issues(self) -> list[dict]:
+        """Open agent:andon issues a trusted login opened, the machine's own included."""
+        issues = json.loads(self.run(["issue", "list", "-R", self.repo, "--label", ANDON_LABEL, "--state", "open",
+                                      "--json", "number,title,body,author", "--limit", "50"]))
+        return [i for i in issues if str((i.get("author") or {}).get("login") or "").lower() in self.policy.trusted_authors]
+
+    def sync_andon(self) -> tuple[Cord | None, list[str]]:
+        """The cord that stops this project, and notices for what changed on GitHub since last time.
+
+        An andon issue the owner opened by hand is adopted into the local record. A recorded cord
+        whose issue is gone stays pulled: closing the issue on GitHub never clears it."""
+        notices: list[str] = []
+        try:
+            issues = self.andon_issues()
+        except Exception:  # noqa: BLE001 - GitHub down: the local record still decides
+            issues = None
+        record = self.andon.read(self.bot.name)
+        if issues is not None:
+            own = [i for i in issues if not str(i.get("body") or "").lstrip().startswith(MACHINE_MARKER)]
+            if record is None and own:
+                first = min(own, key=lambda i: int(i["number"]))
+                title = str(first.get("title") or "").removeprefix("Andon:").strip() or f"see #{first['number']}"
+                try:
+                    why = clean_reason(title)
+                except AndonError:
+                    why = f"see #{first['number']}"
+                by = str((first.get("author") or {}).get("login") or "the owner")
+                self.andon.write(self.bot.name, {"reason": why, "by": by, "at": self.now(), "issue": int(first["number"]), "source": "github"})
+                notices.append(f"{NOTICE} andon pulled on #{first['number']} by {by}: {why}. Nothing new starts here until you ask me to clear it.")
+            elif record is not None and record.get("issue") and not record.get("issue_gone_noted") \
+                    and int(record["issue"]) not in {int(i["number"]) for i in own}:
+                self.andon.write(self.bot.name, {**record, "issue_gone_noted": True})
+                notices.append(f"{NOTICE} andon issue #{record['issue']} is no longer open, but the line stays stopped "
+                               "until you ask me to clear it (team-kit-gh andon clear).")
+        cord = self.andon.pulled(self.bot.name)
+        self._cord = (cord,)
+        return cord, notices
+
+    def cord(self) -> Cord | None:
+        """The cord that stops this project, read once per command."""
+        if self._cord is None:
+            self.sync_andon()
+        return self._cord[0]
+
+    def andon_show(self) -> dict:
+        cord = self.cord()
+        machine, project = self.andon.machine(), self.andon.project(self.bot.name)
+        as_dict = lambda c: None if c is None else {"reason": c.reason, "by": c.by, "issue": c.issue}  # noqa: E731
+        return {"stopped": cord is not None, "machine": as_dict(machine), "project": as_dict(project)}
+
+    def andon_raise(self, words: list[str], source: str = "hermes", incident: int | None = None) -> dict:
+        why = clean_reason(words)
+        if self.andon.project(self.bot.name):
+            raise Refused(f"{self.andon.project(self.bot.name).describe()}; clear it before pulling it again")
+        out: dict = {"stopped": True, "reason": why, "issue": None}
+        try:
+            url = self.run(["issue", "create", "-R", self.repo, "--title", f"Andon: {why}"[:120], "--label", ANDON_LABEL,
+                            "--body", issue_body("project", why, "team-kit-gh andon clear")]).strip()
+            out["issue"] = int(url.rstrip("/").rsplit("/", 1)[-1])
+        except Exception as err:  # noqa: BLE001 - the local cord still stops every launch
+            out["warning"] = f"no andon issue opened ({reason(err)}), so agents already at work will not see it; is the {ANDON_LABEL} label missing?"
+        record = {"reason": why, "by": self.bot.name, "at": self.now(), "issue": out["issue"], "source": source}
+        if incident is not None:
+            record["incident"] = incident
+        self.andon.write(self.bot.name, record)
+        self._cord = None
+        return out
+
+    def andon_clear(self) -> dict:
+        record = self.andon.read(self.bot.name)
+        try:
+            issues = [i for i in self.andon_issues() if not str(i.get("body") or "").lstrip().startswith(MACHINE_MARKER)]
+        except Exception as err:  # noqa: BLE001
+            raise Refused(f"cannot read the andon issues ({reason(err)}); try again") from None
+        numbers = sorted({int(i["number"]) for i in issues} | ({int(record["issue"])} if record and record.get("issue") else set()))
+        if record is None and not numbers:
+            raise Refused("this project's andon cord is not pulled")
+        closed = []
+        for number in numbers:
+            try:
+                self.run(["issue", "close", str(number), "-R", self.repo, "--comment", "The owner cleared the andon cord in Hermes. The line runs again."])
+                closed.append(number)
+            except Exception:  # noqa: BLE001 - already closed, or gone
+                pass
+        self.andon.drop(self.bot.name)
+        self._cord = None
+        out: dict = {"stopped": False, "closed": closed}
+        if self.andon.machine():
+            out = {**out, "stopped": True, "still": self.andon.machine().describe() + "; the bootstrap bot clears it"}
+        return out
+
     # writing ------------------------------------------------------------------------------------
 
     def relabel(self, issue: int, add: str | None = None, remove: tuple[str, ...] = ()) -> None:
@@ -366,6 +509,9 @@ class Gh:
         config = self.dispatch_config()
         self.kit_check(local_commit, config)
         issue = self.launchable(number, config)
+        cord = self.cord()
+        if cord:
+            raise Waiting(f"{cord.describe()}; nothing starts until it is cleared", "machine")
         body = issue.get("body") or ""
         try:
             brief = parse_brief(body)
@@ -473,8 +619,57 @@ class Gh:
         verifier = config.get("verifier_backend", config["backend"])
         if verifier == "none" or cloud is None:
             self.relabel(number, add=REVIEW_LABEL, remove=(RUNNING_LABEL,))
-            return f"{NOTICE} #{number} is ready for you to merge ({checks}, not independently verified): {report['pr']}"
+            risk = self.mark_risk(report["pr"], None, pr["checks"])
+            return f"{NOTICE} #{number} is ready for you to merge ({checks}, not independently verified{risk}): {report['pr']}"
+        if self.cord():
+            return None  # the unit keeps its slot; its verifier starts once the cord is cleared
         return self.start_verifier(issue, report["pr"], pr["head"], verifier, config, cloud, pr["checks"])
+
+    # Risk ---------------------------------------------------------------------------------------
+    # Scored in code from the pull request's files when a unit reaches the owner. Hermes labels the
+    # pull request and suggests reviewers; it never approves and never requests a review.
+
+    def risk(self, pr: int, verification: str | None, checks: str = "passed") -> Risk:
+        config = self.dispatch_config()
+        files = json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/pulls/{int(pr)}/files?per_page=100"]))
+        found = score(files, verification, tuple(config.get("risk_paths_high", [])), tuple(config.get("risk_paths_medium", [])), checks)
+        paths = [str(f.get("filename") or "") for f in files]
+        candidates: list[str] = []
+        for path in CODEOWNERS_PATHS:
+            try:
+                candidates = owners_for(paths, parse_codeowners(self.file(path)))
+            except Refused:
+                continue
+            break
+        if not candidates:
+            # No CODEOWNERS: whoever last changed the files this pull request changes most.
+            biggest = sorted(files, key=lambda f: -(int(f.get("additions") or 0) + int(f.get("deletions") or 0)))[:3]
+            for f in biggest:
+                if f.get("status") == "added":
+                    continue
+                try:
+                    commits = json.loads(self.run(["api", f"repos/{self.repo}/commits?path={f['filename']}&per_page=10"]))
+                except (Refused, ValueError):
+                    continue
+                candidates += [str((c.get("author") or {}).get("login") or "") for c in commits if isinstance(c, dict)]
+        exclude = set(self.policy.trusted_authors) | {str(d).lower() for d in config.get("trusted_dispatchers") or []}
+        return Risk(found.level, found.reasons, pick_reviewers(candidates, exclude))
+
+    def mark_risk(self, pr_url: str, verification: str | None, checks: str = "passed") -> str:
+        """Label the pull request with its risk and comment the reasons. Returns the notice's words for it."""
+        pr = int(pr_url.rsplit("/", 1)[1])
+        try:
+            found = self.risk(pr, verification, checks)
+            current = {label["name"] for label in json.loads(self.run(["pr", "view", str(pr), "-R", self.repo, "--json", "labels"])).get("labels") or []}
+            args = ["pr", "edit", str(pr), "-R", self.repo, "--add-label", found.label]
+            for stale in sorted(current & set(RISK_LABELS) - {found.label}):
+                args += ["--remove-label", stale]
+            self.run(args)
+            self.run(["pr", "comment", str(pr), "-R", self.repo, "--body", found.comment()])
+        except Exception:  # noqa: BLE001 - a missing score never holds a unit back from the owner
+            return ""
+        reviewers = ", ".join(f"@{r}" for r in found.reviewers)
+        return f", {found.summary()}" + (f", suggested reviewers {reviewers}" if reviewers else "")
 
     # Verification -------------------------------------------------------------------------------
     # Each verifier launch is recorded under policy.home/verify/<bot>/<issue>.json: the commit it
@@ -574,7 +769,8 @@ class Gh:
         self.drop_verify_record(number)
         self.relabel(number, add=REVIEW_LABEL, remove=(VERIFYING_LABEL,))
         checks = "checks passed" if pr["checks"] == "passed" else "no checks ran"
-        return f"{NOTICE} #{number} is ready for you to merge ({checks}, verified: {verdict.verification}): {pr_url}"
+        risk = self.mark_risk(pr_url, verdict.verification, pr["checks"])
+        return f"{NOTICE} #{number} is ready for you to merge ({checks}, verified: {verdict.verification}{risk}): {pr_url}"
 
     def verify(self, number: int, local_commit: str, cloud: Cloud) -> dict:
         """Start a new verifier on a unit's current pull request head, without redoing the coding work."""
@@ -589,6 +785,9 @@ class Gh:
         backend = config.get("verifier_backend", config["backend"])
         if backend == "none":
             raise Refused("verifier_backend is none in .agents/dispatch.json")
+        cord = self.cord()
+        if cord:
+            raise Refused(f"{cord.describe()}; nothing starts until it is cleared")
         report = self.report_status(number, since_launch=True)
         if report["status"] != "done" or not report.get("pr"):
             raise Refused(f"#{number} has no done report with a pull request to verify")
@@ -612,6 +811,314 @@ class Gh:
         return {"issue": number, "pr": report["pr"], "head": pr["head"], "verifier": backend}
 
 
+class Security:
+    """A daily security review of the default branch's new commits, in a cloud session that changes nothing.
+
+    The record at policy.home/security/<bot>.json holds the last commit reviewed and, while a review
+    runs, its range, its tracking issue, and the key that signs its result. Each project has one open
+    tracking issue labelled agent:security, and every review posts its result there.
+    """
+
+    def __init__(self, gh: Gh):
+        self.gh = gh
+        self.path = gh.policy.home / "security" / f"{gh.bot.name}.json"
+
+    def record(self) -> dict:
+        try:
+            data = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def write(self, data: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}")
+        tmp.touch(mode=0o600)
+        tmp.write_text(json.dumps(data))
+        tmp.replace(self.path)
+
+    def tracking_issue(self, branch: str) -> int:
+        gh = self.gh
+        found = json.loads(gh.run(["issue", "list", "-R", gh.repo, "--label", SECURITY_LABEL, "--state", "open",
+                                   "--json", "number,author", "--limit", "20"]))
+        own = sorted(int(i["number"]) for i in found if str((i.get("author") or {}).get("login") or "").lower() in gh.policy.trusted_authors)
+        if own:
+            return own[0]
+        body = (f"Hermes reviews every new commit on `{branch}` for security issues, once a day, in a cloud session "
+                "that changes nothing. Each review posts its result here. Keep this issue open.\n")
+        url = gh.run(["issue", "create", "-R", gh.repo, "--title", f"Security review: {branch}", "--label", SECURITY_LABEL, "--body", body]).strip()
+        return int(url.rstrip("/").rsplit("/", 1)[-1])
+
+    def start(self, local_commit: str, cloud: Cloud) -> dict:
+        """What the team-kit-security job runs: review the commits since the last review, if any."""
+        gh = self.gh
+        config = gh.dispatch_config()
+        gh.kit_check(local_commit, config)
+        backend = config.get("security_backend", config["backend"])
+        if backend == "none":
+            return {"state": "off", "why": "security_backend is none in .agents/dispatch.json"}
+        cord = gh.cord()
+        if cord:
+            return {"state": "stopped", "why": cord.describe()}
+        record = self.record()
+        if record.get("running"):
+            return {"state": "running", "range": f"{record['running'].get('base') or 'none'}..{record['running']['head']}"}
+        repo = json.loads(gh.run(["api", f"repos/{gh.repo}"]))
+        branch = str(repo.get("default_branch") or "")
+        head = str(json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{branch}"])).get("sha") or "")
+        if not SHA.match(head):
+            raise Refused(f"cannot read the head of {branch}")
+        base = record.get("reviewed")
+        if base == head:
+            return {"state": "current", "head": head}
+        issue = self.tracking_issue(branch)
+        key = secrets.token_hex(16)
+        argv = security_argv(backend, gh.repo, issue, branch, base, head, key, config.get("codex_env"))
+        owner, name = gh.repo.split("/")
+        workdir = gh.policy.home / "checkouts" / f"{owner}__{name}" / "security"
+        try:
+            session = cloud.start(backend, gh.repo, argv, workdir)
+        except Exception as err:  # noqa: BLE001 - tried again tomorrow
+            raise Refused(f"the security review could not start: {reason(err)}") from None
+        self.write({**record, "running": {"issue": issue, "base": base, "head": head, "key": key, "started": gh.now(), "session": session}})
+        try:
+            gh.run(["issue", "comment", str(issue), "-R", gh.repo, "--body",
+                    f"{SECURITY_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\nrange: {base or 'none'}..{head}\n"])
+        except Exception:  # noqa: BLE001 - the review runs; tick tracks it from the record
+            pass
+        return {"state": "started", "issue": issue, "range": f"{base or 'none'}..{head}", "session": session}
+
+    def check(self) -> str | None:
+        """Called by tick: read a running review's signed result. Returns a notice, or None."""
+        gh = self.gh
+        record = self.record()
+        running = record.get("running")
+        if not running:
+            return None
+        comments = gh.comments(int(running["issue"]))
+        starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(SECURITY_LAUNCHED_MARKER) and gh.trusted(c)]
+        result, url = None, None
+        for comment in comments[(starts[-1] + 1) if starts else 0:]:
+            body = (comment.get("body") or "").lstrip()
+            if not body.startswith(SECURITY_MARKER) or not gh.trusted(comment):
+                continue
+            if comment.get("updated_at") and comment.get("updated_at") != comment.get("created_at"):
+                continue  # an edited result never counts
+            try:
+                candidate = parse_security(body)
+            except ContractError:
+                continue
+            if security_signed(candidate, running["key"], running["head"]):
+                result, url = candidate, comment.get("html_url") or f"https://github.com/{gh.repo}/issues/{running['issue']}"
+                break
+        span = f"{(running.get('base') or 'none')[:7]}..{running['head'][:7]}"
+        if result is None:
+            if gh.now() - float(running.get("started", 0)) > REPORT_DEADLINE_SECONDS:
+                self.write({k: v for k, v in record.items() if k != "running"})
+                return f"{NOTICE} the security review of {span} posted no signed result in a day; it runs again tomorrow. Its session: {running.get('session')}"
+            return None
+        self.write({**{k: v for k, v in record.items() if k != "running"}, "reviewed": running["head"], "at": gh.now()})
+        if not result.serious:
+            return None
+        counts = ", ".join(f"{result.counts[s]} {s}" for s in ("high", "medium") if result.counts[s])
+        return f"{NOTICE} the security review of {span} found {counts}: {url}"
+
+
+def fetch_status(url: str) -> int | None:
+    """The HTTP status of a GET, or None when nothing answered. Outbound only: nothing listens here."""
+    request = urllib.request.Request(url, method="GET", headers={"User-Agent": "team-kit-incidents"})
+    try:
+        with urllib.request.urlopen(request, timeout=HEALTH_TIMEOUT_SECONDS) as response:  # noqa: S310 - https only, checked
+            return int(response.status)
+    except urllib.error.HTTPError as err:
+        return int(err.code)
+    except Exception:  # noqa: BLE001 - a timeout, DNS, or TLS failure is a failed check
+        return None
+
+
+def plain(text: str, limit: int = 120) -> str:
+    """Text safe to put in a cloud session's prompt: plain characters only."""
+    return re.sub(r"[^A-Za-z0-9 _.,:;()/#@+=-]", "-", " ".join(str(text).split()))[:limit] or "incident"
+
+
+class Incidents:
+    """Polling, never a webhook: the default branch's checks and the repository's health URLs.
+
+    A failing source opens an issue labelled agent:incident and tells the owner. A read-only triage
+    session looks for the cause and posts a signed diagnosis there. When the source passes again,
+    the issue closes and the owner hears how long it lasted. With andon_on_red, a red default
+    branch also pulls the project's andon cord, which clears itself when the branch is green again.
+    The state lives in policy.home/incidents/<bot>.json.
+    """
+
+    def __init__(self, gh: Gh, fetch: Callable[[str], int | None] = fetch_status):
+        self.gh, self.fetch = gh, fetch
+        self.path = gh.policy.home / "incidents" / f"{gh.bot.name}.json"
+
+    def state(self) -> dict:
+        try:
+            data = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data.setdefault("open", {})
+        data.setdefault("streaks", {})
+        return data
+
+    def save(self, data: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}")
+        tmp.touch(mode=0o600)
+        tmp.write_text(json.dumps(data))
+        tmp.replace(self.path)
+
+    def main_checks(self, branch: str) -> tuple[str, bool | None, str]:
+        """The default branch's head, whether its checks fail (None while any runs), and which failed."""
+        gh = self.gh
+        head = str(json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{branch}"])).get("sha") or "")
+        if not SHA.match(head):
+            raise Refused(f"cannot read the head of {branch}")
+        runs = json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{head}/check-runs?per_page=100"])).get("check_runs") or []
+        failed = sorted({str(r.get("name") or "check") for r in runs if str(r.get("conclusion") or "").upper() in FAILED_CHECKS})
+        if failed:
+            return head, True, ", ".join(failed)
+        if not runs or any(str(r.get("status") or "").lower() != "completed" for r in runs):
+            return head, None, ""
+        return head, False, ""
+
+    def run(self, local_commit: str, cloud: Cloud) -> list[str]:
+        """One poll. A lasting problem (GitHub down, a broken dispatch.json) is said once, not every poll."""
+        data = self.state()
+        try:
+            notices = self.poll(data, cloud)
+        except Exception as err:  # noqa: BLE001
+            problem = reason(err)
+            notices = [] if data.get("problem") == problem else [f"{NOTICE} incidents could not poll: {problem}"]
+            data["problem"] = problem
+        else:
+            data.pop("problem", None)
+        self.save(data)
+        return notices
+
+    def poll(self, data: dict, cloud: Cloud) -> list[str]:
+        gh = self.gh
+        config = gh.dispatch_config()
+        settings = config.get("incidents", {})
+        branch = str(json.loads(gh.run(["api", f"repos/{gh.repo}"])).get("default_branch") or "")
+        notices: list[str] = []
+        observed: list[tuple[str, str, bool | None, int]] = []  # key, title, failing, streak needed
+        head = None
+        if settings.get("main_checks", True):
+            head, failing, detail = self.main_checks(branch)
+            if failing is False:
+                data["green"] = head
+            observed.append(("main", f"{branch} is red: {detail}" if failing else f"{branch} is red", failing, 1))
+        for check in settings.get("health", []):
+            status = self.fetch(check["url"])
+            failing = status is None or not 200 <= status < 300
+            what = f"health check {check['name']} " + ("does not answer" if status is None else f"returns HTTP {status}")
+            observed.append((f"health:{check['name']}", what, failing, HEALTH_STREAK))
+        for key, title, failing, needed in observed:
+            streak = data["streaks"].get(key, 0)
+            if failing is None:
+                continue  # checks still running: no news either way
+            streak = (max(streak, 0) + 1) if failing else (min(streak, 0) - 1)
+            data["streaks"][key] = streak
+            incident = data["open"].get(key)
+            if failing and incident is None and streak >= needed:
+                notices += self.open(data, key, title, branch, head, settings, config, cloud)
+            elif failing and incident is not None and key == "main" and head and incident.get("head") != head:
+                incident["head"] = head  # still red on a newer commit
+            elif not failing and incident is not None and -streak >= needed:
+                notices += self.close(data, key)
+        watched = {key for key, _, _, _ in observed}
+        for key in [k for k in data["open"] if k not in watched]:
+            notices += self.close(data, key, "no longer watched")  # removed from dispatch.json
+        for key in [k for k in data["streaks"] if k not in watched]:
+            del data["streaks"][key]
+        for incident in data["open"].values():
+            notice = self.check_triage(incident)
+            if notice:
+                notices.append(notice)
+        return notices
+
+    def open(self, data: dict, key: str, title: str, branch: str, head: str | None, settings: dict, config: dict, cloud: Cloud) -> list[str]:
+        gh = self.gh
+        body = (f"{INCIDENT_MARKER}\nsource: {key}\n\n{plain(title, 300)}\n\n"
+                "Hermes polls this source and closes this issue when it passes again. A triage session that changes "
+                "nothing posts its diagnosis here. Fixes go through the project bot, from the owner's own words.\n")
+        url = gh.run(["issue", "create", "-R", gh.repo, "--title", f"Incident: {plain(title, 100)}", "--label", INCIDENT_LABEL, "--body", body]).strip()
+        number = int(url.rstrip("/").rsplit("/", 1)[-1])
+        incident = {"issue": number, "title": plain(title, 100), "since": gh.now(), "head": head}
+        data["open"][key] = incident
+        notices = [f"{NOTICE} incident #{number} opened: {plain(title, 100)}. {url}"]
+        if key == "main" and settings.get("andon_on_red") and not gh.andon.project(gh.bot.name):
+            gh.andon_raise([f"incident #{number}: {plain(title, 100)}"], source="incident", incident=number)
+            incident["andon"] = True
+            notices[0] += " The andon cord is pulled until it is green again."
+        backend = settings.get("triage_backend", config["backend"])
+        if backend != "none" and head:
+            key_hex = secrets.token_hex(16)
+            owner, name = gh.repo.split("/")
+            try:
+                argv = triage_argv(backend, gh.repo, number, plain(title, 120), branch, head, data.get("green"), key_hex, config.get("codex_env"))
+                session = cloud.start(backend, gh.repo, argv, gh.policy.home / "checkouts" / f"{owner}__{name}" / f"incident-{number}")
+            except Exception as err:  # noqa: BLE001 - the incident stands without a diagnosis
+                notices.append(f"{NOTICE} incident #{number}: the triage session could not start: {reason(err)}")
+            else:
+                incident["triage"] = {"key": key_hex, "started": gh.now(), "session": session}
+                try:
+                    gh.run(["issue", "comment", str(number), "-R", gh.repo, "--body", f"{TRIAGE_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\n"])
+                except Exception:  # noqa: BLE001
+                    pass
+        return notices
+
+    def close(self, data: dict, key: str, why: str = "passing again") -> list[str]:
+        gh = self.gh
+        incident = data["open"].pop(key)
+        minutes = max(1, int((gh.now() - float(incident.get("since", gh.now()))) // 60))
+        try:
+            gh.run(["issue", "close", str(incident["issue"]), "-R", gh.repo, "--comment", f"{why.capitalize()}; closed by Hermes after {minutes} minutes."])
+        except Exception:  # noqa: BLE001 - closed by hand already
+            pass
+        verb = "resolved" if why == "passing again" else f"closed ({why})"
+        notice = f"{NOTICE} incident #{incident['issue']} {verb} after {minutes} minutes: {incident['title']}."
+        record = gh.andon.read(gh.bot.name)
+        if incident.get("andon") and record and record.get("source") == "incident" and record.get("incident") == incident["issue"]:
+            gh.andon_clear()
+            notice += " The andon cord it pulled is cleared."
+        return [notice]
+
+    def check_triage(self, incident: dict) -> str | None:
+        gh = self.gh
+        triage = incident.get("triage")
+        if not triage or triage.get("done"):
+            return None
+        number = int(incident["issue"])
+        comments = gh.comments(number)
+        starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(TRIAGE_LAUNCHED_MARKER) and gh.trusted(c)]
+        for comment in comments[(starts[-1] + 1) if starts else 0:]:
+            body = (comment.get("body") or "").lstrip()
+            if not body.startswith(DIAGNOSIS_MARKER) or not gh.trusted(comment):
+                continue
+            if comment.get("updated_at") and comment.get("updated_at") != comment.get("created_at"):
+                continue
+            try:
+                diagnosis = parse_diagnosis(body)
+            except ContractError:
+                continue
+            if diagnosis_signed(diagnosis, triage["key"], number):
+                triage["done"] = True
+                where = comment.get("html_url") or f"https://github.com/{gh.repo}/issues/{number}"
+                suspect = f"suspects {diagnosis.suspect[:7]}" if diagnosis.suspect else "names no suspect commit"
+                return f"{NOTICE} incident #{number}: the triage session {suspect} ({diagnosis.confidence} confidence): {where}"
+        if gh.now() - float(triage.get("started", 0)) > REPORT_DEADLINE_SECONDS:
+            triage["done"] = True
+            return f"{NOTICE} incident #{number}: the triage session posted no signed diagnosis in a day. Its session: {triage.get('session')}"
+        return None
+
+
 class Project:
     """tick and status for the bot's project."""
 
@@ -622,6 +1129,8 @@ class Project:
     def tick(self, local_commit: str, cloud: Cloud) -> list[str]:
         gh, notices, problems = self.gh, [], {}
         queued: list[dict] = []
+        cord, andon_notices = gh.sync_andon()
+        notices.extend(andon_notices)
         try:
             units = gh.units()
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
@@ -639,7 +1148,7 @@ class Project:
             elif not labels & {REVIEW_LABEL, HUMAN_LABEL}:
                 queued.append(issue)
         queued.sort(key=lambda issue: (issue.get("createdAt") or "", int(issue["number"])))
-        for issue in queued:
+        for issue in [] if cord else queued:
             try:
                 gh.launch(int(issue["number"]), local_commit, cloud)
             except Waiting as wait:
@@ -650,6 +1159,12 @@ class Project:
             except Exception as err:  # noqa: BLE001 - a pin mismatch or a GitHub hiccup is not the unit's fault
                 problems[gh.repo] = reason(err)
                 break
+        try:
+            notice = Security(gh).check()
+            if notice:
+                notices.append(notice)
+        except Exception as err:  # noqa: BLE001 - reported once, retried next tick
+            problems["security"] = reason(err)
         try:
             # Refresh this bot's count for the other bots, whatever launched or did not.
             InFlight(self.policy, self.bot, self.run, self.now).count_own()
@@ -693,10 +1208,12 @@ class Project:
                 done.append(f"#{issue['number']} {issue['title']}")
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(json.dumps({"at": self.now()}))
+        cord = self.gh.cord()
+        stopped = [f"{NOTICE} {cord.describe()}. Nothing new starts until it is cleared."] if cord else []
         if not (flight or waiting or done):
-            return [SILENT]
+            return stopped or [SILENT]
         line = lambda name, items: f"{NOTICE} {name}: {len(items)}. " + ("; ".join(items) if items else "none") + "."  # noqa: E731
-        return [line("In flight", flight), line("Waiting on you", waiting), line("Done since last", done)]
+        return stopped + [line("In flight", flight), line("Waiting on you", waiting), line("Done since last", done)]
 
 
 def brief_text(policy: Policy, bot: Bot, path: str) -> str:
@@ -714,8 +1231,11 @@ def brief_text(policy: Policy, bot: Bot, path: str) -> str:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="team-kit-gh")
     sub = top.add_subparsers(dest="command", required=True)
-    for name in ("project", "tick", "status"):
+    for name in ("project", "tick", "status", "security", "incidents"):
         sub.add_parser(name)
+    cmd = sub.add_parser("andon")
+    cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
+    cmd.add_argument("reason", nargs="*")
     for name in ("dispatch", "launch", "verify", "report-status", "read", "show", "pr-state", "kit-check"):
         cmd = sub.add_parser(name)
         if name == "dispatch":
@@ -735,7 +1255,8 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = None, cloud: Cloud | None = None,
-         commit: Callable[[Policy], str] = kit_commit, now: Callable[[], float] = time.time) -> int:
+         commit: Callable[[Policy], str] = kit_commit, now: Callable[[], float] = time.time,
+         fetch: Callable[[str], int | None] = fetch_status) -> int:
     args = parser().parse_args(argv)
     try:
         policy = load_policy()
@@ -745,6 +1266,18 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         cloud = cloud or Cloud(run_gh=run)
         if args.command == "project":
             out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
+        elif args.command == "incidents":
+            gh = Gh(policy, me, run, now)
+            lines = Incidents(gh, fetch).run(commit(policy), cloud)
+            print("\n".join(lines) if lines else SILENT)
+            return 0
+        elif args.command == "security":
+            out = Security(Gh(policy, me, run, now)).start(commit(policy), cloud)
+        elif args.command == "andon":
+            gh = Gh(policy, me, run, now)
+            if args.action != "raise" and args.reason:
+                raise Refused(f"andon {args.action} takes no reason")
+            out = gh.andon_raise(args.reason) if args.action == "raise" else gh.andon_clear() if args.action == "clear" else gh.andon_show()
         elif args.command in ("tick", "status"):
             project = Project(policy, me, run, now)
             lines = project.tick(commit(policy), cloud) if args.command == "tick" else project.status()
@@ -772,7 +1305,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
                 out = gh.pr_state(args.pr)
             else:
                 out = gh.kit_check(commit(policy))
-    except (Refused, ContractError, PolicyError) as err:
+    except (Refused, ContractError, PolicyError, AndonError) as err:
         print(f"team-kit-gh: refused: {err}", file=sys.stderr)
         return 1
     except Exception as err:  # noqa: BLE001 - the bot gets one refusal line, never a traceback
