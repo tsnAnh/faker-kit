@@ -28,7 +28,7 @@ What it describes:
 | A gardener who watches the codebase for spreading smells | `gardener`, with a daily routine template |
 | Extracting what reviewers keep saying into the codebase: the style guide | `style-guide-from-reviews`, then `correct` to promote each entry down the ladder |
 | Grok Bot routines that react to Slack threads and Sentry alerts | `setup-routines`: Claude Code routines or Codex scheduled tasks |
-| Automations, and an SDK for building more bots | `setup-routines`. The SDK and orchestrate plugins were left out; see below |
+| Automations, and an SDK for building more bots | `setup-routines`, and trust-ladder's `orchestrate`, ported from the upstream orchestrate plugin to run Claude Code and Codex agents. The SDK plugin was left out; see below |
 | Cloud agents | `setup-cloud-agents` |
 | Automatically reproducing bug reports and opening pull requests | pstack's benny pack and the `reproduce-bugs` routine |
 | pstack | `plugins/pstack`, vendored in full |
@@ -118,7 +118,7 @@ From the upstream plugin repository:
 
 | Plugin | Why |
 |---|---|
-| orchestrate | Runs cloud agents through the upstream editor's SDK and needs a paid account with it. pstack's Orchestrate playbook runs large programs on your own agent's subagents instead. |
+| orchestrate (vendored) | Runs cloud agents through the upstream editor's SDK. trust-ladder's `orchestrate` skill is a port of it that runs Claude Code and Codex agents in the cloud or locally instead. |
 | the SDK plugin | Documents the upstream editor's TypeScript SDK, which needs a paid account with it. Routines and the review workflows cover the bots this team builds. |
 | ralph-loop | Claude Code's `/loop` and the faker-mode Autonomous run playbook do the same job. |
 | create-plugin | Scaffolds plugins in the upstream editor's format; this kit ships Claude Code, Codex, and Pi manifests. |
