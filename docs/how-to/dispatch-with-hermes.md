@@ -2,7 +2,7 @@
 
 You tell a Hermes bot what you want in Hermes Desktop. It splits the work into units, writes a brief for each, and starts a Claude Code or Codex cloud agent on it. Every unit ends as one pull request with passing checks. You answer the questions agents cannot, and you merge. Nothing else needs you.
 
-This is the "cloud sessions, one pull request each" level of [Run many agents](run-many-agents.md), driven from chat. How many units run at once comes from the repository's `/trust-audit` score. A program that needs a coordinator running dozens of agents for days is the Orchestrate playbook's job, in Claude Code.
+This is the "cloud sessions, one pull request each" level of [Run many agents](run-many-agents.md), driven from chat. How many units run at once comes from the repository's `/trust-audit` score. A program that needs a coordinator running dozens of agents for days is the job of the Orchestrate playbook, or of trust-ladder's `/orchestrate` across cloud sessions.
 
 The Hermes side is the kit's [`hermes/`](../../hermes/) module. Its [README](../../hermes/README.md) lists every file it installs.
 

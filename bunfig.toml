@@ -1,0 +1,3 @@
+[test]
+# The orchestrate skill has its own dependencies and test run: see .github/workflows/ci.yml.
+pathIgnorePatterns = ["plugins/trust-ladder/skills/orchestrate/**"]
