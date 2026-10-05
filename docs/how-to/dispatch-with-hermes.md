@@ -42,11 +42,11 @@ The issue's labels, and whether it is closed as completed, are the unit's whole 
 Each repository picks its coding agent once, in `.agents/dispatch.json` (`backend` is `claude` or `codex`). A launch runs one of these. `N` is 1, 2, or 3 for a small, medium, or large unit.
 
 ```bash
-claude --cloud '/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill'
-codex cloud exec --env ENV_ID --attempts N '$faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill'
+claude --cloud @/path/to/private-prompt-file
+codex cloud exec --env ENV_ID --attempts N -
 ```
 
-The prompt always starts with `/faker-mode` or `$faker-mode`. The `faker-mode` skill cannot load itself, so the prompt has to run it as a command. For `claude`, the launch first clones the repository into `~/.hermes/team-kit/checkouts/`, because `claude --cloud` works on the repository in its current directory.
+The prompt always starts with `/faker-mode` or `$faker-mode`. The `faker-mode` skill cannot load itself, so the prompt has to run it as a command. Team-kit does not put prompt text in process arguments: Codex reads it on stdin via `-`, and Claude reads it through a mode-600 prompt file passed as an `@file` reference. That keeps prompt material, including one-use signing keys for verifier, PR review, security, and incident sessions, out of process listings. For `claude`, the launch first clones the repository into `~/.hermes/team-kit/checkouts/`, because `claude --cloud` works on the repository in its current directory.
 
 ### When work splits into several units
 

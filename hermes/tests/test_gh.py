@@ -227,10 +227,10 @@ def test_dispatch_opens_the_issue_and_launches_from_a_fresh_clone(team_kit_home,
     assert issue["labels"] == {"agent-task", "agent:running"}
     assert issue["body"].startswith("<!-- team-kit:brief v1 card=csv-export -->")
     assert issue["body"].rstrip().endswith(size_marker("large"))
-    [(backend, repo, argv, workdir)] = cloud.started
+    [(backend, repo, command, workdir)] = cloud.started
     assert (backend, repo) == ("claude", REPO)
-    assert argv[:2] == ["claude", "--cloud"]
-    assert argv[2].startswith(f"/faker-mode Work the brief in {REPO}#41 using the follow-brief skill. If the follow-brief skill is not available")
+    assert command.argv == ("claude", "--cloud")
+    assert command.prompt.startswith(f"/faker-mode Work the brief in {REPO}#41 using the follow-brief skill. If the follow-brief skill is not available")
     assert workdir == team_kit_home / "checkouts" / "acme__shop" / "41"
     launched = gh.comments[(REPO, 41)][-1]["body"]
     assert launched.startswith(LAUNCHED_MARKER) and "session: https://claude.ai/code/session_01ABCDEF" in launched
@@ -239,7 +239,7 @@ def test_dispatch_opens_the_issue_and_launches_from_a_fresh_clone(team_kit_home,
 def test_dispatch_for_codex_passes_the_environment_and_the_size(team_kit_home, kit, capsys):
     gh, cloud = FakeGh(kit, backend="codex", codex_env="env_7"), FakeCloud()
     assert dispatch(team_kit_home, gh, cloud, size="medium") == 0
-    assert cloud.started[0][2][:7] == ["codex", "cloud", "exec", "--env", "env_7", "--attempts", "2"]
+    assert cloud.started[0][2].argv == ("codex", "cloud", "exec", "--env", "env_7", "--attempts", "2", "-")
 
 
 def test_dispatch_queues_a_unit_whose_dependency_is_open(team_kit_home, gh, capsys):
@@ -376,7 +376,7 @@ def test_tick_launches_a_queued_unit_once_its_dependency_merged(team_kit_home, g
     cloud = FakeCloud()
     assert tick(gh, capsys, cloud) == ["[SILENT]"]
     assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
-    assert f"{REPO}#{n} using the follow-brief skill." in cloud.started[0][2][-1]
+    assert f"{REPO}#{n} using the follow-brief skill." in cloud.started[0][2].prompt
 
 
 def test_tick_leaves_a_unit_whose_dependency_is_open(team_kit_home, gh, capsys):
@@ -400,7 +400,7 @@ def test_tick_launches_oldest_first_up_to_the_repository_limit(team_kit_home, gh
     queued = [gh.add_issue(REPO) for _ in range(3)]
     cloud = FakeCloud()
     tick(gh, capsys, cloud)
-    started = [argv[-1].split("#")[1].split(" ")[0] for _, _, argv, _ in cloud.started]
+    started = [command.prompt.split("#")[1].split(" ")[0] for _, _, command, _ in cloud.started]
     assert started == [str(queued[0]), str(queued[1])], "max_in_flight is 2"
     assert gh.labels(REPO, queued[2]) == {"agent-task"}
 
@@ -442,11 +442,13 @@ HEAD = "a" * 40
 def test_tick_starts_one_pr_review_for_a_new_unit_pr_head(team_kit_home, kit, capsys):
     gh = FakeGh(kit, review_backend="claude")
     n, cloud = reviewing_unit(gh, team_kit_home, capsys)
-    [(backend, _, argv, workdir)] = cloud.started
+    [(backend, _, command, workdir)] = cloud.started
     saved = review_record(team_kit_home, n)
-    assert backend == "claude" and argv[:2] == ["claude", "--cloud"]
-    assert argv[2].startswith(f"/review-pr Review https://github.com/{REPO}/pull/7 at commit {HEAD} for the unit in {REPO}#{n},")
-    assert saved["key"] in argv[2] and saved["key"] not in gh.comments[(REPO, n)][-1]["body"]
+    assert backend == "claude" and command.argv == ("claude", "--cloud")
+    assert command.prompt.startswith(f"/review-pr Review https://github.com/{REPO}/pull/7 at commit {HEAD} for the unit in {REPO}#{n},")
+    assert saved["key"] in command.prompt
+    assert saved["key"] not in " ".join(command.argv)
+    assert saved["key"] not in gh.comments[(REPO, n)][-1]["body"]
     assert workdir.name == f"{n}-review"
     assert (team_kit_home / "reviews" / "meo-beo" / f"{n}.json").stat().st_mode & 0o077 == 0
     assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
@@ -516,7 +518,7 @@ def test_review_backend_none_does_not_start_pr_reviews(team_kit_home, kit, capsy
     assert cloud.started == []
 
 
-def test_codex_pr_review_uses_the_codex_environment(team_kit_home, kit, capsys):
+def test_codex_pr_review_uses_stdin_outside_argv(team_kit_home, kit, capsys):
     gh = FakeGh(kit, review_backend="codex", codex_env="env_2")
     reviewing_unit(gh, team_kit_home, capsys)
     assert gh.calls
@@ -524,8 +526,13 @@ def test_codex_pr_review_uses_the_codex_environment(team_kit_home, kit, capsys):
     n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
     pr(gh, 8, issue=n)
     tick(gh, capsys, cloud=cloud)
-    [(backend, _, argv, _)] = cloud.started
-    assert backend == "codex" and argv[:5] == ["codex", "cloud", "exec", "--env", "env_2"] and argv[-1].startswith("$review-pr ")
+    [(backend, _, command, _)] = cloud.started
+    saved = review_record(team_kit_home, n)
+    assert backend == "codex"
+    assert command.argv == ("codex", "cloud", "exec", "--env", "env_2", "--attempts", "1", "-")
+    assert command.prompt.startswith("$review-pr ")
+    assert saved["key"] in command.prompt
+    assert saved["key"] not in " ".join(command.argv)
 
 
 def record(team_kit_home, n):
@@ -572,10 +579,11 @@ def test_a_done_unit_with_passing_checks_goes_to_a_verifier_then_to_review(team_
     cloud = FakeCloud()
     assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
     assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"}
-    [(backend, _, argv, workdir)] = cloud.started
+    [(backend, _, command, workdir)] = cloud.started
     saved = record(team_kit_home, n)
-    assert backend == "claude" and argv[:2] == ["claude", "--cloud"]
-    assert argv[2].startswith(f"/verify-unit Verify https://github.com/{REPO}/pull/7 at commit {HEAD} against the brief in {REPO}#{n}. Sign the verdict with key {saved['key']}.")
+    assert backend == "claude" and command.argv == ("claude", "--cloud")
+    assert command.prompt.startswith(f"/verify-unit Verify https://github.com/{REPO}/pull/7 at commit {HEAD} against the brief in {REPO}#{n}. Sign the verdict with key {saved['key']}.")
+    assert saved["key"] not in " ".join(command.argv)
     assert workdir.name == f"{n}-verify"
     assert (team_kit_home / "verify" / "meo-beo" / f"{n}.json").stat().st_mode & 0o077 == 0, "the key file is private"
     launch = gh.comments[(REPO, n)][-1]["body"]
@@ -704,7 +712,7 @@ def test_verify_restarts_only_the_verifier_on_a_gated_unit(team_kit_home, gh, ca
     assert run(gh, "verify", "--issue", str(n), cloud=cloud) == 0
     assert out(capsys) == {"issue": n, "pr": f"https://github.com/{REPO}/pull/7", "head": HEAD, "verifier": "claude"}
     assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"}
-    assert cloud.started[0][2][2].startswith("/verify-unit "), "no coding agent is launched"
+    assert cloud.started[0][2].prompt.startswith("/verify-unit "), "no coding agent is launched"
     verdict(gh, n, team_kit_home, at=NOW + 1)
     assert "ready for you to merge" in tick(gh, capsys)[0]
 
@@ -722,8 +730,9 @@ def test_accept_verifications_and_a_codex_verifier_come_from_dispatch_json(team_
     gh.report(REPO, n, "done", pr=pr(gh, 7))
     cloud = FakeCloud()
     tick(gh, capsys, cloud=cloud)
-    [(backend, _, argv, _)] = cloud.started
-    assert backend == "codex" and argv[:5] == ["codex", "cloud", "exec", "--env", "env_1"] and argv[-1].startswith("$verify-unit ")
+    [(backend, _, command, _)] = cloud.started
+    assert backend == "codex" and command.argv == ("codex", "cloud", "exec", "--env", "env_1", "--attempts", "1", "-")
+    assert command.prompt.startswith("$verify-unit ")
     verdict(gh, n, team_kit_home, verification="type-check-only", at=NOW)
     assert "verified: type-check-only" in tick(gh, capsys)[0]
 
@@ -1165,10 +1174,11 @@ def test_a_security_review_covers_each_new_commit_once(team_kit_home, gh, capsys
     assert started["state"] == "started" and started["range"] == f"none..{gh.main_head}"
     tracking = gh.issues[(REPO, started["issue"])]
     assert tracking["labels"] == {"agent:security"} and tracking["title"] == "Security review: main"
-    [(backend, _, argv, workdir)] = cloud.started
+    [(backend, _, command, workdir)] = cloud.started
     running = security_record(team_kit_home)["running"]
-    assert argv[2].startswith(f"/review-main-security Review the last 20 commits up to {gh.main_head} on main of {REPO}, "
-                              f"and post the result on {REPO}#{started['issue']}. Sign the result with key {running['key']}.")
+    assert command.prompt.startswith(f"/review-main-security Review the last 20 commits up to {gh.main_head} on main of {REPO}, "
+                                     f"and post the result on {REPO}#{started['issue']}. Sign the result with key {running['key']}.")
+    assert running["key"] not in " ".join(command.argv)
     assert workdir.name == "security"
     assert (team_kit_home / "security" / "meo-beo.json").stat().st_mode & 0o077 == 0
     launched = gh.comments[(REPO, started["issue"])][-1]["body"]
@@ -1183,7 +1193,7 @@ def test_a_security_review_covers_each_new_commit_once(team_kit_home, gh, capsys
     assert run(gh, "security", cloud=cloud) == 0
     again = out(capsys)
     assert again["issue"] == started["issue"], "one tracking issue per project"
-    assert cloud.started[-1][2][2].startswith(f"/review-main-security Review the commits after {old} up to {gh.main_head} on main")
+    assert cloud.started[-1][2].prompt.startswith(f"/review-main-security Review the commits after {old} up to {gh.main_head} on main")
 
 
 def test_serious_findings_reach_the_owner_and_only_a_signed_result_counts(team_kit_home, gh, capsys):
@@ -1318,9 +1328,10 @@ def test_a_red_default_branch_opens_an_incident_starts_triage_and_closes_when_gr
     assert opened == f"team-kit notice: incident #{n} opened: main is red: e2e, test. https://github.com/{REPO}/issues/{n}"
     issue = gh.issues[(REPO, n)]
     assert issue["labels"] == {"agent:incident"} and issue["title"] == "Incident: main is red: e2e, test"
-    [(_, _, argv, workdir)] = cloud.started
-    assert argv[2].startswith(f"/triage-incident Investigate the incident in {REPO}#{n}: main is red: e2e, test. The head of main is {'2' * 40}; "
-                              f"its last commit with passing checks is {'1' * 40}. Post the diagnosis on {REPO}#{n}. Sign it with key {state['triage']['key']}.")
+    [(_, _, command, workdir)] = cloud.started
+    assert command.prompt.startswith(f"/triage-incident Investigate the incident in {REPO}#{n}: main is red: e2e, test. The head of main is {'2' * 40}; "
+                                     f"its last commit with passing checks is {'1' * 40}. Post the diagnosis on {REPO}#{n}. Sign it with key {state['triage']['key']}.")
+    assert state["triage"]["key"] not in " ".join(command.argv)
     assert workdir.name == f"incident-{n}"
     assert state["triage"]["key"] not in gh.comments[(REPO, n)][-1]["body"]
     assert poll(gh, capsys, cloud=cloud) == ["[SILENT]"], "one incident per source, and one notice"

@@ -43,6 +43,8 @@ REPORT_FIELDS = ("status", "branch", "head", "pr")
 
 UNIT_ATTEMPTS = {"small": 1, "medium": 2, "large": 3}
 BACKENDS = ("claude", "codex")
+PROMPT_STDIN = "stdin"
+PROMPT_FILE = "prompt-file"
 VENDOR_DIR = ".agents/team-kit"
 # The second sentence makes a session without the kit fail at once, and visibly: a Claude Code
 # session posts a blocked report that tick turns into a gate. A Codex task cannot comment, so it says
@@ -110,6 +112,13 @@ NONE_WORDS = {"none", "none.", "-", "n/a"}
 
 class ContractError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class CloudCommand:
+    argv: tuple[str, ...]
+    prompt: str
+    prompt_transport: str
 
 
 @dataclass(frozen=True)
@@ -296,7 +305,7 @@ def verdict_signed(verdict: Verdict, key: str, head: str) -> bool:
     return hmac.compare_digest(verdict.sig.lower(), verdict_signature(key, verdict.verification, head.lower()))
 
 
-def verify_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key: str, env_id: str | None = None) -> list[str]:
+def verify_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key: str, env_id: str | None = None) -> CloudCommand:
     """The command that starts a verifier session for one commit of one unit's pull request."""
     if not SHA.match(head or ""):
         raise ContractError("the pull request's head must be a full 40-character commit")
@@ -350,7 +359,7 @@ def review_signed(result: ReviewResult, key: str, pr_url: str, head: str) -> boo
     return hmac.compare_digest(result.sig.lower(), review_signature(key, result.counts, pr_url, head))
 
 
-def review_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key: str, env_id: str | None = None) -> list[str]:
+def review_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key: str, env_id: str | None = None) -> CloudCommand:
     """The command that starts one read-only pull request review for one unit PR head."""
     if backend not in REVIEW_PROMPTS:
         raise ContractError(f"review_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
@@ -403,7 +412,7 @@ def security_signed(result: SecurityResult, key: str, head: str) -> bool:
 
 
 def security_argv(backend: str, repo: str, issue: int, branch: str, base: str | None, head: str, key: str,
-                  env_id: str | None = None) -> list[str]:
+                  env_id: str | None = None) -> CloudCommand:
     """The command that starts one security review of the default branch from base to head."""
     if backend not in SECURITY_PROMPTS:
         raise ContractError(f"security_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
@@ -452,7 +461,7 @@ def diagnosis_signed(diagnosis: Diagnosis, key: str, issue: int) -> bool:
 
 
 def triage_argv(backend: str, repo: str, issue: int, what: str, branch: str, head: str, green: str | None, key: str,
-                env_id: str | None = None) -> list[str]:
+                env_id: str | None = None) -> CloudCommand:
     """The command that starts one read-only triage session for an incident."""
     if backend not in TRIAGE_PROMPTS:
         raise ContractError(f"triage_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
@@ -486,20 +495,20 @@ def launch_prompt(backend: str, repo: str, issue: int) -> str:
     return LAUNCH_PROMPTS[backend].format(repo=repo, issue=int(issue))
 
 
-def cloud_argv(backend: str, prompt: str, attempts: int = 1, env_id: str | None = None) -> list[str]:
-    """The argument list that starts one cloud coding agent. No shell is involved."""
+def cloud_argv(backend: str, prompt: str, attempts: int = 1, env_id: str | None = None) -> CloudCommand:
+    """The command and private prompt payload that start one cloud coding agent. No shell is involved."""
     if backend == "claude":
-        return ["claude", "--cloud", prompt]
+        return CloudCommand(("claude", "--cloud"), prompt, PROMPT_FILE)
     if backend != "codex":
         raise ContractError(f"backend must be one of {', '.join(BACKENDS)}")
     if not env_id or not ENV_ID.match(env_id):
         raise ContractError("codex needs the Codex cloud environment id (codex_env in .agents/dispatch.json)")
     if attempts not in UNIT_ATTEMPTS.values():
         raise ContractError("codex attempts must be 1, 2, or 3")
-    return ["codex", "cloud", "exec", "--env", env_id, "--attempts", str(attempts), prompt]
+    return CloudCommand(("codex", "cloud", "exec", "--env", env_id, "--attempts", str(attempts), "-"), prompt, PROMPT_STDIN)
 
 
-def launch_argv(backend: str, repo: str, issue: int, size: str, env_id: str | None = None) -> list[str]:
+def launch_argv(backend: str, repo: str, issue: int, size: str, env_id: str | None = None) -> CloudCommand:
     """The command that starts the coding agent for one unit. Its prompt starts with faker-mode."""
     if size not in UNIT_ATTEMPTS:
         raise ContractError(f"size must be one of {', '.join(UNIT_ATTEMPTS)}")
