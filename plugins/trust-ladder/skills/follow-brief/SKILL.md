@@ -46,7 +46,7 @@ The issue body is your task. Its sections are Goal, Scope, Context, Acceptance, 
 
 Start one new branch, such as `dispatch/<card>`, from the default branch. Every issue Depends on names was closed by a merged pull request before you were launched, so its code is already on the default branch. If it is not there, stop and report `status: blocked`.
 
-Never add or remove the issue's labels. The project bot owns `agent-task`, `agent:running`, `agent:review`, and `agent:needs-human`.
+Never add or remove the issue's labels. The project bot owns `agent-task`, `agent:running`, `agent:verifying`, `agent:review`, and `agent:needs-human`. After your done report, a separate verifier checks your pull request; prove every Acceptance line yourself first, so it has nothing to find.
 
 Pick the faker-mode playbook that fits the Goal: Feature for new behavior, Bug fix for a defect, Refactoring for a change that keeps behavior, Perf issue for a measured slowdown. Pass the brief as the task. Prove each Acceptance line by running what Verify names. For a user-facing change, drive the real app with the repository's verification skill: the one Verify names, else `verification_skill` in `.agents/dispatch.json`, else a `verify-*` skill under `.agents/skills/` or `.claude/skills/`. If there is none, say so under Deviations. Keep the commands, their results, and the skill's evidence for the report.
 

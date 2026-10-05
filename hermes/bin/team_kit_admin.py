@@ -56,7 +56,8 @@ VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
 LABELS = (
     ("agent-task", "1d76db", "A unit dispatched by a team-kit project bot"),
     ("agent:running", "fbca04", "A cloud coding agent is working this unit"),
-    ("agent:review", "0e8a16", "The agent is done and the checks passed; the owner merges"),
+    ("agent:verifying", "5319e7", "A separate verifier session is checking this unit's pull request"),
+    ("agent:review", "0e8a16", "Verified and the checks passed; the owner merges"),
     ("agent:needs-human", "d93f0b", "A dispatched unit needs the owner"),
 )
 JOBS = ("team-kit-tick", "team-kit-status")

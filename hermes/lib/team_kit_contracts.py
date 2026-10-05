@@ -5,12 +5,22 @@ Every reader here is deterministic. Nothing in this module calls a model or the 
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import re
 from dataclasses import dataclass
 
 BRIEF_MARKER = re.compile(r"\A<!-- team-kit:brief v1 card=(?P<card>[A-Za-z0-9_-]+) -->[ \t]*$", re.M)
 REPORT_MARKER = "<!-- team-kit:report v1 -->"
 LAUNCHED_MARKER = "<!-- team-kit:launched v1 -->"
+VERIFY_LAUNCHED_MARKER = "<!-- team-kit:verify-launched v1 -->"
+VERDICT_MARKER = "<!-- team-kit:verdict v1 -->"
+# Strongest claim first. The verify-unit skill defines each; a verifier never rounds up.
+VERIFICATIONS = ("live-ui-verified", "unit-test-verified", "type-check-only", "verifier-blocked", "verifier-failed")
+# The verdicts that let a unit wait for the owner's merge, unless .agents/dispatch.json says otherwise.
+DEFAULT_ACCEPTED = ("live-ui-verified", "unit-test-verified")
+VERDICT_FIELDS = ("verification", "pr", "head", "sig")
+VERIFIER_BACKENDS = ("claude", "codex", "none")
 
 BRIEF_SECTIONS = ("Goal", "Scope", "Context", "Acceptance", "Verify", "Timebox", "Forbidden", "Depends on", "Standing orders")
 REPORT_STATUSES = ("done", "partial", "blocked")
@@ -29,6 +39,18 @@ LAUNCH_PROMPTS = {
                "say the team-kit skills did not load, and stop."),
     "codex": ("$faker-mode Work the brief in {repo}#{issue} using the follow-brief skill. "
               "If the follow-brief skill is not available in this session, stop and say the team-kit skills did not load."),
+}
+# A verifier is a separate session that did not write the change. It checks out the pull request's
+# head, proves each Acceptance line, never edits or pushes, and posts a verdict comment.
+# The key signs the verdict, so only this session can produce one that counts: the coding agent may
+# post as the same GitHub user, but never sees the key. It is never posted anywhere.
+VERIFY_PROMPTS = {
+    "claude": ("/verify-unit Verify {pr} at commit {head} against the brief in {repo}#{issue}. Sign the verdict with key {key}. "
+               "If the verify-unit skill is not available in this session, comment on the issue with "
+               "`<!-- team-kit:verdict v1 -->` as the first line and `verification: verifier-blocked` as the second, "
+               "say the team-kit skills did not load, and stop."),
+    "codex": ("$verify-unit Verify {pr} at commit {head} against the brief in {repo}#{issue}. Sign the verdict with key {key}. "
+              "If the verify-unit skill is not available in this session, stop and say the team-kit skills did not load."),
 }
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 ENV_ID = re.compile(r"\A[A-Za-z0-9_-]+\Z")
@@ -51,6 +73,14 @@ class Brief:
         goal = " ".join(self.sections["Goal"].split())
         first = re.split(r"(?<=[.!?])\s", goal, maxsplit=1)[0]
         return first if len(first) <= 80 else first[:77].rstrip() + "..."
+
+
+@dataclass(frozen=True)
+class Verdict:
+    verification: str
+    pr: str | None
+    head: str | None
+    sig: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +182,54 @@ def parse_report(text: str) -> Report:
     if status not in REPORT_STATUSES:
         raise ContractError(f"report status {status!r} is not one of {', '.join(REPORT_STATUSES)}")
     return Report(status=status, branch=fields.get("branch"), head=fields.get("head"), pr=fields.get("pr"))
+
+
+def parse_verdict(text: str) -> Verdict:
+    """Read a verifier's verdict header. The verification line is the first line after the marker."""
+    body = (text or "").lstrip()
+    if not body.startswith(VERDICT_MARKER):
+        raise ContractError("verdict must start with <!-- team-kit:verdict v1 -->")
+    lines = body[len(VERDICT_MARKER):].strip().splitlines()
+    fields: dict[str, str] = {}
+    for line in lines:
+        match = re.match(r"^([a-z]+):\s*(\S.*?)\s*$", line)
+        if not match or match.group(1) not in VERDICT_FIELDS:
+            break
+        fields[match.group(1)] = match.group(2).strip("`")
+    if not lines or not lines[0].startswith("verification:"):
+        raise ContractError("verdict's first line must be `verification: <value>`")
+    verification = fields.get("verification", "")
+    if verification not in VERIFICATIONS:
+        raise ContractError(f"verification {verification!r} is not one of {', '.join(VERIFICATIONS)}")
+    return Verdict(verification=verification, pr=fields.get("pr"), head=fields.get("head"), sig=fields.get("sig"))
+
+
+def verdict_signature(key: str, verification: str, head: str) -> str:
+    """HMAC-SHA256 of `<verification>|<head>` under the verifier's key, as hex."""
+    return hmac.new(key.encode(), f"{verification}|{head}".encode(), hashlib.sha256).hexdigest()
+
+
+def verdict_signed(verdict: Verdict, key: str, head: str) -> bool:
+    """Whether the verdict was signed by the session that holds `key`, for exactly `head`."""
+    if not verdict.sig or not verdict.head or verdict.head.lower() != head.lower():
+        return False
+    return hmac.compare_digest(verdict.sig.lower(), verdict_signature(key, verdict.verification, head.lower()))
+
+
+def verify_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key: str, env_id: str | None = None) -> list[str]:
+    """The command that starts a verifier session for one commit of one unit's pull request."""
+    if not SHA.match(head or ""):
+        raise ContractError("the pull request's head must be a full 40-character commit")
+    if not re.fullmatch(r"[0-9a-f]{32,}", key or ""):
+        raise ContractError("the verifier key must be hex")
+    if backend not in VERIFY_PROMPTS:
+        raise ContractError(f"verifier_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
+    if not REPO.match(repo):
+        raise ContractError(f"repo {repo!r} is not OWNER/REPO")
+    if not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/[0-9]+", pr_url, re.I):
+        raise ContractError(f"{pr_url!r} is not a pull request in {repo}")
+    prompt = VERIFY_PROMPTS[backend].format(repo=repo, issue=int(issue), pr=pr_url, head=head, key=key)
+    return cloud_argv(backend, prompt, 1, env_id)
 
 
 def report_status(text: str) -> str | None:

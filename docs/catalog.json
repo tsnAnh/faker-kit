@@ -124,6 +124,7 @@
     "trust-ladder/setup-routines": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-routines run the gardener and the verification-skill upkeep every night", "mentioned": [] },
     "trust-ladder/setup-dispatch": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-dispatch for this repo: backend claude, project shop", "mentioned": [] },
     "trust-ladder/follow-brief": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill", "mentioned": [] },
+    "trust-ladder/verify-unit": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/verify-unit Verify https://github.com/OWNER/REPO/pull/7 against the brief in OWNER/REPO#123", "mentioned": [] },
     "trust-ladder/orchestrate": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/orchestrate migrate every service to the new config loader, workers on Claude Code in the cloud, verifiers on Codex", "mentioned": [] },
     "pstack/swarm": { "layer": "scale", "audience": ["engineer"], "prompt": "take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win", "mentioned": ["pt1"] }
   },
