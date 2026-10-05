@@ -4,11 +4,16 @@
   projects                                  every project: its bot, its repository, and any andon cord
   status                                    one line per project: in flight, waiting on the owner, done today
   show          --project P --path F        a file from a project's default branch, such as AGENTS.md
-  propose       --project P --file F        copy one markdown proposal into that project bot's inbox
+  digest        --file F                    the SHA-256 of a draft in this bot's drafts folder
+  propose       --project P --file F --sha256 H
+                                            copy one draft into that project bot's inbox; H must be F's digest now
   andon                                     the machine's and every project's andon cord
 
 The chief of staff routes the owner's intent: it says which project bot gets which part, and
-can hand one proposal to that bot. It never opens an issue, launches, or writes anywhere else.
+can hand one proposal to that bot. The proposal is a .md file of at most 20,000 bytes that the chief
+wrote under ~/.hermes/team-kit/drafts/<chief bot>/ (symlinks are refused). Each owner approval of
+`propose` names the file's SHA-256, so it covers exactly that content. It never opens an issue,
+launches, or writes anywhere else.
 Its GitHub token needs read access to every project's repository and nothing more.
 
 Only what trusted logins wrote reaches the chief: unit titles from issues a trusted author
@@ -36,7 +41,7 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
 
 from team_kit_andon import Andon  # noqa: E402
 from team_kit_guard.policy import Bot, Policy, PolicyError, load_policy  # noqa: E402
-from team_kit_proposals import ProposalError, write_proposal  # noqa: E402
+from team_kit_proposals import ProposalError, file_digest, write_proposal  # noqa: E402
 
 REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
@@ -155,10 +160,16 @@ class Chief:
             raise Refused(f"{path} is not a readable file in {bot.repo}") from None
         return text if len(text) <= MAX_FILE else text[:MAX_FILE] + f"\n[cut at {MAX_FILE} characters]\n"
 
-    def propose(self, slug: str, path: str, from_bot: str) -> dict:
+    def propose(self, slug: str, path: str, sha256: str, from_bot: str) -> dict:
         bot = self.project(slug)
         try:
-            return write_proposal(self.policy.home, bot.name, slug, bot.repo or "", path, from_bot, self.now())
+            return write_proposal(self.policy.home, bot.name, slug, bot.repo or "", path, from_bot, self.now(), sha256)
+        except ProposalError as err:
+            raise Refused(str(err)) from None
+
+    def digest(self, path: str, from_bot: str) -> dict:
+        try:
+            return {"file": os.path.basename(path), "sha256": file_digest(self.policy.home, from_bot, path)}
         except ProposalError as err:
             raise Refused(str(err)) from None
 
@@ -176,9 +187,12 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("show")
     cmd.add_argument("--project", required=True)
     cmd.add_argument("--path", required=True)
+    cmd = sub.add_parser("digest")
+    cmd.add_argument("--file", required=True)
     cmd = sub.add_parser("propose")
     cmd.add_argument("--project", required=True)
     cmd.add_argument("--file", required=True)
+    cmd.add_argument("--sha256", required=True)
     return top
 
 
@@ -197,7 +211,9 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
             print(chief.show(args.project, args.path), end="")
             return 0
         if args.command == "propose":
-            out = chief.propose(args.project, args.file, me.name)
+            out = chief.propose(args.project, args.file, args.sha256, me.name)
+        elif args.command == "digest":
+            out = chief.digest(args.file, me.name)
         else:
             out = chief.projects() if args.command == "projects" else chief.andon_state()
     except (Refused, PolicyError) as err:

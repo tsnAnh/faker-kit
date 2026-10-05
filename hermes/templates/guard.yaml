@@ -26,12 +26,15 @@ require_brief_marker: true
 # Tool results from these are wrapped in <untrusted source=...> and taint the turn.
 # After that, every tool not in read_only_tools needs the owner's approval in Desktop.
 # team-kit-gh report-status is not here: it prints only the parsed status line.
+# team-kit-gh proposals is: it prints a chief proposal's body, which is text the owner has not read.
 untrusted_readers:
   - tool: web_*
   - tool: browser_*
   - tool: x_search
   - tool: terminal
     command: "team-kit-gh read *"
+  - tool: terminal
+    command: "team-kit-gh proposals*"
 
 # Tool calls blocked outright, for every bot. A plain string is a glob over each simple
 # command in a terminal call. {tool, command} matches other tools.

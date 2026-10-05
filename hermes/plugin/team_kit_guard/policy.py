@@ -38,7 +38,7 @@ ROLE_TOOLS = {
     "project": ("terminal", "read_file", "search_files", "write_file", "patch", "clarify",
                 "skills_list", "skill_view", "todo_*", "session_search"),
     "bootstrap": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search"),
-    "chief": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search"),
+    "chief": ("terminal", "read_file", "write_file", "clarify", "skills_list", "skill_view", "todo_*", "session_search"),
 }
 # Each role's one command.
 ROLE_COMMAND = {"project": "team-kit-gh", "bootstrap": "team-kit-admin", "chief": "team-kit-chief"}
@@ -53,8 +53,9 @@ REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "tick", "status", "proposals", "report-status", "read", "show", "pr-state", "kit-check")
 BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon")
 BOOTSTRAP_READ_ONLY = ("status",)
-# The chief of staff reads every project. `propose` is the only write and always asks the owner.
-CHIEF_COMMANDS = ("projects", "status", "show", "propose", "andon")
+# The chief of staff reads every project. Its writes are a draft under drafts/<bot>/ and `propose`;
+# the guard asks the owner to approve both every time.
+CHIEF_COMMANDS = ("projects", "status", "show", "digest", "propose", "andon")
 CHIEF_NEEDS_APPROVAL = ("propose",)
 ARG = r"[A-Za-z0-9_./:#=@~,+-]+"
 
@@ -121,10 +122,15 @@ class Bot:
         return re.compile(rf"(~/\.hermes/bin/)?{ROLE_COMMAND[self.role]} ({'|'.join(commands)})( {ARG})*")
 
     def write_paths(self, home: Path) -> tuple[str, ...]:
+        if self.role == "chief":
+            return (str(home / "drafts" / self.name / "*.md"),)
         return (str(home / "briefs" / self.name / "*"),) if self.role == "project" else ()
 
     def read_paths(self, home: Path) -> tuple[str, ...]:
-        """Its own briefs and the pinned kit (templates, skills). Never secrets, configs, or other bots' files."""
+        """Its own briefs (a chief: its own drafts) and the pinned kit (templates, skills). Never secrets, configs, or other bots' files."""
+        if self.role == "chief":
+            drafts = str(home / "drafts" / self.name)
+            return (drafts, drafts + "/*.md")
         if self.role != "project":
             return ()
         briefs, kit = str(home / "briefs" / self.name), str(home / "kit")
@@ -270,7 +276,7 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
         target = os.path.abspath(os.path.expanduser(str(raw))) if raw else ""
         allowed = bot.read_paths(policy.home)
         if not target or not any(fnmatch.fnmatchcase(target, p) for p in allowed):
-            return block(f"{bot.role} bot {profile} may only read its briefs and the kit")
+            return block(f"{bot.role} bot {profile} may only read its {'drafts' if bot.role == 'chief' else 'briefs and the kit'}")
     if tool_name in WRITE_TOOLS:
         target = os.path.abspath(os.path.expanduser(str(args.get(WRITE_TOOLS[tool_name], ""))))
         allowed = bot.write_paths(policy.home)
@@ -287,9 +293,14 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
             )
     if bot.role == "chief" and not read_only:
         words = command.split()
+        if tool_name == "write_file":
+            return approve(
+                "The chief bot writes a draft proposal. Approve only if you asked it to draft this; read it first.",
+                tool_name, args, "chief",
+            )
         if tool_name == "terminal" and len(words) > 1 and words[1] in CHIEF_NEEDS_APPROVAL:
             return approve(
-                "The chief bot writes one proposal file for a project bot. Approve only if you asked it to hand this work over.",
+                "The chief bot hands one draft, identified by its SHA-256, to a project bot. Approve only if you asked it to hand this work over.",
                 tool_name, args, "chief",
             )
     if tainted and not read_only:

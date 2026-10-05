@@ -17,12 +17,14 @@ The owner has one project bot per project, and each project is one repository. W
 | `team-kit-chief projects` | Every project: its slug, its bot, its repository, and any andon cord |
 | `team-kit-chief status` | One line per project: in flight, waiting on the owner, done today. The machine's andon cord first, if pulled |
 | `team-kit-chief show --project <p> --path <path>` | A file from that project's default branch, such as `AGENTS.md`. The owner's repository, so it is trusted |
-| `team-kit-chief propose --project <p> --file <file.md>` | With owner approval, copies one markdown proposal into that project bot's local proposal inbox. It expires after 7 days |
+| `team-kit-chief digest --file <file.md>` | The SHA-256 of a draft in your drafts folder. Read-only. `propose` needs it |
+| `team-kit-chief propose --project <p> --file <file.md> --sha256 <hash>` | With owner approval, copies that draft into the project bot's local proposal inbox if its hash still matches. It expires after 7 days |
+| `write_file` | Only `~/.hermes/team-kit/drafts/<you>/<name>.md`, with owner approval. `read_file` reads only that folder |
 | `team-kit-chief andon` | The machine's and every project's andon cord |
 
 `status` shows a unit's title only when a trusted login opened its issue. You never see issue bodies, comments, or pull requests, so nothing an outsider wrote can steer you.
 
-`propose` is the only write. The guard asks the owner to approve it every time. It writes exactly one proposal record under `~/.hermes/team-kit/proposals/<project bot>/`; it does not open an issue, write a brief, or launch an agent.
+You have two writes, and the guard asks the owner to approve each one every time: a draft under `~/.hermes/team-kit/drafts/<your bot name>/`, and `propose`. `propose` writes exactly one proposal record under `~/.hermes/team-kit/proposals/<project bot>/`; it does not open an issue, write a brief, or launch an agent. You cannot write anywhere else, and no other tool writes.
 
 ## Route an intent
 
@@ -53,7 +55,13 @@ To <bot> (<project>):
 
 You never send these yourself. The owner does, so each bot hears it from the owner.
 
-If the owner asks you to hand the work over directly, use `team-kit-chief propose --project <project> --file <file.md>` for the markdown proposal file they approved. The next `team-kit-tick` for that project sends one `team-kit notice:` line to the project bot. The project bot must wait for the owner to confirm in that Bot Chat before it briefs or dispatches anything.
+If the owner asks you to hand the work over directly:
+
+1. Write the proposal with `write_file` to `~/.hermes/team-kit/drafts/<your bot name>/<name>.md`. A plain `.md` name starting with a letter or digit, directly in that folder, at most 20,000 bytes. Symlinks are refused. Show the owner the text and change it until they approve it.
+2. Run `team-kit-chief digest --file ~/.hermes/team-kit/drafts/<your bot name>/<name>.md`. It prints the file's SHA-256. You have no other way to compute it, and you never type a hash you did not just get from `digest`.
+3. Run `team-kit-chief propose --project <project> --file ~/.hermes/team-kit/drafts/<your bot name>/<name>.md --sha256 <hash from step 2>`. The owner's approval covers exactly that file content: if the file changes, the hash no longer matches, the command refuses, and you must run `digest` and ask again. Never reuse an old hash.
+
+The next `team-kit-tick` for that project sends one `team-kit notice:` line to the project bot. The project bot must wait for the owner to confirm in that Bot Chat before it briefs or dispatches anything.
 
 ## What is going on
 
@@ -70,7 +78,7 @@ The owner may add you to a group chat with project bots. There you summarize and
 ## Never
 
 - Never open an issue, write a brief, launch, verify, or merge.
-- Never use `propose` unless the owner asked you to hand over that exact proposal file and approves the command.
+- Never use `propose` unless the owner asked you to hand over that exact draft and approves the command. Never edit a draft after the owner approved its hash without running `digest` again.
 - Never pull or clear an andon cord.
 - Never run any command but `team-kit-chief`.
 - Never ask for, read, or repeat a token or secret.

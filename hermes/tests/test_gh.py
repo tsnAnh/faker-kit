@@ -1,6 +1,7 @@
 import base64
 import contextlib
 import io
+import hashlib
 import json
 import time
 
@@ -359,9 +360,11 @@ def tick(gh, capsys, cloud=None):
 
 
 def proposal(team_kit_home, tmp_path, name="handoff.md", body="# Add export\n\nBuild it from the chief handoff.\n", bot="meo-beo", project="shop", at=NOW):
-    source = tmp_path / name
+    source = team_kit_home / "drafts" / "chanh-van" / name
+    source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(body)
-    return write_proposal(team_kit_home, bot, project, REPO, str(source), "chanh-van", at)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    return write_proposal(team_kit_home, bot, project, REPO, str(source), "chanh-van", at, digest)
 
 
 def test_tick_is_silent_with_nothing_to_report(team_kit_home, gh, capsys):
@@ -398,6 +401,56 @@ def test_expired_chief_proposals_are_pruned_deterministically(team_kit_home, tmp
     assert fresh["id"] in found[0]
     files = sorted(p.name for p in (team_kit_home / "proposals" / "meo-beo").glob("*.json"))
     assert files == [f"{fresh['id']}.json"]
+
+
+def corrupt_records(team_kit_home, saved):
+    folder = team_kit_home / "proposals" / "meo-beo"
+    good = json.loads((folder / f"{saved['id']}.json").read_text())
+    bad = {
+        "garbage": "{not json",
+        "empty": "",
+        "list": "[1, 2]",
+        "no-body": json.dumps({k: v for k, v in good.items() if k != "body"}),
+        "wrong-version": json.dumps({**good, "version": 2}),
+        "body-not-text": json.dumps({**good, "body": ["x"]}),
+        "blank-body": json.dumps({**good, "body": " \n"}),
+        "bad-time": json.dumps({**good, "expires_at": "soon"}),
+        "no-expiry-window": json.dumps({**good, "expires_at": good["created_at"] + 10 * PROPOSAL_TTL_SECONDS}),
+        "id-mismatch": json.dumps({**good, "id": "other"}),
+        "other-bot": json.dumps({**good, "bot": "ong-xay"}),
+        "huge": json.dumps({**good, "body": "x" * 500_000}),
+    }
+    for name, text in bad.items():
+        (folder / f"{name}.json").write_text(text)
+    (folder / "dir.json").mkdir()
+    return sorted(bad)
+
+
+def test_corrupt_chief_proposals_are_pruned_and_never_shown(team_kit_home, tmp_path, gh, capsys):
+    saved = proposal(team_kit_home, tmp_path)
+    names = corrupt_records(team_kit_home, saved)
+    assert run(gh, "proposals") == 0
+    found = lines(capsys)
+    assert found[0].startswith(f"team-kit notice: chief proposal {saved['id']} ")
+    assert sum(1 for line in found if line.startswith("team-kit notice:")) == 1
+    left = sorted(p.name for p in (team_kit_home / "proposals" / "meo-beo").iterdir())
+    assert left == [f"{saved['id']}.json"], (left, names)
+
+
+def test_tick_prunes_corrupt_and_expired_proposals_and_notices_only_the_good_one(team_kit_home, tmp_path, gh, capsys):
+    proposal(team_kit_home, tmp_path, "old.md", "# Old\n", at=NOW - PROPOSAL_TTL_SECONDS - 5)
+    saved = proposal(team_kit_home, tmp_path, "new.md", "# New\n")
+    corrupt_records(team_kit_home, saved)
+    [notice] = tick(gh, capsys)
+    assert f"chief proposal {saved['id']} " in notice
+    assert sorted(p.name for p in (team_kit_home / "proposals" / "meo-beo").iterdir()) == [f"{saved['id']}.json"]
+
+
+def test_a_notified_proposal_stays_valid_until_it_expires(team_kit_home, tmp_path, gh, capsys):
+    saved = proposal(team_kit_home, tmp_path)
+    tick(gh, capsys)
+    assert run(gh, "proposals") == 0
+    assert saved["id"] in lines(capsys)[0]
 
 
 def test_tick_launches_a_queued_unit_once_its_dependency_merged(team_kit_home, gh, capsys):

@@ -112,7 +112,7 @@ After the owner reruns `install.sh` with a new `--ref`, every project bot refuse
 
 ## A chief of staff
 
-When the owner wants one bot to route work across projects, or one line per project on what is going on, run `team-kit-admin add-chief --bot <name>`. It creates a bot whose only command, `team-kit-chief`, reads every project and writes only approved local proposal handoffs for project bots; otherwise it writes the message the owner sends each project bot. It has no jobs. Then the owner:
+When the owner wants one bot to route work across projects, or one line per project on what is going on, run `team-kit-admin add-chief --bot <name>`. It creates a bot whose only command, `team-kit-chief`, reads every project, writes only approved drafts in its own drafts folder, and hands them to project bots with `propose`; otherwise it writes the message the owner sends each project bot. It has no jobs. Then the owner:
 
 1. creates a fine-grained GitHub token with read-only Issues, Contents, and Metadata on every project's repository, and puts it in the bot's profile `.env` as `GH_TOKEN` (the `next` list names the file). A new project needs its repository added to that token;
 2. adds the bot in Hermes Desktop Bot Mode.

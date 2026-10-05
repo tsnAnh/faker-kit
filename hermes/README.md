@@ -31,7 +31,7 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `install.sh` | Fetches the kit at a commit, writes the wrappers, refreshes every bot | — |
 | `bin/team_kit_admin.py` | `team-kit-admin`: the bootstrap bot's only command, and the installer's helper | `~/.hermes/bin/team-kit-admin` (a wrapper) |
 | `bin/team_kit_gh.py` | `team-kit-gh`: a project bot's only GitHub access, and what its jobs run | `~/.hermes/bin/team-kit-gh` (a wrapper) |
-| `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and, with approval, writes a proposal for one project bot | `~/.hermes/bin/team-kit-chief` (a wrapper) |
+| `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and, with approval, hands one hashed draft to one project bot | `~/.hermes/bin/team-kit-chief` (a wrapper) |
 | `lib/team_kit_contracts.py` | The brief, size, report, and launch markers, and the cloud command lines | read from the kit checkout |
 | `lib/team_kit_cloud.py` | Starts a `claude --cloud` or `codex cloud exec` session and waits for its id | read from the kit checkout |
 | `lib/team_kit_andon.py` | The andon cords: the local records, and the `agent:andon` issue body | read from the kit checkout |
@@ -50,7 +50,8 @@ Under `~/.hermes/team-kit/`:
 - `guard.yaml`, the policy. You edit it.
 - `bots.yaml`, each bot's role, and for a project bot its project and its one repository. Only `team-kit-admin` writes it.
 - `briefs/<bot>/`, the only place a project bot may write.
-- `proposals/<bot>/`, chief-of-staff handoffs for a project bot. Proposal records expire after 7 days; `team-kit-gh proposals` and `team-kit-gh tick` ignore or prune expired records.
+- `drafts/<chief bot>/`, the only place the chief may write, and the only place `propose` reads from: plain `.md` files of at most 20,000 bytes, no symlinks.
+- `proposals/<bot>/`, chief-of-staff handoffs for a project bot. Proposal records expire after 7 days; `team-kit-gh proposals` and `team-kit-gh tick` delete expired and corrupt records.
 - `andon/`, the pulled cords: `_machine.json` and one file per project bot.
 - `verify/<bot>/`, one private record per verifier: its commit and the key that signs its verdict.
 - `incidents/<bot>.json`, each open incident, its triage session's key, and the last green commit.

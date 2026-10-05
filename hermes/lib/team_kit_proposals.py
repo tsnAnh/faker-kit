@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import shutil
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 DAY = 24 * 3600
 PROPOSAL_TTL_SECONDS = 7 * DAY
-MAX_PROPOSAL_BYTES = 60_000
+MAX_PROPOSAL_BYTES = 20_000
+# A record is the draft plus a little JSON, so anything bigger than this is not one of ours.
+MAX_RECORD_BYTES = 2 * MAX_PROPOSAL_BYTES * 4 + 4096
+SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
 SOURCE_NAME = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,80}\.md\Z")
 SAFE_STEM = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -54,38 +60,63 @@ def _stamp(seconds: float) -> str:
     return time.strftime("%Y%m%dt%H%M%Sz", time.gmtime(seconds))
 
 
-def _source(path: str) -> tuple[Path, str]:
-    target = Path(os.path.expanduser(path)).resolve()
-    name = target.name
+def drafts_dir(home: Path, bot: str) -> Path:
+    """The only place the chief may write a draft, and the only place `propose` reads one from."""
+    return home / "drafts" / bot
+
+
+def _source(home: Path, from_bot: str, path: str) -> tuple[str, str, str]:
+    """(name, text, sha256) of one draft, read once so the hash and the stored body are the same bytes."""
+    directory = drafts_dir(home, from_bot)
+    target = os.path.abspath(os.path.expanduser(path))
+    if os.path.dirname(target) != os.path.abspath(directory):
+        raise ProposalError(f"--file must be a file directly in {directory}")
+    name = os.path.basename(target)
     if not SOURCE_NAME.match(name):
         raise ProposalError("--file must name a plain .md file whose basename starts with a letter or digit")
     try:
-        stat = target.stat()
+        if directory.is_symlink() or directory.parent.is_symlink():
+            raise ProposalError(f"{directory} must not be a symlink")
+        fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+    except ProposalError:
+        raise
     except OSError:
-        raise ProposalError(f"cannot read {target}") from None
-    if not target.is_file():
-        raise ProposalError(f"{target} is not a regular file")
-    if stat.st_size <= 0:
-        raise ProposalError(f"{target} is empty")
-    if stat.st_size > MAX_PROPOSAL_BYTES:
-        raise ProposalError(f"{target} is larger than {MAX_PROPOSAL_BYTES} bytes")
+        raise ProposalError(f"cannot read {name} in {directory}; it must be a regular file, not a symlink") from None
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ProposalError(f"{name} is not a regular file")
+        if info.st_size <= 0:
+            raise ProposalError(f"{name} is empty")
+        if info.st_size > MAX_PROPOSAL_BYTES:
+            raise ProposalError(f"{name} is larger than {MAX_PROPOSAL_BYTES} bytes")
+        raw = handle.read(MAX_PROPOSAL_BYTES + 1)
+    if len(raw) > MAX_PROPOSAL_BYTES:
+        raise ProposalError(f"{name} is larger than {MAX_PROPOSAL_BYTES} bytes")
     try:
-        text = target.read_text()
+        text = raw.decode()
     except UnicodeDecodeError:
-        raise ProposalError(f"{target} is not UTF-8 text") from None
-    except OSError:
-        raise ProposalError(f"cannot read {target}") from None
+        raise ProposalError(f"{name} is not UTF-8 text") from None
     if not text.strip():
-        raise ProposalError(f"{target} is empty")
-    return target, text
+        raise ProposalError(f"{name} is empty")
+    return name, text, hashlib.sha256(raw).hexdigest()
 
 
-def write_proposal(home: Path, bot: str, project: str, repo: str, source_file: str, from_bot: str, now: float) -> dict:
-    source, body = _source(source_file)
+def file_digest(home: Path, from_bot: str, path: str) -> str:
+    """What `propose --sha256` must equal. Same checks as propose, so a bad draft fails here first."""
+    return _source(home, from_bot, path)[2]
+
+
+def write_proposal(home: Path, bot: str, project: str, repo: str, source_file: str, from_bot: str, now: float, sha256: str) -> dict:
+    if not SHA256.match(sha256 or ""):
+        raise ProposalError("--sha256 must be the 64 lowercase hex characters of the file's SHA-256 (team-kit-chief digest --file F)")
+    name, body, actual = _source(home, from_bot, source_file)
+    if actual != sha256:
+        raise ProposalError(f"--sha256 does not match {name} as it is now; run digest again and ask the owner to approve the new command")
     directory = proposals_dir(home, bot)
     directory.mkdir(parents=True, exist_ok=True)
     directory.chmod(0o700)
-    stem = SAFE_STEM.sub("-", source.stem).strip(".-")[:48] or "proposal"
+    stem = SAFE_STEM.sub("-", name.removesuffix(".md")).strip(".-")[:48] or "proposal"
     base = f"{_stamp(now)}-{stem}"
     target = directory / f"{base}.json"
     index = 2
@@ -100,7 +131,8 @@ def write_proposal(home: Path, bot: str, project: str, repo: str, source_file: s
         "bot": bot,
         "repo": repo,
         "from": from_bot,
-        "source_name": source.name,
+        "source_name": name,
+        "sha256": actual,
         "created_at": now,
         "created_at_iso": _iso(now),
         "expires_at": now + PROPOSAL_TTL_SECONDS,
@@ -111,22 +143,30 @@ def write_proposal(home: Path, bot: str, project: str, repo: str, source_file: s
     tmp.touch(mode=0o600)
     tmp.write_text(json.dumps(record, ensure_ascii=False, sort_keys=True))
     tmp.replace(target)
-    keys = ("id", "project", "bot", "repo", "from", "source_name", "created_at_iso", "expires_at_iso")
+    keys = ("id", "project", "bot", "repo", "from", "source_name", "sha256", "created_at_iso", "expires_at_iso")
     return {k: record[k] for k in keys} | {"path": str(target)}
 
 
-def _read(path: Path) -> Proposal | None:
+def _read(path: Path, bot: str) -> Proposal | None:
+    """The record, or None if it is corrupt: unreadable, oversized, the wrong shape, or not this bot's."""
     try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_RECORD_BYTES:
+            return None
         data = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
     required = {"version", "id", "project", "bot", "repo", "from", "created_at", "expires_at", "body"}
     if not isinstance(data, dict) or data.get("version") != 1 or not required <= set(data):
         return None
+    if not all(isinstance(data[k], str) for k in ("id", "project", "bot", "repo", "from", "body")):
+        return None
+    if data["id"] != path.stem or data["bot"] != bot:
+        return None
     try:
-        float(data["created_at"])
-        float(data["expires_at"])
+        created, expires = float(data["created_at"]), float(data["expires_at"])
     except (TypeError, ValueError):
+        return None
+    if not (created < expires <= created + PROPOSAL_TTL_SECONDS) or not data["body"].strip():
         return None
     return Proposal(path, data)
 
@@ -135,18 +175,28 @@ def _expired(proposal: Proposal, now: float) -> bool:
     return now >= proposal.expires_at
 
 
+def _remove(path: Path) -> None:
+    """Delete one bad or expired entry of our own private folder; never let one stuck entry hide the rest."""
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def active_proposals(home: Path, bot: str, now: float, prune: bool = True) -> list[Proposal]:
+    """Unexpired records, oldest first. With prune, expired and corrupt records are deleted on the way."""
     directory = proposals_dir(home, bot)
     if not directory.is_dir():
         return []
     active: list[Proposal] = []
     for path in sorted(directory.glob("*.json"), key=lambda p: p.name):
-        proposal = _read(path)
-        if proposal is None:
-            continue
-        if _expired(proposal, now):
+        proposal = _read(path, bot)
+        if proposal is None or _expired(proposal, now):
             if prune:
-                path.unlink(missing_ok=True)
+                _remove(path)
             continue
         active.append(proposal)
     return active

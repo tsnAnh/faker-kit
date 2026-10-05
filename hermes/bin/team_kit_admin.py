@@ -162,6 +162,9 @@ class Admin:
         shutil.rmtree(plugin, ignore_errors=True)
         shutil.copytree(self.pkg / "plugin" / "team_kit_guard", plugin, ignore=shutil.ignore_patterns("__pycache__"))
         self.link_skill(home, {"project": "dispatch", "bootstrap": "bootstrap", "chief": "chief"}[role])
+        if role == "chief":
+            (self.home / "drafts" / bot).mkdir(parents=True, exist_ok=True)
+            (self.home / "drafts" / bot).chmod(0o700)
         if role == "project":
             (self.home / "briefs" / bot).mkdir(parents=True, exist_ok=True)
             (self.home / "proposals" / bot).mkdir(parents=True, exist_ok=True)
