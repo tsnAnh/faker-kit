@@ -70,6 +70,12 @@ For work that outlives any one agent (a multi-day migration, a queue of independ
 /faker-mode orchestrate the store migration. own it until every package is converted and merged. i'll check in twice a day.
 ```
 
+These playbooks run their agents as your session's subagents, so one machine caps them. To fan a program out across cloud sessions instead, use trust-ladder's `/orchestrate` (Codex: `$orchestrate`). A planner running on your machine publishes tasks to `plan.json`, and a script starts each worker and verifier as a Claude Code cloud session, a Codex cloud task, or a local process, collects their handoffs, and lets the planner replan. Put verifiers on the other agent from their workers, so a second model family checks each change. The skill's `references/runtimes.md` says what each kind of run can do.
+
+```text
+/orchestrate migrate every service to the new config loader. workers on Claude Code in the cloud, verifiers on Codex.
+```
+
 ## Routines
 
 Routines keep the codebase trustworthy without anyone remembering to: the verification skill stays current, spreading smells get caught early, and bug reports get reproduced before anyone reads them.

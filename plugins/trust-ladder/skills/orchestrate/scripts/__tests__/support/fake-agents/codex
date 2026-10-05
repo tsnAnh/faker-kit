@@ -1,0 +1,81 @@
+#!/usr/bin/env bun
+// A stand-in for the Codex CLI in tests: `exec` (local) and `cloud exec|status|diff` (cloud task).
+import { execFileSync } from "node:child_process";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+const mode = process.env.FAKE_MODE ?? "ok";
+if (process.env.FAKE_LOG) appendFileSync(process.env.FAKE_LOG, `${JSON.stringify({ bin: "codex", args, cwd: process.cwd() })}\n`);
+const handoff = (branch: string) => `## Status\nsuccess\n\n## Branch\n\`${branch}\`\n\n## What I did\n- wrote hello.txt\n\n## Verification\nunit-test-verified\n`;
+
+if (args[0] === "cloud") {
+  const sub = args[1];
+  if (sub === "exec") {
+    readFileSync(0, "utf8");
+    console.log("https://chatgpt.com/codex/tasks/task_e_fake42");
+    process.exit(0);
+  }
+  if (sub === "status") {
+    if (mode === "cloud-error") {
+      console.log("[ERROR] Fake task\nenv  •  just now");
+      process.exit(1);
+    }
+    if (mode === "cloud-pending") {
+      console.log("[PENDING] Fake task");
+      process.exit(1);
+    }
+    console.log("[READY] Fake task\nenv  •  just now\n+2/-0 • 2 files");
+    process.exit(0);
+  }
+  if (sub === "diff") {
+    if (mode === "diff-flaky" && process.env.FAKE_COUNTER) {
+      const n = Number(existsSync(process.env.FAKE_COUNTER) ? readFileSync(process.env.FAKE_COUNTER, "utf8") : "0") + 1;
+      writeFileSync(process.env.FAKE_COUNTER, String(n));
+      if (n === 1) {
+        console.error("network timeout");
+        process.exit(1);
+      }
+    }
+    const body = handoff("orch/t/codex-cloud").split("\n");
+    const lines = [
+      "diff --git a/hello.txt b/hello.txt",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/hello.txt",
+      "@@ -0,0 +1 @@",
+      "+hello",
+      "diff --git a/.orchestrate-handoff.md b/.orchestrate-handoff.md",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/.orchestrate-handoff.md",
+      `@@ -0,0 +1,${body.length - 1} @@`,
+      ...body.slice(0, -1).map(l => `+${l}`),
+    ];
+    console.log(lines.join("\n"));
+    process.exit(0);
+  }
+  process.exit(2);
+}
+
+// exec: local headless run.
+const out = args[args.indexOf("-o") + 1];
+const dir = args[args.indexOf("-C") + 1];
+const resumeAt = args.indexOf("resume");
+const thread = resumeAt >= 0 ? args[resumeAt + 1] : "thread-fake-7";
+readFileSync(0, "utf8");
+const git = (...a: string[]) => execFileSync("git", a, { cwd: dir, stdio: "pipe" }).toString().trim();
+const emit = (o: unknown) => console.log(JSON.stringify(o));
+emit({ type: "thread.started", thread_id: thread });
+emit({ type: "item.started", item: { id: "i1", type: "command_execution" } });
+if (mode === "fail") {
+  emit({ type: "turn.failed", error: { message: "model refused" } });
+  process.exit(1);
+}
+const branch = git("branch", "--show-current");
+writeFileSync(`${dir}/codex.txt`, "codex\n");
+git("add", "codex.txt");
+git("commit", "-q", "-m", "codex work");
+git("push", "-q", "--force", "origin", `HEAD:refs/heads/${branch}`);
+emit({ type: "item.completed", item: { id: "i2", type: "agent_message", text: handoff(branch) } });
+emit({ type: "turn.completed", usage: { input_tokens: 1 } });
+writeFileSync(out, handoff(branch));

@@ -82,7 +82,7 @@ def kit_source(tmp_path_factory):
     import shutil
 
     src = tmp_path_factory.mktemp("kit")
-    ignore = shutil.ignore_patterns("__pycache__", ".pytest_cache")
+    ignore = shutil.ignore_patterns("__pycache__", ".pytest_cache", "node_modules")
     shutil.copytree(KIT / "plugins" / "trust-ladder", src / "plugins" / "trust-ladder", ignore=ignore)
     shutil.copytree(HERMES, src / "hermes", ignore=ignore)
     git(src, "init", "-q")
