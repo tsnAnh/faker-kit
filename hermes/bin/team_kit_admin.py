@@ -12,6 +12,8 @@ The bootstrap bot may run these, and the guard asks the owner to approve each on
                                                              start one cloud session that prepares the repository
   protect       --project P --check NAME [--check NAME ...]  require those checks on the default branch
   activate      --bot B                                      resume a project bot's jobs once its GitHub login is set
+  add-chief     --bot B [--model M]                          create or refresh the chief of staff: a read-only bot
+                                                             that routes the owner's intent across every project
   andon         [raise REASON... | clear]                    show, pull, or clear the machine's andon cord: nothing
                                                              new starts in any project, and agents at work stop
 
@@ -154,7 +156,7 @@ class Admin:
         plugin = home / "plugins" / "team_kit_guard"
         shutil.rmtree(plugin, ignore_errors=True)
         shutil.copytree(self.pkg / "plugin" / "team_kit_guard", plugin, ignore=shutil.ignore_patterns("__pycache__"))
-        self.link_skill(home, "dispatch" if role == "project" else "bootstrap")
+        self.link_skill(home, {"project": "dispatch", "bootstrap": "bootstrap", "chief": "chief"}[role])
         if role == "project":
             (self.home / "briefs" / bot).mkdir(parents=True, exist_ok=True)
             # An earlier version kept webhook triage scripts here; nothing uses them now.
@@ -184,6 +186,24 @@ class Admin:
         self.setup_files(bot, "bootstrap", None, model)
         self.write_bots(data)
         return {"bot": bot, "role": "bootstrap"}
+
+    def add_chief(self, bot: str, model: str | None) -> dict:
+        check_name(bot, "bot")
+        data = self.bots_file()
+        current = data["bots"].get(bot)
+        if current and current.get("role") != "chief":
+            raise Refused(f"{bot} is already a {current.get('role')} bot")
+        data["bots"][bot] = {"role": "chief"}
+        load_policy_from(self.home, data)
+        self.setup_files(bot, "chief", None, model)
+        self.write_bots(data)
+        repos = sorted(b.repo for b in self.policy().projects().values())
+        return {
+            "bot": bot, "role": "chief",
+            "next": [f"The owner puts a read-only GitHub token in {profile_home(self.root, bot) / '.env'} as GH_TOKEN: "
+                     "Issues, Contents, and Metadata read on every project's repository" + (f" ({', '.join(repos)})" if repos else ""),
+                     "Add the bot in Hermes Desktop Bot Mode"],
+        }
 
     def add_project(self, bot: str, project: str, repo: str, model: str | None) -> dict:
         check_name(bot, "bot")
@@ -548,6 +568,9 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--check", action="append", default=[])
     cmd = sub.add_parser("activate")
     cmd.add_argument("--bot", required=True)
+    cmd = sub.add_parser("add-chief")
+    cmd.add_argument("--bot", required=True)
+    cmd.add_argument("--model")
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
     cmd.add_argument("reason", nargs="*")
@@ -594,6 +617,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
             out = admin.add_bootstrap(args.bot, args.model)
         elif args.command == "add-project":
             out = admin.add_project(args.bot, args.project, args.repo, args.model)
+        elif args.command == "add-chief":
+            out = admin.add_chief(args.bot, args.model)
         elif args.command == "vendor":
             out = admin.vendor(args.project)
         elif args.command == "setup-repo":

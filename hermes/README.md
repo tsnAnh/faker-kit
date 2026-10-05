@@ -1,6 +1,6 @@
 # team-kit for Hermes
 
-This module runs team-kit dispatch on a [Hermes Agent](https://github.com/NousResearch/hermes-agent) machine: one bootstrap bot that sets projects up, and one project bot per project that briefs cloud coding agents (Claude Code or Codex), one pull request per unit, until the owner merges. How to use it is in [Dispatch work with Hermes](../docs/how-to/dispatch-with-hermes.md).
+This module runs team-kit dispatch on a [Hermes Agent](https://github.com/NousResearch/hermes-agent) machine: one bootstrap bot that sets projects up, one project bot per project that briefs cloud coding agents (Claude Code or Codex), one pull request per unit, until the owner merges, and an optional, read-only chief of staff that routes the owner's intent across projects. How to use it is in [Dispatch work with Hermes](../docs/how-to/dispatch-with-hermes.md).
 
 It lives outside `plugins/` on purpose. Nothing here loads in a coding agent: plugins are what coding agents load, and this is what the Hermes bots load. The coding agents keep using the `trust-ladder` skills `setup-dispatch` and `follow-brief`, and the brief templates in `plugins/trust-ladder/templates/dispatch/`.
 
@@ -31,12 +31,14 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `install.sh` | Fetches the kit at a commit, writes the wrappers, refreshes every bot | — |
 | `bin/team_kit_admin.py` | `team-kit-admin`: the bootstrap bot's only command, and the installer's helper | `~/.hermes/bin/team-kit-admin` (a wrapper) |
 | `bin/team_kit_gh.py` | `team-kit-gh`: a project bot's only GitHub access, and what its jobs run | `~/.hermes/bin/team-kit-gh` (a wrapper) |
+| `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and changes nothing | `~/.hermes/bin/team-kit-chief` (a wrapper) |
 | `lib/team_kit_contracts.py` | The brief, size, report, and launch markers, and the cloud command lines | read from the kit checkout |
 | `lib/team_kit_cloud.py` | Starts a `claude --cloud` or `codex cloud exec` session and waits for its id | read from the kit checkout |
+| `lib/team_kit_andon.py` | The andon cords: the local records, and the `agent:andon` issue body | read from the kit checkout |
 | `lib/install_config.py` | Reads Hermes config, writes it only through `hermes config set` | read from the kit checkout |
 | `plugin/team_kit_guard/` | The Hermes plugin that checks every tool call against `guard.yaml` and `bots.yaml` | each bot's `plugins/` |
-| `profiles/bootstrap/`, `profiles/project/` | `SOUL.md` and the config merged into each bot's profile | each bot's profile |
-| `skills/bootstrap/`, `skills/dispatch/` | The bots' skills | linked into each bot's `skills/` |
+| `profiles/bootstrap/`, `profiles/project/`, `profiles/chief/` | `SOUL.md` and the config merged into each bot's profile | each bot's profile |
+| `skills/bootstrap/`, `skills/dispatch/`, `skills/chief/` | The bots' skills | linked into each bot's `skills/` |
 | `cron/project-jobs.md` | `team-kit-tick` and `team-kit-status`, created paused per project bot | each project bot's scheduled jobs |
 | `templates/guard.yaml` | The machine's policy, written once | `~/.hermes/team-kit/guard.yaml` |
 | `tests/` | `python -m pytest hermes` | — |
@@ -47,6 +49,8 @@ Under `~/.hermes/team-kit/`:
 - `guard.yaml`, the policy. You edit it.
 - `bots.yaml`, each bot's role, and for a project bot its project and its one repository. Only `team-kit-admin` writes it.
 - `briefs/<bot>/`, the only place a project bot may write.
+- `andon/`, the pulled cords: `_machine.json` and one file per project bot.
+- `verify/<bot>/`, one private record per verifier: its commit and the key that signs its verdict.
 - `checkouts/`, shallow clones `claude --cloud` starts from. Pruned after 3 days.
 - `in-flight/<bot>.json`, each project bot's count of running units, for `max_in_flight_total`.
 - `status/<bot>.json`, when the bot's last digest ran, for "Done since last".

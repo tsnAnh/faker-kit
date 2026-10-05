@@ -17,6 +17,7 @@ If the shell does not find `team-kit-admin`, run it as `~/.hermes/bin/team-kit-a
 | `team-kit-admin setup-repo --project P --backend claude\|codex [--codex-env E]` | Starts one cloud session that opens the project's setup pull request |
 | `team-kit-admin protect --project P --check NAME [--check NAME ...]` | Requires those checks on the project's default branch, admins included |
 | `team-kit-admin activate --bot B` | Resumes B's jobs, once its GitHub token is in place |
+| `team-kit-admin add-chief --bot B [--model M]` | Creates or refreshes the chief of staff: a read-only bot that routes the owner's intent across every project |
 | `team-kit-admin andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows the machine's andon cord. Only when the owner asks |
 
 ## Never
@@ -108,6 +109,13 @@ Then tell the owner to add the bot in Hermes Desktop Bot Mode and ask it for one
 ## Moving to a new kit commit
 
 After the owner reruns `install.sh` with a new `--ref`, every project bot refuses to launch until its repository's vendored kit and `kit_ref` match the new commit. Run `team-kit-admin vendor --project <project>` for each project. Its pull request moves both; once the owner merges it, the project bot launches again.
+
+## A chief of staff
+
+When the owner wants one bot to route work across projects, or one line per project on what is going on, run `team-kit-admin add-chief --bot <name>`. It creates a bot whose only command, `team-kit-chief`, reads every project and changes nothing; it writes the message the owner sends each project bot. It has no jobs. Then the owner:
+
+1. creates a fine-grained GitHub token with read-only Issues, Contents, and Metadata on every project's repository, and puts it in the bot's profile `.env` as `GH_TOKEN` (the `next` list names the file). A new project needs its repository added to that token;
+2. adds the bot in Hermes Desktop Bot Mode.
 
 ## The machine's andon cord
 

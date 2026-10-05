@@ -8,15 +8,16 @@ The Hermes side is the kit's [`hermes/`](../../hermes/) module. Its [README](../
 
 ## The bots
 
-One Hermes machine runs one bootstrap bot and one bot per project. Bot names are free: `ong-xay` and `meo-beo` work as well as `bootstrap` and `shop`.
+One Hermes machine runs one bootstrap bot, one bot per project, and, if you want one, a chief of staff. Bot names are free: `ong-xay` and `meo-beo` work as well as `bootstrap` and `shop`.
 
 | Bot | How many | Does | Its only command |
 |---|---|---|---|
 | Bootstrap bot | One per machine | Sets up a project: its project bot, the repository's labels, the vendored kit, a cloud session that opens the setup pull request, branch protection. Loads the [bootstrap](../../hermes/skills/bootstrap/SKILL.md) skill. You approve every command it runs but `status` | `team-kit-admin` |
 | Project bot | One per project | Plans units, writes a brief per unit, dispatches it. Loads the [dispatch](../../hermes/skills/dispatch/SKILL.md) skill | `team-kit-gh`, for its own repository only |
+| Chief of staff | Optional, one per machine | Reads every project and changes nothing. Tell it what you want across projects; it says which project bot gets which part, in what order, and writes the message you send each bot. Ask it "what's going on" for one line per project. Loads the [chief](../../hermes/skills/chief/SKILL.md) skill | `team-kit-chief`, read-only |
 | Coding agent | One per unit, in the cloud | Works the brief in faker-mode with the [follow-brief](../../plugins/trust-ladder/skills/follow-brief/SKILL.md) skill, opens one pull request, posts a report | — |
 
-A project is one repository. When a product has an API, a web app, and a mobile app, keep them side by side in that one repository, such as `apps/api/`, `apps/web/`, and `apps/mobile/` in `acme/shop`. Then one cloud agent can carry a feature through all of them in one pull request and prove it end to end, which separate repositories cannot do. The kit's playbooks assume one repository too. A project bot sees only its repository, so brainstorming one project never pulls in another's context. To brainstorm across projects, add several project bots to a group chat. There they only talk; each bot does work only when you ask it in its own Bot Chat.
+A project is one repository. When a product has an API, a web app, and a mobile app, keep them side by side in that one repository, such as `apps/api/`, `apps/web/`, and `apps/mobile/` in `acme/shop`. Then one cloud agent can carry a feature through all of them in one pull request and prove it end to end, which separate repositories cannot do. The kit's playbooks assume one repository too. A project bot sees only its repository, so brainstorming one project never pulls in another's context. To brainstorm across projects, add several project bots to a group chat. There they only talk; each bot does work only when you ask it in its own Bot Chat. To route one intent across projects, ask the chief of staff instead: ask the bootstrap bot for one (`team-kit-admin add-chief`), and give it a GitHub token that can only read the projects' repositories.
 
 The bot that maintains the kit itself is not part of this module. Keep using whatever you use for it.
 

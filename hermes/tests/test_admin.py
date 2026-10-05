@@ -422,3 +422,19 @@ def test_andon_shows_project_cords_and_refuses_a_bare_raise(ready):
     assert out == {"machine": None, "projects": {"meo-beo": "flaky deploy"}}
     code, err = admin(ready, "andon", "raise", profile="ong-xay")
     assert code == 1 and "say why" in err
+
+
+def test_add_chief_creates_a_read_only_bot_with_the_chief_skill_and_no_jobs(ready):
+    root, _ = ready
+    add_shop(ready)
+    code, out = admin(ready, "add-chief", "--bot", "chanh-van", profile="ong-xay")
+    assert code == 0, out
+    assert out["role"] == "chief" and "acme/shop" in out["next"][0] and "read" in out["next"][0]
+    assert bots(root)["chanh-van"] == {"role": "chief"}
+    home = root / "profiles" / "chanh-van"
+    assert sorted(p.name for p in (home / "skills").iterdir()) == ["chief"]
+    assert (home / "SOUL.md").read_text().startswith("You are this machine's team-kit chief of staff.")
+    assert (home / "plugins" / "team_kit_guard" / "plugin.yaml").exists()
+    assert not any(c[:2] == ["-p", "chanh-van"] and c[2:4] == ["cron", "create"] for c in hermes_calls(root)), "the chief has no jobs"
+    code, err = admin(ready, "add-chief", "--bot", "meo-beo", profile="ong-xay")
+    assert code == 1 and "already a project bot" in err

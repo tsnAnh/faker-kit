@@ -1,0 +1,14 @@
+# Merged into the chief of staff's profile config by team-kit-admin add-chief. Keys here win;
+# lists are replaced, except plugins.enabled, which gains team_kit_guard.
+# The model is set separately: add-chief --model M, or
+# `hermes -p NAME config set model.default <model>`.
+#
+# The chief of staff has no file, web, or Kanban tools, and no scheduled jobs. Its only command is
+# team-kit-chief, which reads every project and changes nothing.
+toolsets: [terminal, clarify, skills]
+approvals:
+  mode: manual
+  cron_mode: deny
+plugins:
+  enabled: [team_kit_guard]
+timezone: Asia/Saigon
