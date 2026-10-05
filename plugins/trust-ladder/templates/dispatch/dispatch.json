@@ -7,6 +7,8 @@
   "verification_skill": "<verify-* skill name; delete the key if the repository has none>",
   "verifier_backend": "<claude | codex | none; who verifies each pull request before the owner merges. Prefer the other agent from backend>",
   "accept_verifications": ["live-ui-verified", "unit-test-verified"],
+  "risk_paths_high": [],
+  "risk_paths_medium": [],
   "security_backend": "<claude | codex | none; who reviews the default branch's new commits for security issues once a day. Defaults to backend>",
   "codex_env": "<Codex cloud environment id; only when backend is codex>"
 }

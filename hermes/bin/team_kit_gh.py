@@ -56,6 +56,7 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
 
 from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord, clean_reason, issue_body  # noqa: E402
 from team_kit_cloud import Cloud, CloudError  # noqa: E402
+from team_kit_risk import CODEOWNERS_PATHS, RISK_LABELS, Risk, owners_for, parse_codeowners, pick_reviewers, score  # noqa: E402
 from team_kit_contracts import (  # noqa: E402
     DEFAULT_ACCEPTED,
     LAUNCHED_MARKER,
@@ -267,6 +268,10 @@ class Gh:
             raise Refused(f".agents/dispatch.json security_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
         if security == "codex" and not config.get("codex_env"):
             raise Refused(".agents/dispatch.json security_backend codex needs codex_env, the Codex cloud environment id")
+        for key in ("risk_paths_high", "risk_paths_medium"):
+            extra = config.get(key, [])
+            if not isinstance(extra, list) or not all(isinstance(p, str) and p for p in extra):
+                raise Refused(f".agents/dispatch.json {key} must be a list of path patterns")
         accepted = config.get("accept_verifications", list(DEFAULT_ACCEPTED))
         if not isinstance(accepted, list) or not accepted or any(v not in VERIFICATIONS[:3] for v in accepted):
             raise Refused(f".agents/dispatch.json accept_verifications must list some of {', '.join(VERIFICATIONS[:3])}")
@@ -585,10 +590,57 @@ class Gh:
         verifier = config.get("verifier_backend", config["backend"])
         if verifier == "none" or cloud is None:
             self.relabel(number, add=REVIEW_LABEL, remove=(RUNNING_LABEL,))
-            return f"{NOTICE} #{number} is ready for you to merge ({checks}, not independently verified): {report['pr']}"
+            risk = self.mark_risk(report["pr"], None, pr["checks"])
+            return f"{NOTICE} #{number} is ready for you to merge ({checks}, not independently verified{risk}): {report['pr']}"
         if self.cord():
             return None  # the unit keeps its slot; its verifier starts once the cord is cleared
         return self.start_verifier(issue, report["pr"], pr["head"], verifier, config, cloud, pr["checks"])
+
+    # Risk ---------------------------------------------------------------------------------------
+    # Scored in code from the pull request's files when a unit reaches the owner. Hermes labels the
+    # pull request and suggests reviewers; it never approves and never requests a review.
+
+    def risk(self, pr: int, verification: str | None, checks: str = "passed") -> Risk:
+        config = self.dispatch_config()
+        files = json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/pulls/{int(pr)}/files?per_page=100"]))
+        found = score(files, verification, tuple(config.get("risk_paths_high", [])), tuple(config.get("risk_paths_medium", [])), checks)
+        paths = [str(f.get("filename") or "") for f in files]
+        candidates: list[str] = []
+        for path in CODEOWNERS_PATHS:
+            try:
+                candidates = owners_for(paths, parse_codeowners(self.file(path)))
+            except Refused:
+                continue
+            break
+        if not candidates:
+            # No CODEOWNERS: whoever last changed the files this pull request changes most.
+            biggest = sorted(files, key=lambda f: -(int(f.get("additions") or 0) + int(f.get("deletions") or 0)))[:3]
+            for f in biggest:
+                if f.get("status") == "added":
+                    continue
+                try:
+                    commits = json.loads(self.run(["api", f"repos/{self.repo}/commits?path={f['filename']}&per_page=10"]))
+                except (Refused, ValueError):
+                    continue
+                candidates += [str((c.get("author") or {}).get("login") or "") for c in commits if isinstance(c, dict)]
+        exclude = set(self.policy.trusted_authors) | {str(d).lower() for d in config.get("trusted_dispatchers") or []}
+        return Risk(found.level, found.reasons, pick_reviewers(candidates, exclude))
+
+    def mark_risk(self, pr_url: str, verification: str | None, checks: str = "passed") -> str:
+        """Label the pull request with its risk and comment the reasons. Returns the notice's words for it."""
+        pr = int(pr_url.rsplit("/", 1)[1])
+        try:
+            found = self.risk(pr, verification, checks)
+            current = {label["name"] for label in json.loads(self.run(["pr", "view", str(pr), "-R", self.repo, "--json", "labels"])).get("labels") or []}
+            args = ["pr", "edit", str(pr), "-R", self.repo, "--add-label", found.label]
+            for stale in sorted(current & set(RISK_LABELS) - {found.label}):
+                args += ["--remove-label", stale]
+            self.run(args)
+            self.run(["pr", "comment", str(pr), "-R", self.repo, "--body", found.comment()])
+        except Exception:  # noqa: BLE001 - a missing score never holds a unit back from the owner
+            return ""
+        reviewers = ", ".join(f"@{r}" for r in found.reviewers)
+        return f", {found.summary()}" + (f", suggested reviewers {reviewers}" if reviewers else "")
 
     # Verification -------------------------------------------------------------------------------
     # Each verifier launch is recorded under policy.home/verify/<bot>/<issue>.json: the commit it
@@ -688,7 +740,8 @@ class Gh:
         self.drop_verify_record(number)
         self.relabel(number, add=REVIEW_LABEL, remove=(VERIFYING_LABEL,))
         checks = "checks passed" if pr["checks"] == "passed" else "no checks ran"
-        return f"{NOTICE} #{number} is ready for you to merge ({checks}, verified: {verdict.verification}): {pr_url}"
+        risk = self.mark_risk(pr_url, verdict.verification, pr["checks"])
+        return f"{NOTICE} #{number} is ready for you to merge ({checks}, verified: {verdict.verification}{risk}): {pr_url}"
 
     def verify(self, number: int, local_commit: str, cloud: Cloud) -> dict:
         """Start a new verifier on a unit's current pull request head, without redoing the coding work."""

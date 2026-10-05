@@ -65,6 +65,9 @@ LABELS = (
     ("agent:review", "0e8a16", "Verified and the checks passed; the owner merges"),
     ("agent:needs-human", "d93f0b", "A dispatched unit needs the owner"),
     ("agent:security", "0052cc", "The tracking issue where Hermes's daily security reviews of the default branch post their results"),
+    ("risk:low", "c2e0c6", "Hermes's risk score for this pull request, from rules in code: small change in ordinary paths"),
+    ("risk:medium", "fbca04", "Hermes's risk score for this pull request, from rules in code: read it with care"),
+    ("risk:high", "b60205", "Hermes's risk score for this pull request, from rules in code: sensitive paths or a large change"),
     (ANDON_LABEL, "b60205", "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"),
 )
 JOBS = ("team-kit-tick", "team-kit-status", "team-kit-security")

@@ -115,6 +115,8 @@ Run it once per unit. Never dispatch the same brief twice. When all are dispatch
 
 ### 4. The owner merges
 
+When a unit moves to `agent:review`, `tick` also scores its pull request's risk in code: `risk:low`, `risk:medium`, or `risk:high` as a label, a comment with the reasons, and up to three suggested reviewers from `CODEOWNERS` or the files' recent authors, never the owner or a bot. The notice carries the same words. Hermes never approves and never requests a review: the owner decides who reads it.
+
 The coding agent follows the `follow-brief` skill under faker-mode, opens one pull request, and babysits it to green (conflicts, review comments, CI) before it reports. When its report says done and the checks pass, a verifier session that did not write the change checks the pull request with the `verify-unit` skill. When its verdict is one `accept_verifications` in `.agents/dispatch.json` lists, the unit moves to `agent:review` and the owner gets a notice. Nobody but the owner merges. The merge closes the issue, which frees its slot and releases the units that depend on it.
 
 ## Gates

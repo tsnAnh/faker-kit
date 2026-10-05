@@ -30,6 +30,7 @@ class FakeGh:
         self.issues, self.comments, self.prs, self.calls = {}, {}, {}, []
         self.next = 40
         self.main_head = "c" * 40
+        self.pr_files, self.history, self.pr_comments = {}, {}, {}
 
     def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small"):
         self.next += 1
@@ -60,6 +61,10 @@ class FakeGh:
                 return json.dumps({"default_branch": "main"})
             if "/commits/" in path:
                 return json.dumps({"sha": self.main_head})
+            if "/pulls/" in path and "/files" in path:
+                return json.dumps(self.pr_files.get(int(path.split("/pulls/")[1].split("/")[0]), []))
+            if "/commits?path=" in path:
+                return json.dumps([{"author": {"login": a}} for a in self.history.get(path.split("path=")[1].split("&")[0], [])])
             repo, rest = path.removeprefix("repos/").split("/issues/")
             if rest.endswith("/comments"):
                 return json.dumps(self.comments.get((repo, int(rest.split("/")[0])), []))
@@ -99,7 +104,22 @@ class FakeGh:
             return ""
         if args[:2] == ["pr", "view"]:
             pr = self.prs[(repo, int(args[2]))]
+            pr.setdefault("labels", [])
             return json.dumps({k: v for k, v in pr.items() if k in args[-1].split(",")})
+        if args[:2] == ["pr", "edit"]:
+            pr = self.prs[(repo, int(args[2]))]
+            names = {label["name"] for label in pr.setdefault("labels", [])}
+            for i, word in enumerate(args):
+                if word == "--add-label":
+                    names.add(args[i + 1])
+                elif word == "--remove-label":
+                    assert args[i + 1] in names, "never remove a label that is not there"
+                    names.discard(args[i + 1])
+            pr["labels"] = [{"name": n} for n in sorted(names)]
+            return ""
+        if args[:2] == ["pr", "comment"]:
+            self.pr_comments.setdefault(int(args[2]), []).append(args[args.index("--body") + 1])
+            return ""
         if args[:2] == ["issue", "view"] or args[:2] == ["pr", "view"]:
             return "body and comments"
         raise AssertionError(f"unexpected gh call {args}")
@@ -433,7 +453,9 @@ def test_a_done_unit_with_passing_checks_goes_to_a_verifier_then_to_review(team_
     assert run(gh, "status") == 0 and f"#{n} A unit (verifying)" in capsys.readouterr().out
     assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"], "no verdict yet"
     verdict(gh, n, team_kit_home, at=NOW)
-    assert tick(gh, capsys) == [f"team-kit notice: #{n} is ready for you to merge (checks passed, verified: live-ui-verified): https://github.com/{REPO}/pull/7"]
+    assert tick(gh, capsys) == [f"team-kit notice: #{n} is ready for you to merge (checks passed, verified: live-ui-verified, "
+                                f"risk low (small change in ordinary paths)): https://github.com/{REPO}/pull/7"]
+    assert gh.prs[(REPO, 7)]["labels"] == [{"name": "risk:low"}]
     assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
     assert not (team_kit_home / "verify" / "meo-beo" / f"{n}.json").exists()
     assert tick(gh, capsys) == ["[SILENT]"], "a unit in review is never reported or launched again"
@@ -581,7 +603,8 @@ def test_verification_can_be_turned_off(team_kit_home, kit, capsys):
     n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
     gh.report(REPO, n, "done", pr=pr(gh, 7))
     cloud = FakeCloud()
-    assert tick(gh, capsys, cloud=cloud) == [f"team-kit notice: #{n} is ready for you to merge (checks passed, not independently verified): https://github.com/{REPO}/pull/7"]
+    assert tick(gh, capsys, cloud=cloud) == [f"team-kit notice: #{n} is ready for you to merge (checks passed, not independently verified, "
+                                             f"risk medium (not independently verified)): https://github.com/{REPO}/pull/7"]
     assert not cloud.started and gh.labels(REPO, n) == {"agent-task", "agent:review"}
 
 
@@ -615,7 +638,7 @@ def test_a_done_report_with_no_checks_is_ready_after_an_hour(team_kit_home, kit,
     gh = FakeGh(kit, verifier_backend="none")
     n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
     gh.report(REPO, n, "done", pr=pr(gh, 7, checks=()), at=NOW - 2 * 3600)
-    assert "ready for you to merge (no checks ran, not independently verified)" in tick(gh, capsys)[0]
+    assert "ready for you to merge (no checks ran, not independently verified, risk medium (no checks ran; not independently verified))" in tick(gh, capsys)[0]
     assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
 
 
@@ -1072,3 +1095,60 @@ def test_a_security_review_respects_its_setting_the_andon_cord_and_a_failed_star
     bad = FakeGh(kit, security_backend="codex")
     assert run(bad, "security") == 1
     assert "security_backend codex needs codex_env" in capsys.readouterr().err
+
+
+# Risk ----------------------------------------------------------------------------------------------
+
+
+def files(*entries):
+    return [{"filename": f, "status": st, "additions": a, "deletions": d} for f, st, a, d in entries]
+
+
+def test_a_ready_pull_request_gets_a_risk_label_reasons_and_reviewers_but_never_a_review(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    gh.prs[(REPO, 7)]["labels"] = [{"name": "risk:low"}, {"name": "feature"}]
+    gh.pr_files[7] = files(("apps/api/migrations/0042_add_index.sql", "added", 30, 0), ("apps/api/orders.py", "modified", 40, 10))
+    gh.files[".github/CODEOWNERS"] = "* @Codertocat\n/apps/api/ @dba-dana @api-ana\n*.sql @dba-dana\n"
+    verdict(gh, n, team_kit_home, at=NOW)
+    [notice] = tick(gh, capsys)
+    assert "risk high (touches apps/api/migrations/0042_add_index.sql)" in notice
+    assert notice.endswith(f"suggested reviewers @dba-dana, @api-ana): https://github.com/{REPO}/pull/7"), "the owner and the bots are never suggested"
+    assert gh.prs[(REPO, 7)]["labels"] == [{"name": "feature"}, {"name": "risk:high"}]
+    [comment] = gh.pr_comments[7]
+    assert comment.startswith("<!-- team-kit:risk v1 -->\nrisk: high\nsuggested reviewers: @dba-dana, @api-ana")
+    assert not any(c[:3] == ["pr", "review"] or "requested_reviewers" in " ".join(c) for c in gh.calls), "Hermes never reviews or requests one"
+
+
+def test_without_codeowners_the_last_people_to_change_the_files_are_suggested(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    gh.pr_files[7] = files(("src/cart.ts", "modified", 300, 20), ("src/new.ts", "added", 5, 0))
+    gh.history["src/cart.ts"] = ["meo-beo-gh", "lan", "lan", "minh", "huy", "tuan"]
+    verdict(gh, n, team_kit_home, verification="unit-test-verified", at=NOW)
+    [notice] = tick(gh, capsys)
+    assert "risk medium (325 lines changed), suggested reviewers @lan, @minh, @huy)" in notice
+
+
+def test_a_failed_risk_score_never_holds_a_unit_back(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    real = gh.__call__
+
+    def no_files(args, input=None):
+        if args[0] == "api" and "/files" in args[-1]:
+            raise Refused("gh api failed: HTTP 502")
+        return real(args, input)
+
+    verdict(gh, n, team_kit_home, at=NOW)
+    assert run(no_files, "tick") == 0
+    assert lines(capsys) == [f"team-kit notice: #{n} is ready for you to merge (checks passed, verified: live-ui-verified): https://github.com/{REPO}/pull/7"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
+
+
+def test_risk_paths_in_dispatch_json_add_to_the_defaults_and_are_checked(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, risk_paths_high=["apps/ledger/"])
+    n = verifying_unit(gh, team_kit_home)
+    gh.pr_files[7] = files(("apps/ledger/post.go", "modified", 4, 1))
+    verdict(gh, n, team_kit_home, at=NOW)
+    assert "risk high (touches apps/ledger/post.go)" in tick(gh, capsys)[0]
+    bad = FakeGh(kit, risk_paths_medium="apps/")
+    assert run(bad, "kit-check") == 1
+    assert "risk_paths_medium must be a list" in capsys.readouterr().err
