@@ -81,6 +81,7 @@ One shell-safe way to sign without putting the key in argv:
 
 ```bash
 read -rsp 'review key: ' TEAM_KIT_REVIEW_KEY; printf '\n'
+export TEAM_KIT_REVIEW_KEY
 TEAM_KIT_REVIEW_MSG='<high>|<medium>|<low>|<pr>|<head>' python3 - <<'PY'
 import hashlib, hmac, os
 print(hmac.new(os.environ["TEAM_KIT_REVIEW_KEY"].encode(), os.environ["TEAM_KIT_REVIEW_MSG"].encode(), hashlib.sha256).hexdigest())
