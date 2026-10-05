@@ -41,8 +41,8 @@ UNIT_ATTEMPTS = {"small": 1, "medium": 2, "large": 3}
 BACKENDS = ("claude", "codex")
 VENDOR_DIR = ".agents/team-kit"
 # The second sentence makes a session without the kit fail at once, and visibly: a Claude Code
-# session posts a blocked report that tick turns into a gate. A Codex task cannot comment, so it says
-# so in its result.
+# session posts a blocked report that tick turns into a gate. The discovered Codex CLI cannot read
+# final messages, so a Codex task without a trusted comment reaches the one-day gate.
 LAUNCH_PROMPTS = {
     "claude": ("/faker-mode Work the brief in {repo}#{issue} using the follow-brief skill. "
                "If the follow-brief skill is not available in this session, comment on the issue with "

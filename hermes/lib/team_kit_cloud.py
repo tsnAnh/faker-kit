@@ -35,6 +35,43 @@ class CloudError(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class CodexCloudResultCapability:
+    version: str
+    commands: tuple[str, ...]
+    list_json: bool
+    status_json: bool
+    final_message_command: str | None
+
+    @property
+    def can_read_final_message(self) -> bool:
+        return self.final_message_command is not None
+
+    def summary(self) -> str:
+        version = self.version or "unknown Codex CLI"
+        commands = ", ".join(self.commands) if self.commands else "none discovered"
+        if self.can_read_final_message:
+            return f"{version}: codex cloud commands: {commands}; final messages via {self.final_message_command}"
+        details = ["no final-message subcommand"]
+        if not self.status_json:
+            details.append("status has no --json")
+        if self.list_json:
+            details.append("list --json lists tasks only")
+        return f"{version}: codex cloud commands: {commands}; {'; '.join(details)}"
+
+
+def codex_cloud_result_capability(version: str, cloud_help: str, list_help: str, status_help: str) -> CodexCloudResultCapability:
+    commands = tuple(re.findall(r"^  ([a-z][a-z-]*)\s+", cloud_help, re.M))
+    final_message = next((name for name in commands if name in {"final-message", "result", "results"}), None)
+    return CodexCloudResultCapability(
+        version=version.strip(),
+        commands=commands,
+        list_json=bool(re.search(r"^\s+--json\b", list_help, re.M)),
+        status_json=bool(re.search(r"^\s+--json\b", status_help, re.M)),
+        final_message_command=final_message,
+    )
+
+
 @dataclass
 class Cloud:
     run_gh: Runner

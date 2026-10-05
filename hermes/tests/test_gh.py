@@ -735,6 +735,17 @@ def test_tick_gates_a_unit_with_no_report_a_day_after_launch(team_kit_home, gh, 
     assert ("agent:needs-human" in gh.labels(REPO, n)) == gated
 
 
+def test_codex_task_without_a_github_report_keeps_the_one_day_fallback(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, backend="codex", codex_env="env_7")
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.comment(REPO, n, f"{LAUNCHED_MARKER}\nsession: task_abc123\nbackend: codex\n", at=NOW - 3600)
+    assert tick(gh, capsys) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
+    gh.comments[(REPO, n)][-1]["created_at"] = iso(NOW - REPORT_DEADLINE_SECONDS - 60)
+    assert "no report 24 hours after launch" in tick(gh, capsys)[0]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+
+
 def test_tick_never_relaunches_a_gated_unit(team_kit_home, gh, capsys):
     gh.add_issue(REPO, labels=("agent-task", "agent:needs-human"))
     cloud = FakeCloud()

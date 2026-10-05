@@ -5,7 +5,7 @@ import time
 
 import pytest
 from conftest import HERMES, KIT
-from team_kit_cloud import Cloud, CloudError
+from team_kit_cloud import Cloud, CloudError, codex_cloud_result_capability
 from team_kit_contracts import LAUNCH_PROMPTS, ContractError, cloud_argv, launch_argv
 
 PREFIXES = ("/faker-mode ", "$faker-mode ")
@@ -22,6 +22,38 @@ CLAUDE = ("/faker-mode Work the brief in acme/shop#123 using the follow-brief sk
 CODEX = ("$faker-mode Work the brief in acme/shop#123 using the follow-brief skill. "
          "If the follow-brief skill is not available in this session, stop and say the team-kit skills did not load.")
 
+CODEX_CLOUD_HELP = """[EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally
+
+Usage: codex cloud [OPTIONS] [COMMAND]
+
+Commands:
+  exec    Submit a new Codex Cloud task without launching the TUI
+  status  Show the status of a Codex Cloud task
+  list    List Codex Cloud tasks
+  apply   Apply the diff for a Codex Cloud task locally
+  diff    Show the unified diff for a Codex Cloud task
+  help    Print this message or the help of the given subcommand(s)
+"""
+
+CODEX_CLOUD_LIST_HELP = """List Codex Cloud tasks
+
+Usage: codex cloud list [OPTIONS]
+
+Options:
+      --limit <N>
+      --json
+          Emit JSON instead of plain text
+"""
+
+CODEX_CLOUD_STATUS_HELP = """Show the status of a Codex Cloud task
+
+Usage: codex cloud status [OPTIONS] <TASK_ID>
+
+Arguments:
+  <TASK_ID>
+          Codex Cloud task identifier to inspect
+"""
+
 
 @pytest.mark.parametrize(
     ("backend", "size", "expected"),
@@ -36,6 +68,24 @@ def test_launch_argv_is_exact_and_needs_no_shell(backend, size, expected):
     argv = launch_argv(backend, "acme/shop", 123, size, "env_7")
     assert argv == expected
     assert argv[-1].startswith(PREFIXES)
+
+
+def test_codex_cloud_result_capability_documents_the_installed_cli_surface():
+    found = codex_cloud_result_capability("codex-cli 0.158.0", CODEX_CLOUD_HELP, CODEX_CLOUD_LIST_HELP, CODEX_CLOUD_STATUS_HELP)
+    assert found.commands == ("exec", "status", "list", "apply", "diff", "help")
+    assert found.list_json is True
+    assert found.status_json is False
+    assert found.final_message_command is None
+    assert found.can_read_final_message is False
+    assert found.summary() == ("codex-cli 0.158.0: codex cloud commands: exec, status, list, apply, diff, help; "
+                               "no final-message subcommand; status has no --json; list --json lists tasks only")
+
+
+def test_codex_cloud_result_capability_would_notice_a_supported_final_message_command():
+    help_text = CODEX_CLOUD_HELP.replace("  help    Print this message", "  final-message  Show the final message for a finished task\n  help    Print this message")
+    found = codex_cloud_result_capability("codex-cli future", help_text, CODEX_CLOUD_LIST_HELP, CODEX_CLOUD_STATUS_HELP)
+    assert found.can_read_final_message is True
+    assert found.final_message_command == "final-message"
 
 
 def test_a_claude_session_without_the_kit_posts_a_report_tick_can_read():

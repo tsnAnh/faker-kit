@@ -55,6 +55,12 @@ A unit is one pull request. The bot splits work only when one pull request would
 
 The agent drives the real app with the repository's verification skill, named as `verification_skill` in `.agents/dispatch.json` and in each brief's Verify section, and puts the evidence in its report. Then a second session checks it: the agent that wrote a change never grades it. Set `verifier_backend` to the other agent from `backend` when you have both, so a second model family looks at every change; `none` turns verification off. A `codex` verifier needs `codex_env`, and its environment must let tasks comment on issues. Without a verification skill both prove the change with tests only, which reaches `unit-test-verified` at most; the setup pull request then lists `/create-verification-skill` for you. A cloud session runs on Linux, so iOS builds cannot run there; the repository's `AGENTS.md` says what a cloud session cannot prove.
 
+### Codex results without GitHub comments
+
+On this kit version's discovery pass, the installed `codex-cli 0.158.0` exposes `codex cloud exec`, `status`, `list`, `apply`, and `diff`. `codex cloud list --json` exists, but only lists tasks. `codex cloud status <TASK_ID>` exists, but it has no `--json` option, and the CLI exposes no final-message or result-reading subcommand. Hermes therefore cannot safely read a finished Codex task's final answer when the task did not post the `team-kit` header as a GitHub comment.
+
+The existing fallback remains: if a Codex coding, verification, security, or triage task produces no trusted signed comment, `team-kit-gh tick` waits until the same one-day deadline and then opens the normal gate with the task session id.
+
 ### How many run at once
 
 Two limits apply to every launch, and both count open issues labeled `agent:running`:
