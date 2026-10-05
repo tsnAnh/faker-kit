@@ -4,7 +4,7 @@
 # `hermes -p NAME config set model.default <model>`.
 #
 # The chief of staff has no file, web, or Kanban tools, and no scheduled jobs. Its only command is
-# team-kit-chief, which reads every project and changes nothing.
+# team-kit-chief; the propose subcommand writes one approved local proposal to a project bot.
 toolsets: [terminal, clarify, skills]
 approvals:
   mode: manual

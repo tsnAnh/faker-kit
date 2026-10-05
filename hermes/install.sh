@@ -26,7 +26,7 @@ It writes, under ~/.hermes:
   team-kit/bots.yaml       each bot's role, project, and repositories; only team-kit-admin writes it
   bin/team-kit-gh          a project bot's only GitHub command
   bin/team-kit-admin       the bootstrap bot's only command
-  bin/team-kit-chief       the chief of staff's only command; it only reads
+  bin/team-kit-chief       the chief of staff's only command; reads, and proposes with approval
   profiles/<bot>/          for each bot in bots.yaml: SOUL.md, config, the guard plugin, its skill
 USAGE
 }

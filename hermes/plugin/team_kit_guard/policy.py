@@ -50,11 +50,12 @@ NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
 RESERVED_NAMES = frozenset({"default"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
-PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
+PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "tick", "status", "proposals", "report-status", "read", "show", "pr-state", "kit-check")
 BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon")
 BOOTSTRAP_READ_ONLY = ("status",)
-# The chief of staff reads every project and changes nothing, so it has no write command at all.
-CHIEF_COMMANDS = ("projects", "status", "show", "andon")
+# The chief of staff reads every project. `propose` is the only write and always asks the owner.
+CHIEF_COMMANDS = ("projects", "status", "show", "propose", "andon")
+CHIEF_NEEDS_APPROVAL = ("propose",)
 ARG = r"[A-Za-z0-9_./:#=@~,+-]+"
 
 MIGRATE_V1 = (
@@ -283,6 +284,13 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
             return approve(
                 f"The bootstrap bot changes this machine or GitHub. Approve {tool_name} only if you asked for it.",
                 tool_name, args, "bootstrap",
+            )
+    if bot.role == "chief" and not read_only:
+        words = command.split()
+        if tool_name == "terminal" and len(words) > 1 and words[1] in CHIEF_NEEDS_APPROVAL:
+            return approve(
+                "The chief bot writes one proposal file for a project bot. Approve only if you asked it to hand this work over.",
+                tool_name, args, "chief",
             )
     if tainted and not read_only:
         return approve(f"This turn read untrusted content. Approve {tool_name} only if you asked for it.", tool_name, args, "taint")

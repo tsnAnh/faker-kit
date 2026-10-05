@@ -17,7 +17,7 @@ If the shell does not find `team-kit-admin`, run it as `~/.hermes/bin/team-kit-a
 | `team-kit-admin setup-repo --project P --backend claude\|codex [--codex-env E]` | Starts one cloud session that opens the project's setup pull request |
 | `team-kit-admin protect --project P --check NAME [--check NAME ...]` | Requires those checks on the project's default branch, admins included |
 | `team-kit-admin activate --bot B` | Resumes B's jobs, once its GitHub token is in place |
-| `team-kit-admin add-chief --bot B [--model M]` | Creates or refreshes the chief of staff: a read-only bot that routes the owner's intent across every project |
+| `team-kit-admin add-chief --bot B [--model M]` | Creates or refreshes the chief of staff: a bot that reads across projects and can, with owner approval, propose one handoff to a project bot |
 | `team-kit-admin andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows the machine's andon cord. Only when the owner asks |
 
 ## Never
@@ -112,7 +112,7 @@ After the owner reruns `install.sh` with a new `--ref`, every project bot refuse
 
 ## A chief of staff
 
-When the owner wants one bot to route work across projects, or one line per project on what is going on, run `team-kit-admin add-chief --bot <name>`. It creates a bot whose only command, `team-kit-chief`, reads every project and changes nothing; it writes the message the owner sends each project bot. It has no jobs. Then the owner:
+When the owner wants one bot to route work across projects, or one line per project on what is going on, run `team-kit-admin add-chief --bot <name>`. It creates a bot whose only command, `team-kit-chief`, reads every project and writes only approved local proposal handoffs for project bots; otherwise it writes the message the owner sends each project bot. It has no jobs. Then the owner:
 
 1. creates a fine-grained GitHub token with read-only Issues, Contents, and Metadata on every project's repository, and puts it in the bot's profile `.env` as `GH_TOKEN` (the `next` list names the file). A new project needs its repository added to that token;
 2. adds the bot in Hermes Desktop Bot Mode.

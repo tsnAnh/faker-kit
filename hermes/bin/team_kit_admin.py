@@ -12,8 +12,8 @@ The bootstrap bot may run these, and the guard asks the owner to approve each on
                                                              start one cloud session that prepares the repository
   protect       --project P --check NAME [--check NAME ...]  require those checks on the default branch
   activate      --bot B                                      resume a project bot's jobs once its GitHub login is set
-  add-chief     --bot B [--model M]                          create or refresh the chief of staff: a read-only bot
-                                                             that routes the owner's intent across every project
+  add-chief     --bot B [--model M]                          create or refresh the chief of staff: reads across
+                                                             projects and can propose a handoff with approval
   andon         [raise REASON... | clear]                    show, pull, or clear the machine's andon cord: nothing
                                                              new starts in any project, and agents at work stop
 
@@ -164,6 +164,7 @@ class Admin:
         self.link_skill(home, {"project": "dispatch", "bootstrap": "bootstrap", "chief": "chief"}[role])
         if role == "project":
             (self.home / "briefs" / bot).mkdir(parents=True, exist_ok=True)
+            (self.home / "proposals" / bot).mkdir(parents=True, exist_ok=True)
             # An earlier version kept webhook triage scripts here; nothing uses them now.
             shutil.rmtree(home / "scripts" / "team-kit", ignore_errors=True)
 

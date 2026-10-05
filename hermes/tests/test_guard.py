@@ -232,6 +232,7 @@ def test_when_classifying_a_result_fails_it_is_treated_as_untrusted():
         ("~/.hermes/bin/team-kit-gh dispatch --unit t_1 --size small --brief-file ~/.hermes/team-kit/briefs/meo-beo/t_1.md", True),
         ("team-kit-gh tick", True),
         ("team-kit-gh status", True),
+        ("team-kit-gh proposals", True),
         ("team-kit-gh verify --issue 7", True),
         ("team-kit-gh andon raise prod is down since 10:40", True),
         ("team-kit-gh andon clear", True),
@@ -301,24 +302,25 @@ def test_the_bootstrap_bot_runs_only_team_kit_admin_and_the_owner_approves_chang
 
 
 @pytest.mark.parametrize(
-    ("command", "allowed"),
+    ("command", "expected"),
     [
-        ("team-kit-chief status", True),
-        ("~/.hermes/bin/team-kit-chief projects", True),
-        ("team-kit-chief show --project shop --path AGENTS.md", True),
-        ("team-kit-chief andon", True),
-        ("team-kit-gh dispatch --unit x --size small --brief-file x.md", False),
-        ("team-kit-gh andon raise stop", False),
-        ("team-kit-admin andon raise stop", False),
-        ("team-kit-chief status; gh issue create -R acme/shop", False),
-        ("gh issue list -R acme/shop", False),
+        ("team-kit-chief status", None),
+        ("~/.hermes/bin/team-kit-chief projects", None),
+        ("team-kit-chief show --project shop --path AGENTS.md", None),
+        ("team-kit-chief andon", None),
+        ("team-kit-chief propose --project shop --file /tmp/handoff.md", "approve"),
+        ("team-kit-gh dispatch --unit x --size small --brief-file x.md", "block"),
+        ("team-kit-gh andon raise stop", "block"),
+        ("team-kit-admin andon raise stop", "block"),
+        ("team-kit-chief status; gh issue create -R acme/shop", "block"),
+        ("gh issue list -R acme/shop", "block"),
     ],
 )
-def test_the_chief_of_staff_only_reads(command, allowed):
-    verdict = guard("chanh-van").pre_tool_call(**terminal(command))
-    assert (verdict is None) == allowed
-    if not allowed:
-        assert verdict["action"] == "block"
+def test_the_chief_of_staff_runs_only_team_kit_chief_and_propose_needs_approval(command, expected):
+    out = guard("chanh-van").pre_tool_call(**terminal(command))
+    assert (out or {}).get("action") == expected
+    if expected == "approve":
+        assert out["rule_key"].startswith("team-kit-chief:terminal:")
 
 
 def test_the_chief_of_staff_has_no_file_or_web_tools():
@@ -326,6 +328,7 @@ def test_the_chief_of_staff_has_no_file_or_web_tools():
     for tool in ("write_file", "read_file", "patch", "web_extract", "memory"):
         assert g.pre_tool_call(tool_name=tool, args={"path": "/tmp/x"})["action"] == "block"
     assert g.pre_tool_call(tool_name="clarify", args={"question": "which project?"}) is None
+    assert "terminal" not in sample_policy().read_only_tools
 
 
 def test_the_bootstrap_bot_has_no_file_or_kanban_tools():

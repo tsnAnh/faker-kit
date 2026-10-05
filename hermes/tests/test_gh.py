@@ -9,6 +9,7 @@ from conftest import SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
 from team_kit_contracts import LAUNCHED_MARKER, diagnosis_signature, security_signature, size_marker, verdict_signature
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, Refused, checks_state, main
+from team_kit_proposals import PROPOSAL_TTL_SECONDS, write_proposal
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
 REPO = SHOP
@@ -357,8 +358,46 @@ def tick(gh, capsys, cloud=None):
     return lines(capsys)
 
 
+def proposal(team_kit_home, tmp_path, name="handoff.md", body="# Add export\n\nBuild it from the chief handoff.\n", bot="meo-beo", project="shop", at=NOW):
+    source = tmp_path / name
+    source.write_text(body)
+    return write_proposal(team_kit_home, bot, project, REPO, str(source), "chanh-van", at)
+
+
 def test_tick_is_silent_with_nothing_to_report(team_kit_home, gh, capsys):
     assert tick(gh, capsys) == ["[SILENT]"]
+
+
+def test_proposals_prints_active_chief_proposals_without_dispatching(team_kit_home, tmp_path, gh, capsys):
+    saved = proposal(team_kit_home, tmp_path)
+    cloud = FakeCloud()
+    assert run(gh, "proposals", cloud=cloud) == 0
+    found = lines(capsys)
+    assert found[0] == f"team-kit notice: chief proposal {saved['id']} from chanh-van for shop expires {saved['expires_at_iso']}"
+    assert found[1:] == ["# Add export", "", "Build it from the chief handoff."]
+    assert gh.calls == []
+    assert cloud.started == []
+
+
+def test_tick_delivers_one_chief_proposal_notice_once(team_kit_home, tmp_path, gh, capsys):
+    saved = proposal(team_kit_home, tmp_path)
+    [notice] = tick(gh, capsys)
+    assert notice.startswith(f"team-kit notice: chief proposal {saved['id']} for shop from chanh-van: Add export.")
+    assert "Ask me in this Bot Chat to brief it" in notice
+    record = json.loads(next((team_kit_home / "proposals" / "meo-beo").glob("*.json")).read_text())
+    assert record["notified_at"] == NOW
+    assert tick(gh, capsys) == ["[SILENT]"]
+
+
+def test_expired_chief_proposals_are_pruned_deterministically(team_kit_home, tmp_path, gh, capsys):
+    old = proposal(team_kit_home, tmp_path, "old.md", "# Old\n", at=NOW - PROPOSAL_TTL_SECONDS - 1)
+    fresh = proposal(team_kit_home, tmp_path, "fresh.md", "# Fresh\n", at=NOW - PROPOSAL_TTL_SECONDS + 1)
+    assert run(gh, "proposals") == 0
+    found = lines(capsys)
+    assert old["id"] not in "\n".join(found)
+    assert fresh["id"] in found[0]
+    files = sorted(p.name for p in (team_kit_home / "proposals" / "meo-beo").glob("*.json"))
+    assert files == [f"{fresh['id']}.json"]
 
 
 def test_tick_launches_a_queued_unit_once_its_dependency_merged(team_kit_home, gh, capsys):

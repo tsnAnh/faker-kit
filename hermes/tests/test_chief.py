@@ -1,5 +1,6 @@
 import base64
 import json
+import stat
 import time
 
 import pytest
@@ -96,6 +97,40 @@ def test_show_reads_a_default_branch_file_of_a_known_project_only(chief_home, ca
                       (["--project", "crm", "--path", "AGENTS.md"], "not a readable file")):
         assert run(gh, "show", *args) == 1
         assert why in capsys.readouterr().err
+
+
+def test_propose_writes_one_proposal_for_the_target_project_bot_only(chief_home, tmp_path, capsys):
+    source = tmp_path / "handoff.md"
+    source.write_text("# Add invoices export\n\nBuild the export in the shop project.\n")
+    assert run(FakeGh(), "propose", "--project", "shop", "--file", str(source)) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["project"] == "shop"
+    assert out["bot"] == "meo-beo"
+    assert out["repo"] == SHOP
+    assert out["from"] == "chanh-van"
+    files = sorted((chief_home / "proposals").glob("*/*"))
+    assert files == [chief_home / "proposals" / "meo-beo" / f"{out['id']}.json"]
+    assert stat.S_IMODE(files[0].stat().st_mode) == 0o600
+    record = json.loads(files[0].read_text())
+    assert record["body"] == source.read_text()
+    assert record["expires_at"] - record["created_at"] == 7 * 24 * 3600
+
+
+@pytest.mark.parametrize(
+    ("project", "name", "why"),
+    [
+        ("nope", "handoff.md", "no project nope"),
+        ("shop", ".handoff.md", "plain .md file"),
+        ("shop", "handoff.txt", "plain .md file"),
+    ],
+)
+def test_propose_validates_the_project_and_source_path(chief_home, tmp_path, capsys, project, name, why):
+    path = tmp_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("proposal\n")
+    assert run(FakeGh(), "propose", "--project", project, "--file", str(path)) == 1
+    assert why in capsys.readouterr().err
+    assert not (chief_home / "proposals").exists()
 
 
 @pytest.mark.parametrize("bot", ["meo-beo", "ong-xay", "stranger"])
