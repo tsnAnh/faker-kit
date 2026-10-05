@@ -66,7 +66,8 @@ class FakeGh:
             label, state = args[args.index("--label") + 1], args[args.index("--state") + 1]
             found = [i for (r, _), i in self.issues.items() if r == repo and label in i["labels"] and i["state"] == state]
             return json.dumps([{"number": i["number"], "title": i["title"], "labels": [{"name": n} for n in sorted(i["labels"])],
-                                "createdAt": i["createdAt"], "closedAt": i["closedAt"], "stateReason": (i["state_reason"] or "").upper()} for i in found])
+                                "createdAt": i["createdAt"], "closedAt": i["closedAt"], "stateReason": (i["state_reason"] or "").upper(),
+                                "body": i["body"], "author": {"login": i["author"]}} for i in found])
         if args[:2] == ["issue", "create"]:
             number = self.add_issue(repo, labels=(args[args.index("--label") + 1],), body=args[args.index("--body") + 1], title=args[args.index("--title") + 1])
             return f"https://github.com/{repo}/issues/{number}\n"
@@ -79,6 +80,14 @@ class FakeGh:
                     if args[i + 1] not in labels:
                         raise Refused(f"gh issue failed: label {args[i + 1]} is not on the issue")
                     labels.discard(args[i + 1])
+            return ""
+        if args[:2] == ["issue", "close"]:
+            issue = self.issues[(repo, int(args[2]))]
+            if issue["state"] != "open":
+                raise Refused("gh issue failed: already closed")
+            issue["state"], issue["state_reason"] = "closed", "completed"
+            if "--comment" in args:
+                self.comment(repo, int(args[2]), args[args.index("--comment") + 1], at=NOW)
             return ""
         if args[:2] == ["issue", "comment"]:
             self.comment(repo, int(args[2]), args[args.index("--body") + 1], at=NOW)
@@ -852,3 +861,120 @@ def test_an_unexpected_error_is_one_refusal_line(team_kit_home, gh, capsys):
 
     assert run(explode, "kit-check") == 1
     assert capsys.readouterr().err == "team-kit-gh: refused: unexpected RuntimeError; nothing more was done\n"
+
+
+# Andon -------------------------------------------------------------------------------------------
+
+
+def andon_issue(gh, author="Codertocat", title="Andon: prod is down", body="stop everything"):
+    return gh.add_issue(REPO, labels=("agent:andon",), body=body, title=title, author=author)
+
+
+def test_pulling_the_cord_stops_every_launch_until_it_is_cleared(team_kit_home, gh, capsys):
+    assert run(gh, "andon", "raise", "prod", "is", "down") == 0
+    raised = out(capsys)
+    assert raised["stopped"] and raised["reason"] == "prod is down"
+    issue = gh.issues[(REPO, raised["issue"])]
+    assert issue["labels"] == {"agent:andon"} and issue["title"] == "Andon: prod is down"
+    assert issue["body"].startswith("<!-- team-kit:andon v1 -->") and "Do not push" in issue["body"]
+    cloud = FakeCloud()
+    assert dispatch(team_kit_home, gh, cloud) == 0
+    queued = out(capsys)
+    assert queued["state"] == "queued" and "andon pulled for this project" in queued["why"] and "prod is down" in queued["why"]
+    assert run(gh, "launch", "--issue", str(queued["issue"]), cloud=cloud) == 1
+    assert "andon pulled" in capsys.readouterr().err
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"], "the owner pulled it, so tick says nothing"
+    assert cloud.started == [] and gh.labels(REPO, queued["issue"]) == {"agent-task"}
+    assert run(gh, "status") == 0
+    assert capsys.readouterr().out.splitlines()[0] == f"team-kit notice: andon pulled for this project (#{raised['issue']}) by meo-beo: prod is down. Nothing new starts until it is cleared."
+    assert run(gh, "andon", "clear") == 0
+    assert out(capsys) == {"stopped": False, "closed": [raised["issue"]]}
+    assert gh.issues[(REPO, raised["issue"])]["state"] == "closed"
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, queued["issue"]) == {"agent-task", "agent:running"} and len(cloud.started) == 1
+
+
+def test_a_done_unit_keeps_its_slot_and_waits_for_its_verifier_while_the_cord_is_pulled(team_kit_home, gh, capsys):
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.report(REPO, n, "done", pr=pr(gh, 7))
+    assert run(gh, "andon", "raise", "billing", "spike") == 0
+    capsys.readouterr()
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"} and cloud.started == []
+    m = gh.add_issue(REPO, labels=("agent-task", "agent:needs-human"))
+    gh.report(REPO, m, "done", pr=pr(gh, 8))
+    assert run(gh, "verify", "--issue", str(m), cloud=cloud) == 1
+    assert "andon pulled" in capsys.readouterr().err
+    assert run(gh, "andon", "clear") == 0
+    capsys.readouterr()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"} and len(cloud.started) == 1
+
+
+def test_a_cord_the_owner_pulls_on_github_is_adopted_and_never_cleared_there(team_kit_home, gh, capsys):
+    a = andon_issue(gh)
+    queued = gh.add_issue(REPO)
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == [f"team-kit notice: andon pulled on #{a} by Codertocat: prod is down. Nothing new starts here until you ask me to clear it."]
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"], "said once"
+    assert cloud.started == []
+    gh.issues[(REPO, a)]["state"] = "closed"  # a cloud agent, posting as the bot's user, could do this
+    assert tick(gh, capsys, cloud=cloud) == [f"team-kit notice: andon issue #{a} is no longer open, but the line stays stopped until you ask me to clear it (team-kit-gh andon clear)."]
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert cloud.started == [] and gh.labels(REPO, queued) == {"agent-task"}
+    assert run(gh, "andon", "clear") == 0
+    assert out(capsys) == {"stopped": False, "closed": []}
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"] and len(cloud.started) == 1
+
+
+def test_an_andon_issue_from_an_untrusted_login_or_the_machine_is_not_a_project_cord(team_kit_home, gh, capsys):
+    andon_issue(gh, author="mallory")
+    andon_issue(gh, body="<!-- team-kit:andon v1 scope=machine -->\nstopped")
+    n = gh.add_issue(REPO)
+    assert tick(gh, capsys) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
+
+
+def test_the_machine_cord_stops_this_project_too(team_kit_home, gh, capsys):
+    (team_kit_home / "andon").mkdir()
+    (team_kit_home / "andon" / "_machine.json").write_text(json.dumps({"reason": "cloud bill", "by": "jarvis", "at": NOW}))
+    n = gh.add_issue(REPO)
+    assert run(gh, "launch", "--issue", str(n)) == 1
+    assert "andon pulled for this machine by jarvis: cloud bill" in capsys.readouterr().err
+    assert run(gh, "andon") == 0
+    assert out(capsys) == {"stopped": True, "machine": {"reason": "cloud bill", "by": "jarvis", "issue": None}, "project": None}
+    assert run(gh, "andon", "raise", "also", "here") == 0
+    capsys.readouterr()
+    assert run(gh, "andon", "clear") == 0
+    cleared = out(capsys)
+    assert cleared["stopped"] and "the bootstrap bot clears it" in cleared["still"]
+
+
+def test_andon_refusals(team_kit_home, gh, capsys):
+    assert run(gh, "andon", "raise") == 1
+    assert "say why" in capsys.readouterr().err
+    assert run(gh, "andon", "clear") == 1
+    assert "not pulled" in capsys.readouterr().err
+    assert run(gh, "andon", "show", "extra") == 1
+    assert "takes no reason" in capsys.readouterr().err
+    assert run(gh, "andon", "raise", "x") == 0
+    capsys.readouterr()
+    assert run(gh, "andon", "raise", "y") == 1
+    assert "clear it before" in capsys.readouterr().err
+
+
+def test_the_cord_holds_even_when_github_will_not_open_its_issue(team_kit_home, gh, capsys):
+    real = gh.__call__
+
+    def no_create(args, input=None):
+        if args[:2] == ["issue", "create"]:
+            raise Refused("gh issue failed: label agent:andon not found")
+        return real(args, input)
+
+    assert run(no_create, "andon", "raise", "stop") == 0
+    raised = out(capsys)
+    assert raised["issue"] is None and "agents already at work will not see it" in raised["warning"]
+    n = gh.add_issue(REPO)
+    assert run(gh, "launch", "--issue", str(n)) == 1
+    assert "andon pulled" in capsys.readouterr().err

@@ -90,7 +90,7 @@ The installer works with macOS's bundled Bash 3. It needs a Python 3.9+ that can
 
 Open the bootstrap bot in Hermes Desktop Bot Mode and say "set up project shop for acme/shop". It asks for the bot's name and the coding agent, then, with your approval at each step:
 
-1. `team-kit-admin add-project` creates the project bot and its two jobs, paused, and the five labels in the repository.
+1. `team-kit-admin add-project` creates the project bot and its two jobs, paused, and the six labels in the repository.
 2. `team-kit-admin vendor` opens a pull request that copies the kit, at the machine's commit, into the repository's `.agents/team-kit/` and links its skills into `.claude/skills/` and `.agents/skills/`. Cloud sessions start from a clone of the repository, and cannot install plugins or fetch a private kit, so this copy is where they get the kit's skills. The repository's own skills keep their place. You review and merge it.
 3. `team-kit-admin setup-repo` starts one cloud session. It runs faker-mode and the [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md) skill, scores the repository with `/trust-audit`, and opens one pull request: `.agents/dispatch.json` (with the `verification_skill`), `.agents/dispatch.md`, a Layout section in `AGENTS.md`, and any kit setup the repository lacks. You review and merge it.
 4. `team-kit-admin protect` makes the CI check that runs `scripts/check.sh` required on the default branch.
@@ -111,12 +111,14 @@ None of these uses a model to decide. Each is code or configuration.
 6. **Briefs come only from you and the repository.** The coding agent works only issues written by a login in `trusted_dispatchers` that start with the brief marker. `dispatch` reads a brief only from the bot's own briefs directory.
 7. **The scheduled jobs decide nothing.** `tick` and `status` are code. Their output reaches Bot Chat as notices, and the guard taints any turn that contains one, so a notice cannot make the bot act.
 8. **Checks and a human merge.** A unit is ready to merge only when its pull request's checks pass. Only you merge.
+9. **An andon cord stops the line.** One for each project and one for the machine. While either is pulled, nothing new starts, and cloud agents at work stop before their next push. Closing the GitHub issue never clears it; only a Hermes command does.
 
 ## What you do
 
 - **State work** in a project bot's Bot Chat, and confirm the units it restates.
 - **Answer gates.** You get one line saying why. Read the report on the issue, put your answer in the issue body under Context, and ask the bot to launch it again, or tell it to change the plan.
 - **Merge** pull requests you get a "ready to merge" line for.
+- **Pull the andon cord** when something is going wrong: tell a project bot "stop", or the bootstrap bot "stop everything". The bot runs `team-kit-gh andon raise <reason>` (or `team-kit-admin andon raise <reason>`), which opens an `agent:andon` issue that every agent at work checks before it pushes. You can open such an issue on GitHub yourself, too; the next tick adopts it. Agents that stop post a `blocked` report, so each becomes a gate. When it is fixed, ask the bot to clear the cord and to relaunch the gated units.
 - **Close abandoned units as not planned.** If you drop a unit, close its issue with "Close as not planned", not "Close as completed": units that depend on it then gate instead of starting on code that never merged.
 
 Each project bot's `team-kit-status` job sends three lines at 9:00, 13:00, and 17:00 in the profile's timezone (Asia/Saigon by default), grouped by repository: what is in flight, what waits on you, and what is done since the last digest. Ask the bot "what's going on" for the same lines at any time.
@@ -127,6 +129,7 @@ Each project bot's `team-kit-status` job sends three lines at 9:00, 13:00, and 1
 - **"profile X is not a team-kit bot in bots.yaml".** Bots are created only by `team-kit-admin`. Ask the bootstrap bot, or rerun `install.sh --bootstrap-bot X` for the bootstrap bot.
 - **"kit commit ... differs from kit_ref ..." or "... has no vendored kit".** The machine, `.agents/dispatch.json`, and the vendored `.agents/team-kit/KIT.json` must pin the same kit commit. Ask the bootstrap bot to run `team-kit-admin vendor` for the project and merge its pull request, which moves both, then ask the project bot to run `team-kit-gh kit-check`.
 - **A cloud agent says the team-kit skills did not load.** The repository's vendored kit is missing or its links are broken. Run `python3 .agents/team-kit/vendor_kit.py --check .` in a clone, then vendor again.
+- **Nothing launches, and `status` starts with "andon pulled".** A cord is pulled. Ask the bot that pulled it to clear it once the cause is fixed. Closing the `agent:andon` issue on GitHub does not clear it.
 - **A unit stays queued.** Its dependencies have not merged, or a limit is full. `team-kit-gh status` lists it; the next tick launches it when it can. Raise `max_in_flight` in a pull request, or `max_in_flight_total` in `guard.yaml`, if you can take more.
 - **A unit stays running.** No report yet. Open the session on the issue's launch comment. After a day without a report, tick opens a gate.
 - **"done without a pull request".** A Codex task that could not push leaves the pull request to you. Open it from the task, with `Closes #<n>` in its body.

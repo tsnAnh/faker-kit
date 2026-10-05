@@ -6,7 +6,7 @@ import yaml
 from conftest import fill_guard, gh_calls, hermes_calls, install
 
 SHOP = "acme/shop"
-LABELS = ["agent-task", "agent:running", "agent:verifying", "agent:review", "agent:needs-human"]
+LABELS = ["agent-task", "agent:running", "agent:verifying", "agent:review", "agent:needs-human", "agent:andon"]
 
 
 @pytest.fixture
@@ -369,3 +369,56 @@ def test_the_gh_calls_never_carry_a_token(ready):
     admin(ready, "status", profile="ong-xay")
     assert all("github_pat_secret" not in json.dumps(c) for c in gh_calls(root))
     assert all("github_pat_secret" not in " ".join(c) for c in hermes_calls(root))
+
+
+def issues(root):
+    path = root.parent / ".fake-gh" / "issues.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def test_the_machine_cord_opens_an_andon_issue_in_every_project_and_stops_setup(ready, kit_source):
+    root, env = ready
+    add_shop(ready)
+    code, out = admin(ready, "andon", "raise", "cloud", "bill", "spike", profile="ong-xay")
+    assert code == 0, out
+    assert out == {"stopped": True, "reason": "cloud bill spike", "issues": {SHOP: 50}}
+    [issue] = issues(root)[SHOP]
+    assert issue["label"] == "agent:andon" and issue["title"] == "Andon: cloud bill spike"
+    assert issue["body"].startswith("<!-- team-kit:andon v1 scope=machine -->") and "team-kit-admin andon clear" in issue["body"]
+    saved = json.loads((root / "team-kit" / "andon" / "_machine.json").read_text())
+    assert saved["by"] == "ong-xay" and saved["issues"] == {SHOP: 50}
+    code, err = admin(ready, "andon", "raise", "again", profile="ong-xay")
+    assert code == 1 and "clear it before" in err
+    vendored(root, subprocess.run(["git", "-C", str(root / "team-kit" / "kit"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip())
+    code, err = admin(ready, "setup-repo", "--project", "shop", "--backend", "claude", profile="ong-xay")
+    assert code == 1 and "andon pulled for this machine by ong-xay: cloud bill spike" in err
+    code, out = admin(ready, "status", profile="ong-xay")
+    assert out["andon"]["machine"]["reason"] == "cloud bill spike"
+    code, out = admin(ready, "andon", "clear", profile="ong-xay")
+    assert code == 0, out
+    assert out == {"stopped": False, "closed": [f"{SHOP}#50"]}
+    assert issues(root)[SHOP][0]["state"] == "closed"
+    assert not (root / "team-kit" / "andon" / "_machine.json").exists()
+    code, err = admin(ready, "andon", "clear", profile="ong-xay")
+    assert code == 1 and "not pulled" in err
+
+
+def test_the_machine_cord_holds_when_github_will_not_open_its_issues(ready):
+    root, env = ready
+    add_shop(ready)
+    env["FAKE_ISSUE_CREATE_FAILS"] = "1"
+    code, out = admin(ready, "andon", "raise", "stop", profile="ong-xay")
+    assert code == 0, out
+    assert out["issues"] == {} and "not found" in out["no_issue"][SHOP]
+    assert json.loads((root / "team-kit" / "andon" / "_machine.json").read_text())["reason"] == "stop"
+
+
+def test_andon_shows_project_cords_and_refuses_a_bare_raise(ready):
+    root, _ = ready
+    add_shop(ready)
+    (root / "team-kit" / "andon").mkdir(exist_ok=True)
+    (root / "team-kit" / "andon" / "meo-beo.json").write_text(json.dumps({"reason": "flaky deploy", "by": "meo-beo", "at": 0}))
+    code, out = admin(ready, "andon", profile="ong-xay")
+    assert out == {"machine": None, "projects": {"meo-beo": "flaky deploy"}}
+    code, err = admin(ready, "andon", "raise", profile="ong-xay")
+    assert code == 1 and "say why" in err

@@ -33,6 +33,24 @@ elif args[:2] == ["repo", "clone"]:
     subprocess.run(["git", "init", "-q", args[3]], check=True)
 elif args[:2] == ["issue", "list"]:
     print("[]")
+elif args[:2] == ["issue", "create"]:
+    repo = args[args.index("-R") + 1]
+    if os.environ.get("FAKE_ISSUE_CREATE_FAILS"):
+        print("gh: could not add label: 'agent:andon' not found", file=sys.stderr)
+        sys.exit(1)
+    issues = load("issues.json", {})
+    number = len(issues.get(repo, [])) + 50
+    issues.setdefault(repo, []).append({"number": number, "title": args[args.index("--title") + 1], "body": args[args.index("--body") + 1],
+                                        "label": args[args.index("--label") + 1], "state": "open"})
+    save("issues.json", issues)
+    print(f"https://github.com/{repo}/issues/{number}")
+elif args[:2] == ["issue", "close"]:
+    repo = args[args.index("-R") + 1]
+    issues = load("issues.json", {})
+    for issue in issues.get(repo, []):
+        if issue["number"] == int(args[2]):
+            issue["state"], issue["comment"] = "closed", args[args.index("--comment") + 1]
+    save("issues.json", issues)
 elif args[0] == "api":
     import base64
 

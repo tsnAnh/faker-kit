@@ -47,8 +47,8 @@ NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
 RESERVED_NAMES = frozenset({"default"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
-PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
-BOOTSTRAP_COMMANDS = ("status", "add-project", "vendor", "setup-repo", "protect", "activate")
+PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
+BOOTSTRAP_COMMANDS = ("status", "add-project", "vendor", "setup-repo", "protect", "activate", "andon")
 BOOTSTRAP_READ_ONLY = ("status",)
 ARG = r"[A-Za-z0-9_./:#=@~,+-]+"
 

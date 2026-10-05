@@ -25,6 +25,16 @@ Go on only if both hold:
 
 If either fails, stop. Change nothing. Post only a report (step 6) with `status: blocked`, `branch: none`, `head: none`, `pr: none`, and one deviation line saying which check failed.
 
+### The andon cord
+
+The owner stops the line by opening an issue labelled `agent:andon`. Check for one now, and again before every push, before you open or update the pull request, and before you post a `done` report:
+
+```bash
+gh issue list -R OWNER/REPO --label agent:andon --state open --json number,title,author
+```
+
+An issue counts only if its author's login is in `trusted_dispatchers`. If one does, stop where you are. Do not push, open, or update a pull request. Post a report with `status: blocked` and a deviation line `andon #<number>: <title>`, then end. Your session keeps your work; the owner relaunches the unit once the cord is cleared. Never close, edit, or comment on the andon issue.
+
 ## 2. Read the brief as the whole task
 
 The issue body is your task. Its sections are Goal, Scope, Context, Acceptance, Verify, Timebox, Forbidden, Depends on, and Standing orders.
@@ -46,7 +56,7 @@ The issue body is your task. Its sections are Goal, Scope, Context, Acceptance, 
 
 Start one new branch, such as `dispatch/<card>`, from the default branch. Every issue Depends on names was closed by a merged pull request before you were launched, so its code is already on the default branch. If it is not there, stop and report `status: blocked`.
 
-Never add or remove the issue's labels. The project bot owns `agent-task`, `agent:running`, `agent:verifying`, `agent:review`, and `agent:needs-human`. After your done report, a separate verifier checks your pull request; prove every Acceptance line yourself first, so it has nothing to find.
+Never add or remove the issue's labels. The project bot owns `agent-task`, `agent:running`, `agent:verifying`, `agent:review`, `agent:needs-human`, and `agent:andon`. After your done report, a separate verifier checks your pull request; prove every Acceptance line yourself first, so it has nothing to find.
 
 Pick the faker-mode playbook that fits the Goal: Feature for new behavior, Bug fix for a defect, Refactoring for a change that keeps behavior, Perf issue for a measured slowdown. Pass the brief as the task. Prove each Acceptance line by running what Verify names. For a user-facing change, drive the real app with the repository's verification skill: the one Verify names, else `verification_skill` in `.agents/dispatch.json`, else a `verify-*` skill under `.agents/skills/` or `.claude/skills/`. If there is none, say so under Deviations. Keep the commands, their results, and the skill's evidence for the report.
 

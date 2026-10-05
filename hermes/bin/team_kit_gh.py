@@ -12,6 +12,7 @@
   read          --issue N | --pr N                 the body and comments (untrusted; the guard wraps it)
   show          --path P                           a file from the default branch (the owner's repo; trusted)
   kit-check                                        compare this machine's kit commit with kit_ref and the vendored kit
+  andon         [raise REASON... | clear]          show, pull, or clear this project's andon cord (the owner asked)
 
 GitHub holds every unit's state, as labels on its issue:
 
@@ -22,6 +23,9 @@ GitHub holds every unit's state, as labels on its issue:
   agent:review        verified (or verification is off) and the checks passed; the owner merges
   agent:needs-human   a gate: the agent stopped and needs the owner
   (closed)            done: its pull request merged
+
+An open issue labelled agent:andon is a pulled cord: nothing new starts, and agents at work stop
+at their next push. See team_kit_andon.
 
 Which bot is running comes from the Hermes profile (HERMES_HOME). Its repository comes from
 bots.yaml; a project is one repository. The guard lets a project bot run this command and nothing else.
@@ -49,6 +53,7 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
+from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord, clean_reason, issue_body  # noqa: E402
 from team_kit_cloud import Cloud, CloudError  # noqa: E402
 from team_kit_contracts import (  # noqa: E402
     DEFAULT_ACCEPTED,
@@ -224,6 +229,8 @@ class Gh:
             raise Refused(f"{bot.name} is a {bot.role} bot; team-kit-gh is for project bots")
         self.policy, self.bot, self.run, self.now = policy, bot, run, now
         self.repo = bot.repo
+        self.andon = Andon(policy.home, now)
+        self._cord: tuple[Cord | None] | None = None
 
     # reading ------------------------------------------------------------------------------------
 
@@ -328,6 +335,96 @@ class Gh:
         kind, number = ("pr", pr) if pr else ("issue", issue)
         return self.run([kind, "view", str(number), "-R", self.repo, "--comments"])
 
+    # andon --------------------------------------------------------------------------------------
+
+    def andon_issues(self) -> list[dict]:
+        """Open agent:andon issues a trusted login opened, the machine's own included."""
+        issues = json.loads(self.run(["issue", "list", "-R", self.repo, "--label", ANDON_LABEL, "--state", "open",
+                                      "--json", "number,title,body,author", "--limit", "50"]))
+        return [i for i in issues if str((i.get("author") or {}).get("login") or "").lower() in self.policy.trusted_authors]
+
+    def sync_andon(self) -> tuple[Cord | None, list[str]]:
+        """The cord that stops this project, and notices for what changed on GitHub since last time.
+
+        An andon issue the owner opened by hand is adopted into the local record. A recorded cord
+        whose issue is gone stays pulled: closing the issue on GitHub never clears it."""
+        notices: list[str] = []
+        try:
+            issues = self.andon_issues()
+        except Exception:  # noqa: BLE001 - GitHub down: the local record still decides
+            issues = None
+        record = self.andon.read(self.bot.name)
+        if issues is not None:
+            own = [i for i in issues if not str(i.get("body") or "").lstrip().startswith(MACHINE_MARKER)]
+            if record is None and own:
+                first = min(own, key=lambda i: int(i["number"]))
+                title = str(first.get("title") or "").removeprefix("Andon:").strip() or f"see #{first['number']}"
+                try:
+                    why = clean_reason(title)
+                except AndonError:
+                    why = f"see #{first['number']}"
+                by = str((first.get("author") or {}).get("login") or "the owner")
+                self.andon.write(self.bot.name, {"reason": why, "by": by, "at": self.now(), "issue": int(first["number"]), "source": "github"})
+                notices.append(f"{NOTICE} andon pulled on #{first['number']} by {by}: {why}. Nothing new starts here until you ask me to clear it.")
+            elif record is not None and record.get("issue") and not record.get("issue_gone_noted") \
+                    and int(record["issue"]) not in {int(i["number"]) for i in own}:
+                self.andon.write(self.bot.name, {**record, "issue_gone_noted": True})
+                notices.append(f"{NOTICE} andon issue #{record['issue']} is no longer open, but the line stays stopped "
+                               "until you ask me to clear it (team-kit-gh andon clear).")
+        cord = self.andon.pulled(self.bot.name)
+        self._cord = (cord,)
+        return cord, notices
+
+    def cord(self) -> Cord | None:
+        """The cord that stops this project, read once per command."""
+        if self._cord is None:
+            self.sync_andon()
+        return self._cord[0]
+
+    def andon_show(self) -> dict:
+        cord = self.cord()
+        machine, project = self.andon.machine(), self.andon.project(self.bot.name)
+        as_dict = lambda c: None if c is None else {"reason": c.reason, "by": c.by, "issue": c.issue}  # noqa: E731
+        return {"stopped": cord is not None, "machine": as_dict(machine), "project": as_dict(project)}
+
+    def andon_raise(self, words: list[str]) -> dict:
+        why = clean_reason(words)
+        if self.andon.project(self.bot.name):
+            raise Refused(f"{self.andon.project(self.bot.name).describe()}; clear it before pulling it again")
+        out: dict = {"stopped": True, "reason": why, "issue": None}
+        try:
+            url = self.run(["issue", "create", "-R", self.repo, "--title", f"Andon: {why}"[:120], "--label", ANDON_LABEL,
+                            "--body", issue_body("project", why, "team-kit-gh andon clear")]).strip()
+            out["issue"] = int(url.rstrip("/").rsplit("/", 1)[-1])
+        except Exception as err:  # noqa: BLE001 - the local cord still stops every launch
+            out["warning"] = f"no andon issue opened ({reason(err)}), so agents already at work will not see it; is the {ANDON_LABEL} label missing?"
+        self.andon.write(self.bot.name, {"reason": why, "by": self.bot.name, "at": self.now(), "issue": out["issue"], "source": "hermes"})
+        self._cord = None
+        return out
+
+    def andon_clear(self) -> dict:
+        record = self.andon.read(self.bot.name)
+        try:
+            issues = [i for i in self.andon_issues() if not str(i.get("body") or "").lstrip().startswith(MACHINE_MARKER)]
+        except Exception as err:  # noqa: BLE001
+            raise Refused(f"cannot read the andon issues ({reason(err)}); try again") from None
+        numbers = sorted({int(i["number"]) for i in issues} | ({int(record["issue"])} if record and record.get("issue") else set()))
+        if record is None and not numbers:
+            raise Refused("this project's andon cord is not pulled")
+        closed = []
+        for number in numbers:
+            try:
+                self.run(["issue", "close", str(number), "-R", self.repo, "--comment", "The owner cleared the andon cord in Hermes. The line runs again."])
+                closed.append(number)
+            except Exception:  # noqa: BLE001 - already closed, or gone
+                pass
+        self.andon.drop(self.bot.name)
+        self._cord = None
+        out: dict = {"stopped": False, "closed": closed}
+        if self.andon.machine():
+            out = {**out, "stopped": True, "still": self.andon.machine().describe() + "; the bootstrap bot clears it"}
+        return out
+
     # writing ------------------------------------------------------------------------------------
 
     def relabel(self, issue: int, add: str | None = None, remove: tuple[str, ...] = ()) -> None:
@@ -366,6 +463,9 @@ class Gh:
         config = self.dispatch_config()
         self.kit_check(local_commit, config)
         issue = self.launchable(number, config)
+        cord = self.cord()
+        if cord:
+            raise Waiting(f"{cord.describe()}; nothing starts until it is cleared", "machine")
         body = issue.get("body") or ""
         try:
             brief = parse_brief(body)
@@ -474,6 +574,8 @@ class Gh:
         if verifier == "none" or cloud is None:
             self.relabel(number, add=REVIEW_LABEL, remove=(RUNNING_LABEL,))
             return f"{NOTICE} #{number} is ready for you to merge ({checks}, not independently verified): {report['pr']}"
+        if self.cord():
+            return None  # the unit keeps its slot; its verifier starts once the cord is cleared
         return self.start_verifier(issue, report["pr"], pr["head"], verifier, config, cloud, pr["checks"])
 
     # Verification -------------------------------------------------------------------------------
@@ -589,6 +691,9 @@ class Gh:
         backend = config.get("verifier_backend", config["backend"])
         if backend == "none":
             raise Refused("verifier_backend is none in .agents/dispatch.json")
+        cord = self.cord()
+        if cord:
+            raise Refused(f"{cord.describe()}; nothing starts until it is cleared")
         report = self.report_status(number, since_launch=True)
         if report["status"] != "done" or not report.get("pr"):
             raise Refused(f"#{number} has no done report with a pull request to verify")
@@ -622,6 +727,8 @@ class Project:
     def tick(self, local_commit: str, cloud: Cloud) -> list[str]:
         gh, notices, problems = self.gh, [], {}
         queued: list[dict] = []
+        cord, andon_notices = gh.sync_andon()
+        notices.extend(andon_notices)
         try:
             units = gh.units()
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
@@ -639,7 +746,7 @@ class Project:
             elif not labels & {REVIEW_LABEL, HUMAN_LABEL}:
                 queued.append(issue)
         queued.sort(key=lambda issue: (issue.get("createdAt") or "", int(issue["number"])))
-        for issue in queued:
+        for issue in [] if cord else queued:
             try:
                 gh.launch(int(issue["number"]), local_commit, cloud)
             except Waiting as wait:
@@ -693,10 +800,12 @@ class Project:
                 done.append(f"#{issue['number']} {issue['title']}")
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(json.dumps({"at": self.now()}))
+        cord = self.gh.cord()
+        stopped = [f"{NOTICE} {cord.describe()}. Nothing new starts until it is cleared."] if cord else []
         if not (flight or waiting or done):
-            return [SILENT]
+            return stopped or [SILENT]
         line = lambda name, items: f"{NOTICE} {name}: {len(items)}. " + ("; ".join(items) if items else "none") + "."  # noqa: E731
-        return [line("In flight", flight), line("Waiting on you", waiting), line("Done since last", done)]
+        return stopped + [line("In flight", flight), line("Waiting on you", waiting), line("Done since last", done)]
 
 
 def brief_text(policy: Policy, bot: Bot, path: str) -> str:
@@ -716,6 +825,9 @@ def parser() -> argparse.ArgumentParser:
     sub = top.add_subparsers(dest="command", required=True)
     for name in ("project", "tick", "status"):
         sub.add_parser(name)
+    cmd = sub.add_parser("andon")
+    cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
+    cmd.add_argument("reason", nargs="*")
     for name in ("dispatch", "launch", "verify", "report-status", "read", "show", "pr-state", "kit-check"):
         cmd = sub.add_parser(name)
         if name == "dispatch":
@@ -745,6 +857,11 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         cloud = cloud or Cloud(run_gh=run)
         if args.command == "project":
             out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
+        elif args.command == "andon":
+            gh = Gh(policy, me, run, now)
+            if args.action != "raise" and args.reason:
+                raise Refused(f"andon {args.action} takes no reason")
+            out = gh.andon_raise(args.reason) if args.action == "raise" else gh.andon_clear() if args.action == "clear" else gh.andon_show()
         elif args.command in ("tick", "status"):
             project = Project(policy, me, run, now)
             lines = project.tick(commit(policy), cloud) if args.command == "tick" else project.status()
@@ -772,7 +889,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
                 out = gh.pr_state(args.pr)
             else:
                 out = gh.kit_check(commit(policy))
-    except (Refused, ContractError, PolicyError) as err:
+    except (Refused, ContractError, PolicyError, AndonError) as err:
         print(f"team-kit-gh: refused: {err}", file=sys.stderr)
         return 1
     except Exception as err:  # noqa: BLE001 - the bot gets one refusal line, never a traceback
