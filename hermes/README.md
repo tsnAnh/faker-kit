@@ -72,9 +72,17 @@ These depend on Hermes and the cloud CLIs, and the tests fake them:
 - that a profile's `.env` (`GH_TOKEN`) reaches its terminal and its scheduled jobs,
 - that a new profile's scheduled jobs run in the shared gateway without a restart,
 - the session line `claude --cloud` and `codex cloud exec` print, which `team_kit_cloud.py` waits for,
+- that `claude --cloud` (Claude Code 2.1.289 and later), run on a pseudo-terminal with the prompt on stdin and no value for `--cloud`, starts a cloud session whose first message is the full `/faker-mode ...` prompt, prints its `https://claude.ai/code/...` URL, and keeps running or exits cleanly once the terminal is closed. The CLI refuses `--cloud` when stdout is not a terminal, and `claude -p --cloud` is interactive only. `--cloud [description|session_id|url]` takes a task only as its value, so a `@file` argument is sent as literal text. Check with `claude --help` after every Claude Code upgrade,
 - that a cloud session loads skills through the relative links `vendor_kit.py` writes in `.claude/skills/` and `.agents/skills/` (the launch prompt has the agent report "the team-kit skills did not load" if not),
 - that the ids `hermes cron list --all` prints are what `hermes cron resume` takes, and that `every 30m` is a valid schedule,
 - the argument names of Hermes's `patch`, `read_file`, and `search_files` tools, which the guard checks (`path`, `mode`, `patch`), and the tool names in each role's allowlist (`ROLE_TOOLS` in `plugin/team_kit_guard/policy.py`).
+
+## Troubleshooting
+
+- **A Claude launch fails with "requires an interactive terminal" or "interactive only".** Something started `claude --cloud` without a pseudo-terminal, or with `-p`. `team_kit_cloud.py` always runs it on a pseudo-terminal; look for another script calling `claude` directly.
+- **A cloud session's first message is a file path or `@...`.** The prompt was passed as the `--cloud` value or an argument. The prompt must go to stdin with `claude --cloud` alone; check `cloud_argv` in `lib/team_kit_contracts.py`.
+- **"exited 1 before starting a session" with an empty or odd last line.** Read `~/.hermes/team-kit/checkouts/<owner>__<repo>/<unit>.log`. It holds the terminal output with escape sequences removed and prompts and signing keys redacted. Run `claude --cloud` by hand from a terminal to see whether it needs a sign-in.
+- **"printed no session in 180s".** The CLI is waiting for input or a login. The same log shows what it printed; the process group is stopped.
 
 ## Upgrade from the webhook version
 

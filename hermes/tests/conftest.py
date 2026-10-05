@@ -77,16 +77,16 @@ def executable(path, text):
 
 FAKE_CLAUDE = """import os
 import pathlib
-import stat
 import sys
 
 home = pathlib.Path(os.environ["HOME"])
 (home / ".fake-claude-cwd").write_text(os.getcwd())
 (home / ".fake-claude-args").write_text("\\n".join(sys.argv[1:]))
-if len(sys.argv) > 2 and sys.argv[2].startswith("@"):
-    prompt = pathlib.Path(sys.argv[2][1:])
-    (home / ".fake-claude-prompt").write_text(prompt.read_text())
-    (home / ".fake-claude-prompt-mode").write_text(oct(stat.S_IMODE(prompt.stat().st_mode)))
+(home / ".fake-claude-tty").write_text(str(os.isatty(1)))
+if sys.argv[1:] != ["--cloud"] or not os.isatty(1):
+    print("claude: --cloud takes no value here and needs a terminal")
+    sys.exit(1)
+(home / ".fake-claude-prompt").write_text(sys.stdin.read())
 print("Started https://claude.ai/code/session_01BOOTstrap")
 """
 

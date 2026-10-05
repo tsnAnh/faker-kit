@@ -39,8 +39,6 @@ REPORT_FIELDS = ("status", "branch", "head", "pr")
 
 UNIT_ATTEMPTS = {"small": 1, "medium": 2, "large": 3}
 BACKENDS = ("claude", "codex")
-PROMPT_STDIN = "stdin"
-PROMPT_FILE = "prompt-file"
 VENDOR_DIR = ".agents/team-kit"
 # The second sentence makes a session without the kit fail at once, and visibly: a Claude Code
 # session posts a blocked report that tick turns into a gate. A Codex task cannot comment, so it says
@@ -103,7 +101,6 @@ class ContractError(ValueError):
 class CloudCommand:
     argv: tuple[str, ...]
     prompt: str
-    prompt_transport: str
     sensitive: tuple[str, ...] = ()
 
 
@@ -419,7 +416,7 @@ def cloud_argv(backend: str, prompt: str, attempts: int = 1, env_id: str | None 
                sensitive: tuple[str, ...] = ()) -> CloudCommand:
     """The command and private prompt payload that start one cloud coding agent. No shell is involved."""
     if backend == "claude":
-        return CloudCommand(("claude", "--cloud"), prompt, PROMPT_FILE, sensitive)
+        return CloudCommand(("claude", "--cloud"), prompt, sensitive)
     if backend != "codex":
         raise ContractError(f"backend must be one of {', '.join(BACKENDS)}")
     if not env_id or not ENV_ID.match(env_id):
@@ -427,7 +424,7 @@ def cloud_argv(backend: str, prompt: str, attempts: int = 1, env_id: str | None 
     if attempts not in UNIT_ATTEMPTS.values():
         raise ContractError("codex attempts must be 1, 2, or 3")
     return CloudCommand(("codex", "cloud", "exec", "--env", env_id, "--attempts", str(attempts), "-"),
-                        prompt, PROMPT_STDIN, sensitive)
+                        prompt, sensitive)
 
 
 def launch_argv(backend: str, repo: str, issue: int, size: str, env_id: str | None = None) -> CloudCommand:

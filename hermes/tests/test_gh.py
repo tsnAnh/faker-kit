@@ -451,6 +451,7 @@ def test_a_done_unit_with_passing_checks_goes_to_a_verifier_then_to_review(team_
     assert backend == "claude" and command.argv == ("claude", "--cloud")
     assert command.prompt.startswith(f"/verify-unit Verify https://github.com/{REPO}/pull/7 at commit {HEAD} against the brief in {REPO}#{n}. Sign the verdict with key {saved['key']}.")
     assert saved["key"] not in " ".join(command.argv)
+    assert command.sensitive == (saved["key"],), "the cloud log redacts the verifier's key"
     assert workdir.name == f"{n}-verify"
     assert (team_kit_home / "verify" / "meo-beo" / f"{n}.json").stat().st_mode & 0o077 == 0, "the key file is private"
     launch = gh.comments[(REPO, n)][-1]["body"]
@@ -1045,6 +1046,7 @@ def test_a_security_review_covers_each_new_commit_once(team_kit_home, gh, capsys
     assert command.prompt.startswith(f"/review-main-security Review the last 20 commits up to {gh.main_head} on main of {REPO}, "
                                      f"and post the result on {REPO}#{started['issue']}. Sign the result with key {running['key']}.")
     assert running["key"] not in " ".join(command.argv)
+    assert command.sensitive == (running["key"],), "the cloud log redacts the reviewer's key"
     assert workdir.name == "security"
     assert (team_kit_home / "security" / "meo-beo.json").stat().st_mode & 0o077 == 0
     launched = gh.comments[(REPO, started["issue"])][-1]["body"]
@@ -1198,6 +1200,7 @@ def test_a_red_default_branch_opens_an_incident_starts_triage_and_closes_when_gr
     assert command.prompt.startswith(f"/triage-incident Investigate the incident in {REPO}#{n}: main is red: e2e, test. The head of main is {'2' * 40}; "
                                      f"its last commit with passing checks is {'1' * 40}. Post the diagnosis on {REPO}#{n}. Sign it with key {state['triage']['key']}.")
     assert state["triage"]["key"] not in " ".join(command.argv)
+    assert command.sensitive == (state["triage"]["key"],), "the cloud log redacts the triager's key"
     assert workdir.name == f"incident-{n}"
     assert state["triage"]["key"] not in gh.comments[(REPO, n)][-1]["body"]
     assert poll(gh, capsys, cloud=cloud) == ["[SILENT]"], "one incident per source, and one notice"

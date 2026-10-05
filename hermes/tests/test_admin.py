@@ -152,10 +152,9 @@ def test_setup_repo_starts_one_cloud_session_on_the_vendored_kit(ready, kit_sour
     home = root.parent
     assert (home / ".fake-claude-cwd").read_text().strip() == str(root / "team-kit" / "checkouts" / "acme__shop" / "setup")
     args = (home / ".fake-claude-args").read_text()
-    assert args.startswith("--cloud\n@")
-    assert "Set up acme/shop" not in args
+    assert args == "--cloud"
+    assert (home / ".fake-claude-tty").read_text() == "True"
     prompt = (home / ".fake-claude-prompt").read_text()
-    assert (home / ".fake-claude-prompt-mode").read_text() == "0o600"
     assert prompt.startswith("Set up acme/shop for team-kit dispatch")
     assert f"vendored in this repository at .agents/team-kit/, at commit {kit_source[1]}" in prompt
     assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in prompt

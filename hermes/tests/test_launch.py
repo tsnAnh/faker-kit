@@ -8,7 +8,7 @@ from hashlib import sha256
 import pytest
 from conftest import HERMES, KIT
 from team_kit_cloud import Cloud, CloudError
-from team_kit_contracts import CloudCommand, LAUNCH_PROMPTS, PROMPT_FILE, PROMPT_STDIN, ContractError, cloud_argv, launch_argv, verify_argv
+from team_kit_contracts import CloudCommand, LAUNCH_PROMPTS, ContractError, cloud_argv, launch_argv, verify_argv
 
 PREFIXES = ("/faker-mode ", "$faker-mode ")
 
@@ -26,18 +26,17 @@ CODEX = ("$faker-mode Work the brief in acme/shop#123 using the follow-brief ski
 
 
 @pytest.mark.parametrize(
-    ("backend", "size", "expected_argv", "transport", "prompt"),
+    ("backend", "size", "expected_argv", "prompt"),
     [
-        ("claude", "large", ("claude", "--cloud"), PROMPT_FILE, CLAUDE),
-        ("codex", "small", ("codex", "cloud", "exec", "--env", "env_7", "--attempts", "1", "-"), PROMPT_STDIN, CODEX),
-        ("codex", "medium", ("codex", "cloud", "exec", "--env", "env_7", "--attempts", "2", "-"), PROMPT_STDIN, CODEX),
-        ("codex", "large", ("codex", "cloud", "exec", "--env", "env_7", "--attempts", "3", "-"), PROMPT_STDIN, CODEX),
+        ("claude", "large", ("claude", "--cloud"), CLAUDE),
+        ("codex", "small", ("codex", "cloud", "exec", "--env", "env_7", "--attempts", "1", "-"), CODEX),
+        ("codex", "medium", ("codex", "cloud", "exec", "--env", "env_7", "--attempts", "2", "-"), CODEX),
+        ("codex", "large", ("codex", "cloud", "exec", "--env", "env_7", "--attempts", "3", "-"), CODEX),
     ],
 )
-def test_launch_argv_is_exact_and_keeps_prompt_out_of_argv(backend, size, expected_argv, transport, prompt):
+def test_launch_argv_is_exact_and_keeps_prompt_out_of_argv(backend, size, expected_argv, prompt):
     command = launch_argv(backend, "acme/shop", 123, size, "env_7")
     assert command.argv == expected_argv
-    assert command.prompt_transport == transport
     assert command.prompt == prompt
     assert command.prompt.startswith(PREFIXES)
     assert command.prompt not in command.argv
@@ -94,8 +93,8 @@ def fake_agent(script):
     return [sys.executable, "-c", script]
 
 
-def command(argv, prompt="prompt", transport=PROMPT_STDIN):
-    return CloudCommand(tuple(argv), prompt, transport)
+def command(argv, prompt="prompt", sensitive=()):
+    return CloudCommand(tuple(argv), prompt, tuple(sensitive))
 
 
 def cloud(gh_calls, wait=200.0):
@@ -142,28 +141,57 @@ def test_codex_prompt_is_sent_on_stdin_not_argv_or_logs(tmp_path):
     assert key not in log
 
 
-def test_claude_prompt_file_is_private_and_argv_carries_only_the_file_reference(tmp_path):
+FAKE_CLAUDE_CLOUD = """
+import os, sys
+if sys.argv[1:] != ['--cloud']:
+    print('bad argv', sys.argv[1:]); sys.exit(2)
+if not os.isatty(1):
+    print('--cloud requires an interactive terminal'); sys.exit(1)
+task = sys.stdin.read()
+if not task.startswith('/faker-mode'):
+    print('task text was', repr(task[:20])); sys.exit(2)
+print('\\x1b7\\x1b[?25l\\x1b[32mStarted\\x1b[0m \\x1b]8;;x\\x07https://claude.ai/code/session_01ABC\\x1b[0m\\x1b8def', flush=True)
+"""
+
+
+def test_claude_runs_on_a_terminal_with_the_prompt_on_stdin_and_no_value_for_cloud(tmp_path):
     key = "0" * 32
-    prompt = f"/verify-unit Sign the verdict with key {key}."
-    script = ("import hashlib, pathlib, sys; p = pathlib.Path(sys.argv[1][1:]); data = p.read_text(); "
-              "print('argv', sys.argv[1:]); print('mode', oct(p.stat().st_mode & 0o777)); "
-              "print('digest', hashlib.sha256(data.encode()).hexdigest()); "
-              "print('Session: https://claude.ai/code/session_01ABCdef', flush=True)")
+    prompt = f"/faker-mode Work the brief. key {key}"
+    script = FAKE_CLAUDE_CLOUD.replace("print('\\x1b7", f"print('task', repr(task)); print('\\x1b7")
     workdir = tmp_path / "checkouts" / "acme__shop" / "7"
-    assert cloud([]).start("claude", "acme/shop", command(fake_agent(script), prompt, PROMPT_FILE), workdir) == "https://claude.ai/code/session_01ABCdef"
+    agent = fake_agent(script)
+    session = cloud([]).start("claude", "acme/shop", command([*agent, "--cloud"], prompt, [key]), workdir)
+    assert session == "https://claude.ai/code/session_01ABCdef"
     log = (workdir.parent / "7.log").read_text()
-    assert "argv ['@" in log
-    assert "mode 0o600" in log
-    assert f"digest {sha256(prompt.encode()).hexdigest()}" in log
+    assert "\x1b" not in log
     assert key not in log
-    assert not (workdir.parent / "7.prompt.md").exists()
+    assert not list(workdir.parent.glob("*.prompt.md"))
 
 
-@pytest.mark.parametrize(
-    ("backend", "transport"),
-    [("codex", PROMPT_STDIN), ("claude", PROMPT_FILE)],
-)
-def test_echoed_signing_prompt_is_redacted_from_log_and_error(tmp_path, backend, transport):
+def test_claude_launch_command_passes_a_fake_that_rejects_a_valued_cloud_flag_or_a_missing_terminal(tmp_path):
+    real = launch_argv("claude", "acme/shop", 7, "small")
+    assert real.argv == ("claude", "--cloud")
+    wrapper = tmp_path / "bin" / "claude"
+    wrapper.parent.mkdir()
+    wrapper.write_text(f"#!{sys.executable}\n" + FAKE_CLAUDE_CLOUD)
+    wrapper.chmod(0o755)
+    workdir = tmp_path / "checkouts" / "acme__shop" / "7"
+    ok = cloud([]).start("claude", "acme/shop", replace(real, argv=(str(wrapper), *real.argv[1:])), workdir)
+    assert ok == "https://claude.ai/code/session_01ABCdef"
+    with pytest.raises(CloudError, match="bad argv"):
+        cloud([]).start("claude", "acme/shop", replace(real, argv=(str(wrapper), "--cloud", "@/tmp/p")), workdir)
+
+
+def test_a_fake_claude_that_needs_a_terminal_fails_when_stdout_is_not_one(tmp_path):
+    wrapper = tmp_path / "claude"
+    wrapper.write_text(f"#!{sys.executable}\n" + FAKE_CLAUDE_CLOUD)
+    wrapper.chmod(0o755)
+    result = subprocess.run([str(wrapper), "--cloud"], input="/faker-mode x", capture_output=True, text=True)
+    assert result.returncode == 1 and "interactive terminal" in result.stdout
+
+
+@pytest.mark.parametrize("backend", ["codex", "claude"])
+def test_echoed_signing_prompt_is_redacted_from_log_and_error(tmp_path, backend):
     key = "0123456789abcdef" * 2
     private_command = verify_argv(
         backend,
@@ -174,14 +202,9 @@ def test_echoed_signing_prompt_is_redacted_from_log_and_error(tmp_path, backend,
         key,
         "env_7",
     )
-    assert private_command.prompt_transport == transport
-    if transport == PROMPT_STDIN:
-        script = ("import sys; data = sys.stdin.read(); key = data.split('with key ', 1)[1].split('.', 1)[0]; "
-                  "print('isolated key:', key); print('backend rejected prompt:', data); sys.exit(3)")
-    else:
-        script = ("import pathlib, sys; data = pathlib.Path(sys.argv[1][1:]).read_text(); "
-                  "key = data.split('with key ', 1)[1].split('.', 1)[0]; print('isolated key:', key); "
-                  "print('backend rejected prompt:', data); sys.exit(3)")
+    assert private_command.sensitive == (key,)
+    script = ("import sys; data = sys.stdin.read(); key = data.split('with key ', 1)[1].split('.', 1)[0]; "
+              "print('\\x1b[1misolated key:', key); print('backend rejected prompt:', data); sys.exit(3)")
     private_command = replace(private_command, argv=tuple(fake_agent(script)))
     workdir = tmp_path / "checkouts" / "acme__shop" / "7"
 

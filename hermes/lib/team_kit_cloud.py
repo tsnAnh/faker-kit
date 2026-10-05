@@ -4,30 +4,40 @@
 runs from a fresh shallow clone of the unit's own repository. `codex cloud exec` names its
 environment, which is bound to a repository, so it runs from an empty directory.
 
-The process is started in its own session and may keep running after this returns. Its output is
-captured outside named files; a redacted snapshot up to the session URL or startup error is written
-to a log next to the working directory. No shell is involved, and prompt text is passed outside argv.
+Claude Code refuses to start a new cloud session unless stdout is a terminal, so every agent runs
+with stdout and stderr on a pseudo-terminal. The prompt is written to the agent's stdin (`claude
+--cloud` with no value reads it there, `codex cloud exec -` likewise), never to argv. The terminal
+output has its escape sequences stripped and is read for the session URL. A redacted snapshot up to
+the session URL or startup error is written to a log next to the working directory. No shell is
+involved. The process is started in its own session and may keep running after this returns.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import select
 import shutil
 import signal
 import subprocess
-import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from team_kit_contracts import CloudCommand, PROMPT_FILE, PROMPT_STDIN
+from team_kit_contracts import CloudCommand
 
 SESSION = re.compile(
     r"https://claude\.ai/code/[A-Za-z0-9_-]+"
     r"|https://chatgpt\.com/codex/tasks/[A-Za-z0-9_-]+"
     r"|\b(?:session|cse|task)_[A-Za-z0-9]{6,}\b"
+)
+ANSI = re.compile(
+    r"\x1b\[[0-?]*[ -/]*[@-~]"                 # CSI
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"     # OSC
+    r"|\x1b[PX^_][^\x1b]*\x1b\\"              # DCS, SOS, PM, APC
+    r"|\x1b[ -/]*[0-~]"                         # two-character escapes such as ESC 7
 )
 KEEP_SECONDS = 3 * 24 * 3600
 REDACTED_PROMPT = "[redacted prompt]"
@@ -38,6 +48,44 @@ Runner = Callable[..., str]
 
 class CloudError(Exception):
     pass
+
+
+def clean_terminal_text(raw: bytes) -> str:
+    """Terminal output as plain text: escape sequences removed, line endings normalized."""
+    text = ANSI.sub("", raw.decode(errors="replace"))
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _read_available(fd: int, timeout: float) -> bytes:
+    """Whatever the pseudo-terminal has now, waiting up to timeout for the first byte."""
+    data = b""
+    try:
+        ready, _, _ = select.select([fd], [], [], timeout)
+        while ready:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            data += chunk
+            ready, _, _ = select.select([fd], [], [], 0)
+    except OSError:  # EIO: every writer has closed the terminal
+        pass
+    return data
+
+
+def _drain(fd: int) -> None:
+    """Keep reading after the session is known, so a running agent never blocks on a full terminal."""
+    try:
+        while True:
+            select.select([fd], [], [])
+            if not os.read(fd, 65536):
+                break
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 @dataclass
@@ -59,82 +107,70 @@ class Cloud:
             self.run_gh(["repo", "clone", repo, str(workdir), "--", "--depth", "1", "--quiet"])
         else:
             workdir.mkdir()
-        argv, stdin_text, prompt_file = self._prepare(command, workdir)
+        argv = list(command.argv)
         log = workdir.with_name(workdir.name + ".log")
+        log.write_text("", encoding="utf-8")
+        master, slave = os.openpty()
+        keep_master = False
         try:
-            log.write_text("", encoding="utf-8")
-            # The backend writes to an unnamed file. Only a final redacted snapshot reaches the log.
-            with tempfile.TemporaryFile(mode="w+b") as capture:
-                stdin = subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL
+            try:
                 proc = self.popen(
                     argv,
                     cwd=str(workdir),
-                    stdin=stdin,
-                    stdout=capture,
-                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.PIPE,
+                    stdout=slave,
+                    stderr=slave,
                     start_new_session=True,
                 )
-                if stdin_text is not None and proc.stdin is not None:
-                    try:
-                        proc.stdin.write(stdin_text.encode())
-                        proc.stdin.close()
-                    except (BrokenPipeError, OSError):
-                        pass
-                deadline = self.clock() + self.wait_seconds
-                while True:
-                    text = self._capture_text(capture)
+            finally:
+                os.close(slave)
+            try:
+                proc.stdin.write(command.prompt.encode())
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+            raw = b""
+            deadline = self.clock() + self.wait_seconds
+            while True:
+                raw += _read_available(master, 0.05)
+                text = clean_terminal_text(raw)
+                found = SESSION.search(text)
+                if found:
+                    self._write_log(log, text, command)
+                    keep_master = True
+                    threading.Thread(target=_drain, args=(master,), daemon=True).start()
+                    return found.group(0)
+                code = proc.poll()
+                if code is not None:
+                    raw += _read_available(master, 0.05)
+                    text = clean_terminal_text(raw)
                     found = SESSION.search(text)
                     if found:
-                        self._write_log(log, text, command.prompt, command.sensitive)
+                        self._write_log(log, text, command)
                         return found.group(0)
-                    code = proc.poll()
-                    if code is not None:
-                        text = self._capture_text(capture)
-                        found = SESSION.search(text)
-                        if found:
-                            self._write_log(log, text, command.prompt, command.sensitive)
-                            return found.group(0)
-                        safe_text = self._write_log(log, text, command.prompt, command.sensitive)
-                        last = next((line for line in reversed(safe_text.splitlines()) if line.strip()), "no output")
-                        raise CloudError(f"{argv[0]} exited {code} before starting a session: {last[:200]}")
-                    if self.clock() >= deadline:
-                        try:
-                            os.killpg(proc.pid, signal.SIGTERM)
-                        except (OSError, AttributeError):
-                            proc.kill()
-                        text = self._capture_text(capture)
-                        self._write_log(log, text, command.prompt, command.sensitive)
-                        raise CloudError(f"{argv[0]} printed no session in {int(self.wait_seconds)}s; see {log}")
-                    self.sleep(1.0)
+                    safe_text = self._write_log(log, text, command)
+                    last = next((line for line in reversed(safe_text.splitlines()) if line.strip()), "no output")
+                    raise CloudError(f"{argv[0]} exited {code} before starting a session: {last[:200]}")
+                if self.clock() >= deadline:
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                    except (OSError, AttributeError):
+                        proc.kill()
+                    raw += _read_available(master, 0.05)
+                    self._write_log(log, clean_terminal_text(raw), command)
+                    raise CloudError(f"{argv[0]} printed no session in {int(self.wait_seconds)}s; see {log}")
+                self.sleep(1.0)
         finally:
-            if prompt_file is not None:
+            if not keep_master:
                 try:
-                    prompt_file.unlink()
-                except FileNotFoundError:
+                    os.close(master)
+                except OSError:
                     pass
 
-    def _prepare(self, command: CloudCommand, workdir: Path) -> tuple[list[str], str | None, Path | None]:
-        argv = list(command.argv)
-        if command.prompt_transport == PROMPT_STDIN:
-            return argv, command.prompt, None
-        if command.prompt_transport == PROMPT_FILE:
-            prompt_file = workdir.with_name(workdir.name + ".prompt.md")
-            prompt_file.unlink(missing_ok=True)
-            fd = os.open(prompt_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as out:
-                out.write(command.prompt)
-            return [*argv, f"@{prompt_file}"], None, prompt_file
-        raise CloudError(f"unknown prompt transport {command.prompt_transport!r}")
-
     @staticmethod
-    def _capture_text(capture) -> str:
-        size = os.fstat(capture.fileno()).st_size
-        return os.pread(capture.fileno(), size, 0).decode(errors="replace")
-
-    @staticmethod
-    def _write_log(log: Path, text: str, prompt: str, sensitive: tuple[str, ...]) -> str:
-        safe_text = text.replace(prompt, REDACTED_PROMPT) if prompt else text
-        for secret in sensitive:
+    def _write_log(log: Path, text: str, command: CloudCommand) -> str:
+        safe_text = text.replace(command.prompt, REDACTED_PROMPT) if command.prompt else text
+        for secret in command.sensitive:
             if secret:
                 safe_text = safe_text.replace(secret, REDACTED_KEY)
         log.write_text(safe_text, encoding="utf-8", errors="replace")
