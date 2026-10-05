@@ -43,6 +43,7 @@ node scripts/validate.mjs                # manifests, frontmatter, links, catalo
 node scripts/gen-catalog.mjs --check     # generated docs are current
 node scripts/gen-site.mjs                # docs site pages, links, and navigation resolve
 bun test plugins/trust-ladder            # trust-ladder scripts and the Pi extension
+(cd plugins/trust-ladder/skills/orchestrate/scripts && bun install && bun test)   # orchestrate engine and runtimes
 bun test upstream/agent-hooks            # upstream hooks run in Claude Code and Codex
 python -m pytest hermes                  # Hermes guard, team-kit-gh, team-kit-admin, install
 bash scripts/test-packs.sh               # lint packs fail on bad fixtures, pass on good

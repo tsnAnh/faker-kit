@@ -4,7 +4,7 @@ This module runs team-kit dispatch on a [Hermes Agent](https://github.com/NousRe
 
 It lives outside `plugins/` on purpose. Nothing here loads in a coding agent: plugins are what coding agents load, and this is what the Hermes bots load. The coding agents keep using the `trust-ladder` skills `setup-dispatch` and `follow-brief`, and the brief templates in `plugins/trust-ladder/templates/dispatch/`.
 
-It does one level of the kit's [Run many agents](../docs/how-to/run-many-agents.md) guide: cloud sessions, one pull request each. Programs that need a coordinator running dozens of agents for days are the Orchestrate playbook's job, in Claude Code.
+It does one level of the kit's [Run many agents](../docs/how-to/run-many-agents.md) guide: cloud sessions, one pull request each. Programs that need a coordinator running dozens of agents for days are the job of the Orchestrate playbook, or of trust-ladder's `/orchestrate` across cloud sessions.
 
 ## How it keeps track
 
