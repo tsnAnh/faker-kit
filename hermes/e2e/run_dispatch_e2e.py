@@ -13,9 +13,9 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
@@ -24,6 +24,9 @@ LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 READY = "ready for you to merge"
 SILENT = "[SILENT]"
+ENV_NAME = re.compile(r"\A[A-Z_][A-Z0-9_]{0,63}\Z")
+# Tokens gh reads on its own. The project bot gets exactly one, its own, and never the operator's.
+GH_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
 README_MARKER = "Hermes e2e dispatch check"
 
 
@@ -40,8 +43,7 @@ class Config:
     project_bot: str
     unit: str
     size: str
-    backend: str
-    codex_env: str | None
+    token_env: str
     owner_login: str | None
     trusted_authors: tuple[str, ...]
     timeout_seconds: int
@@ -55,9 +57,10 @@ class Config:
 class Paths:
     root: Path
     run_root: Path
-    home: Path
     hermes_root: Path
     team_home: Path
+    token_env: str = ""
+    project_token: str = field(default="", repr=False)
 
     @property
     def team_kit_admin(self) -> Path:
@@ -71,6 +74,17 @@ class Paths:
 class CommandRunner:
     def __init__(self, echo: bool = True):
         self.echo = echo
+        self.secrets: list[str] = []
+
+    def hide(self, secret: str) -> None:
+        """Replace this value with *** in everything a command prints, so no log or error can carry it."""
+        if secret and secret not in self.secrets:
+            self.secrets.append(secret)
+
+    def scrub(self, text: str) -> str:
+        for secret in self.secrets:
+            text = text.replace(secret, "***")
+        return text
 
     def run(
         self,
@@ -86,6 +100,7 @@ class CommandRunner:
         if self.echo:
             print("+ " + shlex.join(argv), flush=True)
         done = subprocess.run(argv, env=env, cwd=str(cwd) if cwd else None, input=input, timeout=timeout, capture_output=True, text=True)
+        done.stdout, done.stderr = self.scrub(done.stdout or ""), self.scrub(done.stderr or "")
         if check and done.returncode != 0:
             raise E2EError(format_failure(argv, done))
         return done
@@ -124,8 +139,8 @@ def parser() -> argparse.ArgumentParser:
     top.add_argument("--project-bot", default="hermes-e2e-project")
     top.add_argument("--unit", default="readme-typo")
     top.add_argument("--size", choices=("small", "medium", "large"), default="small")
-    top.add_argument("--backend", choices=("claude", "codex"), default="claude")
-    top.add_argument("--codex-env")
+    top.add_argument("--token-env", required=True, metavar="NAME",
+                     help="name of the environment variable holding the project bot's own fine-grained token for the scratch repository (the token is never given on the command line)")
     top.add_argument("--owner-login", help="GitHub login to put in the temporary guard; defaults to gh api user")
     top.add_argument("--trusted-author", action="append", default=[], help="extra GitHub login whose reports count")
     top.add_argument("--timeout-minutes", type=int, default=120)
@@ -147,8 +162,10 @@ def parse_args(argv: list[str] | None = None) -> Config:
     for attr in ("project", "bootstrap_bot", "project_bot", "unit"):
         if not NAME.match(getattr(args, attr)):
             p.error(f"--{attr.replace('_', '-')} must start with lowercase ASCII/digit and use only lowercase ASCII, digits, - or _")
-    if args.backend == "codex" and not args.codex_env:
-        p.error("--backend codex needs --codex-env")
+    if not ENV_NAME.match(args.token_env):
+        p.error("--token-env must be an environment variable name such as HERMES_E2E_TOKEN")
+    if args.token_env in GH_TOKEN_VARS:
+        p.error(f"--token-env must not be {args.token_env}: that is the variable your own gh login uses, and the project bot must not inherit it")
     if args.timeout_minutes < 1:
         p.error("--timeout-minutes must be positive")
     if args.poll_seconds < 1:
@@ -164,8 +181,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
         project_bot=args.project_bot,
         unit=args.unit,
         size=args.size,
-        backend=args.backend,
-        codex_env=args.codex_env,
+        token_env=args.token_env,
         owner_login=args.owner_login,
         trusted_authors=tuple(args.trusted_author),
         timeout_seconds=args.timeout_minutes * 60,
@@ -180,17 +196,50 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def env_for(paths: Paths, bot: str | None = None) -> dict[str, str]:
+def env_for(paths: Paths, bot: str | None = None, *, token: bool = False) -> dict[str, str]:
+    """The environment for one command. HOME is left alone so the `gh`, `claude`, and `codex` logins stay visible.
+
+    Only TEAM_KIT_HOME and HERMES_HOME move into the temporary directory. The token variable named on the
+    command line is never passed on. With token=True (the project bot) every gh token variable is replaced
+    by the bot's own GH_TOKEN, so the operator's broad token is not inherited.
+    """
     env = os.environ.copy()
-    env["HOME"] = str(paths.home)
+    env.pop(paths.token_env, None)
     env["TEAM_KIT_HOME"] = str(paths.team_home)
     env["PATH"] = f"{paths.hermes_root / 'bin'}:{env.get('PATH', '')}"
     env["NO_COLOR"] = "1"
-    if bot:
-        env["HERMES_HOME"] = str(paths.hermes_root / "profiles" / bot)
-    else:
-        env.pop("HERMES_HOME", None)
+    env["HERMES_HOME"] = str(paths.hermes_root / "profiles" / bot) if bot else str(paths.hermes_root)
+    if token:
+        for name in GH_TOKEN_VARS:
+            env.pop(name, None)
+        env["GH_TOKEN"] = paths.project_token
     return env
+
+
+def project_env(paths: Paths, config: Config) -> dict[str, str]:
+    return env_for(paths, config.project_bot, token=True)
+
+
+def read_token(config: Config) -> str:
+    value = os.environ.get(config.token_env, "")
+    if not value:
+        raise E2EError(f"{config.token_env} is not set. Create a fine-grained token for the scratch repository only (see RUNBOOK.md), put it in that variable, and run again.")
+    if re.search(r"\s", value):
+        raise E2EError(f"{config.token_env} must hold one token with no spaces or line breaks")
+    return value
+
+
+def write_bot_token(paths: Paths, config: Config) -> None:
+    """Write the bot's token to its temporary profile's .env, mode 600. The value is never printed."""
+    home = paths.hermes_root / "profiles" / config.project_bot
+    if not home.is_dir():
+        raise E2EError(f"project bot profile {config.project_bot} was not created")
+    env_file = home / ".env"
+    kept = [line for line in (env_file.read_text().splitlines() if env_file.exists() else []) if not line.startswith("GH_TOKEN=")]
+    fd = os.open(env_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        out.write("\n".join([*kept, f"GH_TOKEN={paths.project_token}"]) + "\n")
+    env_file.chmod(0o600)
 
 
 def run_json(runner: CommandRunner, argv: list[str], *, env: dict[str, str], timeout: int | None = None) -> dict:
@@ -211,15 +260,15 @@ def git_commit(runner: CommandRunner, root: Path) -> str:
     return sha
 
 
-def gh_login(runner: CommandRunner) -> str:
-    login = runner.run(["gh", "api", "user", "--jq", ".login"]).stdout.strip()
+def gh_login(runner: CommandRunner, env: dict[str, str] | None = None) -> str:
+    login = runner.run(["gh", "api", "user", "--jq", ".login"], env=env, timeout=120).stdout.strip()
     if not LOGIN.match(login):
         raise E2EError("could not read the current GitHub login with gh api user")
     return login
 
 
 def install_hermes(runner: CommandRunner, config: Config, paths: Paths, commit: str) -> None:
-    paths.home.mkdir(parents=True, exist_ok=True)
+    paths.hermes_root.mkdir(parents=True, exist_ok=True)
     command = [
         "bash",
         str(paths.root / "hermes" / "install.sh"),
@@ -277,20 +326,22 @@ def add_project(runner: CommandRunner, config: Config, paths: Paths) -> None:
     )
 
 
-def preflight_repo(runner: CommandRunner, config: Config, paths: Paths, commit: str) -> str:
-    project_env = env_for(paths, config.project_bot)
-    kit = run_json(runner, [str(paths.team_kit_gh), "kit-check"], env=project_env, timeout=120)
+def preflight_repo(runner: CommandRunner, config: Config, paths: Paths, commit: str, bot_login: str) -> str:
+    env = project_env(paths, config)
+    kit = run_json(runner, [str(paths.team_kit_gh), "kit-check"], env=env, timeout=120)
     if kit.get("kit") != commit or kit.get("kit_ref") != commit or kit.get("vendored") != commit:
         raise E2EError("scratch repo kit_ref and vendored kit do not match this checkout")
-    dispatch_json = runner.run([str(paths.team_kit_gh), "show", "--path", ".agents/dispatch.json"], env=project_env, timeout=120).stdout
+    dispatch_json = runner.run([str(paths.team_kit_gh), "show", "--path", ".agents/dispatch.json"], env=env, timeout=120).stdout
     try:
         dispatch = json.loads(dispatch_json)
     except json.JSONDecodeError as err:
         raise E2EError(".agents/dispatch.json is not JSON") from err
     if dispatch.get("verifier_backend", dispatch.get("backend")) == "none":
         raise E2EError(".agents/dispatch.json verifier_backend is none; the e2e requires a verifier verdict")
-    runner.run([str(paths.team_kit_gh), "show", "--path", "README.md"], env=project_env, timeout=120)
-    return runner.run([str(paths.team_kit_gh), "show", "--path", ".agents/dispatch.md"], env=project_env, timeout=120).stdout
+    if bot_login.lower() not in {str(d).lower() for d in dispatch.get("trusted_dispatchers") or []}:
+        raise E2EError(f"{bot_login}, the login of the project bot's token, is not in trusted_dispatchers in .agents/dispatch.json")
+    runner.run([str(paths.team_kit_gh), "show", "--path", "README.md"], env=env, timeout=120)
+    return runner.run([str(paths.team_kit_gh), "show", "--path", ".agents/dispatch.md"], env=env, timeout=120).stdout
 
 
 def write_brief(config: Config, paths: Paths, standing_orders: str) -> Path:
@@ -351,7 +402,7 @@ def dispatch_unit(runner: CommandRunner, config: Config, paths: Paths, brief: Pa
             "--brief-file",
             str(brief),
         ],
-        env=env_for(paths, config.project_bot),
+        env=project_env(paths, config),
         timeout=360,
     )
     if out.get("state") != "running":
@@ -370,7 +421,7 @@ def pr_labels(runner: CommandRunner, config: Config, pr: int, env: dict[str, str
 
 
 def tick(runner: CommandRunner, paths: Paths, config: Config) -> list[str]:
-    text = runner.run([str(paths.team_kit_gh), "tick"], env=env_for(paths, config.project_bot), timeout=420).stdout
+    text = runner.run([str(paths.team_kit_gh), "tick"], env=project_env(paths, config), timeout=420).stdout
     return [line for line in text.splitlines() if line.strip() and line.strip() != SILENT]
 
 
@@ -378,7 +429,7 @@ def report_status(runner: CommandRunner, paths: Paths, config: Config, issue: in
     return run_json(
         runner,
         [str(paths.team_kit_gh), "report-status", "--issue", str(issue)],
-        env=env_for(paths, config.project_bot),
+        env=project_env(paths, config),
         timeout=120,
     )
 
@@ -390,12 +441,71 @@ def pr_number(pr_url: str) -> int:
     return int(match.group(1))
 
 
-def wait_for_ready(runner: CommandRunner, paths: Paths, config: Config, issue: int, passed: list[str]) -> str:
-    deadline = time.monotonic() + config.timeout_seconds
-    saw_done = False
-    saw_verifying = False
-    while time.monotonic() < deadline:
+class Observations:
+    """What this run actually saw. A step that was not seen prints as "not seen"; nothing is inferred."""
+
+    STEPS = (
+        "temporary Hermes install and project add",
+        "project bot token written (mode 600)",
+        "scratch repo kit preflight",
+        "launch",
+        "done report",
+        "verifier launch",
+        "verifier verdict",
+        "ready-to-merge notice",
+        "risk label",
+        "stopped before merge",
+        "andon raised",
+        "andon cleared",
+    )
+    WAITED = ("done report", "verifier launch", "verifier verdict", "ready-to-merge notice")
+    # The run passes only when these were seen. The verifier launch label is brief and a poll can miss it.
+    REQUIRED = ("done report", "verifier verdict", "ready-to-merge notice")
+
+    def __init__(self, timeout_seconds: int):
+        self.timeout_seconds = timeout_seconds
+        self.seen: dict[str, str] = {}
+
+    def see(self, step: str, detail: str = "") -> None:
+        if step not in self.STEPS:
+            raise ValueError(step)
+        self.seen.setdefault(step, detail)
+
+    def missing_required(self) -> list[str]:
+        return [step for step in self.REQUIRED if step not in self.seen]
+
+    def lines(self) -> list[str]:
+        minutes = max(1, self.timeout_seconds // 60)
+        out = []
+        for step in self.STEPS:
+            if step in self.seen:
+                out.append(f"- {step}: observed" + (f" ({self.seen[step]})" if self.seen[step] else ""))
+            elif step in self.WAITED:
+                out.append(f"- {step}: not seen (waited up to {minutes} min)")
+            else:
+                out.append(f"- {step}: not seen (the run stopped before this step)")
+        return out
+
+
+def wait_for_ready(
+    runner: CommandRunner,
+    paths: Paths,
+    config: Config,
+    issue: int,
+    obs: Observations,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> str:
+    """Poll until the ready-to-merge notice, recording only what each poll shows."""
+    deadline = clock() + config.timeout_seconds
+    while True:
         notices = tick(runner, paths, config)
+        status = report_status(runner, paths, config, issue)
+        if status.get("status") == "done" and status.get("pr"):
+            obs.see("done report", f"PR {status['pr']}")
+        if "agent:verifying" in issue_labels(runner, config, issue, project_env(paths, config)):
+            obs.see("verifier launch", "label agent:verifying")
         for notice in notices:
             print(notice, flush=True)
             if "needs you" in notice:
@@ -403,23 +513,12 @@ def wait_for_ready(runner: CommandRunner, paths: Paths, config: Config, issue: i
             if READY in notice:
                 if "verified:" not in notice:
                     raise E2EError(f"ready notice has no verifier verdict: {notice}")
-                if not saw_done:
-                    passed.append("done report observed")
-                if not saw_verifying:
-                    passed.append("verifier launch observed")
-                passed.append("verifier verdict observed")
-                passed.append("ready-to-merge notice observed")
+                obs.see("verifier verdict", "from the ready notice")
+                obs.see("ready-to-merge notice")
                 return notice
-        status = report_status(runner, paths, config, issue)
-        if status.get("status") == "done" and status.get("pr") and not saw_done:
-            passed.append("done report observed")
-            saw_done = True
-        labels = issue_labels(runner, config, issue, env_for(paths, config.project_bot))
-        if "agent:verifying" in labels and not saw_verifying:
-            passed.append("verifier launch observed")
-            saw_verifying = True
-        time.sleep(config.poll_seconds)
-    raise E2EError(f"timed out after {config.timeout_seconds // 60} minutes waiting for ready-to-merge")
+        if clock() >= deadline:
+            raise E2EError(f"timed out after {max(1, config.timeout_seconds // 60)} minutes waiting for ready-to-merge")
+        sleep(config.poll_seconds)
 
 
 def assert_pr_open_before_merge(runner: CommandRunner, team_kit_gh: Path, env: dict[str, str], pr_url: str) -> dict:
@@ -437,60 +536,79 @@ def ready_pr_url(notice: str) -> str:
     return match.group(0)
 
 
-def pull_and_clear_andon(runner: CommandRunner, paths: Paths, config: Config, passed: list[str]) -> None:
-    env = env_for(paths, config.project_bot)
+def pull_and_clear_andon(runner: CommandRunner, paths: Paths, config: Config, obs: Observations) -> None:
+    env = project_env(paths, config)
     raised = run_json(runner, [str(paths.team_kit_gh), "andon", "raise", "e2e stop-before-merge check"], env=env, timeout=120)
     if not raised.get("stopped"):
         raise E2EError(f"andon raise did not stop the project: {raised}")
-    passed.append("andon raised")
+    obs.see("andon raised")
     cleared = run_json(runner, [str(paths.team_kit_gh), "andon", "clear"], env=env, timeout=120)
     if cleared.get("stopped"):
         raise E2EError(f"andon clear left the project stopped: {cleared}")
-    passed.append("andon cleared")
+    obs.see("andon cleared")
 
 
-def run_live(config: Config, runner: CommandRunner) -> int:
+def run_live(
+    config: Config,
+    runner: CommandRunner,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> int:
+    token = read_token(config)  # refuse before anything is created
+    hide = getattr(runner, "hide", None)
+    if hide:
+        hide(token)
     root = repo_root()
     commit = git_commit(runner, root)
     owner = config.owner_login or gh_login(runner)
-    authors = (owner, *config.trusted_authors)
     run_root = Path(tempfile.mkdtemp(prefix="team-kit-hermes-e2e-", dir=str(config.temp_parent) if config.temp_parent else None))
-    paths = Paths(root=root, run_root=run_root, home=run_root / "home", hermes_root=run_root / "home" / ".hermes", team_home=run_root / "home" / ".hermes" / "team-kit")
-    passed: list[str] = []
+    hermes_root = run_root / ".hermes"
+    paths = Paths(root=root, run_root=run_root, hermes_root=hermes_root, team_home=hermes_root / "team-kit", token_env=config.token_env, project_token=token)
+    obs = Observations(config.timeout_seconds)
+    failed = True
     try:
         install_hermes(runner, config, paths, commit)
-        write_guard_authors(paths.team_home / "guard.yaml", authors)
+        write_guard_authors(paths.team_home / "guard.yaml", (owner, *config.trusted_authors))
         add_project(runner, config, paths)
-        passed.append("temporary Hermes install and project add")
-        standing = preflight_repo(runner, config, paths, commit)
-        passed.append("scratch repo kit preflight")
+        obs.see("temporary Hermes install and project add")
+        write_bot_token(paths, config)
+        obs.see("project bot token written (mode 600)")
+        bot_login = gh_login(runner, project_env(paths, config))
+        write_guard_authors(paths.team_home / "guard.yaml", (owner, bot_login, *config.trusted_authors))
+        standing = preflight_repo(runner, config, paths, commit, bot_login)
+        obs.see("scratch repo kit preflight", f"bot login {bot_login}")
         brief = write_brief(config, paths, standing)
         dispatch = dispatch_unit(runner, config, paths, brief)
         issue = int(dispatch["issue"])
-        passed.append("launch observed")
-        ready = wait_for_ready(runner, paths, config, issue, passed)
+        obs.see("launch", f"issue #{issue}")
+        ready = wait_for_ready(runner, paths, config, issue, obs, sleep=sleep, clock=clock)
+        missing = obs.missing_required()
+        if missing:
+            raise E2EError("the ready notice arrived, but this run never saw: " + ", ".join(missing))
         pr_url = ready_pr_url(ready)
         pr = pr_number(pr_url)
-        labels = pr_labels(runner, config, pr, env_for(paths, config.project_bot))
+        labels = pr_labels(runner, config, pr, project_env(paths, config))
         risk = sorted(label for label in labels if label.startswith("risk:"))
         if not risk:
             raise E2EError(f"{pr_url} has no risk label")
-        passed.append(f"risk label observed ({', '.join(risk)})")
-        assert_pr_open_before_merge(runner, paths.team_kit_gh, env_for(paths, config.project_bot), pr_url)
-        passed.append("stopped before merge")
-        pull_and_clear_andon(runner, paths, config, passed)
-        print("\nPassed:", flush=True)
-        for item in passed:
-            print(f"- {item}", flush=True)
+        obs.see("risk label", ", ".join(risk))
+        assert_pr_open_before_merge(runner, paths.team_kit_gh, project_env(paths, config), pr_url)
+        obs.see("stopped before merge", pr_url)
+        pull_and_clear_andon(runner, paths, config, obs)
+        failed = False
+        print("\nObserved:", flush=True)
+        for line in obs.lines():
+            print(line, flush=True)
         print(f"\nStopped before merge. Review or close without merging: {pr_url}", flush=True)
-        if config.keep_home:
-            print(f"Temporary Hermes home: {paths.hermes_root}", flush=True)
-        else:
-            print("Temporary Hermes home will be removed after exit.", flush=True)
         return 0
     finally:
+        if failed:
+            print("\nObserved before the run stopped:", flush=True)
+            for line in obs.lines():
+                print(line, flush=True)
         if config.keep_home:
-            print(f"Kept temporary home: {paths.run_root}", flush=True)
+            print(f"Kept temporary directory: {paths.run_root}", flush=True)
         else:
             shutil.rmtree(paths.run_root, ignore_errors=True)
 
@@ -501,8 +619,8 @@ def print_plan(config: Config) -> None:
     print(f"- project: {config.project}")
     print(f"- bootstrap bot: {config.bootstrap_bot}")
     print(f"- project bot: {config.project_bot}")
-    print(f"- backend: {config.backend}")
-    print("- live run will install into a temporary HOME/.hermes, add the project, dispatch one README unit, wait for verification, raise and clear andon, then stop before merge")
+    print(f"- project bot token: read from ${config.token_env} when the live run starts; written to the temporary profile's .env, never printed")
+    print("- live run will install into a temporary TEAM_KIT_HOME and Hermes home (HOME is not changed), add the project, dispatch one README unit, wait for verification, raise and clear andon, then stop before merge")
 
 
 def main(argv: list[str] | None = None) -> int:

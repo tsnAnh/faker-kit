@@ -52,8 +52,10 @@ done
 command -v hermes >/dev/null || die "hermes is not on PATH; install Hermes Agent first"
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-root=$HOME/.hermes
-kit_home=${TEAM_KIT_HOME:-$root/team-kit}
+# team-kit-admin puts bin/ and profiles/ beside the team-kit directory, so a TEAM_KIT_HOME
+# elsewhere (a throwaway test install) moves them too and never touches the real ~/.hermes.
+kit_home=${TEAM_KIT_HOME:-$HOME/.hermes/team-kit}
+root=$(dirname "$kit_home")
 kit=$kit_home/kit
 
 # A managed Hermes launcher may be a shell wrapper, not a venv shebang.
