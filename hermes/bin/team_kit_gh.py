@@ -10,7 +10,7 @@
   pr-state      --pr N                             state, merged, head SHA, and checks of a pull request
   read          --issue N | --pr N                 the body and comments (untrusted; the guard wraps it)
   show          --path P                           a file from the default branch (the owner's repo; trusted)
-  kit-check                                        compare this machine's kit commit with kit_ref
+  kit-check                                        compare this machine's kit commit with kit_ref and the vendored kit
 
 GitHub holds every unit's state, as labels on its issue:
 
@@ -67,6 +67,7 @@ TASK_LABEL = "agent-task"
 RUNNING_LABEL = "agent:running"
 REVIEW_LABEL = "agent:review"
 HUMAN_LABEL = "agent:needs-human"
+VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
 SILENT = "[SILENT]"
 NOTICE = "team-kit notice:"
 # A running unit with no report this long after its launch is a gate: its session died. The same
@@ -233,7 +234,14 @@ class Gh:
             raise Refused("kit_ref in .agents/dispatch.json must be a full 40-character commit")
         if local_commit != pinned:
             raise Refused(f"kit commit {local_commit[:12]} differs from kit_ref {pinned[:12]}; update one side first")
-        return {"kit": local_commit, "kit_ref": pinned}
+        # The cloud agent gets its skills from the copy in the repository, so that copy must be the same kit.
+        try:
+            vendored = json.loads(self.file(VENDOR_MANIFEST)).get("kit_ref")
+        except (Refused, ValueError, AttributeError):
+            raise Refused(f"{self.repo} has no vendored kit, so cloud agents would start without its skills; ask the bootstrap bot to run team-kit-admin vendor") from None
+        if vendored != pinned:
+            raise Refused(f"the vendored kit {str(vendored)[:12]} differs from kit_ref {pinned[:12]}; ask the bootstrap bot to run team-kit-admin vendor")
+        return {"kit": local_commit, "kit_ref": pinned, "vendored": vendored}
 
     def depends(self, brief) -> list[tuple[str, int]]:
         refs = parse_depends(brief, self.repo)

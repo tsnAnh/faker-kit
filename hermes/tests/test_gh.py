@@ -23,7 +23,8 @@ class FakeGh:
 
     def __init__(self, kit_ref, **config):
         dispatch = {"backend": "claude", "kit_ref": kit_ref, "max_in_flight": 2, "forbidden_paths": [], "trusted_dispatchers": [BOT_LOGIN], **config}
-        self.files = {".agents/dispatch.json": json.dumps(dispatch), ".agents/dispatch.md": STANDING}
+        self.files = {".agents/dispatch.json": json.dumps(dispatch), ".agents/dispatch.md": STANDING,
+                      ".agents/team-kit/KIT.json": json.dumps({"version": 1, "kit_ref": kit_ref})}
         self.issues, self.comments, self.prs, self.calls = {}, {}, {}, []
         self.next = 40
 
@@ -179,7 +180,8 @@ def test_dispatch_opens_the_issue_and_launches_from_a_fresh_clone(team_kit_home,
     assert issue["body"].rstrip().endswith(size_marker("large"))
     [(backend, repo, argv, workdir)] = cloud.started
     assert (backend, repo) == ("claude", REPO)
-    assert argv == ["claude", "--cloud", f"/faker-mode Work the brief in {REPO}#41 using the follow-brief skill"]
+    assert argv[:2] == ["claude", "--cloud"]
+    assert argv[2].startswith(f"/faker-mode Work the brief in {REPO}#41 using the follow-brief skill. If the follow-brief skill is not available")
     assert workdir == team_kit_home / "checkouts" / "acme__shop" / "41"
     launched = gh.comments[(REPO, 41)][-1]["body"]
     assert launched.startswith(LAUNCHED_MARKER) and "session: https://claude.ai/code/session_01ABCDEF" in launched
@@ -325,7 +327,7 @@ def test_tick_launches_a_queued_unit_once_its_dependency_merged(team_kit_home, g
     cloud = FakeCloud()
     assert tick(gh, capsys, cloud) == ["[SILENT]"]
     assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
-    assert cloud.started[0][2][-1].endswith(f"{REPO}#{n} using the follow-brief skill")
+    assert f"{REPO}#{n} using the follow-brief skill." in cloud.started[0][2][-1]
 
 
 def test_tick_leaves_a_unit_whose_dependency_is_open(team_kit_home, gh, capsys):
@@ -628,6 +630,25 @@ def test_show_of_a_directory_is_a_refusal_not_a_traceback(team_kit_home, gh, cap
 
     assert run(listing, "show", "--path", "src") == 1
     assert "src is not a readable file" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("manifest", "why"), [(None, "has no vendored kit"), (json.dumps({"kit_ref": "0" * 40}), "the vendored kit 000000000000 differs")])
+def test_launch_refuses_until_the_repository_has_the_same_kit_vendored(team_kit_home, gh, capsys, manifest, why):
+    if manifest is None:
+        del gh.files[".agents/team-kit/KIT.json"]
+    else:
+        gh.files[".agents/team-kit/KIT.json"] = manifest
+    n = gh.add_issue(REPO)
+    cloud = FakeCloud()
+    assert run(gh, "launch", "--issue", str(n), cloud=cloud) == 1
+    err = capsys.readouterr().err
+    assert why in err and "team-kit-admin vendor" in err
+    assert cloud.started == []
+
+
+def test_kit_check_reports_the_vendored_kit(team_kit_home, gh, kit, capsys):
+    assert run(gh, "kit-check") == 0
+    assert out(capsys) == {"kit": kit, "kit_ref": kit, "vendored": kit}
 
 
 def test_a_broken_dispatch_json_is_a_refusal(team_kit_home, gh, capsys):

@@ -34,22 +34,81 @@ elif args[:2] == ["repo", "clone"]:
 elif args[:2] == ["issue", "list"]:
     print("[]")
 elif args[0] == "api":
+    import base64
+
     method = args[args.index("-X") + 1] if "-X" in args else "GET"
-    path = next(a for a in args[1:] if a.startswith("repos/"))
+    full = next(a for a in args[1:] if a.startswith("repos/"))
+    path, _, query = full.partition("?")
     repo = "/".join(path.split("/")[1:3])
-    if path.endswith("/protection") and method == "PUT":
+    rest = path[len(f"repos/{repo}"):]
+
+    def missing():
+        print("gh: Not Found (HTTP 404)", file=sys.stderr)
+        sys.exit(1)
+
+    def record(kind, value):
+        posted = load("posted.json", {})
+        posted.setdefault(kind, []).append(value)
+        save("posted.json", posted)
+
+    if rest.endswith("/protection") and method == "PUT":
         protection = load("protection.json", {})
         protection[path] = json.loads(body)
         save("protection.json", protection)
-    elif "/labels" in path:
+    elif rest.startswith("/labels"):
         print(json.dumps([{"name": n} for n in load("labels.json", {}).get(repo, [])]))
-    elif "/contents/" in path:
-        print("Not Found", file=sys.stderr)
-        sys.exit(1)
-    elif path == f"repos/{repo}":
+    elif rest.startswith("/contents/"):
+        content = load("files.json", {}).get(repo, {}).get(rest[len("/contents/"):])
+        if content is None:
+            missing()
+        print(json.dumps({"content": base64.b64encode(content.encode()).decode()}))
+    elif rest == "":
         print(json.dumps({"default_branch": "main"}))
+    elif rest == "/git/ref/heads/main":
+        print(json.dumps({"object": {"sha": "base0"}}))
+    elif rest.startswith("/git/ref/heads/") or rest.startswith("/git/refs/heads/"):
+        branch = rest.split("/heads/", 1)[1]
+        refs = load("refs.json", {})
+        if method == "PATCH":
+            refs[branch] = json.loads(body)["sha"]
+            save("refs.json", refs)
+            record("refs", {"branch": branch, "patched": True})
+        elif branch in refs:
+            print(json.dumps({"object": {"sha": refs[branch]}}))
+        else:
+            missing()
+    elif rest == "/git/refs" and method == "POST":
+        ref = json.loads(body)
+        refs = load("refs.json", {})
+        refs[ref["ref"].removeprefix("refs/heads/")] = ref["sha"]
+        save("refs.json", refs)
+        record("refs", {"branch": ref["ref"], "created": True})
+    elif rest == "/git/commits/base0":
+        print(json.dumps({"tree": {"sha": "tree0"}}))
+    elif rest == "/git/trees/tree0":
+        print(json.dumps({"tree": load("tree.json", {}).get(repo, []), "truncated": bool(os.environ.get("FAKE_TREE_TRUNCATED"))}))
+    elif rest.startswith("/git/blobs/"):
+        print(json.dumps({"content": base64.b64encode(load("blobs.json", {})[rest.rsplit("/", 1)[1]].encode()).decode()}))
+    elif rest == "/git/trees" and method == "POST":
+        tree = json.loads(body)
+        record("trees", tree)
+        print(json.dumps({"sha": "tree0" if os.environ.get("FAKE_TREE_UNCHANGED") else "tree1"}))
+    elif rest == "/git/commits" and method == "POST":
+        record("commits", json.loads(body))
+        print(json.dumps({"sha": "commit1"}))
+    elif rest == "/pulls" and method == "GET":
+        pulls = [{**pr, "head": {"ref": pr["head"]} if isinstance(pr["head"], str) else pr["head"]} for pr in load("pulls.json", {}).get(repo, [])]
+        print(json.dumps(pulls))
+    elif rest == "/pulls" and method == "POST":
+        pull = json.loads(body)
+        pulls = load("pulls.json", {})
+        pull["html_url"] = f"https://github.com/{repo}/pull/{len(pulls.get(repo, [])) + 7}"
+        pulls.setdefault(repo, []).append(pull)
+        save("pulls.json", pulls)
+        record("pulls", pull)
+        print(json.dumps(pull))
     else:
-        print(f"unsupported fake gh api {path}", file=sys.stderr)
+        print(f"unsupported fake gh api {method} {full}", file=sys.stderr)
         sys.exit(2)
 else:
     print("unsupported fake gh command", file=sys.stderr)

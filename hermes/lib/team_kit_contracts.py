@@ -18,9 +18,17 @@ REPORT_FIELDS = ("status", "branch", "head", "pr")
 
 UNIT_ATTEMPTS = {"small": 1, "medium": 2, "large": 3}
 BACKENDS = ("claude", "codex")
+VENDOR_DIR = ".agents/team-kit"
+# The second sentence makes a session without the kit fail at once, and visibly: a Claude Code
+# session posts a blocked report that tick turns into a gate. A Codex task cannot comment, so it says
+# so in its result.
 LAUNCH_PROMPTS = {
-    "claude": "/faker-mode Work the brief in {repo}#{issue} using the follow-brief skill",
-    "codex": "$faker-mode Work the brief in {repo}#{issue} using the follow-brief skill",
+    "claude": ("/faker-mode Work the brief in {repo}#{issue} using the follow-brief skill. "
+               "If the follow-brief skill is not available in this session, comment on the issue with "
+               "`<!-- team-kit:report v1 -->` as the first line and `status: blocked` as the second, "
+               "say the team-kit skills did not load, and stop."),
+    "codex": ("$faker-mode Work the brief in {repo}#{issue} using the follow-brief skill. "
+              "If the follow-brief skill is not available in this session, stop and say the team-kit skills did not load."),
 }
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 ENV_ID = re.compile(r"\A[A-Za-z0-9_-]+\Z")
@@ -181,11 +189,11 @@ def launch_argv(backend: str, repo: str, issue: int, size: str, env_id: str | No
     return cloud_argv(backend, launch_prompt(backend, repo, issue), UNIT_ATTEMPTS[size], env_id)
 
 
-def bootstrap_prompt(repo: str, project: str, backend: str, kit_source: str, kit_ref: str, dispatchers: list[str], codex_env: str | None = None) -> str:
+def bootstrap_prompt(repo: str, project: str, backend: str, kit_ref: str, dispatchers: list[str], codex_env: str | None = None) -> str:
     """The prompt for the one cloud session that prepares a repository for dispatch.
 
-    The repository may not have the kit yet, so the prompt names the kit commit to read skills from
-    instead of starting with /faker-mode.
+    team-kit-admin vendor has already put the kit in the repository at .agents/team-kit/, so the
+    session reads its skills from there. It never clones the kit, which may be private.
     """
     if not REPO.match(repo):
         raise ContractError("repo must be OWNER/REPO")
@@ -197,9 +205,10 @@ def bootstrap_prompt(repo: str, project: str, backend: str, kit_source: str, kit
         raise ContractError("trusted_authors in guard.yaml must name the project bot's GitHub login")
     lines = [
         f"Set up {repo} for team-kit dispatch, as project {project}.",
-        f"First clone {kit_source} at commit {kit_ref} into a directory outside this repository.",
-        "Read plugins/pstack/skills/faker-mode/SKILL.md there in full and work as it says.",
-        "Then follow plugins/trust-ladder/skills/setup-dispatch/SKILL.md there for this repository, with:",
+        f"The team kit is vendored in this repository at {VENDOR_DIR}/, at commit {kit_ref}.",
+        f"If {VENDOR_DIR}/KIT.json is missing or names another commit, stop and say so. Never edit {VENDOR_DIR}/.",
+        f"Read {VENDOR_DIR}/plugins/pstack/skills/faker-mode/SKILL.md in full and work as it says.",
+        f"Then follow {VENDOR_DIR}/plugins/trust-ladder/skills/setup-dispatch/SKILL.md for this repository, with:",
         f"- backend: {backend}",
         f"- kit_ref: {kit_ref}",
         f"- trusted_dispatchers: {', '.join(dispatchers)}",

@@ -273,6 +273,7 @@ def test_a_project_bot_writes_only_its_own_briefs():
         ("~/.hermes/bin/team-kit-admin status", None),
         ("team-kit-admin add-project --bot meo-beo --project shop --repo acme/shop", "approve"),
         ("team-kit-admin setup-repo --project shop --backend claude", "approve"),
+        ("team-kit-admin vendor --project shop", "approve"),
         ("team-kit-admin add-repo --project shop --repo acme/shop-web", "block"),
         ("team-kit-admin protect --project shop --check check", "approve"),
         ("team-kit-admin activate --bot meo-beo", "approve"),
