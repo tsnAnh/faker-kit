@@ -4,13 +4,12 @@ from team_kit_contracts import (
     BRIEF_SECTIONS,
     ContractError,
     bootstrap_prompt,
-    brief_card,
     parse_brief,
     parse_depends,
-    parse_pr_marker,
     parse_report,
-    pr_marker,
+    parse_size,
     report_status,
+    size_marker,
 )
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
@@ -44,11 +43,6 @@ def test_brief_whose_standing_orders_differ_is_rejected():
         parse_brief(fill_brief(standing="1. Merge when green."), standing_orders=STANDING)
 
 
-def test_brief_card_reads_only_the_first_line_marker():
-    assert brief_card(fill_brief("t_9")) == "t_9"
-    assert brief_card("quoted:\n<!-- team-kit:brief v1 card=t_9 -->") is None
-
-
 def report(status="done"):
     return (TEMPLATES / "report.md").read_text().replace("<done | partial | blocked>", status)
 
@@ -77,12 +71,18 @@ def test_report_without_a_valid_first_status_line_has_no_status(text):
     assert report_status(text) is None
 
 
-def test_pr_marker_round_trips():
-    assert parse_pr_marker(f"Closes #12\n\n{pr_marker('t_1a2b', 12)}") == ("t_1a2b", 12)
-    assert parse_pr_marker("no marker") is None
+def test_the_size_marker_round_trips_and_defaults_to_small():
+    body = fill_brief() + "\n" + size_marker("large") + "\n"
+    assert parse_size(body) == "large"
+    assert parse_size(fill_brief()) == "small"
+    parse_brief(body, standing_orders=None)
+    with pytest.raises(ContractError):
+        size_marker("huge")
+    with pytest.raises(ContractError):
+        parse_size("<!-- team-kit:size v1 huge -->")
 
 
-def depends(text, repo="acme/shop-web"):
+def depends(text, repo="acme/shop"):
     return parse_depends(parse_brief(fill_brief(depends=text)), repo)
 
 
@@ -91,9 +91,10 @@ def depends(text, repo="acme/shop-web"):
     [
         ("none", []),
         ("None.", []),
-        ("#12", [("acme/shop-web", 12)]),
-        ("- Codertocat/Hello-World#3, the API contract\n- #4", [("Codertocat/Hello-World", 3), ("acme/shop-web", 4)]),
-        ("acme/shop-api#3 and acme/shop-api#3 again", [("acme/shop-api", 3)]),
+        ("#12", [("acme/shop", 12)]),
+        ("- #3, the API endpoint\n- #4", [("acme/shop", 3), ("acme/shop", 4)]),
+        ("#3 and #3 again", [("acme/shop", 3)]),
+        ("acme/shop#5", [("acme/shop", 5)]),
     ],
 )
 def test_depends_on_lists_issues(text, expected):
@@ -106,24 +107,26 @@ def test_depends_on_without_an_issue_is_rejected_so_a_typo_cannot_drop_a_depende
         depends(text)
 
 
-def test_bootstrap_prompt_pins_the_kit_and_asks_for_one_pull_request():
-    prompt = bootstrap_prompt("acme/shop-web", "shop", "acme/shop-api", "claude", "https://github.com/tsnAnh/team-kit.git", "a" * 40, ["codertocat"])
-    assert f"at commit {'a' * 40}" in prompt
-    assert "plugins/pstack/skills/faker-mode/SKILL.md" in prompt
-    assert "plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in prompt
-    assert "- home repository: acme/shop-api\n" in prompt
+def test_bootstrap_prompt_reads_the_vendored_kit_and_asks_for_one_pull_request():
+    prompt = bootstrap_prompt("acme/shop", "shop", "claude", "a" * 40, ["codertocat"])
+    assert prompt.startswith("Set up acme/shop for team-kit dispatch, as project shop.")
+    assert f"vendored in this repository at .agents/team-kit/, at commit {'a' * 40}" in prompt
+    assert ".agents/team-kit/plugins/pstack/skills/faker-mode/SKILL.md" in prompt
+    assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in prompt
+    assert "If .agents/team-kit/KIT.json is missing or names another commit, stop" in prompt
+    assert "clone" not in prompt.lower(), "the kit may be private, so the session never clones it"
     assert prompt.endswith("Open exactly one pull request. Never merge it.")
-    home = bootstrap_prompt("acme/shop-api", "shop", "acme/shop-api", "codex", "https://x.example/kit.git", "a" * 40, ["c"], "env_1")
-    assert "also write PROJECT.md" in home and "- codex_env: env_1" in home
+    codex = bootstrap_prompt("acme/shop", "shop", "codex", "a" * 40, ["c"], "env_1")
+    assert "- codex_env: env_1" in codex
 
 
 @pytest.mark.parametrize(
     "args",
     [
-        ("acme/shop;id", "shop", "acme/shop", "claude", "https://x", "a" * 40, ["c"]),
-        ("acme/shop", "shop", "acme/shop", "gpt", "https://x", "a" * 40, ["c"]),
-        ("acme/shop", "shop", "acme/shop", "claude", "https://x", "main", ["c"]),
-        ("acme/shop", "shop", "acme/shop", "claude", "https://x", "a" * 40, []),
+        ("acme/shop;id", "shop", "claude", "a" * 40, ["c"]),
+        ("acme/shop", "shop", "gpt", "a" * 40, ["c"]),
+        ("acme/shop", "shop", "claude", "main", ["c"]),
+        ("acme/shop", "shop", "claude", "a" * 40, []),
     ],
 )
 def test_bootstrap_prompt_refuses_unsafe_or_missing_parts(args):

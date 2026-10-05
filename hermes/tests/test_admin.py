@@ -3,10 +3,10 @@ import subprocess
 
 import pytest
 import yaml
-from conftest import FIXTURES, fill_guard, gh_calls, hermes_calls, install
-from team_kit_contracts import pr_marker
+from conftest import fill_guard, gh_calls, hermes_calls, install
 
-SHOP = "acme/shop-api,acme/shop-web,acme/shop-mobile"
+SHOP = "acme/shop"
+LABELS = ["agent-task", "agent:running", "agent:review", "agent:needs-human"]
 
 
 @pytest.fixture
@@ -19,17 +19,17 @@ def ready(kit_source, machine):
     return root, env
 
 
-def admin(ready, *args, profile=None, stdin=None):
+def admin(ready, *args, profile=None):
     root, env = ready
     env = dict(env)
     if profile:
         env["HERMES_HOME"] = str(root / "profiles" / profile)
-    done = subprocess.run([str(root / "bin" / "team-kit-admin"), *args], env=env, capture_output=True, text=True, input=stdin)
+    done = subprocess.run([str(root / "bin" / "team-kit-admin"), *args], env=env, capture_output=True, text=True)
     return done.returncode, (json.loads(done.stdout) if done.returncode == 0 else done.stderr)
 
 
 def add_shop(ready):
-    code, out = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repos", SHOP, "--home", "acme/shop-api", profile="ong-xay")
+    code, out = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP, profile="ong-xay")
     assert code == 0, out
     return out
 
@@ -38,177 +38,269 @@ def bots(root):
     return yaml.safe_load((root / "team-kit" / "bots.yaml").read_text())["bots"]
 
 
-def routes(root):
-    return yaml.safe_load((root / "config.yaml").read_text())["platforms"]["webhook"]["extra"]["routes"]
-
-
 def jobs(root, bot):
     return json.loads((root / "profiles" / bot / "jobs.json").read_text())
 
 
-def test_add_project_creates_an_isolated_project_bot(ready):
+def seed(root, name, value):
+    """Fake GitHub state the fake gh reads: files.json, tree.json, blobs.json, refs.json, pulls.json."""
+    state = root.parent / ".fake-gh"
+    state.mkdir(exist_ok=True)
+    (state / name).write_text(json.dumps(value))
+
+
+def posted(root):
+    path = root.parent / ".fake-gh" / "posted.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def vendored(root, kit_ref, extra=None):
+    seed(root, "files.json", {SHOP: {".agents/team-kit/KIT.json": json.dumps({"version": 1, "kit_ref": kit_ref}), **(extra or {})}})
+
+
+def labels(root):
+    return json.loads((root.parent / ".fake-gh" / "labels.json").read_text())
+
+
+def test_add_project_creates_the_project_bot_its_labels_and_paused_jobs(ready):
     root, _ = ready
     out = add_shop(ready)
-    assert out["route"] == "/p/meo-beo/webhooks/team-kit-shop"
-    assert sorted(out["jobs_created_paused"]) == ["team-kit-drain", "team-kit-status"]
-    assert bots(root)["meo-beo"] == {"role": "project", "project": "shop", "repos": SHOP.split(","), "home": "acme/shop-api"}
+    assert sorted(out["jobs_created_paused"]) == ["team-kit-status", "team-kit-tick"]
+    assert out["labels"] == LABELS
+    assert bots(root)["meo-beo"] == {"role": "project", "project": "shop", "repo": SHOP}
+    assert labels(root) == {SHOP: LABELS}
 
     home = root / "profiles" / "meo-beo"
     config = yaml.safe_load((home / "config.yaml").read_text())
-    assert config["toolsets"] == ["kanban", "terminal", "file", "clarify", "skills"]
+    assert config["toolsets"] == ["terminal", "file", "clarify", "skills"]
     assert config["plugins"]["enabled"] == ["team_kit_guard"]
-    assert "HERMES_KANBAN_BOARD=shop\n" in (home / ".env").read_text()
-    assert oct((home / ".env").stat().st_mode & 0o777) == "0o600"
+    assert config["approvals"] == {"mode": "manual", "cron_mode": "deny"}
     assert sorted(p.name for p in (home / "skills").iterdir()) == ["dispatch"]
     assert (home / "SOUL.md").read_text().startswith("You are a team-kit project bot.")
     assert (root / "team-kit" / "briefs" / "meo-beo").is_dir()
-    entry = (home / "scripts" / "team-kit" / "github-triage.py").read_text()
-    assert 'BOT = "meo-beo"' in entry and "@TEAM_KIT_BOT@" not in entry
-
-    assert {"slug": "shop", "name": "shop"} in json.loads((root / "boards.json").read_text())
-    route = routes(root)["team-kit-shop"]
-    secret = (root / "team-kit" / "webhook-secret").read_text().strip()
-    assert route["profile"] == "meo-beo" and route["secret"] == secret
-    assert route["script"] == "team-kit/github-triage.py" and route["cron_job"] == "team-kit-drain"
-    assert "toolsets" not in route and "coalesce" not in route
-    assert out["gateway"] == "restarted"
-    assert all(secret not in " ".join(c) for c in hermes_calls(root)), "the secret never goes on a command line"
-    assert oct((root / "config.yaml").stat().st_mode & 0o777) == "0o600"
+    assert not (home / ".env").exists(), "team-kit writes no .env; the owner puts the token there"
 
     created = {c[4]: c for c in hermes_calls(root) if c[2:4] == ["cron", "create"]}
-    assert sorted(created) == ["0 9,13,17 * * *", "every 2h"]
-    drain = created["every 2h"]
-    assert drain[:2] == ["-p", "meo-beo"]
-    assert drain[drain.index("--deliver") + 1] == "bot-chat:meo-beo" and drain[drain.index("--skill") + 1] == "dispatch"
+    assert sorted(created) == ["0 9,13,17 * * *", "every 30m"]
+    tick = created["every 30m"]
+    assert tick[:2] == ["-p", "meo-beo"]
+    assert tick[5].startswith("Run `team-kit-gh tick` in the terminal.")
+    assert tick[tick.index("--name") + 1] == "team-kit-tick"
+    assert tick[tick.index("--deliver") + 1] == "bot-chat:meo-beo" and tick[tick.index("--skill") + 1] == "dispatch"
     assert all(not job["enabled"] and job["paused_reason"] for job in jobs(root, "meo-beo"))
+    assert not (root / "config.yaml").exists(), "the host profile's config is never touched"
 
 
-def test_a_second_project_gets_its_own_board_route_and_jobs(ready):
+def test_a_second_project_gets_its_own_bot_and_jobs(ready):
     root, _ = ready
     add_shop(ready)
-    code, out = admin(ready, "add-project", "--bot", "sep-crm", "--project", "crm", "--repos", "acme/crm", profile="ong-xay")
+    code, out = admin(ready, "add-project", "--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm", profile="ong-xay")
     assert code == 0, out
-    assert bots(root)["sep-crm"]["home"] == "acme/crm"
-    assert routes(root)["team-kit-crm"]["profile"] == "sep-crm"
-    assert routes(root)["team-kit-shop"]["profile"] == "meo-beo"
-    assert "HERMES_KANBAN_BOARD=crm\n" in (root / "profiles" / "sep-crm" / ".env").read_text()
+    assert bots(root)["sep-crm"]["repo"] == "acme/crm"
     assert len(jobs(root, "sep-crm")) == 2 and len(jobs(root, "meo-beo")) == 2
 
 
-def test_add_project_again_extends_the_project_without_duplicating_jobs(ready):
+def test_add_project_again_refreshes_the_bot_without_duplicating_jobs(ready):
     root, _ = ready
     add_shop(ready)
-    code, out = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repos", "acme/shop-admin", profile="ong-xay")
+    code, out = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP, profile="ong-xay")
     assert code == 0, out
     assert out["jobs_created_paused"] == []
-    assert bots(root)["meo-beo"]["repos"][-1] == "acme/shop-admin"
-    assert bots(root)["meo-beo"]["home"] == "acme/shop-api"
     assert len(jobs(root, "meo-beo")) == 2
+
+
+def test_a_project_has_one_repository(ready):
+    root, _ = ready
+    add_shop(ready)
+    code, err = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", "acme/shop-admin", profile="ong-xay")
+    assert code == 1 and "a project has one repository" in err
+    assert bots(root)["meo-beo"]["repo"] == SHOP
+    code, err = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repos", "acme/a,acme/b", profile="ong-xay")
+    assert code != 0
 
 
 @pytest.mark.parametrize(
     ("args", "why"),
     [
-        (["--bot", "sep-crm", "--project", "crm", "--repos", "acme/shop-web"], "belongs to both"),
-        (["--bot", "meo-beo", "--project", "crm", "--repos", "acme/crm"], "already the project bot of shop"),
-        (["--bot", "ong-xay", "--project", "crm", "--repos", "acme/crm"], "already the bootstrap bot"),
-        (["--bot", "sep-crm", "--project", "shop", "--repos", "acme/crm"], "project shop belongs to both"),
-        (["--bot", "Sep Crm", "--project", "crm", "--repos", "acme/crm"], "must be lowercase letters"),
-        (["--bot", "default", "--project", "crm", "--repos", "acme/crm"], "the owner's own Hermes profile"),
-        (["--bot", "sep-crm", "--project", "crm", "--repos", ","], "at least one OWNER/REPO"),
-        (["--bot", "sep-crm", "--project", "crm", "--repos", "acme/crm;id"], "is not OWNER/REPO"),
-        (["--bot", "sep-crm", "--project", "crm", "--repos", "acme/crm", "--home", "acme/other"], "--home must be one of --repos"),
+        (["--bot", "sep-crm", "--project", "crm", "--repo", "acme/shop"], "belongs to both"),
+        (["--bot", "meo-beo", "--project", "crm", "--repo", "acme/crm"], "already the project bot of shop"),
+        (["--bot", "ong-xay", "--project", "crm", "--repo", "acme/crm"], "already the bootstrap bot"),
+        (["--bot", "sep-crm", "--project", "shop", "--repo", "acme/crm"], "project shop belongs to both"),
+        (["--bot", "Sep Crm", "--project", "crm", "--repo", "acme/crm"], "must be lowercase letters"),
+        (["--bot", "default", "--project", "crm", "--repo", "acme/crm"], "the owner's own Hermes profile"),
+        (["--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm;id"], "is not OWNER/REPO"),
     ],
 )
 def test_add_project_refuses_before_changing_anything(ready, args, why):
     root, _ = ready
     add_shop(ready)
-    before = (root / "team-kit" / "bots.yaml").read_text(), (root / "config.yaml").read_text()
+    before = (root / "team-kit" / "bots.yaml").read_text(), labels(root)
     code, err = admin(ready, "add-project", *args, profile="ong-xay")
     assert code == 1 and why in err
-    assert ((root / "team-kit" / "bots.yaml").read_text(), (root / "config.yaml").read_text()) == before
+    assert ((root / "team-kit" / "bots.yaml").read_text(), labels(root)) == before
     assert not (root / "profiles" / "sep-crm").exists()
 
 
-def test_add_project_refuses_a_route_someone_else_owns_and_never_echoes_its_secret(ready):
-    root, _ = ready
-    host = {"platforms": {"webhook": {"extra": {"routes": {"team-kit-shop": {"profile": "other", "script": "x.py", "secret": "do-not-leak"}}}}}}
-    (root / "config.yaml").write_text(yaml.safe_dump(host))
-    code, err = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repos", "acme/shop-api", profile="ong-xay")
-    assert code == 1 and "conflicting host webhook route team-kit-shop" in err
-    assert "do-not-leak" not in err
-    assert yaml.safe_load((root / "config.yaml").read_text()) == host
-    assert not (root / "profiles" / "meo-beo").exists()
-    assert "meo-beo" not in bots(root)
-
-
-def test_add_repo_labels_it_and_points_its_webhook_here_with_the_secret_on_stdin(ready):
+def test_setup_repo_starts_one_cloud_session_on_the_vendored_kit(ready, kit_source):
     root, _ = ready
     add_shop(ready)
-    code, out = admin(ready, "add-repo", "--project", "shop", "--repo", "acme/shop-web", profile="ong-xay")
+    vendored(root, kit_source[1])
+    code, out = admin(ready, "setup-repo", "--project", "shop", "--backend", "claude", profile="ong-xay")
     assert code == 0, out
-    url = "https://hermes.example.ts.net/p/meo-beo/webhooks/team-kit-shop"
-    assert out == {"project": "shop", "repo": "acme/shop-web", "labels": ["agent-task", "agent:running", "agent:needs-human"], "webhook": f"created: {url}"}
-    secret = (root / "team-kit" / "webhook-secret").read_text().strip()
-    calls = gh_calls(root)
-    assert all(secret not in " ".join(c["args"]) for c in calls), "the secret never goes on a command line"
-    post = next(c for c in calls if "POST" in c["args"])
-    hook = json.loads(post["stdin"])
-    assert hook["config"] == {"url": url, "content_type": "json", "secret": secret, "insecure_ssl": "0"}
-    assert hook["events"] == ["pull_request", "issue_comment", "check_suite"]
-    code, out = admin(ready, "add-repo", "--project", "shop", "--repo", "acme/shop-web", profile="ong-xay")
-    assert out["webhook"] == f"exists: {url}"
-    assert secret not in json.dumps(out)
-
-
-def test_add_repo_skips_the_webhook_without_a_public_url(ready):
-    root, _ = ready
-    add_shop(ready)
-    fill_guard(root, url=None)
-    code, out = admin(ready, "add-repo", "--project", "shop", "--repo", "acme/shop-web", profile="ong-xay")
-    assert code == 0 and out["webhook"].startswith("skipped: set webhook_base_url")
-
-
-def test_add_repo_refuses_another_projects_repository(ready):
-    add_shop(ready)
-    admin(ready, "add-project", "--bot", "sep-crm", "--project", "crm", "--repos", "acme/crm", profile="ong-xay")
-    code, err = admin(ready, "add-repo", "--project", "crm", "--repo", "acme/shop-web", profile="ong-xay")
-    assert code == 1 and "already belongs to project shop" in err
-
-
-def test_bootstrap_repo_starts_one_cloud_session_from_a_clone_pinned_to_the_kit(ready, kit_source):
-    root, _ = ready
-    add_shop(ready)
-    code, out = admin(ready, "bootstrap-repo", "--project", "shop", "--repo", "acme/shop-api", "--backend", "claude", profile="ong-xay")
-    assert code == 0, out
-    assert out == {"project": "shop", "repo": "acme/shop-api", "backend": "claude", "kit_ref": kit_source[1], "session": "https://claude.ai/code/session_01BOOTstrap"}
+    assert out == {"project": "shop", "repo": "acme/shop", "backend": "claude", "kit_ref": kit_source[1], "session": "https://claude.ai/code/session_01BOOTstrap"}
     home = root.parent
-    assert (home / ".fake-claude-cwd").read_text().strip() == str(root / "team-kit" / "checkouts" / "acme__shop-api" / "bootstrap")
+    assert (home / ".fake-claude-cwd").read_text().strip() == str(root / "team-kit" / "checkouts" / "acme__shop" / "setup")
     args = (home / ".fake-claude-args").read_text()
-    assert args.startswith("--cloud\nSet up acme/shop-api for team-kit dispatch")
-    assert f"https://github.com/tsnAnh/team-kit.git at commit {kit_source[1]}" in args
-    assert "also write PROJECT.md" in args
+    assert args.startswith("--cloud\nSet up acme/shop for team-kit dispatch")
+    assert f"vendored in this repository at .agents/team-kit/, at commit {kit_source[1]}" in args
+    assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in args
+    assert "clone" not in args.lower(), "the setup session never clones the kit, which may be private"
     assert "trusted_dispatchers: codertocat, meo-beo-gh" in args
 
 
-def test_bootstrap_repo_refuses_codex_without_an_environment_and_unknown_repositories(ready):
+@pytest.mark.parametrize(("kit", "why"), [(None, "has no vendored kit"), ("0" * 40, "has the kit at 000000000000")])
+def test_setup_repo_waits_for_the_vendored_kit(ready, kit_source, kit, why):
+    root, _ = ready
     add_shop(ready)
-    code, err = admin(ready, "bootstrap-repo", "--project", "shop", "--repo", "acme/shop-api", "--backend", "codex", profile="ong-xay")
+    if kit:
+        vendored(root, kit)
+    code, err = admin(ready, "setup-repo", "--project", "shop", "--backend", "claude", profile="ong-xay")
+    assert code == 1 and why in err and "team-kit-admin vendor --project shop" in err
+    assert not (root.parent / ".fake-claude-args").exists()
+
+
+def test_setup_repo_refuses_codex_without_an_environment_and_unknown_projects(ready):
+    add_shop(ready)
+    code, err = admin(ready, "setup-repo", "--project", "shop", "--backend", "codex", profile="ong-xay")
     assert code == 1 and "--codex-env" in err
-    code, err = admin(ready, "bootstrap-repo", "--project", "shop", "--repo", "acme/crm", "--backend", "claude", profile="ong-xay")
-    assert code == 1 and "not a repository of project shop" in err
+    code, err = admin(ready, "setup-repo", "--project", "crm", "--backend", "claude", profile="ong-xay")
+    assert code == 1 and "no project crm" in err
+
+
+def tree_entries(root):
+    [tree] = posted(root)["trees"]
+    assert tree["base_tree"] == "tree0"
+    return {e["path"]: e for e in tree["tree"]}
+
+
+def test_vendor_commits_the_pinned_kit_through_the_api_and_opens_a_pull_request(ready, kit_source):
+    root, _ = ready
+    add_shop(ready)
+    code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 0, out
+    short = kit_source[1][:12]
+    assert out["pr"] == "https://github.com/acme/shop/pull/7" and out["branch"] == f"team-kit/kit-{short}"
+    entries = tree_entries(root)
+    skill = entries[".agents/team-kit/plugins/trust-ladder/skills/follow-brief/SKILL.md"]
+    assert skill["mode"] == "100644" and skill["content"].startswith("---\nname: follow-brief")
+    assert entries[".agents/team-kit/vendor_kit.py"]["mode"] == "100755"
+    assert entries[".claude/skills/follow-brief"] == {"path": ".claude/skills/follow-brief", "mode": "120000", "type": "blob",
+                                                      "content": "../../.agents/team-kit/plugins/trust-ladder/skills/follow-brief"}
+    assert entries[".agents/skills/follow-brief"]["content"] == "../../.agents/team-kit/plugins/trust-ladder/skills/follow-brief"
+    manifest = json.loads(entries[".agents/team-kit/KIT.json"]["content"])
+    assert manifest["kit_ref"] == kit_source[1]
+    assert "plugins/trust-ladder/skills/follow-brief/SKILL.md" in manifest["files"]
+    assert not any(path.startswith("plugins/trust-ladder/test/") for path in manifest["files"]), "the kit's own tests stay out"
+    assert any(path.startswith("plugins/trust-ladder/packs/agnostic/test/") for path in manifest["files"]), "lint-pack fixtures stay in"
+    [commit] = posted(root)["commits"]
+    assert commit == {"message": f"chore(agents): vendor team-kit {short}", "tree": "tree1", "parents": ["base0"]}
+    [pull] = posted(root)["pulls"]
+    assert (pull["head"], pull["base"]) == (f"team-kit/kit-{short}", "main")
+    assert all("git" != c["args"][0] for c in gh_calls(root)), "no git push: everything goes through the API"
+
+
+def test_vendor_keeps_the_repositorys_own_skills_and_removes_stale_kit_files(ready, kit_source):
+    root, _ = ready
+    add_shop(ready)
+    seed(root, "tree.json", {SHOP: [
+        {"path": ".claude/skills/follow-brief", "mode": "040000", "type": "tree", "sha": "own"},
+        {"path": ".agents/skills/old-skill", "mode": "120000", "type": "blob", "sha": "link-old"},
+        {"path": ".agents/skills/verify-shop", "mode": "120000", "type": "blob", "sha": "link-own"},
+        {"path": ".agents/team-kit/plugins/trust-ladder/skills/gone/SKILL.md", "mode": "100644", "type": "blob", "sha": "x"},
+        {"path": ".agents/dispatch.json", "mode": "100644", "type": "blob", "sha": "d"},
+    ]})
+    seed(root, "blobs.json", {"link-old": "../../.agents/team-kit/plugins/pstack/skills/old-skill", "link-own": "../../.claude/skills/verify-shop"})
+    seed(root, "files.json", {SHOP: {".agents/dispatch.json": json.dumps({"backend": "claude", "kit_ref": "0" * 40})}})
+    code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 0, out
+    assert out["kept_repository_own"] == [".claude/skills/follow-brief", ".agents/skills/follow-brief"]
+    assert out["removed"] == [".agents/skills/old-skill", ".agents/team-kit/plugins/trust-ladder/skills/gone/SKILL.md"]
+    entries = tree_entries(root)
+    assert ".claude/skills/follow-brief" not in entries, "a real folder of the repository is never replaced"
+    assert ".agents/skills/follow-brief" not in entries, "nor shadowed for Codex and Pi by the kit's skill of that name"
+    assert entries[".agents/skills/old-skill"]["sha"] is None
+    assert ".agents/skills/verify-shop" not in entries, "a link that points elsewhere is the repository's own"
+    assert json.loads(entries[".agents/dispatch.json"]["content"])["kit_ref"] == kit_source[1], "the same pull request moves kit_ref"
+    assert ".claude/skills/follow-brief" not in json.loads(entries[".agents/team-kit/KIT.json"]["content"])["links"]
+
+
+def test_vendor_with_nothing_to_change_opens_no_pull_request(ready, kit_source):
+    root, env = ready
+    add_shop(ready)
+    env["FAKE_TREE_UNCHANGED"] = "1"
+    code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 0 and out["pr"] is None and "already has the kit" in out["note"]
+    assert "commits" not in posted(root)
+
+
+def test_vendor_again_updates_its_branch_and_reuses_the_open_pull_request(ready, kit_source):
+    root, _ = ready
+    add_shop(ready)
+    branch = f"team-kit/kit-{kit_source[1][:12]}"
+    seed(root, "refs.json", {branch: "old"})
+    seed(root, "pulls.json", {SHOP: [{"html_url": "https://github.com/acme/shop/pull/3", "head": branch}]})
+    code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 0 and out["pr"] == "https://github.com/acme/shop/pull/3"
+    assert posted(root)["refs"] == [{"branch": branch, "patched": True}]
+    assert "pulls" not in posted(root)
+
+
+def test_vendor_lists_older_kit_pull_requests_it_supersedes(ready, kit_source):
+    root, _ = ready
+    add_shop(ready)
+    seed(root, "pulls.json", {SHOP: [{"html_url": "https://github.com/acme/shop/pull/2", "head": "team-kit/kit-000000000000"},
+                                     {"html_url": "https://github.com/acme/shop/pull/4", "head": "feature/other"}]})
+    code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 0 and out["superseded"] == ["https://github.com/acme/shop/pull/2"]
+
+
+@pytest.mark.parametrize("problem", ["symlinked skills folder", "invalid dispatch.json", "dirty kit"])
+def test_vendor_refuses_before_writing_anything(ready, problem):
+    root, _ = ready
+    add_shop(ready)
+    if problem == "symlinked skills folder":
+        seed(root, "tree.json", {SHOP: [{"path": ".claude/skills", "mode": "120000", "type": "blob", "sha": "l"}]})
+        why = ".claude/skills in acme/shop is a symlink"
+    elif problem == "invalid dispatch.json":
+        seed(root, "tree.json", {SHOP: [{"path": ".agents/dispatch.json", "mode": "100644", "type": "blob", "sha": "d"}]})
+        seed(root, "files.json", {SHOP: {".agents/dispatch.json": "{not json"}})
+        why = "is not valid JSON"
+    else:
+        (root / "team-kit" / "kit" / "plugins" / "trust-ladder" / "stray.md").write_text("local")
+        why = "uncommitted changes"
+    code, err = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 1 and why in err
+    assert "trees" not in posted(root)
+
+
+def test_vendor_refuses_a_repository_too_large_to_list(ready):
+    root, env = ready
+    add_shop(ready)
+    env["FAKE_TREE_TRUNCATED"] = "1"
+    code, err = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 1 and "vendor_kit.py --into" in err
 
 
 def test_protect_requires_the_checks_for_admins_too(ready):
     root, _ = ready
     add_shop(ready)
-    code, out = admin(ready, "protect", "--repo", "acme/shop-web", "--check", "check", profile="ong-xay")
+    code, out = admin(ready, "protect", "--project", "shop", "--check", "check", profile="ong-xay")
     assert code == 0, out
     protection = json.loads((root.parent / ".fake-gh" / "protection.json").read_text())
-    body = protection["repos/acme/shop-web/branches/main/protection"]
+    body = protection["repos/acme/shop/branches/main/protection"]
     assert body["required_status_checks"] == {"strict": False, "contexts": ["check"]}
     assert body["enforce_admins"] is True
-    code, err = admin(ready, "protect", "--repo", "acme/shop-web", profile="ong-xay")
+    code, err = admin(ready, "protect", "--project", "shop", profile="ong-xay")
     assert code == 1 and "at least one --check" in err
 
 
@@ -217,32 +309,27 @@ def test_activate_waits_for_the_bots_github_token_then_resumes_its_jobs(ready):
     add_shop(ready)
     code, err = admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay")
     assert code == 1 and "no GH_TOKEN" in err
-    env = root / "profiles" / "meo-beo" / ".env"
-    env.write_text(env.read_text() + "GH_TOKEN=github_pat_secret\n")
+    (root / "profiles" / "meo-beo" / ".env").write_text("GH_TOKEN=github_pat_secret\n")
     code, out = admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay")
     assert code == 0, out
-    assert sorted(out["resumed"]) == ["team-kit-drain", "team-kit-status"]
+    assert sorted(out["resumed"]) == ["team-kit-status", "team-kit-tick"]
     assert all(job["enabled"] for job in jobs(root, "meo-beo"))
     assert "github_pat_secret" not in json.dumps(out)
 
 
-def test_status_reports_every_bot_and_repository(ready):
+def test_status_reports_every_bot_and_repository_and_refreshes_counts(ready):
     root, _ = ready
     add_shop(ready)
-    admin(ready, "add-repo", "--project", "shop", "--repo", "acme/shop-web", profile="ong-xay")
     code, out = admin(ready, "status", profile="ong-xay")
     assert code == 0, out
     assert out["trusted_authors"] == ["codertocat", "meo-beo-gh"]
     shop = next(b for b in out["bots"] if b["bot"] == "meo-beo")
     assert shop["github_login"] is False
-    assert shop["jobs"] == {"team-kit-drain": False, "team-kit-status": False}
-    web = next(r for r in shop["repos"] if r["repo"] == "acme/shop-web")
-    assert web == {"repo": "acme/shop-web", "labels_missing": [], "running": 0, "dispatch_json": False, "webhook": "last delivery 200"}
-    api = next(r for r in shop["repos"] if r["repo"] == "acme/shop-api")
-    assert api["labels_missing"] == ["agent-task", "agent:running", "agent:needs-human"] and api["webhook"] == "missing"
+    assert shop["jobs"] == {"team-kit-tick": False, "team-kit-status": False}
+    assert shop["repo"] == {"repo": "acme/shop", "labels_missing": [], "running": 0, "dispatch_json": False}
     assert {"bot": "ong-xay", "role": "bootstrap"} in out["bots"]
     counts = json.loads((root / "team-kit" / "in-flight" / "meo-beo.json").read_text())["repos"]
-    assert counts == {"acme/shop-api": 0, "acme/shop-web": 0, "acme/shop-mobile": 0}
+    assert counts == {"acme/shop": 0}
 
 
 @pytest.mark.parametrize(("profile", "args", "why"), [
@@ -260,33 +347,25 @@ def test_only_the_bootstrap_bot_or_the_owner_runs_it(ready, profile, args, why):
 def test_reinstalling_refreshes_project_bots_and_keeps_their_job_state(ready, kit_source, machine):
     root, _ = ready
     add_shop(ready)
-    env = root / "profiles" / "meo-beo" / ".env"
-    env.write_text(env.read_text() + "GH_TOKEN=x\n")
+    (root / "profiles" / "meo-beo" / ".env").write_text("GH_TOKEN=x\n")
     admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay")
-    (root / "profiles" / "meo-beo" / "scripts" / "team-kit" / "github-triage.py").write_text("tampered")
+    (root / "profiles" / "meo-beo" / "SOUL.md").write_text("tampered")
+    stale = root / "profiles" / "meo-beo" / "scripts" / "team-kit"
+    stale.mkdir(parents=True)
+    (stale / "github-triage.py").write_text("old webhook triage")
     done = install(kit_source, machine, "--no-gateway")
     assert done.returncode == 0, done.stderr
-    assert 'BOT = "meo-beo"' in (root / "profiles" / "meo-beo" / "scripts" / "team-kit" / "github-triage.py").read_text()
+    assert (root / "profiles" / "meo-beo" / "SOUL.md").read_text().startswith("You are a team-kit project bot.")
+    assert not stale.exists(), "the webhook version's scripts are removed"
     assert all(job["enabled"] for job in jobs(root, "meo-beo")) and len(jobs(root, "meo-beo")) == 2
-    assert "GH_TOKEN=x" in env.read_text()
+    assert (root / "profiles" / "meo-beo" / ".env").read_text() == "GH_TOKEN=x\n"
 
 
-def test_the_installed_triage_script_wakes_only_its_own_bot(ready):
-    root, env = ready
+def test_the_gh_calls_never_carry_a_token(ready):
+    root, _ = ready
     add_shop(ready)
-    admin(ready, "add-project", "--bot", "sep-crm", "--project", "crm", "--repos", "acme/crm", profile="ong-xay")
-    guard = root / "team-kit" / "guard.yaml"
-    guard.write_text(guard.read_text().replace("  - Codertocat\n", "  - Codertocat\n  - octocat\n"))
-    event = json.loads((FIXTURES / "pull_request.opened.json").read_text())
-    event["repository"]["full_name"] = event["pull_request"]["head"]["repo"]["full_name"] = "acme/shop-web"
-    event["pull_request"]["body"] = f"Closes #1\n\n{pr_marker('t_1', 1)}"
-
-    def run(bot):
-        script = root / "profiles" / bot / "scripts" / "team-kit" / "github-triage.py"
-        done = subprocess.run(["python3", str(script)], input=json.dumps(event), capture_output=True, text=True,
-                              env={**env, "TEAM_KIT_HOME": str(root / "team-kit")})
-        assert done.returncode == 0, done.stderr
-        return done.stdout.strip()
-
-    assert json.loads(run("meo-beo"))["team_kit"]["repo"] == "acme/shop-web"
-    assert run("sep-crm") == "[SILENT]"
+    (root / "profiles" / "meo-beo" / ".env").write_text("GH_TOKEN=github_pat_secret\n")
+    admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay")
+    admin(ready, "status", profile="ong-xay")
+    assert all("github_pat_secret" not in json.dumps(c) for c in gh_calls(root))
+    assert all("github_pat_secret" not in " ".join(c) for c in hermes_calls(root))

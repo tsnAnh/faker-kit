@@ -16,19 +16,35 @@ def test_every_launch_prompt_template_starts_with_faker_mode(backend):
     assert LAUNCH_PROMPTS[backend].startswith(PREFIXES)
 
 
+CLAUDE = ("/faker-mode Work the brief in acme/shop#123 using the follow-brief skill. If the follow-brief skill is not available in this session, "
+          "comment on the issue with `<!-- team-kit:report v1 -->` as the first line and `status: blocked` as the second, "
+          "say the team-kit skills did not load, and stop.")
+CODEX = ("$faker-mode Work the brief in acme/shop#123 using the follow-brief skill. "
+         "If the follow-brief skill is not available in this session, stop and say the team-kit skills did not load.")
+
+
 @pytest.mark.parametrize(
     ("backend", "size", "expected"),
     [
-        ("claude", "large", ["claude", "--cloud", "/faker-mode Work the brief in acme/shop#123 using the follow-brief skill"]),
-        ("codex", "small", ["codex", "cloud", "exec", "--env", "env_7", "--attempts", "1", "$faker-mode Work the brief in acme/shop#123 using the follow-brief skill"]),
-        ("codex", "medium", ["codex", "cloud", "exec", "--env", "env_7", "--attempts", "2", "$faker-mode Work the brief in acme/shop#123 using the follow-brief skill"]),
-        ("codex", "large", ["codex", "cloud", "exec", "--env", "env_7", "--attempts", "3", "$faker-mode Work the brief in acme/shop#123 using the follow-brief skill"]),
+        ("claude", "large", ["claude", "--cloud", CLAUDE]),
+        ("codex", "small", ["codex", "cloud", "exec", "--env", "env_7", "--attempts", "1", CODEX]),
+        ("codex", "medium", ["codex", "cloud", "exec", "--env", "env_7", "--attempts", "2", CODEX]),
+        ("codex", "large", ["codex", "cloud", "exec", "--env", "env_7", "--attempts", "3", CODEX]),
     ],
 )
 def test_launch_argv_is_exact_and_needs_no_shell(backend, size, expected):
     argv = launch_argv(backend, "acme/shop", 123, size, "env_7")
     assert argv == expected
     assert argv[-1].startswith(PREFIXES)
+
+
+def test_a_claude_session_without_the_kit_posts_a_report_tick_can_read():
+    from team_kit_contracts import parse_report
+
+    prompt = launch_argv("claude", "acme/shop", 1, "small")[-1]
+    comment = "<!-- team-kit:report v1 -->\nstatus: blocked\nThe team-kit skills did not load."
+    assert "`<!-- team-kit:report v1 -->` as the first line and `status: blocked` as the second" in prompt
+    assert parse_report(comment).status == "blocked"
 
 
 @pytest.mark.parametrize(("repo", "env", "size"), [("acme/shop;id", "e", "small"), ("acme", "e", "small"), ("acme/shop", "e;id", "small"), ("acme/shop", None, "small"), ("acme/shop", "e", "huge")])

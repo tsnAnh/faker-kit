@@ -4,13 +4,17 @@
 The bootstrap bot may run these, and the guard asks the owner to approve each one but `status`:
 
   status                                                     every project, repository, bot, and job, read-only
-  add-project   --bot B --project P --repos R1,R2 [--home R] [--model M]
-                                                             create or extend a project bot, its board, route, and jobs
-  add-repo      --project P --repo R                         add a repository: labels, GitHub webhook, bots.yaml
-  bootstrap-repo --project P --repo R --backend claude|codex [--codex-env E]
+  add-project   --bot B --project P --repo R [--model M]     create or refresh a project bot for one repository:
+                                                             profile, skill, paused jobs, labels, bots.yaml
+  vendor        --project P                                  open a pull request that copies the pinned kit into the
+                                                             repository, so cloud sessions have its skills
+  setup-repo    --project P --backend claude|codex [--codex-env E]
                                                              start one cloud session that prepares the repository
-  protect       --repo R --check NAME [--check NAME ...]     require those checks on the default branch
+  protect       --project P --check NAME [--check NAME ...]  require those checks on the default branch
   activate      --bot B                                      resume a project bot's jobs once its GitHub login is set
+
+A project is one repository. Keep a product's apps (API, web, mobile) in one repository, so one
+cloud agent can carry a feature through all of them in one pull request.
 
 install.sh also runs these, which no bot may:
 
@@ -24,15 +28,18 @@ command writes.
 from __future__ import annotations
 
 import argparse
+import base64
+import fcntl
+import importlib.util
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Callable
+from urllib.parse import quote
 
 HERE = Path(__file__).resolve().parent
 for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
@@ -40,30 +47,20 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
         sys.path.insert(0, str(candidate))
 
 import yaml  # noqa: E402
-from install_config import (  # noqa: E402
-    InstallError,
-    apply_profile,
-    config_set,
-    config_set_private,
-    cron_jobs,
-    cron_spec,
-    hermes,
-    mapping,
-    profile_home,
-    value_at,
-    webhook_updates,
-)
+from install_config import InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, profile_home  # noqa: E402
 from team_kit_cloud import Cloud, CloudError  # noqa: E402
 from team_kit_contracts import ContractError, bootstrap_prompt, cloud_argv  # noqa: E402
 from team_kit_guard.policy import NAME, REPO, RESERVED_NAMES, Policy, PolicyError, load_policy, team_kit_home  # noqa: E402
 
+VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
 LABELS = (
     ("agent-task", "1d76db", "A unit dispatched by a team-kit project bot"),
     ("agent:running", "fbca04", "A cloud coding agent is working this unit"),
+    ("agent:review", "0e8a16", "The agent is done and the checks passed; the owner merges"),
     ("agent:needs-human", "d93f0b", "A dispatched unit needs the owner"),
 )
-JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login and the repositories' webhooks"
-TRIAGE_FILES = ("team_kit_triage.py", "team_kit_contracts.py")
+JOBS = ("team-kit-tick", "team-kit-status")
+JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
 
 Runner = Callable[..., str]
 
@@ -110,21 +107,6 @@ class Admin:
 
     # files from the pinned kit -----------------------------------------------------------------------
 
-    def secret(self) -> str:
-        try:
-            value = (self.home / "webhook-secret").read_text().strip()
-        except OSError:
-            raise Refused("no webhook-secret; run hermes/install.sh") from None
-        if not value:
-            raise Refused("webhook-secret is empty; supply a nonempty HMAC secret")
-        return value
-
-    def route(self, bot: str, project: str) -> tuple[str, dict]:
-        route = yaml.safe_load((self.pkg / "webhook" / "route.yaml").read_text())
-        route["profile"] = bot
-        route["secret"] = self.secret()
-        return f"team-kit-{project}", route
-
     def ensure_profile(self, bot: str, role: str) -> Path:
         home = profile_home(self.root, bot)
         if not home.is_dir():
@@ -169,27 +151,9 @@ class Admin:
         shutil.copytree(self.pkg / "plugin" / "team_kit_guard", plugin, ignore=shutil.ignore_patterns("__pycache__"))
         self.link_skill(home, "dispatch" if role == "project" else "bootstrap")
         if role == "project":
-            self.set_env(home, "HERMES_KANBAN_BOARD", project)
             (self.home / "briefs" / bot).mkdir(parents=True, exist_ok=True)
-            scripts = home / "scripts" / "team-kit"
-            shutil.rmtree(scripts, ignore_errors=True)
-            scripts.mkdir(parents=True)
-            for name in TRIAGE_FILES:
-                shutil.copy2(self.pkg / "lib" / name, scripts / name)
-            shutil.copytree(self.pkg / "plugin" / "team_kit_guard", scripts / "team_kit_guard", ignore=shutil.ignore_patterns("__pycache__"))
-            entry = (self.pkg / "webhook" / "github-triage.py").read_text().replace("@TEAM_KIT_BOT@", bot)
-            (scripts / "github-triage.py").write_text(entry)
-            (scripts / "github-triage.py").chmod(0o755)
-
-    def ensure_board(self, project: str) -> None:
-        listing = hermes("kanban", "boards", "list", "--json")
-        try:
-            boards = json.loads(listing or "[]")
-        except ValueError:
-            raise Refused("cannot read `hermes kanban boards list --json`") from None
-        slugs = {b.get("slug") if isinstance(b, dict) else b for b in (boards.get("boards", []) if isinstance(boards, dict) else boards)}
-        if project not in slugs:
-            hermes("kanban", "boards", "create", project, "--name", project, "--description", f"team-kit project {project}")
+            # An earlier version kept webhook triage scripts here; nothing uses them now.
+            shutil.rmtree(home / "scripts" / "team-kit", ignore_errors=True)
 
     def ensure_jobs(self, bot: str) -> list[str]:
         existing = cron_jobs(hermes("-p", bot, "cron", "list", "--all"))
@@ -201,28 +165,6 @@ class Admin:
                    "--skill", job["skill"], "--paused", "--paused-reason", JOBS_PAUSED_REASON)
             created.append(job["name"])
         return created
-
-    def apply_route(self, bot: str, project: str) -> bool:
-        """Adds or refreshes the project's route. True when the host config changed."""
-        name, route = self.route(bot, project)
-        changed = False
-        for keys, value in webhook_updates(self.root, name, route):
-            if value_at(mapping(self.root / "config.yaml"), keys) == value:
-                continue
-            changed = True
-            if keys[-1] == "routes":
-                config_set_private(self.root, "default", keys, value)
-            else:
-                config_set(self.root, "default", keys, value)
-        return changed
-
-    def restart_gateway(self) -> str:
-        # The shared listener reads its routes when it starts.
-        try:
-            hermes("-p", "default", "gateway", "restart")
-            return "restarted"
-        except InstallError:
-            return "not restarted: run `hermes gateway restart` in a terminal"
 
     # commands --------------------------------------------------------------------------------------
 
@@ -238,90 +180,173 @@ class Admin:
         self.write_bots(data)
         return {"bot": bot, "role": "bootstrap"}
 
-    def add_project(self, bot: str, project: str, repos: list[str], home_repo: str | None, model: str | None) -> dict:
+    def add_project(self, bot: str, project: str, repo: str, model: str | None) -> dict:
         check_name(bot, "bot")
         check_name(project, "project")
-        for repo in repos:
-            check_repo(repo)
+        check_repo(repo)
         data = self.bots_file()
         current = data["bots"].get(bot)
         if current and (current.get("role") != "project" or current.get("project") != project):
             raise Refused(f"{bot} is already the {current.get('role')} bot{' of ' + current['project'] if current.get('project') else ''}")
-        merged = list(current.get("repos", [])) if current else []
-        merged += [r for r in repos if r.lower() not in {m.lower() for m in merged}]
-        entry = {"role": "project", "project": project, "repos": merged, "home": home_repo or (current or {}).get("home") or merged[0]}
-        data["bots"][bot] = entry
-        load_policy_from(self.home, data)
-        name, route = self.route(bot, project)
-        webhook_updates(self.root, name, route)
+        if current and str(current.get("repo", "")).lower() != repo.lower():
+            raise Refused(f"project {project} is {current.get('repo')}; a project has one repository, so start another project for {repo}")
+        data["bots"][bot] = {"role": "project", "project": project, "repo": current.get("repo") if current else repo}
+        load_policy_from(self.home, data)  # refuses a repository another project owns
+        for name, color, description in LABELS:
+            self.run(["label", "create", name, "-R", repo, "--color", color, "--description", description, "--force"])
         self.setup_files(bot, "project", project, model)
-        self.ensure_board(project)
-        changed = self.apply_route(bot, project)
         created = self.ensure_jobs(bot)
         self.write_bots(data)
         return {
-            "bot": bot, "project": project, "repos": merged, "route": f"/p/{bot}/webhooks/{name}", "jobs_created_paused": created,
-            "gateway": self.restart_gateway() if changed else "unchanged",
-            "next": [f"Put the bot's GitHub token in {profile_home(self.root, bot) / '.env'} as GH_TOKEN (Issues read and write, Contents and Pull requests and Checks read)",
-                     f"team-kit-admin add-repo --project {project} --repo <OWNER/REPO> for each repository",
+            "bot": bot, "project": project, "repo": repo, "labels": [n for n, _, _ in LABELS], "jobs_created_paused": created,
+            "next": [f"team-kit-admin setup-repo --project {project} --backend claude|codex",
+                     f"The owner puts the bot's GitHub token in {profile_home(self.root, bot) / '.env'} as GH_TOKEN",
                      f"team-kit-admin activate --bot {bot}"],
         }
 
-    def add_repo(self, project: str, repo: str) -> dict:
-        check_repo(repo)
-        policy = self.policy()
+    def project_bot(self, policy: Policy, project: str):
         bot = policy.projects().get(project)
         if bot is None:
-            raise Refused(f"no project {project}; run add-project first")
-        owner = policy.owner_of(repo)
-        if owner is not None and owner.name != bot.name:
-            raise Refused(f"{repo} already belongs to project {owner.project}")
-        for name, color, description in LABELS:
-            self.run(["label", "create", name, "-R", repo, "--color", color, "--description", description, "--force"])
-        hook = self.ensure_hook(policy, bot.name, project, repo)
-        data = self.bots_file()
-        entry = data["bots"][bot.name]
-        if repo.lower() not in {r.lower() for r in entry.get("repos", [])}:
-            entry.setdefault("repos", []).append(repo)
-        self.write_bots(data)
-        return {"project": project, "repo": repo, "labels": [n for n, _, _ in LABELS], "webhook": hook}
+            raise Refused(f"no project {project}; create it with add-project first")
+        return bot
 
-    def ensure_hook(self, policy: Policy, bot: str, project: str, repo: str) -> str:
-        if not policy.webhook_base_url:
-            return "skipped: set webhook_base_url in guard.yaml, then run add-repo again"
-        url = f"{policy.webhook_base_url}/p/{bot}/webhooks/team-kit-{project}"
-        for hook in json.loads(self.run(["api", f"repos/{repo}/hooks"]) or "[]"):
-            if (hook.get("config") or {}).get("url") == url:
-                return f"exists: {url}"
-        body = {"name": "web", "active": True, "events": ["pull_request", "issue_comment", "check_suite"],
-                "config": {"url": url, "content_type": "json", "secret": self.secret(), "insecure_ssl": "0"}}
-        self.run(["api", "-X", "POST", f"repos/{repo}/hooks", "--input", "-"], input=json.dumps(body))
-        return f"created: {url}"
+    def api(self, path: str, method: str = "GET", body: dict | None = None):
+        args = ["api", "-X", method, path] if method != "GET" else ["api", path]
+        if body is not None:
+            args += ["--input", "-"]
+        out = self.run(args, input=json.dumps(body)) if body is not None else self.run(args)
+        return json.loads(out) if out.strip() else None
 
-    def bootstrap_repo(self, project: str, repo: str, backend: str, codex_env: str | None) -> dict:
+    def vendored_ref(self, repo: str, branch: str) -> str | None:
+        """The kit commit vendored on a branch, or None."""
+        try:
+            data = self.api(f"repos/{repo}/contents/{VENDOR_MANIFEST}?ref={quote(branch, safe='')}")
+            return json.loads(base64.b64decode(data["content"]))["kit_ref"]
+        except (Refused, ValueError, KeyError, TypeError):
+            return None
+
+    def vendor_module(self):
+        """vendor_kit.py from the pinned kit, so the copy and its manifest match that commit."""
+        path = self.kit / "plugins" / "trust-ladder" / "skills" / "setup-cloud-agents" / "scripts" / "vendor_kit.py"
+        if not path.is_file():
+            raise Refused(f"the kit at {path.parents[5]} has no vendor_kit.py; pin a newer kit commit")
+        spec = importlib.util.spec_from_file_location("team_kit_vendor_kit", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module  # dataclasses look their module up while the class is built
+        writes, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # leave the kit checkout clean
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = writes
+        return module
+
+    def vendor(self, project: str) -> dict:
+        """Commit the pinned kit into the project's repository through the GitHub API, on a branch,
+        and open a pull request. No git push, so the Hermes machine needs no git credentials."""
+        repo = self.project_bot(self.policy(), project).repo
+        vk = self.vendor_module()
+        try:
+            kit_ref = vk.kit_commit(self.kit)
+            plan = vk.plan(self.kit, kit_ref)
+        except vk.VendorError as err:
+            raise Refused(str(err)) from None
+        default = self.api(f"repos/{repo}")["default_branch"]
+        ref_path, ref_query = quote(default, safe="/"), quote(default, safe="")
+        base = self.api(f"repos/{repo}/git/ref/heads/{ref_path}")["object"]["sha"]
+        base_tree = self.api(f"repos/{repo}/git/commits/{base}")["tree"]["sha"]
+        listing = self.api(f"repos/{repo}/git/trees/{base_tree}?recursive=1")
+        if listing.get("truncated"):
+            raise Refused(f"{repo} is too large to list through the API; run vendor_kit.py --into in a clone instead")
+        existing = {e["path"]: e for e in listing.get("tree") or []}
+        link_dirs = {place for places in vk.LINK_DIRS.values() for place, _ in places}
+        for link_dir in sorted(link_dirs):
+            if existing.get(link_dir, {}).get("mode") == "120000":
+                raise Refused(f"{link_dir} in {repo} is a symlink; make it a real folder first, so the kit's relative links resolve")
+
+        def link_target(entry) -> str:
+            blob = self.api(f"repos/{repo}/git/blobs/{entry['sha']}")
+            return base64.b64decode(blob["content"]).decode()
+
+        targets: dict[str, bool] = {}
+
+        def ours(entry) -> bool:
+            if entry.get("mode") != "120000":
+                return False
+            if entry["sha"] not in targets:
+                targets[entry["sha"]] = vk.points_into_vendor(link_target(entry))
+            return targets[entry["sha"]]
+
+        entries = [{"path": path, "mode": "100755" if executable else "100644", "type": "blob", "content": data.decode()}
+                   for path, (data, executable) in sorted(plan.files.items())]
+        stale = [path for path, e in existing.items() if path.startswith(f"{vk.VENDOR_DIR}/") and e["type"] == "blob"
+                 and path not in plan.files and path != vk.MANIFEST]
+        linked, skipped = vk.choose_links(plan.links, lambda path: path in existing and not ours(existing[path]))
+        planned = {path for path, _ in linked}
+        entries += [{"path": path, "mode": "120000", "type": "blob", "content": target} for path, target in linked]
+        stale += [path for path, e in existing.items() if path.rsplit("/", 1)[0] in link_dirs and path not in planned and ours(e)]
+        entries += [{"path": path, "mode": existing[path]["mode"], "type": "blob", "sha": None} for path in sorted(stale)]
+        entries.append({"path": vk.MANIFEST, "mode": "100644", "type": "blob", "content": plan.manifest(linked).decode()})
+        if vk.DISPATCH in existing:
+            text = base64.b64decode(self.api(f"repos/{repo}/contents/{vk.DISPATCH}?ref={ref_query}")["content"]).decode()
+            try:
+                moved = vk.move_kit_ref(text, kit_ref)
+            except vk.VendorError as err:
+                raise Refused(str(err)) from None
+            if moved:
+                entries.append({"path": vk.DISPATCH, "mode": "100644", "type": "blob", "content": moved})
+        tree = self.api(f"repos/{repo}/git/trees", "POST", {"base_tree": base_tree, "tree": entries})["sha"]
+        result = {"project": project, "repo": repo, "kit_ref": kit_ref, "files": len(plan.files), "links": len(linked),
+                  "kept_repository_own": skipped, "removed": sorted(stale)}
+        if tree == base_tree:
+            return {**result, "pr": None, "note": f"{default} already has the kit at {kit_ref[:12]}"}
+        short = kit_ref[:12]
+        commit = self.api(f"repos/{repo}/git/commits", "POST",
+                          {"message": f"chore(agents): vendor team-kit {short}", "tree": tree, "parents": [base]})["sha"]
+        branch = f"team-kit/kit-{short}"
+        try:
+            self.api(f"repos/{repo}/git/ref/heads/{quote(branch, safe='/')}")
+            self.api(f"repos/{repo}/git/refs/heads/{quote(branch, safe='/')}", "PATCH", {"sha": commit, "force": True})
+        except Refused:
+            self.api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": commit})
+        open_prs = [pr for pr in self.api(f"repos/{repo}/pulls?state=open&base={ref_query}&per_page=100") or []
+                    if str((pr.get("head") or {}).get("ref", "")).startswith("team-kit/kit-")]
+        mine = [pr["html_url"] for pr in open_prs if pr["head"]["ref"] == branch]
+        superseded = sorted(pr["html_url"] for pr in open_prs if pr["head"]["ref"] != branch)
+        if mine:
+            url = mine[0]
+        else:
+            body = (f"Copies the team kit at `{kit_ref}` into `.agents/team-kit/`, and links its skills from `.claude/skills/` and "
+                    "`.agents/skills/` and its subagents from `.claude/agents/`, so every agent session, cloud sessions included, "
+                    "has them. Generated by `team-kit-admin vendor`; nothing under `.agents/team-kit/` is edited by hand.\n\n"
+                    f"`python3 .agents/team-kit/vendor_kit.py --check .` verifies the copy. Kept the repository's own: "
+                    f"{', '.join(skipped) or 'none'}. Removed: {', '.join(sorted(stale)) or 'nothing'}.")
+            url = self.api(f"repos/{repo}/pulls", "POST", {"title": f"chore(agents): vendor team-kit {short}", "head": branch,
+                                                         "base": default, "body": body})["html_url"]
+        return {**result, "branch": branch, "pr": url, "superseded": superseded}
+
+    def setup_repo(self, project: str, backend: str, codex_env: str | None) -> dict:
         policy = self.policy()
-        bot = policy.projects().get(project)
-        if bot is None or not bot.owns(repo):
-            raise Refused(f"{repo} is not a repository of project {project}; run add-repo first")
+        bot = self.project_bot(policy, project)
+        repo = bot.repo
         if backend == "codex" and not codex_env:
             raise Refused("codex needs --codex-env, the Codex cloud environment id for this repository")
         commit = git(self.kit, "rev-parse", "HEAD")
-        source = os.environ.get("TEAM_KIT_SOURCE_URL") or git(self.kit, "remote", "get-url", "origin")
-        if not source.startswith("https://"):
-            raise Refused(f"kit source {source} is not an https URL a cloud session can clone; set TEAM_KIT_SOURCE_URL")
-        prompt = bootstrap_prompt(repo, project, bot.home or repo, backend, source, commit, sorted(policy.trusted_authors), codex_env)
+        default = self.api(f"repos/{repo}")["default_branch"]
+        vendored = self.vendored_ref(repo, default)
+        if vendored != commit:
+            found = f"has the kit at {vendored[:12]}" if vendored else "has no vendored kit"
+            raise Refused(f"{repo} {default} {found}, not {commit[:12]}; run team-kit-admin vendor --project {project} and merge its pull request first")
+        prompt = bootstrap_prompt(repo, project, backend, commit, sorted(policy.trusted_authors), codex_env)
         argv = cloud_argv(backend, prompt, 1, codex_env)
         owner, name = repo.split("/")
         try:
-            session = self.cloud.start(backend, repo, argv, self.home / "checkouts" / f"{owner}__{name}" / "bootstrap")
+            session = self.cloud.start(backend, repo, argv, self.home / "checkouts" / f"{owner}__{name}" / "setup")
         except CloudError as err:
-            raise Refused(f"bootstrap launch failed: {err}") from err
+            raise Refused(f"setup launch failed: {err}") from err
         return {"project": project, "repo": repo, "backend": backend, "kit_ref": commit, "session": session}
 
-    def protect(self, repo: str, checks: list[str]) -> dict:
-        policy = self.policy()
-        if policy.owner_of(repo) is None:
-            raise Refused(f"{repo} is not a repository of any project")
+    def protect(self, project: str, checks: list[str]) -> dict:
+        repo = self.project_bot(self.policy(), project).repo
         if not checks:
             raise Refused("name at least one --check, such as the CI job that runs scripts/check.sh")
         branch = json.loads(self.run(["api", f"repos/{repo}"]))["default_branch"]
@@ -335,39 +360,35 @@ class Admin:
         me = policy.bot(bot)
         if me.role != "project":
             raise Refused(f"{bot} is not a project bot")
-        if not me.repos:
-            raise Refused(f"{bot} has no repositories; run add-repo first")
         if not self.has_env(profile_home(self.root, bot), "GH_TOKEN"):
             raise Refused(f"{bot} has no GH_TOKEN in {profile_home(self.root, bot) / '.env'}")
         resumed = []
         for name, job in cron_jobs(hermes("-p", bot, "cron", "list", "--all")).items():
-            if name in ("team-kit-drain", "team-kit-status") and not job["enabled"]:
+            if name in JOBS and not job["enabled"]:
                 hermes("-p", bot, "cron", "resume", job["id"])
                 resumed.append(name)
         return {"bot": bot, "resumed": resumed}
 
     def status(self) -> dict:
         policy = self.policy()
-        out = {"max_in_flight_total": policy.max_in_flight_total, "trusted_authors": sorted(policy.trusted_authors),
-               "webhook_base_url": policy.webhook_base_url, "bots": []}
+        out = {"max_in_flight_total": policy.max_in_flight_total, "trusted_authors": sorted(policy.trusted_authors), "bots": []}
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
             item = {"bot": bot.name, "role": bot.role}
             if bot.role == "project":
-                item.update(project=bot.project, home=bot.home, github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"))
+                item.update(project=bot.project, github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"))
                 try:
                     item["jobs"] = {n: j["enabled"] for n, j in cron_jobs(hermes("-p", bot.name, "cron", "list", "--all")).items() if n.startswith("team-kit-")}
                 except InstallError as err:
                     item["jobs"] = f"unreadable: {err}"
-                item["repos"] = [self.repo_status(policy, bot.name, bot.project, repo) for repo in bot.repos]
-                counts = {r["repo"]: r["running"] for r in item["repos"] if isinstance(r.get("running"), int)}
-                if len(counts) == len(bot.repos):
+                item["repo"] = self.repo_status(bot.repo)
+                if isinstance(item["repo"].get("running"), int):
                     # This login sees every project, so it refreshes each project bot's count for the
                     # machine-wide limit, even for a bot whose jobs are paused.
-                    write_in_flight(self.home, bot.name, counts)
+                    write_in_flight(self.home, bot.name, {bot.repo: item["repo"]["running"]})
             out["bots"].append(item)
         return out
 
-    def repo_status(self, policy: Policy, bot: str, project: str, repo: str) -> dict:
+    def repo_status(self, repo: str) -> dict:
         item: dict = {"repo": repo}
         try:
             names = {label["name"] for label in json.loads(self.run(["api", f"repos/{repo}/labels?per_page=100"]))}
@@ -378,14 +399,6 @@ class Admin:
                 item["dispatch_json"] = True
             except Refused:
                 item["dispatch_json"] = False
-            if policy.webhook_base_url:
-                url = f"{policy.webhook_base_url}/p/{bot}/webhooks/team-kit-{project}"
-                hook = next((h for h in json.loads(self.run(["api", f"repos/{repo}/hooks"]) or "[]") if (h.get("config") or {}).get("url") == url), None)
-                if hook is None:
-                    item["webhook"] = "missing"
-                else:
-                    deliveries = json.loads(self.run(["api", f"repos/{repo}/hooks/{hook['id']}/deliveries?per_page=1"]) or "[]")
-                    item["webhook"] = f"last delivery {deliveries[0].get('status_code')}" if deliveries else "no deliveries yet"
         except (Refused, ValueError, KeyError) as err:
             item["error"] = str(err)[:200]
         return item
@@ -396,23 +409,24 @@ class Admin:
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
             self.setup_files(bot.name, bot.role, bot.project, None)
             if bot.role == "project":
-                self.ensure_board(bot.project)
-                self.apply_route(bot.name, bot.project)
                 self.ensure_jobs(bot.name)
             done.append(bot.name)
         return {"synced": done}
 
 
 def write_in_flight(home: Path, bot: str, counts: dict[str, int]) -> None:
+    """Under the same lock team-kit-gh launch holds, so this never overwrites a launch's count."""
     directory = home / "in-flight"
     directory.mkdir(parents=True, exist_ok=True)
-    target = directory / f"{bot}.json"
-    tmp = target.with_name(f".{target.name}.{os.getpid()}")
-    tmp.write_text(json.dumps({"at": time.time(), "repos": counts}))
-    tmp.replace(target)
+    with open(directory / ".lock", "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        target = directory / f"{bot}.json"
+        tmp = target.with_name(f".{target.name}.{os.getpid()}")
+        tmp.write_text(json.dumps({"at": time.time(), "repos": counts}))
+        tmp.replace(target)
 
 
-def load_policy_from(home: Path, bots: dict) -> None:
+def load_policy_from(home: Path, bots: dict) -> Policy:
     """Validate a bots.yaml mapping against guard.yaml before anything is written."""
     import yaml as _yaml
 
@@ -422,7 +436,7 @@ def load_policy_from(home: Path, bots: dict) -> None:
         guard = _yaml.safe_load((home / "guard.yaml").read_text())
     except OSError:
         raise Refused(f"no guard.yaml in {home}; run hermes/install.sh") from None
-    parse_policy(guard, bots, home)
+    return parse_policy(guard, bots, home)
 
 
 def check_name(value: str, what: str) -> None:
@@ -455,19 +469,16 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("add-project")
     cmd.add_argument("--bot", required=True)
     cmd.add_argument("--project", required=True)
-    cmd.add_argument("--repos", required=True, help="comma-separated OWNER/REPO list")
-    cmd.add_argument("--home", help="the repository that holds PROJECT.md (default: the first)")
+    cmd.add_argument("--repo", required=True, help="the project's one OWNER/REPO")
     cmd.add_argument("--model")
-    cmd = sub.add_parser("add-repo")
+    cmd = sub.add_parser("vendor")
     cmd.add_argument("--project", required=True)
-    cmd.add_argument("--repo", required=True)
-    cmd = sub.add_parser("bootstrap-repo")
+    cmd = sub.add_parser("setup-repo")
     cmd.add_argument("--project", required=True)
-    cmd.add_argument("--repo", required=True)
     cmd.add_argument("--backend", required=True, choices=["claude", "codex"])
     cmd.add_argument("--codex-env")
     cmd = sub.add_parser("protect")
-    cmd.add_argument("--repo", required=True)
+    cmd.add_argument("--project", required=True)
     cmd.add_argument("--check", action="append", default=[])
     cmd = sub.add_parser("activate")
     cmd.add_argument("--bot", required=True)
@@ -512,22 +523,20 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
         elif args.command == "add-bootstrap":
             out = admin.add_bootstrap(args.bot, args.model)
         elif args.command == "add-project":
-            repos = [r.strip() for r in args.repos.split(",") if r.strip()]
-            if not repos:
-                raise Refused("--repos needs at least one OWNER/REPO")
-            if args.home and args.home.lower() not in {r.lower() for r in repos}:
-                raise Refused("--home must be one of --repos")
-            out = admin.add_project(args.bot, args.project, repos, args.home, args.model)
-        elif args.command == "add-repo":
-            out = admin.add_repo(args.project, args.repo)
-        elif args.command == "bootstrap-repo":
-            out = admin.bootstrap_repo(args.project, args.repo, args.backend, args.codex_env)
+            out = admin.add_project(args.bot, args.project, args.repo, args.model)
+        elif args.command == "vendor":
+            out = admin.vendor(args.project)
+        elif args.command == "setup-repo":
+            out = admin.setup_repo(args.project, args.backend, args.codex_env)
         elif args.command == "protect":
-            out = admin.protect(args.repo, args.check)
+            out = admin.protect(args.project, args.check)
         else:
             out = admin.activate(args.bot)
     except (Refused, InstallError, PolicyError, ContractError, yaml.YAMLError) as err:
         print(f"team-kit-admin: refused: {err}", file=sys.stderr)
+        return 1
+    except Exception as err:  # noqa: BLE001 - the bot gets one refusal line, never a traceback
+        print(f"team-kit-admin: refused: unexpected {type(err).__name__}: {str(err)[:300]}", file=sys.stderr)
         return 1
     print(json.dumps(out, ensure_ascii=False))
     return 0

@@ -25,21 +25,28 @@ Run it in a clean container (for example `docker run --rm -v "$PWD:/repo" -w /re
 
 ## 2. Make the kit load in every session
 
-A cloud container starts with no plugins installed by any person, so the repository has to bring the kit with it.
+A cloud session starts from a clone of the repository and nothing else. It does not install the plugins `.claude/settings.json` enables, Codex cloud loads no plugins at all, and neither can clone the kit when the kit's repository is private: the session's GitHub access reaches only the repository it was started on. Both do load skills committed to the repository: Claude Code from `.claude/skills/` and `.claude/agents/`, Codex and Pi from `.agents/skills/`. So the repository carries the kit with it.
 
-1. Commit `.claude/settings.json` from `templates/claude-settings.json` if `setup-team-kit` has not already. It declares the team-kit marketplace and enables its plugins for everyone who opens the repository.
-2. Allow the network access the kit needs: GitHub, for the marketplace and plugin downloads.
-3. Link the repository's own skills with `scripts/link-skills.sh` (from `setup-team-kit`), so they load even where plugins do not.
+1. Vendor the kit. From a checkout of the kit at the commit the team pins (the one in `.pi/settings.json` and, for dispatch, `.agents/dispatch.json`), run:
 
-Step 5 proves that `/start-here` resolves in a fresh session. If it does not, add `claude plugin marketplace add tsnAnh/team-kit` and `claude plugin install trust-ladder@team-kit` to the end of `scripts/cloud-setup.sh`, guarded by `CLAUDE_CODE_REMOTE`.
+   ```bash
+   python3 plugins/trust-ladder/skills/setup-cloud-agents/scripts/vendor_kit.py --kit . --into <repository>
+   ```
 
-Codex cloud tasks do not load plugins at all; they read skills from `.agents/skills` in the repository and from `~/.agents/skills`. Copy `scripts/install-kit-skills.sh` from this skill to the repository's `scripts/`. Run from the Codex environment's setup script, it fetches the kit at a pinned commit into `~/.team-kit` and links every kit skill into `~/.agents/skills`, outside the repository, so no task's diff picks them up. Plugin hooks do not run there either, so the compat block in AGENTS.md (from `setup-team-kit`) is what tells Codex how to read the upstream skills.
+   It copies every kit plugin into `.agents/team-kit/` (without their docs and the kit's own tests), records the commit and a hash of every file in `.agents/team-kit/KIT.json`, and links each kit skill into `.claude/skills/` and `.agents/skills/` and each subagent into `.claude/agents/`. When the repository already has its own skill of a kit skill's name, such as its own `follow-brief`, the kit's is linked nowhere, so every agent runs the repository's; the script lists what it kept. It also moves `kit_ref` in `.agents/dispatch.json` to the vendored commit, and refuses when the repository's ignore rules would leave a vendored file or link out of the commit. On a Hermes machine, `team-kit-admin vendor --project <name>` does the same through the GitHub API and opens the pull request.
+2. Add `python3 .agents/team-kit/vendor_kit.py --check .` to `scripts/check.sh`. It fails when anyone edits the vendored copy, a link breaks, or `.agents/dispatch.json` pins another commit. Changes to the kit go to the kit's repository; to take them, rerun step 1 at the new commit and commit the result.
+3. Keep `.claude/settings.json` from `setup-team-kit`: it still installs the kit as plugins on engineers' own machines, where the plugin hooks run. In Claude Code a plugin skill is named `trust-ladder:follow-brief` and the vendored one `follow-brief`, so the two never clash. Pi on an engineer's machine sees each kit skill twice, from `.pi/settings.json` and from `.agents/skills/`, and keeps the first; pin `.pi/settings.json` to the vendored commit so both are the same.
+4. Link the repository's own skills with `scripts/link-skills.sh` (from `setup-team-kit`) as before.
+
+Plugin hooks do not run in a cloud session, so the compat block in AGENTS.md (from `setup-team-kit`) is what tells the agent how to read the upstream skills. Step 5 proves that `/start-here` resolves in a fresh session.
+
+`scripts/install-kit-skills.sh` in this skill is the older route for Codex: it fetches the kit at a pinned commit into `~/.agents/skills` from the setup script. It works only while the kit's repository is public, and a vendored kit makes it unnecessary.
 
 ## 3. Wire it into each agent's cloud
 
-- **Claude Code on the web** (also what the Claude desktop and mobile apps run). In the cloud environment's settings, set the setup script to `bash scripts/cloud-setup.sh`, set network access to what the script and step 2 need, and add environment variables and API credentials. The result is cached between sessions. For steps that must run in every session, such as starting a local database, add a `SessionStart` hook to `.claude/settings.json` that runs only when `CLAUDE_CODE_REMOTE` is `true`. Name the environment after the repository, so non-engineers can pick it without asking.
+- **Claude Code on the web** (also what the Claude desktop and mobile apps run). In the cloud environment's settings, set the setup script to `bash scripts/cloud-setup.sh`, set network access to what the script needs, and add environment variables and API credentials. The result is cached between sessions. For steps that must run in every session, such as starting a local database, add a `SessionStart` hook to `.claude/settings.json` that runs only when `CLAUDE_CODE_REMOTE` is `true`. Name the environment after the repository, so non-engineers can pick it without asking.
 - **Codex cloud** (Codex on the web, in the ChatGPT app, and behind `@codex` on GitHub, Slack, and Linear). At chatgpt.com/codex, create an environment for the repository:
-  - Setup script: `bash scripts/cloud-setup.sh && bash scripts/install-kit-skills.sh --ref <kit commit>`. Pin the same commit as `.pi/settings.json`, so every agent runs the same kit. Add a maintenance script that reruns the second command, so a cached container picks up a new pin.
+  - Setup script: `bash scripts/cloud-setup.sh`. The kit's skills come from the vendored `.agents/skills/` in the clone, so a new kit commit reaches every task as soon as its vendoring pull request merges.
   - Codex runs in two phases. The setup script has the network and the environment's secrets; the agent phase that follows has neither, by default. So the setup script must install everything, build once, and seed test data, and the verification skill must run on seeded local accounts with no API keys. Where the app needs an outside service, point it at a local fake. Turn on agent internet access only if verification cannot work without it, limited to a domain allowlist and to `GET`, `HEAD`, and `OPTIONS`.
   - The agent cannot push, open the pull request, label, or comment. When the task ends, the person presses the button to open a pull request from its diff; Codex writes the pull request from the task. CODEOWNERS still requests the right reviewer.
   - Codex reads the commands in AGENTS.md; keep them exact.
@@ -77,4 +84,4 @@ Record the time from session start to a passing check. If it is over ten minutes
 
 ## Report
 
-The setup script, where it is wired in each agent, whether the kit loads in a fresh session of each (and the kit commit Codex links), the proof for each surface and where the rest is verified, the link to the test pull request, the time to a passing check, and the next steps: send non-engineers [the browser guide](https://github.com/tsnAnh/team-kit/blob/main/docs/how-to/use-the-kit-from-the-browser.md), and run `trust-audit` to see how many agents the repository can take in parallel.
+The setup script, where it is wired in each agent, the vendored kit commit and any kit skills the repository's own kept out, whether the kit loads in a fresh session of each, the proof for each surface and where the rest is verified, the link to the test pull request, the time to a passing check, and the next steps: send non-engineers [the browser guide](https://github.com/tsnAnh/team-kit/blob/main/docs/how-to/use-the-kit-from-the-browser.md), and run `trust-audit` to see how many agents the repository can take in parallel.

@@ -44,7 +44,9 @@ It writes one setup script that boots the repository from nothing and wires it i
 /faker-mode improve the initial loading time of our app. first use the verification skill to take a trace of the status quo and identify opportunities. then make a targeted fix, and use it with /swarm to confirm the win.
 ```
 
-In Codex cloud the kit's skills come from `scripts/install-kit-skills.sh` in the environment's setup script, since cloud tasks do not load plugins; you open each task's pull request from the task. Pi has no managed cloud; Pi users run `scripts/cloud-setup.sh` in a remote container, or use pi-subagents background runs for small fan-outs.
+To start and track these cloud sessions from a chat instead, one pull request per unit, see [Dispatch work with Hermes](dispatch-with-hermes.md).
+
+Cloud sessions in both agents load no plugins and start from a clone of the repository, so `/setup-cloud-agents` vendors the kit into the repository's `.agents/team-kit/` and links its skills into `.claude/skills/` and `.agents/skills/`. In Codex cloud you open each task's pull request from the task. Pi has no managed cloud; Pi users run `scripts/cloud-setup.sh` in a remote container, or use pi-subagents background runs for small fan-outs.
 
 ## 4. Let work run while you are away
 

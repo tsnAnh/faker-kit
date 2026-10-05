@@ -18,14 +18,6 @@ if args[:2] == ["profile", "create"]:
     if os.environ.get("FAKE_PROFILE_CREATE_FAIL"):
         sys.exit(1)
     (root / "profiles" / args[2]).mkdir(parents=True)
-elif args[:2] == ["kanban", "boards"]:
-    boards_path = root / "boards.json"
-    boards = json.loads(boards_path.read_text()) if boards_path.exists() else [{"slug": "default", "name": "Default"}]
-    if args[2] == "list":
-        print(json.dumps(boards))
-    elif args[2] == "create":
-        boards.append({"slug": args[3], "name": args[args.index("--name") + 1]})
-        boards_path.write_text(json.dumps(boards))
 elif args[:2] == ["config", "set"]:
     key, value = args[2:4]
     if os.environ.get("FAKE_CONFIG_FAIL") == key:
