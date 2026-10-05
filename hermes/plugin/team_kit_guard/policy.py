@@ -138,6 +138,7 @@ class Policy:
     trusted_authors: frozenset[str]
     max_in_flight_total: int
     require_brief_marker: bool = True
+    alert_hosts: frozenset[str] = frozenset()
     bots: dict[str, Bot] = field(default_factory=dict)
     home: Path = field(default_factory=team_kit_home)
 
@@ -200,6 +201,18 @@ def parse_bots(data) -> dict[str, Bot]:
     return bots
 
 
+ALERT_HOST = re.compile(r"\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+\Z")
+
+
+def parse_alert_hosts(value) -> frozenset[str]:
+    """Hosts an alert source may send its token to, besides each source's own default. Only the owner edits this."""
+    if value is None:
+        return frozenset()
+    if not isinstance(value, list) or any(not isinstance(h, str) or not ALERT_HOST.match(h.lower()) for h in value):
+        raise PolicyError("guard.yaml alert_hosts must be a list of bare host names, such as grafana.example.com")
+    return frozenset(h.lower() for h in value)
+
+
 def parse_policy(data, bots=None, home: Path | None = None) -> Policy:
     if isinstance(data, dict) and data.get("version") == 1:
         raise PolicyError(MIGRATE_V1)
@@ -215,6 +228,7 @@ def parse_policy(data, bots=None, home: Path | None = None) -> Policy:
         trusted_authors=frozenset(str(a).lower() for a in data.get("trusted_authors") or []),
         max_in_flight_total=total,
         require_brief_marker=bool(data.get("require_brief_marker", True)),
+        alert_hosts=parse_alert_hosts(data.get("alert_hosts")),
         bots=parse_bots(bots),
         home=home or team_kit_home(),
     )

@@ -122,7 +122,9 @@ None of these uses a model to decide. Each is code or configuration.
 - **Pull the andon cord** when something is going wrong: tell a project bot "stop", or the bootstrap bot "stop everything". The bot runs `team-kit-gh andon raise <reason>` (or `team-kit-admin andon raise <reason>`), which opens an `agent:andon` issue that every agent at work checks before it pushes. You can open such an issue on GitHub yourself, too; the next tick adopts it. Agents that stop post a `blocked` report, so each becomes a gate. When it is fixed, ask the bot to clear the cord and to relaunch the gated units.
 - **Act on incidents.** Every 10 minutes each project bot polls the default branch's checks, the health URLs in `.agents/dispatch.json`, and optional external alert sources, outbound from your machine, so nothing needs a public address or a webhook. A failure opens an `agent:incident` issue and a [triage-incident](../../plugins/trust-ladder/skills/triage-incident/SKILL.md) session that changes nothing and posts a signed diagnosis there. You get a line when it opens, when the diagnosis names a suspect, and when it passes again. Tell the bot the fix in your own words, such as "revert abc1234", and it briefs a unit. Set `incidents.andon_on_red` to stop the line while the branch is red.
 
-  `incidents.sources` can poll Sentry unresolved issues at or above a level, PagerDuty open incidents on one service, Datadog monitors in Alert, and Grafana firing alerts. The config stores only environment variable names; put the actual tokens in the project bot profile's `.env`.
+  `incidents.sources` can poll Sentry unresolved issues at or above a level, PagerDuty open incidents on one service, Datadog monitors in Alert, and Grafana firing alerts. The config stores only environment variable names; put the actual tokens in the project bot profile's `.env`. Each `token_env` (and Datadog's `app_key_env`) must start with `TEAM_KIT_ALERT_`, so a config change can never name the bot's GitHub token. A token goes only to a pinned host: `sentry.io`, `api.pagerduty.com`, or Datadog's own API hosts. Grafana, self-hosted Sentry, and any other host must be listed under `alert_hosts` in the machine's `guard.yaml`, which only you edit. Sentry's `min_level` defaults to `error`.
+
+  A source that cannot be read (an expired token, an HTTP error, an unset variable) tells you once and leaves its other checks running. Alert text from these sources never reaches the triage prompt: the prompt gets only the source and a count, and example titles sit in the incident issue under a block marked as untrusted data.
 
   ```json
   {
@@ -135,27 +137,27 @@ None of these uses a model to decide. Each is code or configuration.
           "project": "api",
           "environment": "production",
           "min_level": "error",
-          "token_env": "SENTRY_TOKEN"
+          "token_env": "TEAM_KIT_ALERT_SENTRY"
         },
         {
           "type": "pagerduty",
           "name": "pager-api",
           "service_id": "P12345",
-          "token_env": "PAGERDUTY_TOKEN"
+          "token_env": "TEAM_KIT_ALERT_PAGERDUTY"
         },
         {
           "type": "datadog",
           "name": "dd-api",
           "site": "datadoghq.com",
           "monitor_tags": ["service:api"],
-          "token_env": "DATADOG_API_KEY",
-          "app_key_env": "DATADOG_APP_KEY"
+          "token_env": "TEAM_KIT_ALERT_DATADOG_API",
+          "app_key_env": "TEAM_KIT_ALERT_DATADOG_APP"
         },
         {
           "type": "grafana",
           "name": "grafana-prod",
           "url": "https://grafana.example.com",
-          "token_env": "GRAFANA_TOKEN"
+          "token_env": "TEAM_KIT_ALERT_GRAFANA"
         }
       ]
     }

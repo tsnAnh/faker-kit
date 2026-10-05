@@ -28,7 +28,8 @@ BOTS = {
 
 
 def guard_text():
-    return GUARD_TEMPLATE.read_text().replace("  - OWNER-LOGIN", "  - Codertocat\n  - meo-beo-gh")
+    text = GUARD_TEMPLATE.read_text().replace("  - OWNER-LOGIN", "  - Codertocat\n  - meo-beo-gh")
+    return text + "\nalert_hosts:\n  - grafana.example.com\n"
 
 
 @pytest.fixture

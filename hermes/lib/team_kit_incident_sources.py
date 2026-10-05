@@ -6,7 +6,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -22,15 +22,44 @@ DEFAULT_GRAFANA_ALERTS_PATH = "/api/prometheus/grafana/api/v1/alerts"
 HTTP_TIMEOUT_SECONDS = 10
 
 
+ALERT_ENV_PREFIX = "TEAM_KIT_ALERT_"
+FORBIDDEN_ENV = re.compile(r"\A(GH_TOKEN|GH_[A-Z0-9_]*|GITHUB_[A-Z0-9_]*)\Z", re.IGNORECASE)
+HOST_NAME = re.compile(r"\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+\Z")
+DEFAULT_SENTRY_HOST = "sentry.io"
+DEFAULT_PAGERDUTY_HOST = "api.pagerduty.com"
+DATADOG_SITES = ("datadoghq.com", "datadoghq.eu", "us3.datadoghq.com", "us5.datadoghq.com",
+                 "ap1.datadoghq.com", "ap2.datadoghq.com", "ddog-gov.com")
+DATADOG_HOSTS = frozenset(f"api.{site}" for site in DATADOG_SITES)
+DEFAULT_SENTRY_LEVEL = "error"
+MAX_EXAMPLES = 3
+
+
 class IncidentSourceError(Exception):
     pass
 
 
 @dataclass(frozen=True)
 class ExternalObservation:
+    """What one source says. `title` is built from the source key and a count only, so it is safe to put in
+    a prompt. `examples` is third-party alert text: data for a fenced block, never for a prompt."""
+
     key: str
     title: str
     failing: bool
+    examples: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SourceFailure:
+    key: str
+    problem: str
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would carry the token's header to another host, so a redirect is an error."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
 
 
 def fetch_json(url: str, headers: Mapping[str, str]) -> Any:
@@ -40,7 +69,7 @@ def fetch_json(url: str, headers: Mapping[str, str]) -> Any:
         headers={"Accept": "application/json", "User-Agent": "team-kit-incidents", **dict(headers)},
     )
     try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:  # noqa: S310 - URLs are validated as https.
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:  # noqa: S310 - URLs are validated: https, pinned host.
             body = response.read(2_000_000)
     except urllib.error.HTTPError as err:
         raise IncidentSourceError(f"{_url_for_error(url)} returned HTTP {err.code}") from None
@@ -52,7 +81,8 @@ def fetch_json(url: str, headers: Mapping[str, str]) -> Any:
         raise IncidentSourceError(f"{_url_for_error(url)} returned invalid JSON") from None
 
 
-def validate_sources(value: Any) -> list[dict[str, Any]]:
+def validate_sources(value: Any, alert_hosts: Collection[str] = ()) -> list[dict[str, Any]]:
+    """alert_hosts is the machine's guard.yaml list; only the owner edits it."""
     if value is None:
         return []
     if not isinstance(value, list):
@@ -79,13 +109,24 @@ def validate_sources(value: Any) -> list[dict[str, Any]]:
             "datadog": _validate_datadog,
             "grafana": _validate_grafana,
         }[kind]
-        validator(source)
+        validator(source, frozenset(str(h).lower() for h in alert_hosts))
         normalized.append(source)
     return normalized
 
 
-def poll_sources(value: Any, fetch: FetchJson = fetch_json, env: Mapping[str, str] | None = None) -> list[ExternalObservation]:
-    return [_poll(source, fetch, env or os.environ) for source in validate_sources(value)]
+def poll_sources(value: Any, fetch: FetchJson = fetch_json, env: Mapping[str, str] | None = None,
+                 alert_hosts: Collection[str] = ()) -> list[ExternalObservation | SourceFailure]:
+    """One result per source. A source that fails is a SourceFailure; it never stops the others."""
+    results: list[ExternalObservation | SourceFailure] = []
+    for source in validate_sources(value, alert_hosts):
+        key = f"{source['type']}:{source['name']}"
+        try:
+            results.append(_poll(source, fetch, os.environ if env is None else env))
+        except IncidentSourceError as err:
+            results.append(SourceFailure(key, str(err)[:200]))
+        except Exception as err:  # noqa: BLE001 - an odd payload must not stop the other checks
+            results.append(SourceFailure(key, f"{source['type']} source {source['name']} failed: unexpected {type(err).__name__}"))
+    return results
 
 
 def _poll(source: dict[str, Any], fetch: FetchJson, env: Mapping[str, str]) -> ExternalObservation:
@@ -98,48 +139,53 @@ def _poll(source: dict[str, Any], fetch: FetchJson, env: Mapping[str, str]) -> E
     }[kind](source, fetch, env)
 
 
-def _validate_sentry(source: dict[str, Any]) -> None:
+def _validate_sentry(source: dict[str, Any], alert_hosts: frozenset[str]) -> None:
     _only(source, {"type", "name", "token_env", "url", "organization", "project", "projects", "environment", "environments", "min_level", "query", "limit"})
     _env(source, "token_env")
     _slug(source, "organization", required=True)
     _slugs(source, "project", "projects")
     _slugs(source, "environment", "environments")
-    level = source.get("min_level")
+    level = source.get("min_level", DEFAULT_SENTRY_LEVEL)
     if level not in SENTRY_LEVELS:
         raise IncidentSourceError("sentry min_level must be debug, info, warning, error, or fatal")
-    _https(source, "url", required=False)
+    _host(source, "url", {DEFAULT_SENTRY_HOST}, alert_hosts, required=False)
     _limit(source)
 
 
-def _validate_pagerduty(source: dict[str, Any]) -> None:
+def _validate_pagerduty(source: dict[str, Any], alert_hosts: frozenset[str]) -> None:
     _only(source, {"type", "name", "token_env", "url", "service_id", "limit"})
     _env(source, "token_env")
     _slug(source, "service_id", required=True)
-    _https(source, "url", required=False)
+    _host(source, "url", {DEFAULT_PAGERDUTY_HOST}, alert_hosts, required=False)
     _limit(source)
 
 
-def _validate_datadog(source: dict[str, Any]) -> None:
+def _validate_datadog(source: dict[str, Any], alert_hosts: frozenset[str]) -> None:
     _only(source, {"type", "name", "token_env", "app_key_env", "url", "site", "monitor_tags", "limit"})
     _env(source, "token_env")
     _env(source, "app_key_env")
+    if "url" in source and "site" in source:
+        raise IncidentSourceError("datadog must use either url or site, not both")
     if "url" in source:
-        _https(source, "url", required=True)
+        _host(source, "url", DATADOG_HOSTS, alert_hosts, required=True)
     site = source.get("site", "datadoghq.com")
     if not isinstance(site, str) or not DATADOG_SITE.match(site) or "/" in site:
         raise IncidentSourceError("datadog site must be a Datadog site host, such as datadoghq.com or datadoghq.eu")
+    if f"api.{site.lower()}" not in DATADOG_HOSTS | alert_hosts:
+        raise IncidentSourceError(f"datadog site {site} is not a Datadog site; the owner lists a custom host under alert_hosts in guard.yaml")
     tags = source.get("monitor_tags", [])
     if not isinstance(tags, list) or any(not isinstance(tag, str) or not tag for tag in tags):
         raise IncidentSourceError("datadog monitor_tags must be a list of non-empty strings")
     _limit(source)
 
 
-def _validate_grafana(source: dict[str, Any]) -> None:
+def _validate_grafana(source: dict[str, Any], alert_hosts: frozenset[str]) -> None:
     _only(source, {"type", "name", "token_env", "url", "path", "org_id"})
     _env(source, "token_env")
-    _https(source, "url", required=True)
+    _host(source, "url", set(), alert_hosts, required=True)  # Grafana is self-hosted: its host is always the owner's to list
     path = source.get("path", DEFAULT_GRAFANA_ALERTS_PATH)
-    if not isinstance(path, str) or not path.startswith("/") or "://" in path:
+    if (not isinstance(path, str) or not path.startswith("/") or "://" in path or path.startswith("//")
+            or any(ch in path for ch in "?#\\ ") or ".." in path):
         raise IncidentSourceError("grafana path must be an absolute API path")
     org_id = source.get("org_id")
     if org_id is not None and (not isinstance(org_id, int) or org_id <= 0):
@@ -159,10 +205,10 @@ def _poll_sentry(source: dict[str, Any], fetch: FetchJson, env: Mapping[str, str
     payload = fetch(url, {"Authorization": f"Bearer {token}"})
     if not isinstance(payload, list):
         raise IncidentSourceError(f"sentry source {source['name']} returned an unexpected response")
-    min_level = SENTRY_LEVELS[str(source["min_level"])]
+    min_level = SENTRY_LEVELS[str(source.get("min_level", DEFAULT_SENTRY_LEVEL))]
     issues = [issue for issue in payload if isinstance(issue, dict) and SENTRY_LEVELS.get(str(issue.get("level") or "").lower(), -1) >= min_level]
-    title = f"Sentry {source['name']}: {len(issues)} unresolved issue(s) at {source['min_level']} or above{_examples(issues, _sentry_title)}"
-    return ExternalObservation(f"sentry:{source['name']}", _redact(title, token), bool(issues))
+    level = source.get("min_level", DEFAULT_SENTRY_LEVEL)
+    return _observation("sentry", source, f"{_count(len(issues), 'unresolved issue')} at {level} or above", issues, _sentry_title, token)
 
 
 def _poll_pagerduty(source: dict[str, Any], fetch: FetchJson, env: Mapping[str, str]) -> ExternalObservation:
@@ -186,8 +232,7 @@ def _poll_pagerduty(source: dict[str, Any], fetch: FetchJson, env: Mapping[str, 
         incident for incident in incidents
         if isinstance(incident, dict) and str(incident.get("status") or "").lower() in {"triggered", "acknowledged"}
     ]
-    title = f"PagerDuty {source['name']}: {len(open_incidents)} open incident(s) on service {source['service_id']}{_examples(open_incidents, _pagerduty_title)}"
-    return ExternalObservation(f"pagerduty:{source['name']}", _redact(title, token), bool(open_incidents))
+    return _observation("pagerduty", source, f"{_count(len(open_incidents), 'open incident')}", open_incidents, _pagerduty_title, token)
 
 
 def _poll_datadog(source: dict[str, Any], fetch: FetchJson, env: Mapping[str, str]) -> ExternalObservation:
@@ -203,8 +248,7 @@ def _poll_datadog(source: dict[str, Any], fetch: FetchJson, env: Mapping[str, st
     if not isinstance(monitors, list):
         raise IncidentSourceError(f"datadog source {source['name']} returned an unexpected response")
     alerting = [monitor for monitor in monitors if isinstance(monitor, dict) and _datadog_alerting(monitor)]
-    title = f"Datadog {source['name']}: {len(alerting)} monitor(s) in Alert{_examples(alerting, _datadog_title)}"
-    return ExternalObservation(f"datadog:{source['name']}", _redact(_redact(title, api_key), app_key), bool(alerting))
+    return _observation("datadog", source, f"{_count(len(alerting), 'monitor')} in Alert", alerting, _datadog_title, api_key, app_key)
 
 
 def _poll_grafana(source: dict[str, Any], fetch: FetchJson, env: Mapping[str, str]) -> ExternalObservation:
@@ -216,8 +260,7 @@ def _poll_grafana(source: dict[str, Any], fetch: FetchJson, env: Mapping[str, st
     payload = fetch(f"{base}{source.get('path', DEFAULT_GRAFANA_ALERTS_PATH)}", headers)
     alerts = _grafana_alerts(payload)
     firing = [alert for alert in alerts if isinstance(alert, dict) and _grafana_firing(alert)]
-    title = f"Grafana {source['name']}: {len(firing)} firing alert(s){_examples(firing, _grafana_title)}"
-    return ExternalObservation(f"grafana:{source['name']}", _redact(title, token), bool(firing))
+    return _observation("grafana", source, f"{_count(len(firing), 'firing alert')}", firing, _grafana_title, token)
 
 
 def _only(source: Mapping[str, Any], allowed: set[str]) -> None:
@@ -230,6 +273,10 @@ def _env(source: Mapping[str, Any], key: str) -> None:
     value = source.get(key)
     if not isinstance(value, str) or not ENV_NAME.match(value):
         raise IncidentSourceError(f"{source['type']} {key} must name an environment variable")
+    if FORBIDDEN_ENV.match(value):
+        raise IncidentSourceError(f"{source['type']} {key} must not name the bot's GitHub credentials")
+    if not value.startswith(ALERT_ENV_PREFIX) or len(value) == len(ALERT_ENV_PREFIX):
+        raise IncidentSourceError(f"{source['type']} {key} must start with {ALERT_ENV_PREFIX}")
 
 
 def _secret(env: Mapping[str, str], source: Mapping[str, Any], key: str) -> str:
@@ -259,12 +306,24 @@ def _slugs(source: Mapping[str, Any], singular: str, plural: str) -> None:
             raise IncidentSourceError(f"{source['type']} {plural} must be a list of short ids or slugs")
 
 
-def _https(source: Mapping[str, Any], key: str, required: bool) -> None:
+def _host(source: Mapping[str, Any], key: str, pinned: Collection[str], alert_hosts: frozenset[str], required: bool) -> None:
+    """An https URL on a pinned host or one the owner listed in guard.yaml alert_hosts: the token goes only there."""
     value = source.get(key)
     if value is None and not required:
         return
     if not isinstance(value, str) or not value.startswith("https://"):
         raise IncidentSourceError(f"{source['type']} {key} must be an https URL")
+    try:
+        parts = urllib.parse.urlsplit(value)
+        host = (parts.hostname or "").lower()
+        port = parts.port
+    except ValueError:
+        raise IncidentSourceError(f"{source['type']} {key} must be an https URL") from None
+    if "@" in parts.netloc or port is not None or parts.query or parts.fragment or not HOST_NAME.match(host):
+        raise IncidentSourceError(f"{source['type']} {key} must be a plain https URL: a host, no login, port, query, or fragment")
+    if host not in {h.lower() for h in pinned} | alert_hosts:
+        raise IncidentSourceError(
+            f"{source['type']} source host {host} is not allowed; the owner lists it under alert_hosts in guard.yaml on this machine")
 
 
 def _limit(source: Mapping[str, Any]) -> None:
@@ -291,15 +350,25 @@ def _url_for_error(url: str) -> str:
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
-def _examples(items: list[dict[str, Any]], pick: Callable[[dict[str, Any]], str | None]) -> str:
-    values = []
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+def _observation(kind: str, source: Mapping[str, Any], what: str, items: list[dict[str, Any]],
+                 pick: Callable[[dict[str, Any]], str | None], *secrets: str) -> ExternalObservation:
+    """The title carries the source key and a count, nothing a third party wrote."""
+    examples: list[str] = []
     for item in items:
         value = pick(item)
         if value:
-            values.append(_one_line(value))
-        if len(values) == 3:
+            text = _one_line(value)
+            for secret in secrets:
+                text = _redact(text, secret)
+            examples.append(text)
+        if len(examples) == MAX_EXAMPLES:
             break
-    return ": " + ", ".join(values) if values else ""
+    key = f"{kind}:{source['name']}"
+    return ExternalObservation(key, f"{key}: {what}", bool(items), tuple(examples))
 
 
 def _one_line(value: Any) -> str:
