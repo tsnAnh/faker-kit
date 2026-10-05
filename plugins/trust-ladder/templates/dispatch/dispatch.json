@@ -9,6 +9,12 @@
   "accept_verifications": ["live-ui-verified", "unit-test-verified"],
   "risk_paths_high": [],
   "risk_paths_medium": [],
+  "incidents": {
+    "main_checks": true,
+    "health": [],
+    "andon_on_red": false,
+    "triage_backend": "<claude | codex | none; who investigates an incident. Defaults to backend>"
+  },
   "security_backend": "<claude | codex | none; who reviews the default branch's new commits for security issues once a day. Defaults to backend>",
   "codex_env": "<Codex cloud environment id; only when backend is codex>"
 }

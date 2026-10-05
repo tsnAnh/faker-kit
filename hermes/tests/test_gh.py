@@ -7,7 +7,7 @@ import time
 import pytest
 from conftest import SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
-from team_kit_contracts import LAUNCHED_MARKER, security_signature, size_marker, verdict_signature
+from team_kit_contracts import LAUNCHED_MARKER, diagnosis_signature, security_signature, size_marker, verdict_signature
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, Refused, checks_state, main
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
@@ -31,6 +31,7 @@ class FakeGh:
         self.next = 40
         self.main_head = "c" * 40
         self.pr_files, self.history, self.pr_comments = {}, {}, {}
+        self.runs = {}
 
     def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small"):
         self.next += 1
@@ -59,6 +60,9 @@ class FakeGh:
                 return json.dumps({"content": base64.b64encode(self.files[name].encode()).decode()})
             if path.count("/") == 2:
                 return json.dumps({"default_branch": "main"})
+            if path.endswith("/check-runs?per_page=100"):
+                sha = path.split("/commits/")[1].split("/")[0]
+                return json.dumps({"check_runs": self.runs.get(sha, [])})
             if "/commits/" in path:
                 return json.dumps({"sha": self.main_head})
             if "/pulls/" in path and "/files" in path:
@@ -1152,3 +1156,125 @@ def test_risk_paths_in_dispatch_json_add_to_the_defaults_and_are_checked(team_ki
     bad = FakeGh(kit, risk_paths_medium="apps/")
     assert run(bad, "kit-check") == 1
     assert "risk_paths_medium must be a list" in capsys.readouterr().err
+
+
+# Incidents -----------------------------------------------------------------------------------------
+
+
+def red(gh, sha, *names):
+    gh.main_head = sha
+    gh.runs[sha] = [{"name": n, "status": "completed", "conclusion": "failure"} for n in names] + [{"name": "lint", "status": "completed", "conclusion": "success"}]
+
+
+def green(gh, sha):
+    gh.main_head = sha
+    gh.runs[sha] = [{"name": "test", "status": "completed", "conclusion": "success"}]
+
+
+def poll(gh, capsys, cloud=None, fetch=lambda url: 200, at=NOW):
+    assert main(["incidents"], run=gh, bot="meo-beo", cloud=cloud or FakeCloud(), now=lambda: at, fetch=fetch) == 0
+    return lines(capsys)
+
+
+def incidents(team_kit_home):
+    return json.loads((team_kit_home / "incidents" / "meo-beo.json").read_text())
+
+
+def test_a_red_default_branch_opens_an_incident_starts_triage_and_closes_when_green(team_kit_home, gh, capsys):
+    green(gh, "1" * 40)
+    assert poll(gh, capsys) == ["[SILENT]"]
+    red(gh, "2" * 40, "test", "e2e")
+    cloud = FakeCloud()
+    [opened] = poll(gh, capsys, cloud=cloud)
+    state = incidents(team_kit_home)["open"]["main"]
+    n = state["issue"]
+    assert opened == f"team-kit notice: incident #{n} opened: main is red: e2e, test. https://github.com/{REPO}/issues/{n}"
+    issue = gh.issues[(REPO, n)]
+    assert issue["labels"] == {"agent:incident"} and issue["title"] == "Incident: main is red: e2e, test"
+    [(_, _, argv, workdir)] = cloud.started
+    assert argv[2].startswith(f"/triage-incident Investigate the incident in {REPO}#{n}: main is red: e2e, test. The head of main is {'2' * 40}; "
+                              f"its last commit with passing checks is {'1' * 40}. Post the diagnosis on {REPO}#{n}. Sign it with key {state['triage']['key']}.")
+    assert workdir.name == f"incident-{n}"
+    assert state["triage"]["key"] not in gh.comments[(REPO, n)][-1]["body"]
+    assert poll(gh, capsys, cloud=cloud) == ["[SILENT]"], "one incident per source, and one notice"
+    assert len(cloud.started) == 1
+    sig = diagnosis_signature(state["triage"]["key"], "2" * 40, "high", n)
+    gh.comment(REPO, n, f"<!-- team-kit:diagnosis v1 -->\nsuspect: {'2' * 40}\nconfidence: high\nsig: 0000\n", login="Codertocat", at=NOW)
+    gh.comment(REPO, n, f"<!-- team-kit:diagnosis v1 -->\nsuspect: {'2' * 40}\nconfidence: high\nsig: {sig}\n", login="Codertocat", at=NOW)
+    assert poll(gh, capsys) == [f"team-kit notice: incident #{n}: the triage session suspects 2222222 (high confidence): https://github.com/{REPO}/issues/{n}"]
+    assert poll(gh, capsys) == ["[SILENT]"]
+    green(gh, "3" * 40)
+    assert poll(gh, capsys, at=NOW + 1800) == [f"team-kit notice: incident #{n} resolved after 30 minutes: main is red: e2e, test."]
+    assert gh.issues[(REPO, n)]["state"] == "closed"
+    assert incidents(team_kit_home)["open"] == {} and incidents(team_kit_home)["green"] == "3" * 40
+
+
+def test_running_checks_are_no_news(team_kit_home, gh, capsys):
+    gh.main_head = "4" * 40
+    gh.runs["4" * 40] = [{"name": "test", "status": "in_progress", "conclusion": None}]
+    assert poll(gh, capsys) == ["[SILENT]"]
+    assert incidents(team_kit_home)["open"] == {}
+
+
+def test_a_health_check_needs_two_failures_to_open_and_two_passes_to_close(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, incidents={"main_checks": False, "health": [{"name": "api", "url": "https://api.example.com/healthz"}], "triage_backend": "none"})
+    down, up = (lambda url: 502), (lambda url: 200)
+    assert poll(gh, capsys, fetch=down) == ["[SILENT]"], "one blip pages nobody"
+    [opened] = poll(gh, capsys, fetch=down)
+    assert "opened: health check api returns HTTP 502" in opened
+    assert poll(gh, capsys, fetch=lambda url: None) == ["[SILENT]"]
+    assert poll(gh, capsys, fetch=up) == ["[SILENT]"]
+    assert poll(gh, capsys, fetch=down) == ["[SILENT]"], "a pass then a failure is not yet a recovery"
+    assert poll(gh, capsys, fetch=up) == ["[SILENT]"]
+    [resolved] = poll(gh, capsys, fetch=up, at=NOW + 600)
+    assert "resolved after 10 minutes: health check api returns HTTP 502." in resolved
+
+
+def test_a_red_branch_pulls_the_andon_cord_when_asked_and_clears_only_its_own(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, incidents={"andon_on_red": True, "triage_backend": "none"})
+    red(gh, "5" * 40, "test")
+    [opened] = poll(gh, capsys)
+    assert opened.endswith("The andon cord is pulled until it is green again.")
+    n = incidents(team_kit_home)["open"]["main"]["issue"]
+    queued = gh.add_issue(REPO)
+    assert run(gh, "launch", "--issue", str(queued)) == 1
+    assert f"incident #{n}" in capsys.readouterr().err
+    green(gh, "6" * 40)
+    [resolved] = poll(gh, capsys)
+    assert resolved.endswith("The andon cord it pulled is cleared.")
+    assert run(gh, "andon") == 0 and out(capsys)["stopped"] is False
+    red(gh, "7" * 40, "test")
+    assert run(gh, "andon", "raise", "owner", "stop") == 0
+    capsys.readouterr()
+    [opened] = poll(gh, capsys)
+    assert "andon" not in opened, "the owner's cord is already pulled"
+    green(gh, "8" * 40)
+    [resolved] = poll(gh, capsys)
+    assert "cleared" not in resolved
+    assert run(gh, "andon") == 0 and out(capsys)["project"]["reason"] == "owner stop", "never the owner's cord"
+
+
+def test_a_lasting_polling_problem_is_said_once(team_kit_home, gh, capsys):
+    real = gh.__call__
+
+    def down(args, input=None):
+        if args[0] == "api" and args[-1].endswith("/commits/main"):
+            raise Refused("gh api failed: HTTP 502")
+        return real(args, input)
+
+    assert main(["incidents"], run=down, bot="meo-beo", cloud=FakeCloud(), now=lambda: NOW) == 0
+    assert lines(capsys) == ["team-kit notice: incidents could not poll: gh api failed: HTTP 502"]
+    assert main(["incidents"], run=down, bot="meo-beo", cloud=FakeCloud(), now=lambda: NOW) == 0
+    assert lines(capsys) == ["[SILENT]"]
+
+
+@pytest.mark.parametrize("incidents_setting", [
+    {"health": [{"name": "api", "url": "http://api.example.com"}]},
+    {"health": [{"name": "Bad Name", "url": "https://x.example"}]},
+    {"pager": True},
+    {"triage_backend": "codex"},
+])
+def test_bad_incident_settings_are_refused(team_kit_home, kit, capsys, incidents_setting):
+    gh = FakeGh(kit, incidents=incidents_setting)
+    assert run(gh, "kit-check") == 1
+    assert "incidents" in capsys.readouterr().err

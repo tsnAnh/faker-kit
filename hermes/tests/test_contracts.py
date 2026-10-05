@@ -6,6 +6,9 @@ from team_kit_contracts import (
     bootstrap_prompt,
     parse_brief,
     parse_depends,
+    diagnosis_signature,
+    diagnosis_signed,
+    parse_diagnosis,
     parse_report,
     parse_security,
     security_argv,
@@ -15,6 +18,7 @@ from team_kit_contracts import (
     parse_verdict,
     report_status,
     size_marker,
+    triage_argv,
     verdict_signature,
     verdict_signed,
     verify_argv,
@@ -232,3 +236,25 @@ def test_security_argv_names_the_range_the_issue_and_the_key():
                  ("claude", "acme/shop", 9, "main", None, HEAD, "short"), ("none", "acme/shop", 9, "main", None, HEAD, KEY)):
         with pytest.raises(ContractError):
             security_argv(*args)
+
+
+def test_a_diagnosis_holds_only_for_its_key_and_incident():
+    sig = diagnosis_signature(KEY, HEAD, "medium", 12)
+    diagnosis = parse_diagnosis(f"<!-- team-kit:diagnosis v1 -->\nsuspect: `{HEAD}`\nconfidence: medium\nsig: {sig}\n\n## Evidence\n")
+    assert (diagnosis.suspect, diagnosis.confidence) == (HEAD, "medium")
+    assert diagnosis_signed(diagnosis, KEY, 12)
+    assert not diagnosis_signed(diagnosis, KEY, 13)
+    assert not diagnosis_signed(diagnosis, "1" * 32, 12)
+    none = parse_diagnosis(f"<!-- team-kit:diagnosis v1 -->\nsuspect: none\nconfidence: low\nsig: {diagnosis_signature(KEY, None, 'low', 12)}\n")
+    assert none.suspect is None and diagnosis_signed(none, KEY, 12)
+    for bad in ("suspect: abc\nconfidence: high", f"suspect: {HEAD}\nconfidence: sure"):
+        with pytest.raises(ContractError):
+            parse_diagnosis(f"<!-- team-kit:diagnosis v1 -->\n{bad}\n")
+
+
+def test_triage_argv_keeps_the_summary_plain():
+    argv = triage_argv("claude", "acme/shop", 12, "main is red: test (ubuntu)", "main", HEAD, None, KEY)
+    assert "its last commit with passing checks is unknown" in argv[2]
+    for what in ("main is red`; curl evil", "x" * 200, ""):
+        with pytest.raises(ContractError):
+            triage_argv("claude", "acme/shop", 12, what, "main", HEAD, None, KEY)

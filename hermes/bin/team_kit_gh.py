@@ -14,6 +14,7 @@
   kit-check                                        compare this machine's kit commit with kit_ref and the vendored kit
   andon         [raise REASON... | clear]          show, pull, or clear this project's andon cord (the owner asked)
   security                                         start a security review of the default branch's new commits
+  incidents                                        poll the default branch's checks and health URLs; open, triage, and close incidents
 
 GitHub holds every unit's state, as labels on its issue:
 
@@ -46,6 +47,8 @@ import secrets
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Callable
 
@@ -60,7 +63,10 @@ from team_kit_risk import CODEOWNERS_PATHS, RISK_LABELS, Risk, owners_for, parse
 from team_kit_contracts import (  # noqa: E402
     DEFAULT_ACCEPTED,
     LAUNCHED_MARKER,
+    DIAGNOSIS_MARKER,
+    INCIDENT_MARKER,
     REPORT_MARKER,
+    TRIAGE_LAUNCHED_MARKER,
     SECURITY_LAUNCHED_MARKER,
     SECURITY_MARKER,
     UNIT_ATTEMPTS,
@@ -72,6 +78,8 @@ from team_kit_contracts import (  # noqa: E402
     launch_argv,
     parse_brief,
     parse_depends,
+    diagnosis_signed,
+    parse_diagnosis,
     parse_report,
     parse_security,
     parse_size,
@@ -79,6 +87,7 @@ from team_kit_contracts import (  # noqa: E402
     security_signed,
     parse_verdict,
     size_marker,
+    triage_argv,
     verdict_signed,
     verify_argv,
 )
@@ -93,8 +102,14 @@ VERIFYING_LABEL = "agent:verifying"
 REVIEW_LABEL = "agent:review"
 HUMAN_LABEL = "agent:needs-human"
 SECURITY_LABEL = "agent:security"
+INCIDENT_LABEL = "agent:incident"
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
 SILENT = "[SILENT]"
+HEALTH_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,31}\Z")
+# A health check opens an incident after this many failed polls in a row, and closes it after as
+# many passing ones, so one blip never pages the owner. A failed check run is definite at once.
+HEALTH_STREAK = 2
+HEALTH_TIMEOUT_SECONDS = 10
 NOTICE = "team-kit notice:"
 # A running unit with no report this long after its launch is a gate: its session died. The same
 # for checks still pending this long after a done report.
@@ -268,6 +283,17 @@ class Gh:
             raise Refused(f".agents/dispatch.json security_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
         if security == "codex" and not config.get("codex_env"):
             raise Refused(".agents/dispatch.json security_backend codex needs codex_env, the Codex cloud environment id")
+        incidents = config.get("incidents", {})
+        if not isinstance(incidents, dict) or not set(incidents) <= {"main_checks", "health", "andon_on_red", "triage_backend"}:
+            raise Refused(".agents/dispatch.json incidents may hold only main_checks, health, andon_on_red, and triage_backend")
+        health = incidents.get("health", [])
+        if not isinstance(health, list) or not all(
+                isinstance(h, dict) and set(h) <= {"name", "url"} and HEALTH_NAME.match(str(h.get("name", "")))
+                and str(h.get("url", "")).startswith("https://") for h in health):
+            raise Refused(".agents/dispatch.json incidents.health must list {name, url} with an https URL and a short name")
+        triage = incidents.get("triage_backend", config["backend"])
+        if triage not in VERIFIER_BACKENDS or (triage == "codex" and not config.get("codex_env")):
+            raise Refused(".agents/dispatch.json incidents.triage_backend must be claude, codex (with codex_env), or none")
         for key in ("risk_paths_high", "risk_paths_medium"):
             extra = config.get(key, [])
             if not isinstance(extra, list) or not all(isinstance(p, str) and p for p in extra):
@@ -404,7 +430,7 @@ class Gh:
         as_dict = lambda c: None if c is None else {"reason": c.reason, "by": c.by, "issue": c.issue}  # noqa: E731
         return {"stopped": cord is not None, "machine": as_dict(machine), "project": as_dict(project)}
 
-    def andon_raise(self, words: list[str]) -> dict:
+    def andon_raise(self, words: list[str], source: str = "hermes", incident: int | None = None) -> dict:
         why = clean_reason(words)
         if self.andon.project(self.bot.name):
             raise Refused(f"{self.andon.project(self.bot.name).describe()}; clear it before pulling it again")
@@ -415,7 +441,10 @@ class Gh:
             out["issue"] = int(url.rstrip("/").rsplit("/", 1)[-1])
         except Exception as err:  # noqa: BLE001 - the local cord still stops every launch
             out["warning"] = f"no andon issue opened ({reason(err)}), so agents already at work will not see it; is the {ANDON_LABEL} label missing?"
-        self.andon.write(self.bot.name, {"reason": why, "by": self.bot.name, "at": self.now(), "issue": out["issue"], "source": "hermes"})
+        record = {"reason": why, "by": self.bot.name, "at": self.now(), "issue": out["issue"], "source": source}
+        if incident is not None:
+            record["incident"] = incident
+        self.andon.write(self.bot.name, record)
         self._cord = None
         return out
 
@@ -895,6 +924,201 @@ class Security:
         return f"{NOTICE} the security review of {span} found {counts}: {url}"
 
 
+def fetch_status(url: str) -> int | None:
+    """The HTTP status of a GET, or None when nothing answered. Outbound only: nothing listens here."""
+    request = urllib.request.Request(url, method="GET", headers={"User-Agent": "team-kit-incidents"})
+    try:
+        with urllib.request.urlopen(request, timeout=HEALTH_TIMEOUT_SECONDS) as response:  # noqa: S310 - https only, checked
+            return int(response.status)
+    except urllib.error.HTTPError as err:
+        return int(err.code)
+    except Exception:  # noqa: BLE001 - a timeout, DNS, or TLS failure is a failed check
+        return None
+
+
+def plain(text: str, limit: int = 120) -> str:
+    """Text safe to put in a cloud session's prompt: plain characters only."""
+    return re.sub(r"[^A-Za-z0-9 _.,:;()/#@+=-]", "-", " ".join(str(text).split()))[:limit] or "incident"
+
+
+class Incidents:
+    """Polling, never a webhook: the default branch's checks and the repository's health URLs.
+
+    A failing source opens an issue labelled agent:incident and tells the owner. A read-only triage
+    session looks for the cause and posts a signed diagnosis there. When the source passes again,
+    the issue closes and the owner hears how long it lasted. With andon_on_red, a red default
+    branch also pulls the project's andon cord, which clears itself when the branch is green again.
+    The state lives in policy.home/incidents/<bot>.json.
+    """
+
+    def __init__(self, gh: Gh, fetch: Callable[[str], int | None] = fetch_status):
+        self.gh, self.fetch = gh, fetch
+        self.path = gh.policy.home / "incidents" / f"{gh.bot.name}.json"
+
+    def state(self) -> dict:
+        try:
+            data = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data.setdefault("open", {})
+        data.setdefault("streaks", {})
+        return data
+
+    def save(self, data: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}")
+        tmp.touch(mode=0o600)
+        tmp.write_text(json.dumps(data))
+        tmp.replace(self.path)
+
+    def main_checks(self, branch: str) -> tuple[str, bool | None, str]:
+        """The default branch's head, whether its checks fail (None while any runs), and which failed."""
+        gh = self.gh
+        head = str(json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{branch}"])).get("sha") or "")
+        if not SHA.match(head):
+            raise Refused(f"cannot read the head of {branch}")
+        runs = json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{head}/check-runs?per_page=100"])).get("check_runs") or []
+        failed = sorted({str(r.get("name") or "check") for r in runs if str(r.get("conclusion") or "").upper() in FAILED_CHECKS})
+        if failed:
+            return head, True, ", ".join(failed)
+        if not runs or any(str(r.get("status") or "").lower() != "completed" for r in runs):
+            return head, None, ""
+        return head, False, ""
+
+    def run(self, local_commit: str, cloud: Cloud) -> list[str]:
+        """One poll. A lasting problem (GitHub down, a broken dispatch.json) is said once, not every poll."""
+        data = self.state()
+        try:
+            notices = self.poll(data, cloud)
+        except Exception as err:  # noqa: BLE001
+            problem = reason(err)
+            notices = [] if data.get("problem") == problem else [f"{NOTICE} incidents could not poll: {problem}"]
+            data["problem"] = problem
+        else:
+            data.pop("problem", None)
+        self.save(data)
+        return notices
+
+    def poll(self, data: dict, cloud: Cloud) -> list[str]:
+        gh = self.gh
+        config = gh.dispatch_config()
+        settings = config.get("incidents", {})
+        branch = str(json.loads(gh.run(["api", f"repos/{gh.repo}"])).get("default_branch") or "")
+        notices: list[str] = []
+        observed: list[tuple[str, str, bool | None, int]] = []  # key, title, failing, streak needed
+        head = None
+        if settings.get("main_checks", True):
+            head, failing, detail = self.main_checks(branch)
+            if failing is False:
+                data["green"] = head
+            observed.append(("main", f"{branch} is red: {detail}" if failing else f"{branch} is red", failing, 1))
+        for check in settings.get("health", []):
+            status = self.fetch(check["url"])
+            failing = status is None or not 200 <= status < 300
+            what = f"health check {check['name']} " + ("does not answer" if status is None else f"returns HTTP {status}")
+            observed.append((f"health:{check['name']}", what, failing, HEALTH_STREAK))
+        for key, title, failing, needed in observed:
+            streak = data["streaks"].get(key, 0)
+            if failing is None:
+                continue  # checks still running: no news either way
+            streak = (max(streak, 0) + 1) if failing else (min(streak, 0) - 1)
+            data["streaks"][key] = streak
+            incident = data["open"].get(key)
+            if failing and incident is None and streak >= needed:
+                notices += self.open(data, key, title, branch, head, settings, config, cloud)
+            elif failing and incident is not None and key == "main" and head and incident.get("head") != head:
+                incident["head"] = head  # still red on a newer commit
+            elif not failing and incident is not None and -streak >= needed:
+                notices += self.close(data, key)
+        watched = {key for key, _, _, _ in observed}
+        for key in [k for k in data["open"] if k not in watched]:
+            notices += self.close(data, key, "no longer watched")  # removed from dispatch.json
+        for key in [k for k in data["streaks"] if k not in watched]:
+            del data["streaks"][key]
+        for incident in data["open"].values():
+            notice = self.check_triage(incident)
+            if notice:
+                notices.append(notice)
+        return notices
+
+    def open(self, data: dict, key: str, title: str, branch: str, head: str | None, settings: dict, config: dict, cloud: Cloud) -> list[str]:
+        gh = self.gh
+        body = (f"{INCIDENT_MARKER}\nsource: {key}\n\n{plain(title, 300)}\n\n"
+                "Hermes polls this source and closes this issue when it passes again. A triage session that changes "
+                "nothing posts its diagnosis here. Fixes go through the project bot, from the owner's own words.\n")
+        url = gh.run(["issue", "create", "-R", gh.repo, "--title", f"Incident: {plain(title, 100)}", "--label", INCIDENT_LABEL, "--body", body]).strip()
+        number = int(url.rstrip("/").rsplit("/", 1)[-1])
+        incident = {"issue": number, "title": plain(title, 100), "since": gh.now(), "head": head}
+        data["open"][key] = incident
+        notices = [f"{NOTICE} incident #{number} opened: {plain(title, 100)}. {url}"]
+        if key == "main" and settings.get("andon_on_red") and not gh.andon.project(gh.bot.name):
+            gh.andon_raise([f"incident #{number}: {plain(title, 100)}"], source="incident", incident=number)
+            incident["andon"] = True
+            notices[0] += " The andon cord is pulled until it is green again."
+        backend = settings.get("triage_backend", config["backend"])
+        if backend != "none" and head:
+            key_hex = secrets.token_hex(16)
+            owner, name = gh.repo.split("/")
+            try:
+                argv = triage_argv(backend, gh.repo, number, plain(title, 120), branch, head, data.get("green"), key_hex, config.get("codex_env"))
+                session = cloud.start(backend, gh.repo, argv, gh.policy.home / "checkouts" / f"{owner}__{name}" / f"incident-{number}")
+            except Exception as err:  # noqa: BLE001 - the incident stands without a diagnosis
+                notices.append(f"{NOTICE} incident #{number}: the triage session could not start: {reason(err)}")
+            else:
+                incident["triage"] = {"key": key_hex, "started": gh.now(), "session": session}
+                try:
+                    gh.run(["issue", "comment", str(number), "-R", gh.repo, "--body", f"{TRIAGE_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\n"])
+                except Exception:  # noqa: BLE001
+                    pass
+        return notices
+
+    def close(self, data: dict, key: str, why: str = "passing again") -> list[str]:
+        gh = self.gh
+        incident = data["open"].pop(key)
+        minutes = max(1, int((gh.now() - float(incident.get("since", gh.now()))) // 60))
+        try:
+            gh.run(["issue", "close", str(incident["issue"]), "-R", gh.repo, "--comment", f"{why.capitalize()}; closed by Hermes after {minutes} minutes."])
+        except Exception:  # noqa: BLE001 - closed by hand already
+            pass
+        verb = "resolved" if why == "passing again" else f"closed ({why})"
+        notice = f"{NOTICE} incident #{incident['issue']} {verb} after {minutes} minutes: {incident['title']}."
+        record = gh.andon.read(gh.bot.name)
+        if incident.get("andon") and record and record.get("source") == "incident" and record.get("incident") == incident["issue"]:
+            gh.andon_clear()
+            notice += " The andon cord it pulled is cleared."
+        return [notice]
+
+    def check_triage(self, incident: dict) -> str | None:
+        gh = self.gh
+        triage = incident.get("triage")
+        if not triage or triage.get("done"):
+            return None
+        number = int(incident["issue"])
+        comments = gh.comments(number)
+        starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(TRIAGE_LAUNCHED_MARKER) and gh.trusted(c)]
+        for comment in comments[(starts[-1] + 1) if starts else 0:]:
+            body = (comment.get("body") or "").lstrip()
+            if not body.startswith(DIAGNOSIS_MARKER) or not gh.trusted(comment):
+                continue
+            if comment.get("updated_at") and comment.get("updated_at") != comment.get("created_at"):
+                continue
+            try:
+                diagnosis = parse_diagnosis(body)
+            except ContractError:
+                continue
+            if diagnosis_signed(diagnosis, triage["key"], number):
+                triage["done"] = True
+                where = comment.get("html_url") or f"https://github.com/{gh.repo}/issues/{number}"
+                suspect = f"suspects {diagnosis.suspect[:7]}" if diagnosis.suspect else "names no suspect commit"
+                return f"{NOTICE} incident #{number}: the triage session {suspect} ({diagnosis.confidence} confidence): {where}"
+        if gh.now() - float(triage.get("started", 0)) > REPORT_DEADLINE_SECONDS:
+            triage["done"] = True
+            return f"{NOTICE} incident #{number}: the triage session posted no signed diagnosis in a day. Its session: {triage.get('session')}"
+        return None
+
+
 class Project:
     """tick and status for the bot's project."""
 
@@ -1007,7 +1231,7 @@ def brief_text(policy: Policy, bot: Bot, path: str) -> str:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="team-kit-gh")
     sub = top.add_subparsers(dest="command", required=True)
-    for name in ("project", "tick", "status", "security"):
+    for name in ("project", "tick", "status", "security", "incidents"):
         sub.add_parser(name)
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
@@ -1031,7 +1255,8 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = None, cloud: Cloud | None = None,
-         commit: Callable[[Policy], str] = kit_commit, now: Callable[[], float] = time.time) -> int:
+         commit: Callable[[Policy], str] = kit_commit, now: Callable[[], float] = time.time,
+         fetch: Callable[[str], int | None] = fetch_status) -> int:
     args = parser().parse_args(argv)
     try:
         policy = load_policy()
@@ -1041,6 +1266,11 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         cloud = cloud or Cloud(run_gh=run)
         if args.command == "project":
             out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
+        elif args.command == "incidents":
+            gh = Gh(policy, me, run, now)
+            lines = Incidents(gh, fetch).run(commit(policy), cloud)
+            print("\n".join(lines) if lines else SILENT)
+            return 0
         elif args.command == "security":
             out = Security(Gh(policy, me, run, now)).start(commit(policy), cloud)
         elif args.command == "andon":

@@ -125,6 +125,7 @@
     "trust-ladder/setup-dispatch": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-dispatch for this repo: backend claude, project shop", "mentioned": [] },
     "trust-ladder/follow-brief": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill", "mentioned": [] },
     "trust-ladder/verify-unit": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/verify-unit Verify https://github.com/OWNER/REPO/pull/7 at commit <sha> against the brief in OWNER/REPO#123. Sign the verdict with key <key>.", "mentioned": [] },
+    "trust-ladder/triage-incident": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/triage-incident Investigate the incident in OWNER/REPO#12: main is red: test. The head of main is <sha>; its last commit with passing checks is <sha>. Post the diagnosis on OWNER/REPO#12. Sign it with key <key>.", "mentioned": [] },
     "trust-ladder/review-main-security": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/review-main-security Review the commits after <base> up to <head> on main of OWNER/REPO, and post the result on OWNER/REPO#9. Sign the result with key <key>.", "mentioned": [] },
     "pstack/swarm": { "layer": "scale", "audience": ["engineer"], "prompt": "take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win", "mentioned": ["pt1"] }
   },

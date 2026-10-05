@@ -27,6 +27,11 @@ SECURITY_FIELDS = ("range", "findings", "sig")
 SEVERITIES = ("high", "medium", "low")
 # With no earlier review, the first one covers this many commits up to the head.
 FIRST_REVIEW_COMMITS = 20
+INCIDENT_MARKER = "<!-- team-kit:incident v1 -->"
+TRIAGE_LAUNCHED_MARKER = "<!-- team-kit:triage-launched v1 -->"
+DIAGNOSIS_MARKER = "<!-- team-kit:diagnosis v1 -->"
+DIAGNOSIS_FIELDS = ("suspect", "confidence", "sig")
+CONFIDENCES = ("high", "medium", "low")
 
 BRIEF_SECTIONS = ("Goal", "Scope", "Context", "Acceptance", "Verify", "Timebox", "Forbidden", "Depends on", "Standing orders")
 REPORT_STATUSES = ("done", "partial", "blocked")
@@ -68,6 +73,17 @@ SECURITY_PROMPTS = {
     "codex": ("$review-main-security Review {span} on {branch} of {repo}, and post the result on {repo}#{issue}. "
               "Sign the result with key {key}. "
               "If the review-main-security skill is not available in this session, stop and say the team-kit skills did not load."),
+}
+# A triage session investigates one incident and changes nothing. It may run while the andon cord
+# is pulled: diagnosing the incident is what the stopped line waits for.
+TRIAGE_PROMPTS = {
+    "claude": ("/triage-incident Investigate the incident in {repo}#{issue}: {what}. The head of {branch} is {head}; "
+               "its last commit with passing checks is {green}. Post the diagnosis on {repo}#{issue}. Sign it with key {key}. "
+               "If the triage-incident skill is not available in this session, comment on that issue with "
+               "`<!-- team-kit:diagnosis v1 -->` as the first line, say the team-kit skills did not load, and stop."),
+    "codex": ("$triage-incident Investigate the incident in {repo}#{issue}: {what}. The head of {branch} is {head}; "
+              "its last commit with passing checks is {green}. Post the diagnosis on {repo}#{issue}. Sign it with key {key}. "
+              "If the triage-incident skill is not available in this session, stop and say the team-kit skills did not load."),
 }
 BRANCH = re.compile(r"\A(?!.*\.\.)(?!/)(?!.*/\Z)[A-Za-z0-9_./-]{1,100}\Z")
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
@@ -111,6 +127,13 @@ class SecurityResult:
     @property
     def serious(self) -> int:
         return self.counts["high"] + self.counts["medium"]
+
+
+@dataclass(frozen=True)
+class Diagnosis:
+    suspect: str | None
+    confidence: str
+    sig: str | None = None
 
 
 @dataclass(frozen=True)
@@ -313,6 +336,57 @@ def security_argv(backend: str, repo: str, issue: int, branch: str, base: str | 
         raise ContractError("the reviewer key must be hex")
     span = f"the commits after {base} up to {head}" if base else f"the last {FIRST_REVIEW_COMMITS} commits up to {head}"
     prompt = SECURITY_PROMPTS[backend].format(span=span, branch=branch, repo=repo, issue=int(issue), key=key)
+    return cloud_argv(backend, prompt, 1, env_id)
+
+
+def parse_diagnosis(text: str) -> Diagnosis:
+    """Read a triage session's header: `suspect: <commit|none>`, `confidence: high|medium|low`, `sig:`."""
+    body = (text or "").lstrip()
+    if not body.startswith(DIAGNOSIS_MARKER):
+        raise ContractError("a diagnosis must start with <!-- team-kit:diagnosis v1 -->")
+    fields: dict[str, str] = {}
+    for line in body[len(DIAGNOSIS_MARKER):].strip().splitlines():
+        match = re.match(r"^([a-z]+):\s*(\S.*?)\s*$", line)
+        if not match or match.group(1) not in DIAGNOSIS_FIELDS:
+            break
+        fields[match.group(1)] = match.group(2).strip("`")
+    suspect = fields.get("suspect", "")
+    if suspect != "none" and not SHA.match(suspect):
+        raise ContractError("suspect must be a full 40-character commit or none")
+    if fields.get("confidence") not in CONFIDENCES:
+        raise ContractError(f"confidence must be one of {', '.join(CONFIDENCES)}")
+    return Diagnosis(suspect=None if suspect == "none" else suspect, confidence=fields["confidence"], sig=fields.get("sig"))
+
+
+def diagnosis_signature(key: str, suspect: str | None, confidence: str, issue: int) -> str:
+    """HMAC-SHA256 of `<suspect or none>|<confidence>|<issue>` under the triage session's key, as hex."""
+    message = f"{(suspect or 'none').lower()}|{confidence}|{int(issue)}"
+    return hmac.new(key.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+
+def diagnosis_signed(diagnosis: Diagnosis, key: str, issue: int) -> bool:
+    if not diagnosis.sig:
+        return False
+    return hmac.compare_digest(diagnosis.sig.lower(), diagnosis_signature(key, diagnosis.suspect, diagnosis.confidence, issue))
+
+
+def triage_argv(backend: str, repo: str, issue: int, what: str, branch: str, head: str, green: str | None, key: str,
+                env_id: str | None = None) -> list[str]:
+    """The command that starts one read-only triage session for an incident."""
+    if backend not in TRIAGE_PROMPTS:
+        raise ContractError(f"triage_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
+    if not REPO.match(repo):
+        raise ContractError(f"repo {repo!r} is not OWNER/REPO")
+    if not BRANCH.match(branch or ""):
+        raise ContractError(f"{branch!r} is not a branch name")
+    if not SHA.match(head or "") or (green is not None and not SHA.match(green)):
+        raise ContractError("the incident's commits must be full 40-character SHAs")
+    if not re.fullmatch(r"[0-9a-f]{32,}", key or ""):
+        raise ContractError("the triage key must be hex")
+    if not re.fullmatch(r"[A-Za-z0-9 _.,:;()/#@+=-]{1,160}", what or ""):
+        raise ContractError("the incident's summary must be plain text")
+    prompt = TRIAGE_PROMPTS[backend].format(repo=repo, issue=int(issue), what=what, branch=branch, head=head,
+                                            green=green or "unknown", key=key)
     return cloud_argv(backend, prompt, 1, env_id)
 
 

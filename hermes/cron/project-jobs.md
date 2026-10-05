@@ -40,3 +40,16 @@ Starts one cloud session that reviews the default branch's commits since the las
 Run `team-kit-gh security` in the terminal. If it succeeds, print exactly `[SILENT]` and nothing else.
 If it refuses, print one line: "team-kit notice: security refused: " and the refusal.
 ```
+
+## team-kit-incidents
+
+Schedule: `every 10m`
+Deliver: `bot-chat:{bot}`
+Skill: `dispatch`
+
+Polls the default branch's checks and the health URLs in `.agents/dispatch.json`, from this machine, outbound only. A failure opens an `agent:incident` issue, starts a triage session that changes nothing, and tells the owner; a pass closes it again.
+
+```text
+Run `team-kit-gh incidents` in the terminal. Print its output exactly as it is, and nothing else.
+If it refuses, print one line: "team-kit notice: incidents refused: " and the refusal.
+```

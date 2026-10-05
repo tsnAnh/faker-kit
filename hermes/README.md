@@ -8,7 +8,7 @@ It does one level of the kit's [Run many agents](../docs/how-to/run-many-agents.
 
 ## How it keeps track
 
-GitHub holds every unit's state, as labels on its issue: `agent-task` (queued), `agent:running`, `agent:verifying` (done and checks passed; a separate verifier session is checking the pull request), `agent:review` (verified, the owner merges), and `agent:needs-human` (a gate). A closed issue is done. An open issue labelled `agent:andon` is the andon cord: while it, or the machine's cord, is pulled, nothing new starts and cloud agents at work stop at their next push. Only `team-kit-gh andon clear` (a project) or `team-kit-admin andon clear` (the machine) clears it; closing the issue on GitHub does not. One open issue labelled `agent:security` collects the daily security reviews of the default branch. There is no Kanban board, no webhook, and no public address: each project bot's `team-kit-tick` job runs `team-kit-gh tick` every 30 minutes, which reads the labels and reports, launches what can start, and opens gates, all in code.
+GitHub holds every unit's state, as labels on its issue: `agent-task` (queued), `agent:running`, `agent:verifying` (done and checks passed; a separate verifier session is checking the pull request), `agent:review` (verified, the owner merges), and `agent:needs-human` (a gate). A closed issue is done. An open issue labelled `agent:andon` is the andon cord: while it, or the machine's cord, is pulled, nothing new starts and cloud agents at work stop at their next push. Only `team-kit-gh andon clear` (a project) or `team-kit-admin andon clear` (the machine) clears it; closing the issue on GitHub does not. One open issue labelled `agent:security` collects the daily security reviews of the default branch, and an issue labelled `agent:incident` tracks each incident the `team-kit-incidents` job finds by polling the default branch's checks and the project's health URLs. There is no Kanban board, no webhook, and no public address: each project bot's `team-kit-tick` job runs `team-kit-gh tick` every 30 minutes, which reads the labels and reports, launches what can start, and opens gates, all in code.
 
 ## Install
 
@@ -40,7 +40,7 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `plugin/team_kit_guard/` | The Hermes plugin that checks every tool call against `guard.yaml` and `bots.yaml` | each bot's `plugins/` |
 | `profiles/bootstrap/`, `profiles/project/`, `profiles/chief/` | `SOUL.md` and the config merged into each bot's profile | each bot's profile |
 | `skills/bootstrap/`, `skills/dispatch/`, `skills/chief/` | The bots' skills | linked into each bot's `skills/` |
-| `cron/project-jobs.md` | `team-kit-tick`, `team-kit-status`, and `team-kit-security`, created paused per project bot | each project bot's scheduled jobs |
+| `cron/project-jobs.md` | `team-kit-tick`, `team-kit-status`, `team-kit-security`, and `team-kit-incidents`, created paused per project bot | each project bot's scheduled jobs |
 | `templates/guard.yaml` | The machine's policy, written once | `~/.hermes/team-kit/guard.yaml` |
 | `tests/` | `python -m pytest hermes` | — |
 
@@ -52,6 +52,7 @@ Under `~/.hermes/team-kit/`:
 - `briefs/<bot>/`, the only place a project bot may write.
 - `andon/`, the pulled cords: `_machine.json` and one file per project bot.
 - `verify/<bot>/`, one private record per verifier: its commit and the key that signs its verdict.
+- `incidents/<bot>.json`, each open incident, its triage session's key, and the last green commit.
 - `security/<bot>.json`, the last commit a security review covered, and the running review's range and key.
 - `checkouts/`, shallow clones `claude --cloud` starts from. Pruned after 3 days.
 - `in-flight/<bot>.json`, each project bot's count of running units, for `max_in_flight_total`.

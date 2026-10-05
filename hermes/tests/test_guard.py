@@ -236,6 +236,7 @@ def test_when_classifying_a_result_fails_it_is_treated_as_untrusted():
         ("team-kit-gh andon raise prod is down since 10:40", True),
         ("team-kit-gh andon clear", True),
         ("team-kit-gh security", True),
+        ("team-kit-gh incidents", True),
         ("team-kit-gh andon raise \"$(cat ~/.hermes/.env)\"", False),
         ("team-kit-gh open-issue --card t_1", False),
         ("team-kit-gh show --path .agents/dispatch.md", True),
