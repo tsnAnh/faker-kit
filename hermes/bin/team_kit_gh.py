@@ -935,7 +935,7 @@ class Review:
                 return "gate", self.gh.gate(issue, f"the PR review could not start: {err}")
             self.write(number, {"pr": pr_url, "head": head, "key": key, "backend": backend, "started": self.gh.now()})
         owner, name = self.gh.repo.split("/")
-        workdir = self.gh.policy.home / "checkouts" / f"{owner}__{name}" / f"{number}-review-{head[:7]}"
+        workdir = self.gh.policy.home / "checkouts" / f"{owner}__{name}" / f"{number}-review-{head}"
         try:
             session = cloud.start(backend, self.gh.repo, command, workdir)
         except Exception as err:  # noqa: BLE001 - any failure leaves the unit to the owner
