@@ -521,6 +521,28 @@
         "word": "cursor",
         "reason": "the text cursor in the user's editor"
       }
+    ],
+    "ownExceptions": [
+      {
+        "file": "plugins/trust-ladder/skills/orchestrate/scripts/adapters/slack/index.ts",
+        "word": "cursor",
+        "reason": "Slack's conversations.replies pagination parameter"
+      },
+      {
+        "file": "plugins/trust-ladder/skills/orchestrate/scripts/adapters/slack/index.ts",
+        "word": "next_cursor",
+        "reason": "Slack's pagination response field"
+      },
+      {
+        "file": "plugins/trust-ladder/skills/orchestrate/scripts/__tests__/slack-adapter.test.ts",
+        "word": "cursor",
+        "reason": "Slack's conversations.replies pagination parameter"
+      },
+      {
+        "file": "plugins/trust-ladder/skills/orchestrate/scripts/__tests__/slack-adapter.test.ts",
+        "word": "next_cursor",
+        "reason": "Slack's pagination response field"
+      }
     ]
   },
   "authorFallback": {
