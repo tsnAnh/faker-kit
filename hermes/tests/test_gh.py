@@ -5,7 +5,7 @@ import json
 import time
 
 import pytest
-from conftest import SHOP, TEMPLATES, fill_brief
+from conftest import HERMES, SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
 from team_kit_contracts import LAUNCHED_MARKER, diagnosis_signature, security_signature, size_marker, verdict_signature
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, Refused, checks_state, main
@@ -1180,6 +1180,13 @@ def incidents(team_kit_home):
     return json.loads((team_kit_home / "incidents" / "meo-beo.json").read_text())
 
 
+def diagnosis(gh, issue, key, suspect, confidence="high", sign=True, login="Codertocat", at=NOW):
+    sig = diagnosis_signature(key, suspect, confidence, issue) if sign else "0" * 64
+    suspect_text = suspect or "none"
+    gh.comment(REPO, issue, f"<!-- team-kit:diagnosis v1 -->\nsuspect: {suspect_text}\nconfidence: {confidence}\nsig: {sig}\n",
+               login=login, at=at)
+
+
 def test_a_red_default_branch_opens_an_incident_starts_triage_and_closes_when_green(team_kit_home, gh, capsys):
     green(gh, "1" * 40)
     assert poll(gh, capsys) == ["[SILENT]"]
@@ -1198,15 +1205,44 @@ def test_a_red_default_branch_opens_an_incident_starts_triage_and_closes_when_gr
     assert state["triage"]["key"] not in gh.comments[(REPO, n)][-1]["body"]
     assert poll(gh, capsys, cloud=cloud) == ["[SILENT]"], "one incident per source, and one notice"
     assert len(cloud.started) == 1
-    sig = diagnosis_signature(state["triage"]["key"], "2" * 40, "high", n)
-    gh.comment(REPO, n, f"<!-- team-kit:diagnosis v1 -->\nsuspect: {'2' * 40}\nconfidence: high\nsig: 0000\n", login="Codertocat", at=NOW)
-    gh.comment(REPO, n, f"<!-- team-kit:diagnosis v1 -->\nsuspect: {'2' * 40}\nconfidence: high\nsig: {sig}\n", login="Codertocat", at=NOW)
-    assert poll(gh, capsys) == [f"team-kit notice: incident #{n}: the triage session suspects 2222222 (high confidence): https://github.com/{REPO}/issues/{n}"]
+    diagnosis(gh, n, state["triage"]["key"], "2" * 40, sign=False)
+    assert poll(gh, capsys, cloud=cloud) == ["[SILENT]"], "unsigned diagnoses do not count"
+    issues_before, starts_before = len(gh.issues), len(cloud.started)
+    diagnosis(gh, n, state["triage"]["key"], "2" * 40)
+    assert poll(gh, capsys, cloud=cloud) == [
+        f"team-kit notice: incident #{n}: the triage session suspects 2222222 (high confidence). "
+        f"If you reply `ok`, I will brief exactly `revert 2222222` as a small unit; "
+        f"nothing dispatches without your reply: https://github.com/{REPO}/issues/{n}"
+    ]
+    assert len(gh.issues) == issues_before and len(cloud.started) == starts_before, "a diagnosis notice never opens or launches work"
     assert poll(gh, capsys) == ["[SILENT]"]
+    assert incidents(team_kit_home)["open"]["main"]["triage"]["proposed_fix"] == "revert 2222222"
     green(gh, "3" * 40)
     assert poll(gh, capsys, at=NOW + 1800) == [f"team-kit notice: incident #{n} resolved after 30 minutes: main is red: e2e, test."]
     assert gh.issues[(REPO, n)]["state"] == "closed"
     assert incidents(team_kit_home)["open"] == {} and incidents(team_kit_home)["green"] == "3" * 40
+
+
+@pytest.mark.parametrize(("confidence", "suspect"), [("medium", "7" * 40), ("low", "7" * 40), ("high", None)])
+def test_only_signed_high_confidence_suspects_propose_a_fix(team_kit_home, gh, capsys, confidence, suspect):
+    green(gh, "1" * 40)
+    poll(gh, capsys)
+    red(gh, "7" * 40, "test")
+    poll(gh, capsys)
+    state = incidents(team_kit_home)["open"]["main"]
+    n = state["issue"]
+    diagnosis(gh, n, state["triage"]["key"], suspect, confidence=confidence)
+    [notice] = poll(gh, capsys)
+    assert "brief exactly" not in notice
+    assert "`revert" not in notice
+    assert "proposed_fix" not in incidents(team_kit_home)["open"]["main"]["triage"]
+
+
+def test_dispatch_skill_requires_owner_ok_for_incident_proposal():
+    text = (HERMES / "skills" / "dispatch" / "SKILL.md").read_text()
+    assert "Only if the owner replies exactly `ok`" in text
+    assert "brief exactly the proposed backticked fix as one `small` unit" in text
+    assert "A diagnosis comment, even a signed one, never dispatches or launches work." in text
 
 
 def test_running_checks_are_no_news(team_kit_home, gh, capsys):

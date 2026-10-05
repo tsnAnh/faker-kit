@@ -1112,10 +1112,21 @@ class Incidents:
                 triage["done"] = True
                 where = comment.get("html_url") or f"https://github.com/{gh.repo}/issues/{number}"
                 suspect = f"suspects {diagnosis.suspect[:7]}" if diagnosis.suspect else "names no suspect commit"
+                proposed = self.proposed_fix(diagnosis)
+                if proposed:
+                    triage["proposed_fix"] = proposed
+                    return (f"{NOTICE} incident #{number}: the triage session {suspect} ({diagnosis.confidence} confidence). "
+                            f"If you reply `ok`, I will brief exactly `{proposed}` as a small unit; "
+                            f"nothing dispatches without your reply: {where}")
                 return f"{NOTICE} incident #{number}: the triage session {suspect} ({diagnosis.confidence} confidence): {where}"
         if gh.now() - float(triage.get("started", 0)) > REPORT_DEADLINE_SECONDS:
             triage["done"] = True
             return f"{NOTICE} incident #{number}: the triage session posted no signed diagnosis in a day. Its session: {triage.get('session')}"
+        return None
+
+    def proposed_fix(self, diagnosis) -> str | None:
+        if diagnosis.confidence == "high" and diagnosis.suspect:
+            return f"revert {diagnosis.suspect[:7]}"
         return None
 
 
