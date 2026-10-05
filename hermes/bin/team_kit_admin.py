@@ -6,6 +6,8 @@ The bootstrap bot may run these, and the guard asks the owner to approve each on
   status                                                     every project, repository, bot, and job, read-only
   add-project   --bot B --project P --repo R [--model M]     create or refresh a project bot for one repository:
                                                              profile, skill, paused jobs, labels, bots.yaml
+  vendor        --project P                                  open a pull request that copies the pinned kit into the
+                                                             repository, so cloud sessions have its skills
   setup-repo    --project P --backend claude|codex [--codex-env E]
                                                              start one cloud session that prepares the repository
   protect       --project P --check NAME [--check NAME ...]  require those checks on the default branch
@@ -26,7 +28,9 @@ command writes.
 from __future__ import annotations
 
 import argparse
+import base64
 import fcntl
+import importlib.util
 import json
 import os
 import shutil
@@ -35,6 +39,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Callable
+from urllib.parse import quote
 
 HERE = Path(__file__).resolve().parent
 for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
@@ -47,6 +52,7 @@ from team_kit_cloud import Cloud, CloudError  # noqa: E402
 from team_kit_contracts import ContractError, bootstrap_prompt, cloud_argv  # noqa: E402
 from team_kit_guard.policy import NAME, REPO, RESERVED_NAMES, Policy, PolicyError, load_policy, team_kit_home  # noqa: E402
 
+VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
 LABELS = (
     ("agent-task", "1d76db", "A unit dispatched by a team-kit project bot"),
     ("agent:running", "fbca04", "A cloud coding agent is working this unit"),
@@ -204,6 +210,120 @@ class Admin:
             raise Refused(f"no project {project}; create it with add-project first")
         return bot
 
+    def api(self, path: str, method: str = "GET", body: dict | None = None):
+        args = ["api", "-X", method, path] if method != "GET" else ["api", path]
+        if body is not None:
+            args += ["--input", "-"]
+        out = self.run(args, input=json.dumps(body)) if body is not None else self.run(args)
+        return json.loads(out) if out.strip() else None
+
+    def vendored_ref(self, repo: str, branch: str) -> str | None:
+        """The kit commit vendored on a branch, or None."""
+        try:
+            data = self.api(f"repos/{repo}/contents/{VENDOR_MANIFEST}?ref={quote(branch, safe='')}")
+            return json.loads(base64.b64decode(data["content"]))["kit_ref"]
+        except (Refused, ValueError, KeyError, TypeError):
+            return None
+
+    def vendor_module(self):
+        """vendor_kit.py from the pinned kit, so the copy and its manifest match that commit."""
+        path = self.kit / "plugins" / "trust-ladder" / "skills" / "setup-cloud-agents" / "scripts" / "vendor_kit.py"
+        if not path.is_file():
+            raise Refused(f"the kit at {path.parents[5]} has no vendor_kit.py; pin a newer kit commit")
+        spec = importlib.util.spec_from_file_location("team_kit_vendor_kit", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module  # dataclasses look their module up while the class is built
+        writes, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # leave the kit checkout clean
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = writes
+        return module
+
+    def vendor(self, project: str) -> dict:
+        """Commit the pinned kit into the project's repository through the GitHub API, on a branch,
+        and open a pull request. No git push, so the Hermes machine needs no git credentials."""
+        repo = self.project_bot(self.policy(), project).repo
+        vk = self.vendor_module()
+        try:
+            kit_ref = vk.kit_commit(self.kit)
+            plan = vk.plan(self.kit, kit_ref)
+        except vk.VendorError as err:
+            raise Refused(str(err)) from None
+        default = self.api(f"repos/{repo}")["default_branch"]
+        ref_path, ref_query = quote(default, safe="/"), quote(default, safe="")
+        base = self.api(f"repos/{repo}/git/ref/heads/{ref_path}")["object"]["sha"]
+        base_tree = self.api(f"repos/{repo}/git/commits/{base}")["tree"]["sha"]
+        listing = self.api(f"repos/{repo}/git/trees/{base_tree}?recursive=1")
+        if listing.get("truncated"):
+            raise Refused(f"{repo} is too large to list through the API; run vendor_kit.py --into in a clone instead")
+        existing = {e["path"]: e for e in listing.get("tree") or []}
+        link_dirs = {place for places in vk.LINK_DIRS.values() for place, _ in places}
+        for link_dir in sorted(link_dirs):
+            if existing.get(link_dir, {}).get("mode") == "120000":
+                raise Refused(f"{link_dir} in {repo} is a symlink; make it a real folder first, so the kit's relative links resolve")
+
+        def link_target(entry) -> str:
+            blob = self.api(f"repos/{repo}/git/blobs/{entry['sha']}")
+            return base64.b64decode(blob["content"]).decode()
+
+        targets: dict[str, bool] = {}
+
+        def ours(entry) -> bool:
+            if entry.get("mode") != "120000":
+                return False
+            if entry["sha"] not in targets:
+                targets[entry["sha"]] = vk.points_into_vendor(link_target(entry))
+            return targets[entry["sha"]]
+
+        entries = [{"path": path, "mode": "100755" if executable else "100644", "type": "blob", "content": data.decode()}
+                   for path, (data, executable) in sorted(plan.files.items())]
+        stale = [path for path, e in existing.items() if path.startswith(f"{vk.VENDOR_DIR}/") and e["type"] == "blob"
+                 and path not in plan.files and path != vk.MANIFEST]
+        linked, skipped = vk.choose_links(plan.links, lambda path: path in existing and not ours(existing[path]))
+        planned = {path for path, _ in linked}
+        entries += [{"path": path, "mode": "120000", "type": "blob", "content": target} for path, target in linked]
+        stale += [path for path, e in existing.items() if path.rsplit("/", 1)[0] in link_dirs and path not in planned and ours(e)]
+        entries += [{"path": path, "mode": existing[path]["mode"], "type": "blob", "sha": None} for path in sorted(stale)]
+        entries.append({"path": vk.MANIFEST, "mode": "100644", "type": "blob", "content": plan.manifest(linked).decode()})
+        if vk.DISPATCH in existing:
+            text = base64.b64decode(self.api(f"repos/{repo}/contents/{vk.DISPATCH}?ref={ref_query}")["content"]).decode()
+            try:
+                moved = vk.move_kit_ref(text, kit_ref)
+            except vk.VendorError as err:
+                raise Refused(str(err)) from None
+            if moved:
+                entries.append({"path": vk.DISPATCH, "mode": "100644", "type": "blob", "content": moved})
+        tree = self.api(f"repos/{repo}/git/trees", "POST", {"base_tree": base_tree, "tree": entries})["sha"]
+        result = {"project": project, "repo": repo, "kit_ref": kit_ref, "files": len(plan.files), "links": len(linked),
+                  "kept_repository_own": skipped, "removed": sorted(stale)}
+        if tree == base_tree:
+            return {**result, "pr": None, "note": f"{default} already has the kit at {kit_ref[:12]}"}
+        short = kit_ref[:12]
+        commit = self.api(f"repos/{repo}/git/commits", "POST",
+                          {"message": f"chore(agents): vendor team-kit {short}", "tree": tree, "parents": [base]})["sha"]
+        branch = f"team-kit/kit-{short}"
+        try:
+            self.api(f"repos/{repo}/git/ref/heads/{quote(branch, safe='/')}")
+            self.api(f"repos/{repo}/git/refs/heads/{quote(branch, safe='/')}", "PATCH", {"sha": commit, "force": True})
+        except Refused:
+            self.api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": commit})
+        open_prs = [pr for pr in self.api(f"repos/{repo}/pulls?state=open&base={ref_query}&per_page=100") or []
+                    if str((pr.get("head") or {}).get("ref", "")).startswith("team-kit/kit-")]
+        mine = [pr["html_url"] for pr in open_prs if pr["head"]["ref"] == branch]
+        superseded = sorted(pr["html_url"] for pr in open_prs if pr["head"]["ref"] != branch)
+        if mine:
+            url = mine[0]
+        else:
+            body = (f"Copies the team kit at `{kit_ref}` into `.agents/team-kit/`, and links its skills from `.claude/skills/` and "
+                    "`.agents/skills/` and its subagents from `.claude/agents/`, so every agent session, cloud sessions included, "
+                    "has them. Generated by `team-kit-admin vendor`; nothing under `.agents/team-kit/` is edited by hand.\n\n"
+                    f"`python3 .agents/team-kit/vendor_kit.py --check .` verifies the copy. Kept the repository's own: "
+                    f"{', '.join(skipped) or 'none'}. Removed: {', '.join(sorted(stale)) or 'nothing'}.")
+            url = self.api(f"repos/{repo}/pulls", "POST", {"title": f"chore(agents): vendor team-kit {short}", "head": branch,
+                                                         "base": default, "body": body})["html_url"]
+        return {**result, "branch": branch, "pr": url, "superseded": superseded}
+
     def setup_repo(self, project: str, backend: str, codex_env: str | None) -> dict:
         policy = self.policy()
         bot = self.project_bot(policy, project)
@@ -211,10 +331,12 @@ class Admin:
         if backend == "codex" and not codex_env:
             raise Refused("codex needs --codex-env, the Codex cloud environment id for this repository")
         commit = git(self.kit, "rev-parse", "HEAD")
-        source = os.environ.get("TEAM_KIT_SOURCE_URL") or git(self.kit, "remote", "get-url", "origin")
-        if not source.startswith("https://"):
-            raise Refused(f"kit source {source} is not an https URL a cloud session can clone; set TEAM_KIT_SOURCE_URL")
-        prompt = bootstrap_prompt(repo, project, backend, source, commit, sorted(policy.trusted_authors), codex_env)
+        default = self.api(f"repos/{repo}")["default_branch"]
+        vendored = self.vendored_ref(repo, default)
+        if vendored != commit:
+            found = f"has the kit at {vendored[:12]}" if vendored else "has no vendored kit"
+            raise Refused(f"{repo} {default} {found}, not {commit[:12]}; run team-kit-admin vendor --project {project} and merge its pull request first")
+        prompt = bootstrap_prompt(repo, project, backend, commit, sorted(policy.trusted_authors), codex_env)
         argv = cloud_argv(backend, prompt, 1, codex_env)
         owner, name = repo.split("/")
         try:
@@ -349,6 +471,8 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--project", required=True)
     cmd.add_argument("--repo", required=True, help="the project's one OWNER/REPO")
     cmd.add_argument("--model")
+    cmd = sub.add_parser("vendor")
+    cmd.add_argument("--project", required=True)
     cmd = sub.add_parser("setup-repo")
     cmd.add_argument("--project", required=True)
     cmd.add_argument("--backend", required=True, choices=["claude", "codex"])
@@ -400,6 +524,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
             out = admin.add_bootstrap(args.bot, args.model)
         elif args.command == "add-project":
             out = admin.add_project(args.bot, args.project, args.repo, args.model)
+        elif args.command == "vendor":
+            out = admin.vendor(args.project)
         elif args.command == "setup-repo":
             out = admin.setup_repo(args.project, args.backend, args.codex_env)
         elif args.command == "protect":
@@ -408,6 +534,9 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
             out = admin.activate(args.bot)
     except (Refused, InstallError, PolicyError, ContractError, yaml.YAMLError) as err:
         print(f"team-kit-admin: refused: {err}", file=sys.stderr)
+        return 1
+    except Exception as err:  # noqa: BLE001 - the bot gets one refusal line, never a traceback
+        print(f"team-kit-admin: refused: unexpected {type(err).__name__}: {str(err)[:300]}", file=sys.stderr)
         return 1
     print(json.dumps(out, ensure_ascii=False))
     return 0

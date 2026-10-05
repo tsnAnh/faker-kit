@@ -28,8 +28,9 @@ Open exactly one pull request. Never merge it, and never push to the default bra
 
 The repository must work for unattended cloud agents:
 
-- `setup-team-kit` is done, so the kit loads in every session here.
-- `setup-cloud-agents` is done: `scripts/check.sh` exists and passes in a fresh cloud session. For Codex, the environment's setup script runs `install-kit-skills.sh --ref <kit_ref>`.
+- The kit is vendored at `kit_ref`: `.agents/team-kit/KIT.json` names that commit, and `python3 .agents/team-kit/vendor_kit.py --check .` passes. Cloud sessions get the kit's skills only from this copy. If it is missing or names another commit, stop: the owner vendors it first (the bootstrap bot's `team-kit-admin vendor`), because this session cannot fetch the kit. Never edit `.agents/team-kit/`.
+- `setup-team-kit` is done.
+- `setup-cloud-agents` is done: `scripts/check.sh` exists, runs the vendored kit's `--check`, and passes in a fresh cloud session.
 - CI runs `scripts/check.sh` on every pull request.
 - With several apps, `scripts/check.sh` and CI check only the apps a change touches (a workspace tool's affected-only run, or path filters), so a web change does not wait for the mobile build. The top trust layer needs `check` under 15 minutes.
 
@@ -65,7 +66,7 @@ Copy `templates/dispatch/dispatch.json` and fill it:
 
 A Codex cloud task cannot push or open a pull request unless its environment allows it. Then the agent reports `partial`, which opens a gate, and the owner opens the pull request from the task. Say so in the pull request for `codex`.
 
-Claude Code cloud sessions load the kit from the marketplace in `.claude/settings.json`, which follows the kit's default branch. `kit_ref` must be a commit on that branch.
+`kit_ref` must equal the vendored kit's commit in `.agents/team-kit/KIT.json`; the vendored `--check` fails otherwise. To move to another kit commit later, vendor it again: that pull request updates both.
 
 ## 4. Write `.agents/dispatch.md`
 

@@ -107,25 +107,26 @@ def test_depends_on_without_an_issue_is_rejected_so_a_typo_cannot_drop_a_depende
         depends(text)
 
 
-def test_bootstrap_prompt_pins_the_kit_and_asks_for_one_pull_request():
-    prompt = bootstrap_prompt("acme/shop", "shop", "claude", "https://github.com/tsnAnh/team-kit.git", "a" * 40, ["codertocat"])
+def test_bootstrap_prompt_reads_the_vendored_kit_and_asks_for_one_pull_request():
+    prompt = bootstrap_prompt("acme/shop", "shop", "claude", "a" * 40, ["codertocat"])
     assert prompt.startswith("Set up acme/shop for team-kit dispatch, as project shop.")
-    assert f"at commit {'a' * 40}" in prompt
-    assert "plugins/pstack/skills/faker-mode/SKILL.md" in prompt
-    assert "plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in prompt
-    assert "PROJECT.md" not in prompt and "home" not in prompt
+    assert f"vendored in this repository at .agents/team-kit/, at commit {'a' * 40}" in prompt
+    assert ".agents/team-kit/plugins/pstack/skills/faker-mode/SKILL.md" in prompt
+    assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in prompt
+    assert "If .agents/team-kit/KIT.json is missing or names another commit, stop" in prompt
+    assert "clone" not in prompt.lower(), "the kit may be private, so the session never clones it"
     assert prompt.endswith("Open exactly one pull request. Never merge it.")
-    codex = bootstrap_prompt("acme/shop", "shop", "codex", "https://x.example/kit.git", "a" * 40, ["c"], "env_1")
+    codex = bootstrap_prompt("acme/shop", "shop", "codex", "a" * 40, ["c"], "env_1")
     assert "- codex_env: env_1" in codex
 
 
 @pytest.mark.parametrize(
     "args",
     [
-        ("acme/shop;id", "shop", "claude", "https://x", "a" * 40, ["c"]),
-        ("acme/shop", "shop", "gpt", "https://x", "a" * 40, ["c"]),
-        ("acme/shop", "shop", "claude", "https://x", "main", ["c"]),
-        ("acme/shop", "shop", "claude", "https://x", "a" * 40, []),
+        ("acme/shop;id", "shop", "claude", "a" * 40, ["c"]),
+        ("acme/shop", "shop", "gpt", "a" * 40, ["c"]),
+        ("acme/shop", "shop", "claude", "main", ["c"]),
+        ("acme/shop", "shop", "claude", "a" * 40, []),
     ],
 )
 def test_bootstrap_prompt_refuses_unsafe_or_missing_parts(args):

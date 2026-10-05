@@ -12,7 +12,7 @@ One Hermes machine runs one bootstrap bot and one bot per project. Bot names are
 
 | Bot | How many | Does | Its only command |
 |---|---|---|---|
-| Bootstrap bot | One per machine | Sets up a project: its project bot, the repository's labels, a cloud session that opens the setup pull request, branch protection. Loads the [bootstrap](../../hermes/skills/bootstrap/SKILL.md) skill. You approve every command it runs but `status` | `team-kit-admin` |
+| Bootstrap bot | One per machine | Sets up a project: its project bot, the repository's labels, the vendored kit, a cloud session that opens the setup pull request, branch protection. Loads the [bootstrap](../../hermes/skills/bootstrap/SKILL.md) skill. You approve every command it runs but `status` | `team-kit-admin` |
 | Project bot | One per project | Plans units, writes a brief per unit, dispatches it. Loads the [dispatch](../../hermes/skills/dispatch/SKILL.md) skill | `team-kit-gh`, for its own repository only |
 | Coding agent | One per unit, in the cloud | Works the brief in faker-mode with the [follow-brief](../../plugins/trust-ladder/skills/follow-brief/SKILL.md) skill, opens one pull request, posts a report | — |
 
@@ -74,14 +74,14 @@ From a clone of the kit on that machine:
 bash hermes/install.sh --ref <kit commit> --bootstrap-bot <name>
 ```
 
-`--ref` is a full 40-character kit commit. Every repository's `kit_ref` must equal it. The script fetches the kit at that commit, writes `guard.yaml` once, installs `team-kit-gh` and `team-kit-admin` in `~/.hermes/bin/`, creates the bootstrap bot, refreshes every existing bot from the new kit, and restarts the gateway. Run it again with a new commit to move every bot to it.
+`--ref` is a full 40-character kit commit. Every repository's `kit_ref` must equal it. The script fetches the kit at that commit, writes `guard.yaml` once, installs `team-kit-gh` and `team-kit-admin` in `~/.hermes/bin/`, creates the bootstrap bot, refreshes every existing bot from the new kit, and restarts the gateway. Run it again with a new commit to move every bot to it, then ask the bootstrap bot to vendor the new commit into each project's repository (below).
 
 Then edit `~/.hermes/team-kit/guard.yaml`:
 
 - `trusted_authors`: your GitHub login, and each project bot's login. Reports by anyone else are ignored, so a copied report cannot move a unit.
 - `max_in_flight_total`: how many cloud sessions may run at once on this machine.
 
-The bootstrap bot runs `gh` with its own login. Put a token with Administration and Issues read and write on your repositories in `~/.hermes/profiles/<bootstrap bot>/.env` as `GH_TOKEN`, or sign `gh` in on the machine. Sign in the coding agent too: `claude` for Claude Code cloud, `codex` for Codex cloud.
+The bootstrap bot runs `gh` with its own login. Put a token with Administration, Issues, Contents, and Pull requests read and write on your repositories in `~/.hermes/profiles/<bootstrap bot>/.env` as `GH_TOKEN`, or sign `gh` in on the machine. Sign in the coding agent too: `claude` for Claude Code cloud, `codex` for Codex cloud.
 
 The installer works with macOS's bundled Bash 3. It needs a Python 3.9+ that can import PyYAML: it tries the Python in Hermes's shebang, then `python3` on `PATH`. Otherwise, install PyYAML in a helper Python and pass it as `HERMES_PYTHON`. Hermes configuration is changed only through `hermes config set` and read back.
 
@@ -90,10 +90,11 @@ The installer works with macOS's bundled Bash 3. It needs a Python 3.9+ that can
 Open the bootstrap bot in Hermes Desktop Bot Mode and say "set up project shop for acme/shop". It asks for the bot's name and the coding agent, then, with your approval at each step:
 
 1. `team-kit-admin add-project` creates the project bot and its two jobs, paused, and the four labels in the repository.
-2. `team-kit-admin setup-repo` starts one cloud session. It runs faker-mode and the [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md) skill, scores the repository with `/trust-audit`, and opens one pull request: `.agents/dispatch.json` (with the `verification_skill`), `.agents/dispatch.md`, a Layout section in `AGENTS.md`, and any kit setup the repository lacks. You review and merge it.
-3. `team-kit-admin protect` makes the CI check that runs `scripts/check.sh` required on the default branch.
-4. You put the project bot's GitHub token in `~/.hermes/profiles/<project bot>/.env` as `GH_TOKEN` yourself: a fine-grained token for the repository with Issues read and write, and Contents, Pull requests, Checks, and Commit statuses read. Never in chat.
-5. `team-kit-admin activate` resumes the project bot's jobs.
+2. `team-kit-admin vendor` opens a pull request that copies the kit, at the machine's commit, into the repository's `.agents/team-kit/` and links its skills into `.claude/skills/` and `.agents/skills/`. Cloud sessions start from a clone of the repository, and cannot install plugins or fetch a private kit, so this copy is where they get the kit's skills. The repository's own skills keep their place. You review and merge it.
+3. `team-kit-admin setup-repo` starts one cloud session. It runs faker-mode and the [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md) skill, scores the repository with `/trust-audit`, and opens one pull request: `.agents/dispatch.json` (with the `verification_skill`), `.agents/dispatch.md`, a Layout section in `AGENTS.md`, and any kit setup the repository lacks. You review and merge it.
+4. `team-kit-admin protect` makes the CI check that runs `scripts/check.sh` required on the default branch.
+5. You put the project bot's GitHub token in `~/.hermes/profiles/<project bot>/.env` as `GH_TOKEN` yourself: a fine-grained token for the repository with Issues read and write, and Contents, Pull requests, Checks, and Commit statuses read. Never in chat.
+6. `team-kit-admin activate` resumes the project bot's jobs.
 
 Then add the project bot in Bot Mode and ask it for one small change, such as a README typo fix, to prove the loop.
 
@@ -123,7 +124,8 @@ Each project bot's `team-kit-status` job sends three lines at 9:00, 13:00, and 1
 
 - **Every tool call is blocked.** `~/.hermes/team-kit/guard.yaml` or `bots.yaml` is missing, does not parse, or `guard.yaml` is not `version: 2`. The block message names the problem. A version 1 file needs migrating: [hermes/README.md](../../hermes/README.md#migrate-from-version-1).
 - **"profile X is not a team-kit bot in bots.yaml".** Bots are created only by `team-kit-admin`. Ask the bootstrap bot, or rerun `install.sh --bootstrap-bot X` for the bootstrap bot.
-- **"kit commit ... differs from kit_ref ...".** The machine and `.agents/dispatch.json` pin different kit commits. Rerun `install.sh --ref` or change `kit_ref` in a pull request, then run `team-kit-gh kit-check --repo OWNER/REPO`.
+- **"kit commit ... differs from kit_ref ..." or "... has no vendored kit".** The machine, `.agents/dispatch.json`, and the vendored `.agents/team-kit/KIT.json` must pin the same kit commit. Ask the bootstrap bot to run `team-kit-admin vendor` for the project and merge its pull request, which moves both, then ask the project bot to run `team-kit-gh kit-check`.
+- **A cloud agent says the team-kit skills did not load.** The repository's vendored kit is missing or its links are broken. Run `python3 .agents/team-kit/vendor_kit.py --check .` in a clone, then vendor again.
 - **A unit stays queued.** Its dependencies have not merged, or a limit is full. `team-kit-gh status` lists it; the next tick launches it when it can. Raise `max_in_flight` in a pull request, or `max_in_flight_total` in `guard.yaml`, if you can take more.
 - **A unit stays running.** No report yet. Open the session on the issue's launch comment. After a day without a report, tick opens a gate.
 - **"done without a pull request".** A Codex task that could not push leaves the pull request to you. Open it from the task, with `Closes #<n>` in its body.

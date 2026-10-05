@@ -68,7 +68,7 @@ A repository can make the kit appear for everyone who opens it. `/setup-team-kit
 | `.pi/settings.json` | Declares the kit as a pinned project package. Pi installs and loads it after the teammate trusts the project. |
 | `AGENTS.md` and `CLAUDE.md` | The instructions every agent reads, with the upstream-terms table built in. |
 
-None of these files affect the other agents, so a repository can carry all three.
+None of these files affect the other agents, so a repository can carry all three. Cloud sessions (Claude Code on the web, Codex cloud) install none of these plugins; [`/setup-cloud-agents`](use-the-kit-from-the-browser.md) vendors the kit into the repository for them.
 
 ## Check that it works
 

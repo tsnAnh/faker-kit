@@ -42,6 +42,22 @@ def jobs(root, bot):
     return json.loads((root / "profiles" / bot / "jobs.json").read_text())
 
 
+def seed(root, name, value):
+    """Fake GitHub state the fake gh reads: files.json, tree.json, blobs.json, refs.json, pulls.json."""
+    state = root.parent / ".fake-gh"
+    state.mkdir(exist_ok=True)
+    (state / name).write_text(json.dumps(value))
+
+
+def posted(root):
+    path = root.parent / ".fake-gh" / "posted.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def vendored(root, kit_ref, extra=None):
+    seed(root, "files.json", {SHOP: {".agents/team-kit/KIT.json": json.dumps({"version": 1, "kit_ref": kit_ref}), **(extra or {})}})
+
+
 def labels(root):
     return json.loads((root.parent / ".fake-gh" / "labels.json").read_text())
 
@@ -125,9 +141,10 @@ def test_add_project_refuses_before_changing_anything(ready, args, why):
     assert not (root / "profiles" / "sep-crm").exists()
 
 
-def test_setup_repo_starts_one_cloud_session_from_a_clone_pinned_to_the_kit(ready, kit_source):
+def test_setup_repo_starts_one_cloud_session_on_the_vendored_kit(ready, kit_source):
     root, _ = ready
     add_shop(ready)
+    vendored(root, kit_source[1])
     code, out = admin(ready, "setup-repo", "--project", "shop", "--backend", "claude", profile="ong-xay")
     assert code == 0, out
     assert out == {"project": "shop", "repo": "acme/shop", "backend": "claude", "kit_ref": kit_source[1], "session": "https://claude.ai/code/session_01BOOTstrap"}
@@ -135,9 +152,21 @@ def test_setup_repo_starts_one_cloud_session_from_a_clone_pinned_to_the_kit(read
     assert (home / ".fake-claude-cwd").read_text().strip() == str(root / "team-kit" / "checkouts" / "acme__shop" / "setup")
     args = (home / ".fake-claude-args").read_text()
     assert args.startswith("--cloud\nSet up acme/shop for team-kit dispatch")
-    assert f"https://github.com/tsnAnh/team-kit.git at commit {kit_source[1]}" in args
-    assert "PROJECT.md" not in args
+    assert f"vendored in this repository at .agents/team-kit/, at commit {kit_source[1]}" in args
+    assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in args
+    assert "clone" not in args.lower(), "the setup session never clones the kit, which may be private"
     assert "trusted_dispatchers: codertocat, meo-beo-gh" in args
+
+
+@pytest.mark.parametrize(("kit", "why"), [(None, "has no vendored kit"), ("0" * 40, "has the kit at 000000000000")])
+def test_setup_repo_waits_for_the_vendored_kit(ready, kit_source, kit, why):
+    root, _ = ready
+    add_shop(ready)
+    if kit:
+        vendored(root, kit)
+    code, err = admin(ready, "setup-repo", "--project", "shop", "--backend", "claude", profile="ong-xay")
+    assert code == 1 and why in err and "team-kit-admin vendor --project shop" in err
+    assert not (root.parent / ".fake-claude-args").exists()
 
 
 def test_setup_repo_refuses_codex_without_an_environment_and_unknown_projects(ready):
@@ -146,6 +175,120 @@ def test_setup_repo_refuses_codex_without_an_environment_and_unknown_projects(re
     assert code == 1 and "--codex-env" in err
     code, err = admin(ready, "setup-repo", "--project", "crm", "--backend", "claude", profile="ong-xay")
     assert code == 1 and "no project crm" in err
+
+
+def tree_entries(root):
+    [tree] = posted(root)["trees"]
+    assert tree["base_tree"] == "tree0"
+    return {e["path"]: e for e in tree["tree"]}
+
+
+def test_vendor_commits_the_pinned_kit_through_the_api_and_opens_a_pull_request(ready, kit_source):
+    root, _ = ready
+    add_shop(ready)
+    code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 0, out
+    short = kit_source[1][:12]
+    assert out["pr"] == "https://github.com/acme/shop/pull/7" and out["branch"] == f"team-kit/kit-{short}"
+    entries = tree_entries(root)
+    skill = entries[".agents/team-kit/plugins/trust-ladder/skills/follow-brief/SKILL.md"]
+    assert skill["mode"] == "100644" and skill["content"].startswith("---\nname: follow-brief")
+    assert entries[".agents/team-kit/vendor_kit.py"]["mode"] == "100755"
+    assert entries[".claude/skills/follow-brief"] == {"path": ".claude/skills/follow-brief", "mode": "120000", "type": "blob",
+                                                      "content": "../../.agents/team-kit/plugins/trust-ladder/skills/follow-brief"}
+    assert entries[".agents/skills/follow-brief"]["content"] == "../../.agents/team-kit/plugins/trust-ladder/skills/follow-brief"
+    manifest = json.loads(entries[".agents/team-kit/KIT.json"]["content"])
+    assert manifest["kit_ref"] == kit_source[1]
+    assert "plugins/trust-ladder/skills/follow-brief/SKILL.md" in manifest["files"]
+    assert not any(path.startswith("plugins/trust-ladder/test/") for path in manifest["files"]), "the kit's own tests stay out"
+    assert any(path.startswith("plugins/trust-ladder/packs/agnostic/test/") for path in manifest["files"]), "lint-pack fixtures stay in"
+    [commit] = posted(root)["commits"]
+    assert commit == {"message": f"chore(agents): vendor team-kit {short}", "tree": "tree1", "parents": ["base0"]}
+    [pull] = posted(root)["pulls"]
+    assert (pull["head"], pull["base"]) == (f"team-kit/kit-{short}", "main")
+    assert all("git" != c["args"][0] for c in gh_calls(root)), "no git push: everything goes through the API"
+
+
+def test_vendor_keeps_the_repositorys_own_skills_and_removes_stale_kit_files(ready, kit_source):
+    root, _ = ready
+    add_shop(ready)
+    seed(root, "tree.json", {SHOP: [
+        {"path": ".claude/skills/follow-brief", "mode": "040000", "type": "tree", "sha": "own"},
+        {"path": ".agents/skills/old-skill", "mode": "120000", "type": "blob", "sha": "link-old"},
+        {"path": ".agents/skills/verify-shop", "mode": "120000", "type": "blob", "sha": "link-own"},
+        {"path": ".agents/team-kit/plugins/trust-ladder/skills/gone/SKILL.md", "mode": "100644", "type": "blob", "sha": "x"},
+        {"path": ".agents/dispatch.json", "mode": "100644", "type": "blob", "sha": "d"},
+    ]})
+    seed(root, "blobs.json", {"link-old": "../../.agents/team-kit/plugins/pstack/skills/old-skill", "link-own": "../../.claude/skills/verify-shop"})
+    seed(root, "files.json", {SHOP: {".agents/dispatch.json": json.dumps({"backend": "claude", "kit_ref": "0" * 40})}})
+    code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 0, out
+    assert out["kept_repository_own"] == [".claude/skills/follow-brief", ".agents/skills/follow-brief"]
+    assert out["removed"] == [".agents/skills/old-skill", ".agents/team-kit/plugins/trust-ladder/skills/gone/SKILL.md"]
+    entries = tree_entries(root)
+    assert ".claude/skills/follow-brief" not in entries, "a real folder of the repository is never replaced"
+    assert ".agents/skills/follow-brief" not in entries, "nor shadowed for Codex and Pi by the kit's skill of that name"
+    assert entries[".agents/skills/old-skill"]["sha"] is None
+    assert ".agents/skills/verify-shop" not in entries, "a link that points elsewhere is the repository's own"
+    assert json.loads(entries[".agents/dispatch.json"]["content"])["kit_ref"] == kit_source[1], "the same pull request moves kit_ref"
+    assert ".claude/skills/follow-brief" not in json.loads(entries[".agents/team-kit/KIT.json"]["content"])["links"]
+
+
+def test_vendor_with_nothing_to_change_opens_no_pull_request(ready, kit_source):
+    root, env = ready
+    add_shop(ready)
+    env["FAKE_TREE_UNCHANGED"] = "1"
+    code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 0 and out["pr"] is None and "already has the kit" in out["note"]
+    assert "commits" not in posted(root)
+
+
+def test_vendor_again_updates_its_branch_and_reuses_the_open_pull_request(ready, kit_source):
+    root, _ = ready
+    add_shop(ready)
+    branch = f"team-kit/kit-{kit_source[1][:12]}"
+    seed(root, "refs.json", {branch: "old"})
+    seed(root, "pulls.json", {SHOP: [{"html_url": "https://github.com/acme/shop/pull/3", "head": branch}]})
+    code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 0 and out["pr"] == "https://github.com/acme/shop/pull/3"
+    assert posted(root)["refs"] == [{"branch": branch, "patched": True}]
+    assert "pulls" not in posted(root)
+
+
+def test_vendor_lists_older_kit_pull_requests_it_supersedes(ready, kit_source):
+    root, _ = ready
+    add_shop(ready)
+    seed(root, "pulls.json", {SHOP: [{"html_url": "https://github.com/acme/shop/pull/2", "head": "team-kit/kit-000000000000"},
+                                     {"html_url": "https://github.com/acme/shop/pull/4", "head": "feature/other"}]})
+    code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 0 and out["superseded"] == ["https://github.com/acme/shop/pull/2"]
+
+
+@pytest.mark.parametrize("problem", ["symlinked skills folder", "invalid dispatch.json", "dirty kit"])
+def test_vendor_refuses_before_writing_anything(ready, problem):
+    root, _ = ready
+    add_shop(ready)
+    if problem == "symlinked skills folder":
+        seed(root, "tree.json", {SHOP: [{"path": ".claude/skills", "mode": "120000", "type": "blob", "sha": "l"}]})
+        why = ".claude/skills in acme/shop is a symlink"
+    elif problem == "invalid dispatch.json":
+        seed(root, "tree.json", {SHOP: [{"path": ".agents/dispatch.json", "mode": "100644", "type": "blob", "sha": "d"}]})
+        seed(root, "files.json", {SHOP: {".agents/dispatch.json": "{not json"}})
+        why = "is not valid JSON"
+    else:
+        (root / "team-kit" / "kit" / "plugins" / "trust-ladder" / "stray.md").write_text("local")
+        why = "uncommitted changes"
+    code, err = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 1 and why in err
+    assert "trees" not in posted(root)
+
+
+def test_vendor_refuses_a_repository_too_large_to_list(ready):
+    root, env = ready
+    add_shop(ready)
+    env["FAKE_TREE_TRUNCATED"] = "1"
+    code, err = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 1 and "vendor_kit.py --into" in err
 
 
 def test_protect_requires_the_checks_for_admins_too(ready):

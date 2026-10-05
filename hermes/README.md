@@ -18,6 +18,12 @@ bash hermes/install.sh --ref <kit commit> --bootstrap-bot <name>
 
 Run `bash hermes/install.sh --help` for every flag. Then set `trusted_authors` and `max_in_flight_total` in `~/.hermes/team-kit/guard.yaml`, and ask the bootstrap bot for your first project.
 
+## How cloud agents get the kit
+
+A cloud session starts from a clone of the project's repository and nothing else: it installs no plugins and cannot fetch the kit while the kit's repository is private. So `team-kit-admin vendor` copies the kit, at this machine's commit, into the repository's `.agents/team-kit/` in a pull request, and links its skills into `.claude/skills/` and `.agents/skills/`. It builds the copy with `vendor_kit.py` from the trust-ladder `setup-cloud-agents` skill, and `python3 .agents/team-kit/vendor_kit.py --check .` in the repository verifies it.
+
+To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the bootstrap bot to run `team-kit-admin vendor` for each project, and merge each pull request. Until then that project's bot refuses to launch, because the machine and the repository would run different kits.
+
 ## Layout
 
 | Path | What it is | Installed to |
@@ -47,7 +53,7 @@ Under `~/.hermes/team-kit/`:
 
 ## What only you do
 
-- Merge pull requests.
+- Merge pull requests, including each project's kit-vendoring pull request.
 - Put each bot's GitHub token in its profile's `.env`. No bot ever sees a token in chat.
 - Sign the coding agent in on the machine.
 - Approve each `team-kit-admin` command the bootstrap bot runs.
@@ -59,6 +65,7 @@ These depend on Hermes and the cloud CLIs, and the tests fake them:
 - that a profile's `.env` (`GH_TOKEN`) reaches its terminal and its scheduled jobs,
 - that a new profile's scheduled jobs run in the shared gateway without a restart,
 - the session line `claude --cloud` and `codex cloud exec` print, which `team_kit_cloud.py` waits for,
+- that a cloud session loads skills through the relative links `vendor_kit.py` writes in `.claude/skills/` and `.agents/skills/` (the launch prompt has the agent report "the team-kit skills did not load" if not),
 - that the ids `hermes cron list --all` prints are what `hermes cron resume` takes, and that `every 30m` is a valid schedule,
 - the argument names of Hermes's `patch`, `read_file`, and `search_files` tools, which the guard checks (`path`, `mode`, `patch`), and the tool names in each role's allowlist (`ROLE_TOOLS` in `plugin/team_kit_guard/policy.py`).
 
@@ -79,6 +86,6 @@ Version 1 had two fixed profiles, `dispatcher` and `launcher`, and listed reposi
 2. Let in-flight units finish, or note their issues. Version 2 counts running units by the `agent:running` label, which version 1 never set.
 3. In `~/.hermes/team-kit/guard.yaml`: set `version: 2`, delete `repos` and `profiles`, and add `max_in_flight_total: 3`. Keep `trusted_authors`, `deny`, `untrusted_readers`, and `read_only_tools`. Compare with `templates/guard.yaml`.
 4. Run `bash hermes/install.sh --ref <new kit commit> --bootstrap-bot <name>`.
-5. Ask the bootstrap bot to set up a project with the old repositories. Run `setup-repo` only for repositories without `.agents/dispatch.json`; for the rest, move `kit_ref` to the new commit in a pull request. Delete the old `/p/dispatcher/webhooks/team-kit-github` GitHub webhook.
+5. Ask the bootstrap bot to set up a project with the old repositories. Run `setup-repo` only for repositories without `.agents/dispatch.json`; for the rest, run `team-kit-admin vendor`, whose pull request vendors the kit and moves `kit_ref` to the new commit. Delete the old `/p/dispatcher/webhooks/team-kit-github` GitHub webhook.
 6. Move the dispatcher's `GH_TOKEN` into the new project bot's `.env` if it should keep the same login, then `team-kit-admin activate`.
 7. Once nothing uses them, delete the `dispatcher` and `launcher` profiles with `hermes profile delete`, and the `team-kit-github` route from the default profile's `platforms.webhook.extra.routes`.
