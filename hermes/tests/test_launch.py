@@ -2,12 +2,13 @@ import re
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from hashlib import sha256
 
 import pytest
 from conftest import HERMES, KIT
 from team_kit_cloud import Cloud, CloudError
-from team_kit_contracts import CloudCommand, LAUNCH_PROMPTS, PROMPT_FILE, PROMPT_STDIN, ContractError, cloud_argv, launch_argv
+from team_kit_contracts import CloudCommand, LAUNCH_PROMPTS, PROMPT_FILE, PROMPT_STDIN, ContractError, cloud_argv, launch_argv, verify_argv
 
 PREFIXES = ("/faker-mode ", "$faker-mode ")
 
@@ -156,6 +157,46 @@ def test_claude_prompt_file_is_private_and_argv_carries_only_the_file_reference(
     assert f"digest {sha256(prompt.encode()).hexdigest()}" in log
     assert key not in log
     assert not (workdir.parent / "7.prompt.md").exists()
+
+
+@pytest.mark.parametrize(
+    ("backend", "transport"),
+    [("codex", PROMPT_STDIN), ("claude", PROMPT_FILE)],
+)
+def test_echoed_signing_prompt_is_redacted_from_log_and_error(tmp_path, backend, transport):
+    key = "0123456789abcdef" * 2
+    private_command = verify_argv(
+        backend,
+        "acme/shop",
+        7,
+        "https://github.com/acme/shop/pull/7",
+        "a" * 40,
+        key,
+        "env_7",
+    )
+    assert private_command.prompt_transport == transport
+    if transport == PROMPT_STDIN:
+        script = ("import sys; data = sys.stdin.read(); key = data.split('with key ', 1)[1].split('.', 1)[0]; "
+                  "print('isolated key:', key); print('backend rejected prompt:', data); sys.exit(3)")
+    else:
+        script = ("import pathlib, sys; data = pathlib.Path(sys.argv[1][1:]).read_text(); "
+                  "key = data.split('with key ', 1)[1].split('.', 1)[0]; print('isolated key:', key); "
+                  "print('backend rejected prompt:', data); sys.exit(3)")
+    private_command = replace(private_command, argv=tuple(fake_agent(script)))
+    workdir = tmp_path / "checkouts" / "acme__shop" / "7"
+
+    with pytest.raises(CloudError) as raised:
+        cloud([]).start(backend, "acme/shop", private_command, workdir)
+
+    log = workdir.with_name("7.log").read_text()
+    error = str(raised.value)
+    assert "isolated key: [redacted signing key]" in log
+    assert "backend rejected prompt: [redacted prompt]" in log
+    assert "backend rejected prompt: [redacted prompt]" in error
+    assert key not in log
+    assert private_command.prompt not in log
+    assert key not in error
+    assert private_command.prompt not in error
 
 
 def test_an_agent_that_exits_without_a_session_is_an_error(tmp_path):

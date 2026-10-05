@@ -119,6 +119,7 @@ class CloudCommand:
     argv: tuple[str, ...]
     prompt: str
     prompt_transport: str
+    sensitive: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -318,7 +319,7 @@ def verify_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key
     if not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/[0-9]+", pr_url, re.I):
         raise ContractError(f"{pr_url!r} is not a pull request in {repo}")
     prompt = VERIFY_PROMPTS[backend].format(repo=repo, issue=int(issue), pr=pr_url, head=head, key=key)
-    return cloud_argv(backend, prompt, 1, env_id)
+    return cloud_argv(backend, prompt, 1, env_id, sensitive=(key,))
 
 
 def parse_review(text: str) -> ReviewResult:
@@ -372,7 +373,7 @@ def review_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key
     if not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/[0-9]+", pr_url, re.I):
         raise ContractError(f"{pr_url!r} is not a pull request in {repo}")
     prompt = REVIEW_PROMPTS[backend].format(repo=repo, issue=int(issue), pr=pr_url, head=head, key=key)
-    return cloud_argv(backend, prompt, 1, env_id)
+    return cloud_argv(backend, prompt, 1, env_id, sensitive=(key,))
 
 
 def parse_security(text: str) -> SecurityResult:
@@ -426,7 +427,7 @@ def security_argv(backend: str, repo: str, issue: int, branch: str, base: str | 
         raise ContractError("the reviewer key must be hex")
     span = f"the commits after {base} up to {head}" if base else f"the last {FIRST_REVIEW_COMMITS} commits up to {head}"
     prompt = SECURITY_PROMPTS[backend].format(span=span, branch=branch, repo=repo, issue=int(issue), key=key)
-    return cloud_argv(backend, prompt, 1, env_id)
+    return cloud_argv(backend, prompt, 1, env_id, sensitive=(key,))
 
 
 def parse_diagnosis(text: str) -> Diagnosis:
@@ -477,7 +478,7 @@ def triage_argv(backend: str, repo: str, issue: int, what: str, branch: str, hea
         raise ContractError("the incident's summary must be plain text")
     prompt = TRIAGE_PROMPTS[backend].format(repo=repo, issue=int(issue), what=what, branch=branch, head=head,
                                             green=green or "unknown", key=key)
-    return cloud_argv(backend, prompt, 1, env_id)
+    return cloud_argv(backend, prompt, 1, env_id, sensitive=(key,))
 
 
 def report_status(text: str) -> str | None:
@@ -495,17 +496,19 @@ def launch_prompt(backend: str, repo: str, issue: int) -> str:
     return LAUNCH_PROMPTS[backend].format(repo=repo, issue=int(issue))
 
 
-def cloud_argv(backend: str, prompt: str, attempts: int = 1, env_id: str | None = None) -> CloudCommand:
+def cloud_argv(backend: str, prompt: str, attempts: int = 1, env_id: str | None = None,
+               sensitive: tuple[str, ...] = ()) -> CloudCommand:
     """The command and private prompt payload that start one cloud coding agent. No shell is involved."""
     if backend == "claude":
-        return CloudCommand(("claude", "--cloud"), prompt, PROMPT_FILE)
+        return CloudCommand(("claude", "--cloud"), prompt, PROMPT_FILE, sensitive)
     if backend != "codex":
         raise ContractError(f"backend must be one of {', '.join(BACKENDS)}")
     if not env_id or not ENV_ID.match(env_id):
         raise ContractError("codex needs the Codex cloud environment id (codex_env in .agents/dispatch.json)")
     if attempts not in UNIT_ATTEMPTS.values():
         raise ContractError("codex attempts must be 1, 2, or 3")
-    return CloudCommand(("codex", "cloud", "exec", "--env", env_id, "--attempts", str(attempts), "-"), prompt, PROMPT_STDIN)
+    return CloudCommand(("codex", "cloud", "exec", "--env", env_id, "--attempts", str(attempts), "-"),
+                        prompt, PROMPT_STDIN, sensitive)
 
 
 def launch_argv(backend: str, repo: str, issue: int, size: str, env_id: str | None = None) -> CloudCommand:

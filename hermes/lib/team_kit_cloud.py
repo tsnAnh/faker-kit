@@ -4,9 +4,9 @@
 runs from a fresh shallow clone of the unit's own repository. `codex cloud exec` names its
 environment, which is bound to a repository, so it runs from an empty directory.
 
-The process is started in its own session, with its output in a log file next to its working
-directory, and keeps running after this returns. The session URL or id is read from that log.
-No shell is involved, and prompt text is passed outside argv.
+The process is started in its own session and may keep running after this returns. Its output is
+captured outside named files; a redacted snapshot up to the session URL or startup error is written
+to a log next to the working directory. No shell is involved, and prompt text is passed outside argv.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import re
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,8 @@ SESSION = re.compile(
     r"|\b(?:session|cse|task)_[A-Za-z0-9]{6,}\b"
 )
 KEEP_SECONDS = 3 * 24 * 3600
+REDACTED_PROMPT = "[redacted prompt]"
+REDACTED_KEY = "[redacted signing key]"
 
 Runner = Callable[..., str]
 
@@ -59,36 +62,50 @@ class Cloud:
         argv, stdin_text, prompt_file = self._prepare(command, workdir)
         log = workdir.with_name(workdir.name + ".log")
         try:
-            with log.open("w") as out:
+            log.write_text("", encoding="utf-8")
+            # The backend writes to an unnamed file. Only a final redacted snapshot reaches the log.
+            with tempfile.TemporaryFile(mode="w+b") as capture:
                 stdin = subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL
-                proc = self.popen(argv, cwd=str(workdir), stdin=stdin, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
-            if stdin_text is not None and proc.stdin is not None:
-                try:
-                    proc.stdin.write(stdin_text.encode())
-                    proc.stdin.close()
-                except (BrokenPipeError, OSError):
-                    pass
-            deadline = self.clock() + self.wait_seconds
-            while True:
-                text = log.read_text(errors="replace")
-                found = SESSION.search(text)
-                if found:
-                    return found.group(0)
-                code = proc.poll()
-                if code is not None:
-                    text = log.read_text(errors="replace")
+                proc = self.popen(
+                    argv,
+                    cwd=str(workdir),
+                    stdin=stdin,
+                    stdout=capture,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                if stdin_text is not None and proc.stdin is not None:
+                    try:
+                        proc.stdin.write(stdin_text.encode())
+                        proc.stdin.close()
+                    except (BrokenPipeError, OSError):
+                        pass
+                deadline = self.clock() + self.wait_seconds
+                while True:
+                    text = self._capture_text(capture)
                     found = SESSION.search(text)
                     if found:
+                        self._write_log(log, text, command.prompt, command.sensitive)
                         return found.group(0)
-                    last = next((line for line in reversed(text.splitlines()) if line.strip()), "no output")
-                    raise CloudError(f"{argv[0]} exited {code} before starting a session: {last[:200]}")
-                if self.clock() >= deadline:
-                    try:
-                        os.killpg(proc.pid, signal.SIGTERM)
-                    except (OSError, AttributeError):
-                        proc.kill()
-                    raise CloudError(f"{argv[0]} printed no session in {int(self.wait_seconds)}s; see {log}")
-                self.sleep(1.0)
+                    code = proc.poll()
+                    if code is not None:
+                        text = self._capture_text(capture)
+                        found = SESSION.search(text)
+                        if found:
+                            self._write_log(log, text, command.prompt, command.sensitive)
+                            return found.group(0)
+                        safe_text = self._write_log(log, text, command.prompt, command.sensitive)
+                        last = next((line for line in reversed(safe_text.splitlines()) if line.strip()), "no output")
+                        raise CloudError(f"{argv[0]} exited {code} before starting a session: {last[:200]}")
+                    if self.clock() >= deadline:
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except (OSError, AttributeError):
+                            proc.kill()
+                        text = self._capture_text(capture)
+                        self._write_log(log, text, command.prompt, command.sensitive)
+                        raise CloudError(f"{argv[0]} printed no session in {int(self.wait_seconds)}s; see {log}")
+                    self.sleep(1.0)
         finally:
             if prompt_file is not None:
                 try:
@@ -108,6 +125,20 @@ class Cloud:
                 out.write(command.prompt)
             return [*argv, f"@{prompt_file}"], None, prompt_file
         raise CloudError(f"unknown prompt transport {command.prompt_transport!r}")
+
+    @staticmethod
+    def _capture_text(capture) -> str:
+        size = os.fstat(capture.fileno()).st_size
+        return os.pread(capture.fileno(), size, 0).decode(errors="replace")
+
+    @staticmethod
+    def _write_log(log: Path, text: str, prompt: str, sensitive: tuple[str, ...]) -> str:
+        safe_text = text.replace(prompt, REDACTED_PROMPT) if prompt else text
+        for secret in sensitive:
+            if secret:
+                safe_text = safe_text.replace(secret, REDACTED_KEY)
+        log.write_text(safe_text, encoding="utf-8", errors="replace")
+        return safe_text
 
     def _prune(self, parent: Path) -> None:
         cutoff = self.now() - KEEP_SECONDS
