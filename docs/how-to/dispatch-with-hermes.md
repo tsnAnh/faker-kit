@@ -38,7 +38,7 @@ The bot that maintains the kit itself is not part of this module. Keep using wha
 
 The issue's labels, and whether it is closed as completed, are the unit's whole state, so GitHub's issue list filtered by label is your board.
 
-An open issue labelled `agent:proposal` is not a unit. It is a teammate proposal. `team-kit-gh proposals` lists only its title and link, and `team-kit-tick` sends one notice per proposal issue, also title and link only. The project bot does not read the proposal body, comments, or attached discussion while deciding what to do. If you want the proposal done, restate the desired work in the project bot's own Bot Chat in Hermes Desktop before it writes a brief or dispatches anything.
+An open issue labelled `agent:proposal` is not a unit. It is a teammate proposal. Only a collaborator's proposal counts (the author has write, maintain, or admin permission, or is the repository's owner, member, or collaborator); others are ignored. `team-kit-gh proposals` lists its number, author, title, and link, and `team-kit-tick` sends one notice per proposal with only the number, author, and link, never the title. An issue that also carries `agent-task` is a unit, and the proposal label is ignored. The project bot does not read the proposal body, comments, or attached discussion while deciding what to do. If you want the proposal done, restate the desired work in the project bot's own Bot Chat in Hermes Desktop before it writes a brief or dispatches anything.
 
 Each repository picks its coding agent once, in `.agents/dispatch.json` (`backend` is `claude` or `codex`). A launch runs one of these. `N` is 1, 2, or 3 for a small, medium, or large unit.
 

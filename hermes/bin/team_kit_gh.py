@@ -2,7 +2,7 @@
 """team-kit-gh: the only GitHub access a project bot has, and only for its project's one repository.
 
   project                                          this bot's project and repository
-  proposals                                        list open teammate proposals: title and link metadata only
+  proposals                                        list open collaborator proposals: number, author, title, link
   dispatch      --unit U --size S --brief-file F   open the unit's issue, then launch it or queue it
   launch        --issue N                          launch one queued or gated unit now (the owner asked)
   verify        --issue N                          verify a unit's pull request again, without redoing its work
@@ -99,6 +99,9 @@ SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
 REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
 PROPOSAL_LABEL = "agent:proposal"
+COLLABORATOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+COLLABORATOR_PERMISSIONS = frozenset({"write", "maintain", "admin"})
+LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?\Z")
 RUNNING_LABEL = "agent:running"
 VERIFYING_LABEL = "agent:verifying"
 REVIEW_LABEL = "agent:review"
@@ -163,6 +166,18 @@ def kit_commit(policy: Policy) -> str:
 def reason(err: Exception) -> str:
     text = str(err) if isinstance(err, (Refused, ContractError)) else f"unexpected {type(err).__name__}"
     return text[:200]
+
+
+def json_pages(text: str) -> list:
+    """gh api --paginate prints each page's array one after another; join them."""
+    decoder, at, items = json.JSONDecoder(), 0, []
+    while at < len(text):
+        if text[at].isspace():
+            at += 1
+            continue
+        page, at = decoder.raw_decode(text, at)
+        items.extend(page if isinstance(page, list) else [page])
+    return items
 
 
 def labels_of(issue: dict) -> set[str]:
@@ -337,41 +352,60 @@ class Gh:
             args += ["--search", search]
         return sorted(json.loads(self.run(args)), key=lambda i: int(i["number"]))
 
-    def proposal_issues(self) -> list[dict]:
-        issues = json.loads(self.run(["issue", "list", "-R", self.repo, "--label", PROPOSAL_LABEL, "--state", "open",
-                                      "--json", "number,title,url", "--limit", "200"]))
+    def proposal_candidates(self) -> list[dict]:
+        """Every open issue labelled agent:proposal, all pages. An issue that is also an agent-task is a unit, not a proposal."""
+        pages = self.run(["api", "--paginate", f"repos/{self.repo}/issues?labels={PROPOSAL_LABEL.replace(':', '%3A')}&state=open&per_page=100"])
         found = []
-        for issue in issues:
-            number = int(issue["number"])
-            title = " ".join(str(issue.get("title") or f"Proposal #{number}").split())[:200] or f"Proposal #{number}"
-            url = str(issue.get("url") or "")
-            expected = f"https://github.com/{self.repo}/issues/{number}"
-            if url != expected:
-                url = expected
-            found.append({"number": number, "title": title, "url": url})
-        return sorted(found, key=lambda issue: int(issue["number"]))
+        for issue in json_pages(pages):
+            if not isinstance(issue, dict) or "pull_request" in issue or issue.get("state") != "open":
+                continue
+            if TASK_LABEL in labels_of(issue) or PROPOSAL_LABEL not in labels_of(issue):
+                continue
+            found.append(issue)
+        return sorted(found, key=lambda i: int(i["number"]))
+
+    def collaborator(self, issue: dict) -> bool:
+        """Only people who can write to the repository make proposals: the issue's author_association, else their permission."""
+        if str(issue.get("author_association") or "").upper() in COLLABORATOR_ASSOCIATIONS:
+            return True
+        login = str((issue.get("user") or {}).get("login") or "")
+        if not LOGIN.match(login):
+            return False
+        try:
+            data = json.loads(self.run(["api", f"repos/{self.repo}/collaborators/{login}/permission"]))
+        except (Refused, ValueError):
+            return False
+        return isinstance(data, dict) and str(data.get("permission") or "").lower() in COLLABORATOR_PERMISSIONS
+
+    def proposal_summary(self, issue: dict) -> dict:
+        number = int(issue["number"])
+        title = " ".join(str(issue.get("title") or f"Proposal #{number}").split())[:200] or f"Proposal #{number}"
+        return {"number": number, "author": str((issue.get("user") or {}).get("login") or ""), "title": title,
+                "url": f"https://github.com/{self.repo}/issues/{number}"}
 
     def proposals(self) -> list[dict]:
-        return [{"title": issue["title"], "url": issue["url"]} for issue in self.proposal_issues()]
+        return [self.proposal_summary(i) for i in self.proposal_candidates() if self.collaborator(i)]
 
     def proposal_notices(self) -> list[str]:
-        issues = self.proposal_issues()
-        directory = self.policy.home / "proposals"
+        """One notice per new collaborator proposal: number, author login, link. Never the title, which anyone could word as a notice."""
+        candidates = self.proposal_candidates()
+        open_numbers = {int(i["number"]) for i in candidates}
+        directory = self.policy.home / "proposal-notices"
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{self.bot.name}.json"
         with open(directory / ".lock", "w") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
             try:
-                record = json.loads(path.read_text())
-                seen = {int(n) for n in record.get("seen", [])}
+                seen = {int(n) for n in json.loads(path.read_text()).get("seen", [])}
             except (OSError, ValueError, TypeError, AttributeError):
                 seen = set()
-            fresh = [issue for issue in issues if int(issue["number"]) not in seen]
-            if fresh:
+            fresh = [self.proposal_summary(i) for i in candidates if int(i["number"]) not in seen and self.collaborator(i)]
+            kept = (seen & open_numbers) | {i["number"] for i in fresh}  # a closed or relabelled issue drops out
+            if kept != seen:
                 target = path.with_name(f".{path.name}.{os.getpid()}")
-                target.write_text(json.dumps({"seen": sorted(seen | {int(issue["number"]) for issue in fresh})}))
+                target.write_text(json.dumps({"seen": sorted(kept)}))
                 target.replace(path)
-        return [f"{NOTICE} proposal: {issue['title']}. {issue['url']}" for issue in fresh]
+        return [f"{NOTICE} proposal #{i['number']} from {i['author']}. {i['url']}" for i in fresh]
 
     def comments(self, issue: int) -> list[dict]:
         return json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/issues/{issue}/comments"]))
@@ -598,8 +632,6 @@ class Gh:
         author = str((issue.get("user") or {}).get("login") or "").lower()
         if "pull_request" in issue or issue.get("state") != "open" or TASK_LABEL not in labels:
             raise Unfit(f"#{number} is not an open {TASK_LABEL} issue")
-        if PROPOSAL_LABEL in labels:
-            raise Refused(f"#{number} is a proposal, not a dispatch unit; the owner must restate the work in Hermes Desktop before it is briefed")
         if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
             raise Refused(f"#{number} is already launched ({RUNNING_LABEL} or {VERIFYING_LABEL}); never launch a unit twice")
         if REVIEW_LABEL in labels:
@@ -1181,7 +1213,7 @@ class Project:
             units, problems[gh.repo] = [], reason(err)
         for issue in units:
             labels = labels_of(issue)
-            if PROPOSAL_LABEL in labels:
+            if TASK_LABEL not in labels:
                 continue
             if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
                 try:
@@ -1239,7 +1271,7 @@ class Project:
         flight, waiting, done = [], [], []
         for issue in self.gh.units():
             labels, ref = labels_of(issue), f"#{issue['number']} {issue['title']}"
-            if PROPOSAL_LABEL in labels:
+            if TASK_LABEL not in labels:
                 continue
             if RUNNING_LABEL in labels:
                 flight.append(f"{ref} (running)")
