@@ -31,6 +31,8 @@ untrusted_readers:
   - tool: browser_*
   - tool: x_search
   - tool: terminal
+    command: "team-kit-gh proposals"
+  - tool: terminal
     command: "team-kit-gh read *"
 
 # Tool calls blocked outright, for every bot. A plain string is a glob over each simple

@@ -60,6 +60,7 @@ from team_kit_guard.policy import NAME, REPO, RESERVED_NAMES, Policy, PolicyErro
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
 LABELS = (
     ("agent-task", "1d76db", "A unit dispatched by a team-kit project bot"),
+    ("agent:proposal", "c5def5", "A teammate proposal; the owner must restate the work in Hermes Desktop before any brief is written"),
     ("agent:running", "fbca04", "A cloud coding agent is working this unit"),
     ("agent:verifying", "5319e7", "A separate verifier session is checking this unit's pull request"),
     ("agent:review", "0e8a16", "Verified and the checks passed; the owner merges"),

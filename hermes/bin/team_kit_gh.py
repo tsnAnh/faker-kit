@@ -2,6 +2,7 @@
 """team-kit-gh: the only GitHub access a project bot has, and only for its project's one repository.
 
   project                                          this bot's project and repository
+  proposals                                        list open teammate proposals: title and link metadata only
   dispatch      --unit U --size S --brief-file F   open the unit's issue, then launch it or queue it
   launch        --issue N                          launch one queued or gated unit now (the owner asked)
   verify        --issue N                          verify a unit's pull request again, without redoing its work
@@ -97,6 +98,7 @@ SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
 REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
+PROPOSAL_LABEL = "agent:proposal"
 RUNNING_LABEL = "agent:running"
 VERIFYING_LABEL = "agent:verifying"
 REVIEW_LABEL = "agent:review"
@@ -335,6 +337,42 @@ class Gh:
             args += ["--search", search]
         return sorted(json.loads(self.run(args)), key=lambda i: int(i["number"]))
 
+    def proposal_issues(self) -> list[dict]:
+        issues = json.loads(self.run(["issue", "list", "-R", self.repo, "--label", PROPOSAL_LABEL, "--state", "open",
+                                      "--json", "number,title,url", "--limit", "200"]))
+        found = []
+        for issue in issues:
+            number = int(issue["number"])
+            title = " ".join(str(issue.get("title") or f"Proposal #{number}").split())[:200] or f"Proposal #{number}"
+            url = str(issue.get("url") or "")
+            expected = f"https://github.com/{self.repo}/issues/{number}"
+            if url != expected:
+                url = expected
+            found.append({"number": number, "title": title, "url": url})
+        return sorted(found, key=lambda issue: int(issue["number"]))
+
+    def proposals(self) -> list[dict]:
+        return [{"title": issue["title"], "url": issue["url"]} for issue in self.proposal_issues()]
+
+    def proposal_notices(self) -> list[str]:
+        issues = self.proposal_issues()
+        directory = self.policy.home / "proposals"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{self.bot.name}.json"
+        with open(directory / ".lock", "w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                record = json.loads(path.read_text())
+                seen = {int(n) for n in record.get("seen", [])}
+            except (OSError, ValueError, TypeError, AttributeError):
+                seen = set()
+            fresh = [issue for issue in issues if int(issue["number"]) not in seen]
+            if fresh:
+                target = path.with_name(f".{path.name}.{os.getpid()}")
+                target.write_text(json.dumps({"seen": sorted(seen | {int(issue["number"]) for issue in fresh})}))
+                target.replace(path)
+        return [f"{NOTICE} proposal: {issue['title']}. {issue['url']}" for issue in fresh]
+
     def comments(self, issue: int) -> list[dict]:
         return json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/issues/{issue}/comments"]))
 
@@ -560,6 +598,8 @@ class Gh:
         author = str((issue.get("user") or {}).get("login") or "").lower()
         if "pull_request" in issue or issue.get("state") != "open" or TASK_LABEL not in labels:
             raise Unfit(f"#{number} is not an open {TASK_LABEL} issue")
+        if PROPOSAL_LABEL in labels:
+            raise Refused(f"#{number} is a proposal, not a dispatch unit; the owner must restate the work in Hermes Desktop before it is briefed")
         if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
             raise Refused(f"#{number} is already launched ({RUNNING_LABEL} or {VERIFYING_LABEL}); never launch a unit twice")
         if REVIEW_LABEL in labels:
@@ -1132,11 +1172,17 @@ class Project:
         cord, andon_notices = gh.sync_andon()
         notices.extend(andon_notices)
         try:
+            notices.extend(gh.proposal_notices())
+        except Exception as err:  # noqa: BLE001 - reported once, retried next tick
+            problems["proposals"] = reason(err)
+        try:
             units = gh.units()
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
             units, problems[gh.repo] = [], reason(err)
         for issue in units:
             labels = labels_of(issue)
+            if PROPOSAL_LABEL in labels:
+                continue
             if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
                 try:
                     notice = gh.check_verifying(issue) if VERIFYING_LABEL in labels else gh.check_running(issue, cloud)
@@ -1193,6 +1239,8 @@ class Project:
         flight, waiting, done = [], [], []
         for issue in self.gh.units():
             labels, ref = labels_of(issue), f"#{issue['number']} {issue['title']}"
+            if PROPOSAL_LABEL in labels:
+                continue
             if RUNNING_LABEL in labels:
                 flight.append(f"{ref} (running)")
             elif VERIFYING_LABEL in labels:
@@ -1231,7 +1279,7 @@ def brief_text(policy: Policy, bot: Bot, path: str) -> str:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="team-kit-gh")
     sub = top.add_subparsers(dest="command", required=True)
-    for name in ("project", "tick", "status", "security", "incidents"):
+    for name in ("project", "proposals", "tick", "status", "security", "incidents"):
         sub.add_parser(name)
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
@@ -1266,6 +1314,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         cloud = cloud or Cloud(run_gh=run)
         if args.command == "project":
             out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
+        elif args.command == "proposals":
+            out = Gh(policy, me, run, now).proposals()
         elif args.command == "incidents":
             gh = Gh(policy, me, run, now)
             lines = Incidents(gh, fetch).run(commit(policy), cloud)
