@@ -14,13 +14,14 @@ GUARD_TEMPLATE = HERMES / "templates" / "guard.yaml"
 for path in (HERMES / "lib", HERMES / "bin", HERMES / "plugin"):
     sys.path.insert(0, str(path))
 
-SHOP = ("acme/shop-api", "acme/shop-web", "acme/shop-mobile")
+# A project is one repository; shop keeps its API, web, and mobile apps side by side in acme/shop.
+SHOP = "acme/shop"
 BOTS = {
     "version": 1,
     "bots": {
         "ong-xay": {"role": "bootstrap"},
-        "meo-beo": {"role": "project", "project": "shop", "repos": list(SHOP), "home": SHOP[0]},
-        "sep-crm": {"role": "project", "project": "crm", "repos": ["acme/crm"]},
+        "meo-beo": {"role": "project", "project": "shop", "repo": SHOP},
+        "sep-crm": {"role": "project", "project": "crm", "repo": "acme/crm"},
     },
 }
 

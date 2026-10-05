@@ -3,7 +3,7 @@
 # team-kit-admin. If this file is missing or invalid,
 # the guard blocks every tool call of every team-kit bot.
 #
-# Which Hermes profiles are bots, their roles, and each project's repositories live in
+# Which Hermes profiles are bots, their roles, and each project's one repository live in
 # bots.yaml next to this file. team-kit-admin writes bots.yaml. Do not list repositories here.
 version: 2
 
@@ -16,7 +16,7 @@ max_in_flight_total: 3
 # GitHub logins whose unit issues and reports count: the login each project bot opens issues as,
 # and the account the coding agent posts as (for Claude Code on the web, usually the owner).
 # Reports by anyone else are ignored, so a copied report cannot move a unit.
-# team-kit-admin setup-repo writes these logins into each repository's trusted_dispatchers.
+# team-kit-admin setup-repo writes these logins into the repository's trusted_dispatchers.
 trusted_authors:
   - OWNER-LOGIN
 

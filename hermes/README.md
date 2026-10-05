@@ -39,7 +39,7 @@ Under `~/.hermes/team-kit/`:
 
 - `kit/`, the kit at the pinned commit. Every bot's files come from here.
 - `guard.yaml`, the policy. You edit it.
-- `bots.yaml`, each bot's role, project, repositories, and home repository. Only `team-kit-admin` writes it.
+- `bots.yaml`, each bot's role, and for a project bot its project and its one repository. Only `team-kit-admin` writes it.
 - `briefs/<bot>/`, the only place a project bot may write.
 - `checkouts/`, shallow clones `claude --cloud` starts from. Pruned after 3 days.
 - `in-flight/<bot>.json`, each project bot's count of running units, for `max_in_flight_total`.
@@ -69,7 +69,7 @@ The first version 2 tracked units on a Kanban board and woke a drain job from Gi
 1. Pause and delete each project bot's `team-kit-drain` job (`hermes -p <bot> cron list --all`). Rerunning `install.sh` creates `team-kit-tick` paused; resume it with `team-kit-admin activate`.
 2. Delete each repository's GitHub webhook to `/p/<bot>/webhooks/team-kit-<project>`, the `team-kit-<project>` routes under `platforms.webhook.extra.routes` in `~/.hermes/config.yaml`, and `~/.hermes/team-kit/webhook-secret`. Close the tunnel if nothing else uses it.
 3. Delete `webhook_base_url` from `guard.yaml`, and `HERMES_KANBAN_BOARD` from each project bot's `.env`.
-4. Run `team-kit-admin add-project` again for each project with its repositories, to create the new `agent:review` label.
+4. A project is now one repository. In `~/.hermes/team-kit/bots.yaml`, give each project bot `repo: OWNER/REPO` and delete `repos` and `home`; the guard refuses the old keys. A project that spanned several repositories becomes one project per repository, or, better, one combined repository. Then run `team-kit-admin add-project` again for each project, to create the new `agent:review` label.
 
 ## Migrate from version 1
 

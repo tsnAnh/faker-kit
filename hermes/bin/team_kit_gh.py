@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""team-kit-gh: the only GitHub access a project bot has, and only for its own project's repositories.
+"""team-kit-gh: the only GitHub access a project bot has, and only for its project's one repository.
 
-  project                                                   this bot's project, repositories, and home repository
-  dispatch      --repo R --unit U --size S --brief-file F   open the unit's issue, then launch it or queue it
-  launch        --repo R --issue N                          launch one queued or gated unit now (the owner asked)
-  tick                                                      launch queued units, open gates, free slots; notices only
-  status                                                    the three-line digest, grouped by repository
-  report-status --repo R --issue N                          the latest report's parsed header, nothing else
-  pr-state      --repo R --pr N                             state, merged, head SHA, and checks of a pull request
-  read          --repo R --issue N | --pr N                 the body and comments (untrusted; the guard wraps it)
-  show          --repo R --path P                           a file from the default branch (the owner's repo; trusted)
-  kit-check     --repo R                                    compare this machine's kit commit with kit_ref
+  project                                          this bot's project and repository
+  dispatch      --unit U --size S --brief-file F   open the unit's issue, then launch it or queue it
+  launch        --issue N                          launch one queued or gated unit now (the owner asked)
+  tick                                             launch queued units, open gates, free slots; notices only
+  status                                           the three-line digest
+  report-status --issue N                          the latest report's parsed header, nothing else
+  pr-state      --pr N                             state, merged, head SHA, and checks of a pull request
+  read          --issue N | --pr N                 the body and comments (untrusted; the guard wraps it)
+  show          --path P                           a file from the default branch (the owner's repo; trusted)
+  kit-check                                        compare this machine's kit commit with kit_ref
 
 GitHub holds every unit's state, as labels on its issue:
 
@@ -20,8 +20,8 @@ GitHub holds every unit's state, as labels on its issue:
   agent:needs-human   a gate: the agent stopped and needs the owner
   (closed)            done: its pull request merged
 
-Which bot is running comes from the Hermes profile (HERMES_HOME). Which repositories it may
-touch comes from bots.yaml. The guard lets a project bot run this command and nothing else.
+Which bot is running comes from the Hermes profile (HERMES_HOME). Its repository comes from
+bots.yaml; a project is one repository. The guard lets a project bot run this command and nothing else.
 """
 
 from __future__ import annotations
@@ -152,7 +152,7 @@ def in_flight(run: Runner, repo: str) -> int:
     return len(issues)
 
 
-# Each project bot's GitHub login sees only its own repositories, so a bot cannot count another
+# Each project bot's GitHub login sees only its own repository, so a bot cannot count another
 # project's running units. Instead every project bot writes its own count to in-flight/<bot>.json
 # whenever it counts, and reads the other bots' files for the machine total. team-kit-admin status,
 # which sees every repository, refreshes all of them. A launch holds a machine-wide lock from
@@ -199,15 +199,13 @@ class InFlight:
 
 
 class Gh:
-    """One repository of the bot's project."""
+    """The bot's project: its one repository."""
 
-    def __init__(self, policy: Policy, bot: Bot, repo: str, run: Runner, now: Callable[[], float] = time.time):
-        if bot.role != "project":
+    def __init__(self, policy: Policy, bot: Bot, run: Runner, now: Callable[[], float] = time.time):
+        if bot.role != "project" or not bot.repo:
             raise Refused(f"{bot.name} is a {bot.role} bot; team-kit-gh is for project bots")
-        if not bot.owns(repo):
-            raise Refused(f"{repo} is not a repository of project {bot.project}")
         self.policy, self.bot, self.run, self.now = policy, bot, run, now
-        self.repo = next(r for r in bot.repos if r.lower() == repo.lower())
+        self.repo = bot.repo
 
     # reading ------------------------------------------------------------------------------------
 
@@ -241,7 +239,7 @@ class Gh:
         refs = parse_depends(brief, self.repo)
         outside = [f"{r}#{n}" for r, n in refs if not self.bot.owns(r)]
         if outside:
-            raise Refused(f"Depends on names issues outside project {self.bot.project}: {', '.join(outside)}")
+            raise Refused(f"Depends on names another repository's issues: {', '.join(outside)}; a project is one repository, so list its own issues as #n")
         return refs
 
     def issue(self, number: int, repo: str | None = None) -> dict:
@@ -406,7 +404,7 @@ class Gh:
         """The agent stopped and needs the owner. Frees the unit's slot."""
         running = RUNNING_LABEL in labels_of(issue)
         self.relabel(int(issue["number"]), add=HUMAN_LABEL, remove=(RUNNING_LABEL,) if running else ())
-        return f"{NOTICE} {self.repo.split('/')[1]}#{issue['number']} needs you: {why}. https://github.com/{self.repo}/issues/{issue['number']}"
+        return f"{NOTICE} #{issue['number']} needs you: {why}. https://github.com/{self.repo}/issues/{issue['number']}"
 
     def check_running(self, issue: dict) -> str | None:
         """One running unit: free its slot when its agent has finished. Returns a notice, or None."""
@@ -439,56 +437,47 @@ class Gh:
             return None
         self.relabel(number, add=REVIEW_LABEL, remove=(RUNNING_LABEL,))
         checks = "checks passed" if pr["checks"] == "passed" else "no checks ran"
-        return f"{NOTICE} {self.repo.split('/')[1]}#{number} is ready for you to merge ({checks}): {report['pr']}"
+        return f"{NOTICE} #{number} is ready for you to merge ({checks}): {report['pr']}"
 
 
 class Project:
-    """Every repository of the bot's project, for tick and status."""
+    """tick and status for the bot's project."""
 
     def __init__(self, policy: Policy, bot: Bot, run: Runner, now: Callable[[], float] = time.time):
         self.policy, self.bot, self.run, self.now = policy, bot, run, now
-        self.repos = [Gh(policy, bot, repo, run, now) for repo in bot.repos]
+        self.gh = Gh(policy, bot, run, now)
 
     def tick(self, local_commit: str, cloud: Cloud) -> list[str]:
-        notices: list[str] = []
-        problems: dict[str, str] = {}
-        queued: list[tuple[Gh, dict]] = []
-        for gh in self.repos:
-            try:
-                units = gh.units()
-            except Exception as err:  # noqa: BLE001 - one repository's trouble never stops the others
-                problems[gh.repo] = reason(err)
-                continue
-            for issue in units:
-                labels = labels_of(issue)
-                if RUNNING_LABEL in labels:
-                    try:
-                        notice = gh.check_running(issue)
-                    except Exception as err:  # noqa: BLE001
-                        problems[f"{gh.repo}#{issue['number']}"] = reason(err)
-                        continue
-                    if notice:
-                        notices.append(notice)
-                elif not labels & {REVIEW_LABEL, HUMAN_LABEL}:
-                    queued.append((gh, issue))
-        # Oldest first across the whole project, so no repository starves another.
-        queued.sort(key=lambda pair: (pair[1].get("createdAt") or "", pair[0].repo, int(pair[1]["number"])))
-        skip: set[str] = set()
-        for gh, issue in queued:
-            if gh.repo in skip:
-                continue
+        gh, notices, problems = self.gh, [], {}
+        queued: list[dict] = []
+        try:
+            units = gh.units()
+        except Exception as err:  # noqa: BLE001 - reported once, retried next tick
+            units, problems[gh.repo] = [], reason(err)
+        for issue in units:
+            labels = labels_of(issue)
+            if RUNNING_LABEL in labels:
+                try:
+                    notice = gh.check_running(issue)
+                except Exception as err:  # noqa: BLE001 - one broken unit never stops the others
+                    problems[f"{gh.repo}#{issue['number']}"] = reason(err)
+                    continue
+                if notice:
+                    notices.append(notice)
+            elif not labels & {REVIEW_LABEL, HUMAN_LABEL}:
+                queued.append(issue)
+        queued.sort(key=lambda issue: (issue.get("createdAt") or "", int(issue["number"])))
+        for issue in queued:
             try:
                 gh.launch(int(issue["number"]), local_commit, cloud)
             except Waiting as wait:
-                if wait.scope == "machine":
-                    break
-                if wait.scope == "repo":
-                    skip.add(gh.repo)
+                if wait.scope != "unit":
+                    break  # the repository or the machine is full
             except Unfit as err:
                 notices.append(gh.gate(issue, f"it could not launch: {err}"))
             except Exception as err:  # noqa: BLE001 - a pin mismatch or a GitHub hiccup is not the unit's fault
                 problems[gh.repo] = reason(err)
-                skip.add(gh.repo)
+                break
         try:
             # Refresh this bot's count for the other bots, whatever launched or did not.
             InFlight(self.policy, self.bot, self.run, self.now).count_own()
@@ -515,21 +504,19 @@ class Project:
             since = self.now() - 24 * 3600
         since_iso = dt.datetime.fromtimestamp(since, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         flight, waiting, done = [], [], []
-        for gh in self.repos:
-            short = gh.repo.split("/")[1]
-            for issue in gh.units():
-                labels, ref = labels_of(issue), f"{short}#{issue['number']} {issue['title']}"
-                if RUNNING_LABEL in labels:
-                    flight.append(f"{ref} (running)")
-                elif HUMAN_LABEL in labels:
-                    waiting.append(f"{ref} (gate)")
-                elif REVIEW_LABEL in labels:
-                    waiting.append(f"{ref} (merge)")
-                else:
-                    flight.append(f"{ref} (queued)")
-            for issue in gh.units("closed", search=f"closed:>={since_iso}"):
-                if (timestamp(issue.get("closedAt")) or 0) >= since and str(issue.get("stateReason") or "").upper() in ("", "COMPLETED"):
-                    done.append(f"{short}#{issue['number']} {issue['title']}")
+        for issue in self.gh.units():
+            labels, ref = labels_of(issue), f"#{issue['number']} {issue['title']}"
+            if RUNNING_LABEL in labels:
+                flight.append(f"{ref} (running)")
+            elif HUMAN_LABEL in labels:
+                waiting.append(f"{ref} (gate)")
+            elif REVIEW_LABEL in labels:
+                waiting.append(f"{ref} (merge)")
+            else:
+                flight.append(f"{ref} (queued)")
+        for issue in self.gh.units("closed", search=f"closed:>={since_iso}"):
+            if (timestamp(issue.get("closedAt")) or 0) >= since and str(issue.get("stateReason") or "").upper() in ("", "COMPLETED"):
+                done.append(f"#{issue['number']} {issue['title']}")
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(json.dumps({"at": self.now()}))
         if not (flight or waiting or done):
@@ -557,7 +544,6 @@ def parser() -> argparse.ArgumentParser:
         sub.add_parser(name)
     for name in ("dispatch", "launch", "report-status", "read", "show", "pr-state", "kit-check"):
         cmd = sub.add_parser(name)
-        cmd.add_argument("--repo", required=True)
         if name == "dispatch":
             cmd.add_argument("--unit", required=True)
             cmd.add_argument("--size", required=True, choices=list(UNIT_ATTEMPTS))
@@ -584,14 +570,14 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
             raise Refused(f"{me.name} is a {me.role} bot; team-kit-gh is for project bots")
         cloud = cloud or Cloud(run_gh=run)
         if args.command == "project":
-            out: object = {"bot": me.name, "project": me.project, "repos": list(me.repos), "home": me.home}
+            out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
         elif args.command in ("tick", "status"):
             project = Project(policy, me, run, now)
             lines = project.tick(commit(policy), cloud) if args.command == "tick" else project.status()
             print("\n".join(lines) if lines else SILENT)
             return 0
         else:
-            gh = Gh(policy, me, args.repo, run, now)
+            gh = Gh(policy, me, run, now)
             if args.command == "dispatch":
                 out = gh.dispatch(args.unit, args.size, brief_text(policy, me, args.brief_file), commit(policy), cloud)
             elif args.command == "launch":

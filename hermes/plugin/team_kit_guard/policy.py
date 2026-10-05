@@ -1,7 +1,7 @@
 """team-kit guard policy: guard.yaml and bots.yaml parsed into rules, and the decisions made from them.
 
 guard.yaml is the owner's policy for the machine. bots.yaml names each Hermes profile that is a
-team-kit bot, its role, and for a project bot its project and repositories. team-kit-admin writes
+team-kit bot, its role, and for a project bot its project and its one repository. team-kit-admin writes
 bots.yaml; nothing else does. A bot's name is free: its role comes from bots.yaml, never from its
 name.
 
@@ -101,11 +101,14 @@ class Bot:
     name: str
     role: str
     project: str | None = None
-    repos: tuple[str, ...] = ()
-    home: str | None = None
+    repo: str | None = None
+
+    @property
+    def repos(self) -> tuple[str, ...]:
+        return (self.repo,) if self.repo else ()
 
     def owns(self, repo: str) -> bool:
-        return repo.lower() in {r.lower() for r in self.repos}
+        return bool(self.repo) and repo.lower() == self.repo.lower()
 
     def terminal_allow(self) -> re.Pattern:
         if self.role == "project":
@@ -181,17 +184,15 @@ def parse_bots(data) -> dict[str, Bot]:
         if project in seen_projects:
             raise PolicyError(f"bots.yaml: project {project} belongs to both {seen_projects[project]} and {name}")
         seen_projects[project] = name
-        repos = tuple(str(r) for r in raw.get("repos") or [])
-        for repo in repos:
-            if not REPO.match(repo):
-                raise PolicyError(f"bots.yaml: {name} repo {repo!r} is not OWNER/REPO")
-            if repo.lower() in seen_repos:
-                raise PolicyError(f"bots.yaml: {repo} belongs to both {seen_repos[repo.lower()]} and {name}")
-            seen_repos[repo.lower()] = name
-        home = raw.get("home") or (repos[0] if repos else None)
-        if home is not None and home.lower() not in {r.lower() for r in repos}:
-            raise PolicyError(f"bots.yaml: {name} home {home} is not one of its repos")
-        bots[name] = Bot(name=name, role="project", project=project, repos=repos, home=home)
+        if "repos" in raw or "home" in raw:
+            raise PolicyError(f"bots.yaml: {name} lists repos; a project has one repository now: write `repo: OWNER/REPO` and drop `repos` and `home`")
+        repo = str(raw.get("repo") or "")
+        if not REPO.match(repo):
+            raise PolicyError(f"bots.yaml: {name} needs repo: OWNER/REPO, got {repo!r}")
+        if repo.lower() in seen_repos:
+            raise PolicyError(f"bots.yaml: {repo} belongs to both {seen_repos[repo.lower()]} and {name}")
+        seen_repos[repo.lower()] = name
+        bots[name] = Bot(name=name, role="project", project=project, repo=repo)
     return bots
 
 

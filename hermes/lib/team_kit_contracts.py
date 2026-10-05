@@ -90,7 +90,8 @@ def parse_brief(text: str, standing_orders: str | None = None) -> Brief:
 def parse_depends(brief: Brief, repo: str) -> list[tuple[str, int]]:
     """The issues this unit waits for, from its Depends on section.
 
-    `OWNER/REPO#12` names an issue in any repository, `#12` one in this unit's repository, and
+    `#12` names an issue in this unit's repository, as does `OWNER/REPO#12` (team-kit-gh refuses any
+    other repository), and
     "none" means no dependency. Anything else is an error, so a typo cannot drop a dependency.
     """
     text = brief.sections["Depends on"].strip()
@@ -102,7 +103,7 @@ def parse_depends(brief: Brief, repo: str) -> list[tuple[str, int]]:
         if ref not in found:
             found.append(ref)
     if not found:
-        raise ContractError("Depends on must be \"none\" or list issues as OWNER/REPO#n or #n")
+        raise ContractError("Depends on must be \"none\" or list issues as #n")
     return found
 
 
@@ -180,14 +181,14 @@ def launch_argv(backend: str, repo: str, issue: int, size: str, env_id: str | No
     return cloud_argv(backend, launch_prompt(backend, repo, issue), UNIT_ATTEMPTS[size], env_id)
 
 
-def bootstrap_prompt(repo: str, project: str, home: str, backend: str, kit_source: str, kit_ref: str, dispatchers: list[str], codex_env: str | None = None) -> str:
+def bootstrap_prompt(repo: str, project: str, backend: str, kit_source: str, kit_ref: str, dispatchers: list[str], codex_env: str | None = None) -> str:
     """The prompt for the one cloud session that prepares a repository for dispatch.
 
     The repository may not have the kit yet, so the prompt names the kit commit to read skills from
     instead of starting with /faker-mode.
     """
-    if not REPO.match(repo) or not REPO.match(home):
-        raise ContractError("repo and home must be OWNER/REPO")
+    if not REPO.match(repo):
+        raise ContractError("repo must be OWNER/REPO")
     if backend not in BACKENDS:
         raise ContractError(f"backend must be one of {', '.join(BACKENDS)}")
     if not SHA.match(kit_ref):
@@ -195,7 +196,7 @@ def bootstrap_prompt(repo: str, project: str, home: str, backend: str, kit_sourc
     if not dispatchers:
         raise ContractError("trusted_authors in guard.yaml must name the project bot's GitHub login")
     lines = [
-        f"Set up {repo} for team-kit dispatch, as one repository of project {project}.",
+        f"Set up {repo} for team-kit dispatch, as project {project}.",
         f"First clone {kit_source} at commit {kit_ref} into a directory outside this repository.",
         "Read plugins/pstack/skills/faker-mode/SKILL.md there in full and work as it says.",
         "Then follow plugins/trust-ladder/skills/setup-dispatch/SKILL.md there for this repository, with:",
@@ -203,7 +204,6 @@ def bootstrap_prompt(repo: str, project: str, home: str, backend: str, kit_sourc
         f"- kit_ref: {kit_ref}",
         f"- trusted_dispatchers: {', '.join(dispatchers)}",
         f"- project: {project}",
-        f"- home repository: {home}" + (" (this one, so also write PROJECT.md)" if home.lower() == repo.lower() else ""),
     ]
     if backend == "codex":
         lines.append(f"- codex_env: {codex_env}")

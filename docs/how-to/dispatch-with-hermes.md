@@ -1,8 +1,8 @@
 # Dispatch work with Hermes
 
-You tell a Hermes bot what you want in Hermes Desktop. It splits the work into units across the project's repositories, writes a brief for each, and starts a Claude Code or Codex cloud agent on it. Every unit ends as one pull request with passing checks. You answer the questions agents cannot, and you merge. Nothing else needs you.
+You tell a Hermes bot what you want in Hermes Desktop. It splits the work into units, writes a brief for each, and starts a Claude Code or Codex cloud agent on it. Every unit ends as one pull request with passing checks. You answer the questions agents cannot, and you merge. Nothing else needs you.
 
-This is the "cloud sessions, one pull request each" level of [Run many agents](run-many-agents.md), driven from chat. How many units run at once per repository comes from its `/trust-audit` score. A program that needs a coordinator running dozens of agents for days is the Orchestrate playbook's job, in Claude Code.
+This is the "cloud sessions, one pull request each" level of [Run many agents](run-many-agents.md), driven from chat. How many units run at once comes from the repository's `/trust-audit` score. A program that needs a coordinator running dozens of agents for days is the Orchestrate playbook's job, in Claude Code.
 
 The Hermes side is the kit's [`hermes/`](../../hermes/) module. Its [README](../../hermes/README.md) lists every file it installs.
 
@@ -12,19 +12,19 @@ One Hermes machine runs one bootstrap bot and one bot per project. Bot names are
 
 | Bot | How many | Does | Its only command |
 |---|---|---|---|
-| Bootstrap bot | One per machine | Sets up a project: its project bot, its repositories' labels, a cloud session per repository that opens the setup pull request, branch protection. Loads the [bootstrap](../../hermes/skills/bootstrap/SKILL.md) skill. You approve every command it runs but `status` | `team-kit-admin` |
-| Project bot | One per project | Plans units across the project's repositories, writes a brief per unit, dispatches it. Loads the [dispatch](../../hermes/skills/dispatch/SKILL.md) skill | `team-kit-gh`, for its own repositories only |
+| Bootstrap bot | One per machine | Sets up a project: its project bot, the repository's labels, a cloud session that opens the setup pull request, branch protection. Loads the [bootstrap](../../hermes/skills/bootstrap/SKILL.md) skill. You approve every command it runs but `status` | `team-kit-admin` |
+| Project bot | One per project | Plans units, writes a brief per unit, dispatches it. Loads the [dispatch](../../hermes/skills/dispatch/SKILL.md) skill | `team-kit-gh`, for its own repository only |
 | Coding agent | One per unit, in the cloud | Works the brief in faker-mode with the [follow-brief](../../plugins/trust-ladder/skills/follow-brief/SKILL.md) skill, opens one pull request, posts a report | — |
 
-A project is one product, which may span several repositories, such as `acme/shop-api`, `acme/shop-web`, and `acme/shop-mobile`. Its project bot sees only those repositories, so brainstorming one project never pulls in another's context. To brainstorm across projects, add several project bots to a group chat. There they only talk; each bot does work only when you ask it in its own Bot Chat.
+A project is one repository. When a product has an API, a web app, and a mobile app, keep them side by side in that one repository, such as `apps/api/`, `apps/web/`, and `apps/mobile/` in `acme/shop`. Then one cloud agent can carry a feature through all of them in one pull request and prove it end to end, which separate repositories cannot do. The kit's playbooks assume one repository too. A project bot sees only its repository, so brainstorming one project never pulls in another's context. To brainstorm across projects, add several project bots to a group chat. There they only talk; each bot does work only when you ask it in its own Bot Chat.
 
 The bot that maintains the kit itself is not part of this module. Keep using whatever you use for it.
 
-`~/.hermes/team-kit/bots.yaml` records each bot's role, project, and repositories. Only `team-kit-admin` writes it, and the guard reads it on every tool call.
+`~/.hermes/team-kit/bots.yaml` records each bot's role, project, and repository. Only `team-kit-admin` writes it, and the guard reads it on every tool call.
 
 ## One unit
 
-1. You state the work in the project bot's Bot Chat. It reads `PROJECT.md` in the project's home repository, restates the units, and asks you to confirm.
+1. You state the work in the project bot's Bot Chat. It reads the repository's `AGENTS.md`, restates the units, and asks you to confirm. A feature that touches the API, web, and mobile is usually one unit.
 2. Per unit, it writes the brief and runs `team-kit-gh dispatch`. That opens the issue, labeled `agent-task`, then launches the cloud agent and labels the issue `agent:running`. A unit whose dependencies have not merged, or that has no free slot, stays queued.
 3. The coding agent checks the issue came from a trusted login with the brief marker, does the work, opens a pull request that closes the issue, and comments a report.
 4. Every 30 minutes the bot's `team-kit-tick` job runs `team-kit-gh tick`, which is code, not a model:
@@ -45,24 +45,22 @@ codex cloud exec --env ENV_ID --attempts N '$faker-mode Work the brief in OWNER/
 
 The prompt always starts with `/faker-mode` or `$faker-mode`. The `faker-mode` skill cannot load itself, so the prompt has to run it as a command. For `claude`, the launch first clones the repository into `~/.hermes/team-kit/checkouts/`, because `claude --cloud` works on the repository in its current directory.
 
-### Work across repositories
+### When work splits into several units
 
-A change that crosses repositories goes contract first. The project bot plans:
+A unit is one pull request. The bot splits work only when one pull request would be too big to review, so it goes in steps, or when parts are independent and can run in parallel. Each brief's Depends on section lists the issues it waits for as `#n`. A unit launches only after each of them is closed by a merged pull request, so every agent starts from code that is already on the default branch.
 
-1. a **contract unit** in the home repository, which writes the decision to `docs/decisions/` (and the API's schema, if it keeps one) and changes no behavior,
-2. a **provider unit**, usually in the API, which depends on the contract unit,
-3. **consumer units** in web and mobile, which depend on the provider unit and run in parallel.
+### How the agent proves its work
 
-Each brief's Depends on section lists issues as `OWNER/REPO#n`. A unit launches only after each of them is closed by a merged pull request, so every agent starts from code that is already on the default branch.
+The agent drives the real app with the repository's verification skill, named as `verification_skill` in `.agents/dispatch.json` and in each brief's Verify section, and puts the evidence in its report. Without one it proves the change with tests only; the setup pull request then lists `/create-verification-skill` for you. A cloud session runs on Linux, so iOS builds cannot run there; the repository's `AGENTS.md` says what a cloud session cannot prove.
 
 ### How many run at once
 
 Two limits apply to every launch, and both count open issues labeled `agent:running`:
 
-- `max_in_flight` in a repository's `.agents/dispatch.json` caps that repository. The setup session sets it from `/trust-audit`: 1 while any layer is below 2, more once every layer is at 2 or above. Raise it in a pull request as the score improves.
-- `max_in_flight_total` in `guard.yaml` caps the whole machine, because every project draws on the same Claude or ChatGPT subscription. Each project bot's GitHub login sees only its own repositories, so each bot records its count in `~/.hermes/team-kit/in-flight/` and reads the others' from there.
+- `max_in_flight` in the repository's `.agents/dispatch.json` caps the project. The setup session sets it from `/trust-audit`: 1 while any layer is below 2, more once every layer is at 2 or above. Raise it in a pull request as the score improves.
+- `max_in_flight_total` in `guard.yaml` caps the whole machine, because every project draws on the same Claude or ChatGPT subscription. Each project bot's GitHub login sees only its own repository, so each bot records its count in `~/.hermes/team-kit/in-flight/` and reads the others' from there.
 
-A unit over either limit stays queued, and the next tick launches it when a slot frees up, oldest first across the project. A unit frees its slot once its agent has reported and its checks have finished, not when you merge.
+A unit over either limit stays queued, and the next tick launches it when a slot frees up, oldest first. A unit frees its slot once its agent has reported and its checks have finished, not when you merge.
 
 ## Install
 
@@ -89,12 +87,12 @@ The installer works with macOS's bundled Bash 3. It needs a Python 3.9+ that can
 
 ### 2. Each project
 
-Open the bootstrap bot in Hermes Desktop Bot Mode and say "set up project shop with acme/shop-api, acme/shop-web, and acme/shop-mobile". It asks for the bot's name, the home repository, and the coding agent, then, with your approval at each step:
+Open the bootstrap bot in Hermes Desktop Bot Mode and say "set up project shop for acme/shop". It asks for the bot's name and the coding agent, then, with your approval at each step:
 
-1. `team-kit-admin add-project` creates the project bot and its two jobs, paused, and the four labels in each repository.
-2. `team-kit-admin setup-repo` starts one cloud session per repository. Each runs faker-mode and the [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md) skill, scores the repository with `/trust-audit`, and opens one pull request: `.agents/dispatch.json`, `.agents/dispatch.md`, any kit setup the repository lacks, and `PROJECT.md` in the home repository. You review and merge each.
-3. `team-kit-admin protect` makes the CI check that runs `scripts/check.sh` required on each default branch.
-4. You put the project bot's GitHub token in `~/.hermes/profiles/<project bot>/.env` as `GH_TOKEN` yourself: a fine-grained token for the project's repositories with Issues read and write, and Contents, Pull requests, Checks, and Commit statuses read. Never in chat.
+1. `team-kit-admin add-project` creates the project bot and its two jobs, paused, and the four labels in the repository.
+2. `team-kit-admin setup-repo` starts one cloud session. It runs faker-mode and the [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md) skill, scores the repository with `/trust-audit`, and opens one pull request: `.agents/dispatch.json` (with the `verification_skill`), `.agents/dispatch.md`, a Layout section in `AGENTS.md`, and any kit setup the repository lacks. You review and merge it.
+3. `team-kit-admin protect` makes the CI check that runs `scripts/check.sh` required on the default branch.
+4. You put the project bot's GitHub token in `~/.hermes/profiles/<project bot>/.env` as `GH_TOKEN` yourself: a fine-grained token for the repository with Issues read and write, and Contents, Pull requests, Checks, and Commit statuses read. Never in chat.
 5. `team-kit-admin activate` resumes the project bot's jobs.
 
 Then add the project bot in Bot Mode and ask it for one small change, such as a README typo fix, to prove the loop.
@@ -105,10 +103,10 @@ None of these uses a model to decide. Each is code or configuration.
 
 1. **Desktop is the only way in.** No chat platform and no webhook is connected. The machine listens to nothing from outside.
 2. **Roles come from one file.** The guard looks up the calling profile in `bots.yaml`. A profile that is not there gets nothing. Each role has a fixed list of tools, whatever its toolsets say. A project bot may run only `team-kit-gh`, write only its own briefs, and read only its briefs and the kit, so it cannot read a token or another bot's files. The bootstrap bot may run only `team-kit-admin`, and every command but `status` waits for your approval.
-3. **Projects are walled off.** `team-kit-gh` refuses repositories outside the bot's project, including in a brief's Depends on, and each bot's GitHub token covers only its project.
+3. **Projects are walled off.** `team-kit-gh` works only on the bot's own repository, including in a brief's Depends on, and each bot's GitHub token covers only that repository.
 4. **The guard fails closed.** The `team_kit_guard` plugin checks every tool call against `guard.yaml` and `bots.yaml`. Merges, pushes to `main`, force-pushes, and deletes are denied for every bot. Any error, a timeout, or a missing or invalid file blocks the call.
 5. **Untrusted text is marked.** Output from `team-kit-gh read` and web tools arrives wrapped in `<untrusted source=...>` and taints the turn. After that, every tool that changes something asks you to approve it in Desktop.
-6. **Briefs come only from you and the repositories.** The coding agent works only issues written by a login in `trusted_dispatchers` that start with the brief marker. `dispatch` reads a brief only from the bot's own briefs directory.
+6. **Briefs come only from you and the repository.** The coding agent works only issues written by a login in `trusted_dispatchers` that start with the brief marker. `dispatch` reads a brief only from the bot's own briefs directory.
 7. **The scheduled jobs decide nothing.** `tick` and `status` are code. Their output reaches Bot Chat as notices, and the guard taints any turn that contains one, so a notice cannot make the bot act.
 8. **Checks and a human merge.** A unit is ready to merge only when its pull request's checks pass. Only you merge.
 

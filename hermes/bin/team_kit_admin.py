@@ -4,13 +4,15 @@
 The bootstrap bot may run these, and the guard asks the owner to approve each one but `status`:
 
   status                                                     every project, repository, bot, and job, read-only
-  add-project   --bot B --project P --repos R1,R2 [--home R] [--model M]
-                                                             create a project bot, or add repositories to it:
+  add-project   --bot B --project P --repo R [--model M]     create or refresh a project bot for one repository:
                                                              profile, skill, paused jobs, labels, bots.yaml
-  setup-repo    --project P --repo R --backend claude|codex [--codex-env E]
+  setup-repo    --project P --backend claude|codex [--codex-env E]
                                                              start one cloud session that prepares the repository
-  protect       --repo R --check NAME [--check NAME ...]     require those checks on the default branch
+  protect       --project P --check NAME [--check NAME ...]  require those checks on the default branch
   activate      --bot B                                      resume a project bot's jobs once its GitHub login is set
+
+A project is one repository. Keep a product's apps (API, web, mobile) in one repository, so one
+cloud agent can carry a feature through all of them in one pull request.
 
 install.sh also runs these, which no bot may:
 
@@ -172,45 +174,47 @@ class Admin:
         self.write_bots(data)
         return {"bot": bot, "role": "bootstrap"}
 
-    def add_project(self, bot: str, project: str, repos: list[str], home_repo: str | None, model: str | None) -> dict:
+    def add_project(self, bot: str, project: str, repo: str, model: str | None) -> dict:
         check_name(bot, "bot")
         check_name(project, "project")
-        for repo in repos:
-            check_repo(repo)
+        check_repo(repo)
         data = self.bots_file()
         current = data["bots"].get(bot)
         if current and (current.get("role") != "project" or current.get("project") != project):
             raise Refused(f"{bot} is already the {current.get('role')} bot{' of ' + current['project'] if current.get('project') else ''}")
-        merged = list(current.get("repos", [])) if current else []
-        merged += [r for r in repos if r.lower() not in {m.lower() for m in merged}]
-        entry = {"role": "project", "project": project, "repos": merged, "home": home_repo or (current or {}).get("home") or merged[0]}
-        data["bots"][bot] = entry
+        if current and str(current.get("repo", "")).lower() != repo.lower():
+            raise Refused(f"project {project} is {current.get('repo')}; a project has one repository, so start another project for {repo}")
+        data["bots"][bot] = {"role": "project", "project": project, "repo": current.get("repo") if current else repo}
         load_policy_from(self.home, data)  # refuses a repository another project owns
-        for repo in repos:
-            for name, color, description in LABELS:
-                self.run(["label", "create", name, "-R", repo, "--color", color, "--description", description, "--force"])
+        for name, color, description in LABELS:
+            self.run(["label", "create", name, "-R", repo, "--color", color, "--description", description, "--force"])
         self.setup_files(bot, "project", project, model)
         created = self.ensure_jobs(bot)
         self.write_bots(data)
         return {
-            "bot": bot, "project": project, "repos": merged, "home": entry["home"], "labels": [n for n, _, _ in LABELS], "jobs_created_paused": created,
-            "next": [f"team-kit-admin setup-repo --project {project} --repo <OWNER/REPO> --backend claude|codex for each repository",
+            "bot": bot, "project": project, "repo": repo, "labels": [n for n, _, _ in LABELS], "jobs_created_paused": created,
+            "next": [f"team-kit-admin setup-repo --project {project} --backend claude|codex",
                      f"The owner puts the bot's GitHub token in {profile_home(self.root, bot) / '.env'} as GH_TOKEN",
                      f"team-kit-admin activate --bot {bot}"],
         }
 
-    def setup_repo(self, project: str, repo: str, backend: str, codex_env: str | None) -> dict:
-        policy = self.policy()
+    def project_bot(self, policy: Policy, project: str):
         bot = policy.projects().get(project)
-        if bot is None or not bot.owns(repo):
-            raise Refused(f"{repo} is not a repository of project {project}; add it with add-project first")
+        if bot is None:
+            raise Refused(f"no project {project}; create it with add-project first")
+        return bot
+
+    def setup_repo(self, project: str, backend: str, codex_env: str | None) -> dict:
+        policy = self.policy()
+        bot = self.project_bot(policy, project)
+        repo = bot.repo
         if backend == "codex" and not codex_env:
             raise Refused("codex needs --codex-env, the Codex cloud environment id for this repository")
         commit = git(self.kit, "rev-parse", "HEAD")
         source = os.environ.get("TEAM_KIT_SOURCE_URL") or git(self.kit, "remote", "get-url", "origin")
         if not source.startswith("https://"):
             raise Refused(f"kit source {source} is not an https URL a cloud session can clone; set TEAM_KIT_SOURCE_URL")
-        prompt = bootstrap_prompt(repo, project, bot.home or repo, backend, source, commit, sorted(policy.trusted_authors), codex_env)
+        prompt = bootstrap_prompt(repo, project, backend, source, commit, sorted(policy.trusted_authors), codex_env)
         argv = cloud_argv(backend, prompt, 1, codex_env)
         owner, name = repo.split("/")
         try:
@@ -219,10 +223,8 @@ class Admin:
             raise Refused(f"setup launch failed: {err}") from err
         return {"project": project, "repo": repo, "backend": backend, "kit_ref": commit, "session": session}
 
-    def protect(self, repo: str, checks: list[str]) -> dict:
-        policy = self.policy()
-        if policy.owner_of(repo) is None:
-            raise Refused(f"{repo} is not a repository of any project")
+    def protect(self, project: str, checks: list[str]) -> dict:
+        repo = self.project_bot(self.policy(), project).repo
         if not checks:
             raise Refused("name at least one --check, such as the CI job that runs scripts/check.sh")
         branch = json.loads(self.run(["api", f"repos/{repo}"]))["default_branch"]
@@ -236,8 +238,6 @@ class Admin:
         me = policy.bot(bot)
         if me.role != "project":
             raise Refused(f"{bot} is not a project bot")
-        if not me.repos:
-            raise Refused(f"{bot} has no repositories; run add-project first")
         if not self.has_env(profile_home(self.root, bot), "GH_TOKEN"):
             raise Refused(f"{bot} has no GH_TOKEN in {profile_home(self.root, bot) / '.env'}")
         resumed = []
@@ -253,17 +253,16 @@ class Admin:
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
             item = {"bot": bot.name, "role": bot.role}
             if bot.role == "project":
-                item.update(project=bot.project, home=bot.home, github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"))
+                item.update(project=bot.project, github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"))
                 try:
                     item["jobs"] = {n: j["enabled"] for n, j in cron_jobs(hermes("-p", bot.name, "cron", "list", "--all")).items() if n.startswith("team-kit-")}
                 except InstallError as err:
                     item["jobs"] = f"unreadable: {err}"
-                item["repos"] = [self.repo_status(repo) for repo in bot.repos]
-                counts = {r["repo"]: r["running"] for r in item["repos"] if isinstance(r.get("running"), int)}
-                if len(counts) == len(bot.repos):
+                item["repo"] = self.repo_status(bot.repo)
+                if isinstance(item["repo"].get("running"), int):
                     # This login sees every project, so it refreshes each project bot's count for the
                     # machine-wide limit, even for a bot whose jobs are paused.
-                    write_in_flight(self.home, bot.name, counts)
+                    write_in_flight(self.home, bot.name, {bot.repo: item["repo"]["running"]})
             out["bots"].append(item)
         return out
 
@@ -348,16 +347,14 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("add-project")
     cmd.add_argument("--bot", required=True)
     cmd.add_argument("--project", required=True)
-    cmd.add_argument("--repos", required=True, help="comma-separated OWNER/REPO list")
-    cmd.add_argument("--home", help="the repository that holds PROJECT.md (default: the first)")
+    cmd.add_argument("--repo", required=True, help="the project's one OWNER/REPO")
     cmd.add_argument("--model")
     cmd = sub.add_parser("setup-repo")
     cmd.add_argument("--project", required=True)
-    cmd.add_argument("--repo", required=True)
     cmd.add_argument("--backend", required=True, choices=["claude", "codex"])
     cmd.add_argument("--codex-env")
     cmd = sub.add_parser("protect")
-    cmd.add_argument("--repo", required=True)
+    cmd.add_argument("--project", required=True)
     cmd.add_argument("--check", action="append", default=[])
     cmd = sub.add_parser("activate")
     cmd.add_argument("--bot", required=True)
@@ -402,16 +399,11 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
         elif args.command == "add-bootstrap":
             out = admin.add_bootstrap(args.bot, args.model)
         elif args.command == "add-project":
-            repos = [r.strip() for r in args.repos.split(",") if r.strip()]
-            if not repos:
-                raise Refused("--repos needs at least one OWNER/REPO")
-            if args.home and args.home.lower() not in {r.lower() for r in repos}:
-                raise Refused("--home must be one of --repos")
-            out = admin.add_project(args.bot, args.project, repos, args.home, args.model)
+            out = admin.add_project(args.bot, args.project, args.repo, args.model)
         elif args.command == "setup-repo":
-            out = admin.setup_repo(args.project, args.repo, args.backend, args.codex_env)
+            out = admin.setup_repo(args.project, args.backend, args.codex_env)
         elif args.command == "protect":
-            out = admin.protect(args.repo, args.check)
+            out = admin.protect(args.project, args.check)
         else:
             out = admin.activate(args.bot)
     except (Refused, InstallError, PolicyError, ContractError, yaml.YAMLError) as err:
