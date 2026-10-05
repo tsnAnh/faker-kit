@@ -10,7 +10,7 @@ import time
 import pytest
 from conftest import HERMES, SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
-from team_kit_contracts import LAUNCHED_MARKER, diagnosis_signature, review_signature, security_signature, size_marker, verdict_signature
+from team_kit_contracts import LAUNCHED_MARKER, REVIEW_LAUNCHED_MARKER, diagnosis_signature, review_signature, security_signature, size_marker, verdict_signature
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, Refused, checks_state, main
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
@@ -452,7 +452,7 @@ def test_tick_starts_one_pr_review_for_a_new_unit_pr_head(team_kit_home, kit, ca
     assert saved["key"] in command.prompt
     assert saved["key"] not in " ".join(command.argv)
     assert saved["key"] not in gh.comments[(REPO, n)][-1]["body"]
-    assert workdir.name == f"{n}-review"
+    assert workdir.name == f"{n}-review-{HEAD[:7]}"
     assert (team_kit_home / "reviews" / "meo-beo" / f"{n}.json").stat().st_mode & 0o077 == 0
     assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
     assert len(cloud.started) == 1, "same PR head already has one review in flight"
@@ -555,6 +555,24 @@ def test_tick_starts_a_new_pr_review_when_the_head_moves(team_kit_home, kit, cap
     saved = review_record(team_kit_home, n)
     assert len(cloud.started) == 2
     assert saved["head"] == "b" * 40 and saved["key"] != first
+    assert cloud.started[0][3].name != cloud.started[1][3].name
+
+
+def test_a_late_stale_review_launch_does_not_hide_the_current_signed_result(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude", verifier_backend="none")
+    n, cloud = reviewing_unit(gh, team_kit_home, capsys)
+    old_head = HEAD
+    new_head = "b" * 40
+    gh.prs[(REPO, 7)]["headRefOid"] = new_head
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    review_result(gh, n, team_kit_home, medium=1, head=new_head)
+    gh.comment(REPO, n,
+               f"{REVIEW_LAUNCHED_MARKER}\nsession: late-stale-review\nbackend: claude\n"
+               f"pr: https://github.com/{REPO}/pull/7\nhead: {old_head}\n")
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/7", at=NOW)
+    [notice] = tick(gh, capsys, cloud=FakeCloud())
+    assert "ready for you to merge" in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
 
 
 @pytest.mark.parametrize("forgery", ["unsigned", "wrong key", "edited", "untrusted", "stale head", "before launch"])

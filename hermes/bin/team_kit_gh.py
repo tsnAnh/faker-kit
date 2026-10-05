@@ -935,7 +935,7 @@ class Review:
                 return "gate", self.gh.gate(issue, f"the PR review could not start: {err}")
             self.write(number, {"pr": pr_url, "head": head, "key": key, "backend": backend, "started": self.gh.now()})
         owner, name = self.gh.repo.split("/")
-        workdir = self.gh.policy.home / "checkouts" / f"{owner}__{name}" / f"{number}-review"
+        workdir = self.gh.policy.home / "checkouts" / f"{owner}__{name}" / f"{number}-review-{head[:7]}"
         try:
             session = cloud.start(backend, self.gh.repo, command, workdir)
         except Exception as err:  # noqa: BLE001 - any failure leaves the unit to the owner
@@ -956,10 +956,23 @@ class Review:
             pass
         return "wait", None
 
+    def current_launch_index(self, comments: list[dict], record: dict) -> int | None:
+        start = None
+        for i, comment in enumerate(comments):
+            body = (comment.get("body") or "").lstrip()
+            if not body.startswith(REVIEW_LAUNCHED_MARKER) or not self.gh.trusted(comment):
+                continue
+            fields = dict(re.findall(r"^([a-z]+):\s*(\S.*?)\s*$", body, re.M))
+            if fields.get("pr") == record["pr"] and fields.get("head") == record["head"]:
+                start = i
+        return start
+
     def accept(self, number: int, record: dict):
         comments = self.gh.comments(number)
-        starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(REVIEW_LAUNCHED_MARKER) and self.gh.trusted(c)]
-        for comment in comments[(starts[-1] + 1) if starts else 0:]:
+        start = self.current_launch_index(comments, record)
+        if start is None:
+            return None
+        for comment in comments[start + 1:]:
             body = (comment.get("body") or "").lstrip()
             if not body.startswith(REVIEW_MARKER) or not self.gh.trusted(comment):
                 continue
