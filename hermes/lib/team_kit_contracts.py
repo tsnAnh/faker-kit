@@ -21,6 +21,10 @@ VERIFICATIONS = ("live-ui-verified", "unit-test-verified", "type-check-only", "v
 DEFAULT_ACCEPTED = ("live-ui-verified", "unit-test-verified")
 VERDICT_FIELDS = ("verification", "pr", "head", "sig")
 VERIFIER_BACKENDS = ("claude", "codex", "none")
+PR_MARKER = re.compile(r"<!-- team-kit:pr v1 card=(?P<card>[A-Za-z0-9_-]+) issue=(?P<issue>[0-9]+) -->")
+REVIEW_LAUNCHED_MARKER = "<!-- team-kit:review-launched v1 -->"
+REVIEW_MARKER = "<!-- team-kit:review v1 -->"
+REVIEW_FIELDS = ("pr", "head", "findings", "sig")
 SECURITY_LAUNCHED_MARKER = "<!-- team-kit:security-launched v1 -->"
 SECURITY_MARKER = "<!-- team-kit:security v1 -->"
 SECURITY_FIELDS = ("range", "findings", "sig")
@@ -73,6 +77,17 @@ SECURITY_PROMPTS = {
     "codex": ("$review-main-security Review {span} on {branch} of {repo}, and post the result on {repo}#{issue}. "
               "Sign the result with key {key}. "
               "If the review-main-security skill is not available in this session, stop and say the team-kit skills did not load."),
+}
+# A pull request reviewer reads one unit PR head, changes nothing, never approves, and posts one
+# signed finding summary on the unit issue. High findings hold the unit back when its author reports done.
+REVIEW_PROMPTS = {
+    "claude": ("/review-pr Review {pr} at commit {head} for the unit in {repo}#{issue}, and post the result on {repo}#{issue}. "
+               "Sign the result with key {key}. "
+               "If the review-pr skill is not available in this session, comment on that issue with "
+               "`<!-- team-kit:review v1 -->` as the first line, say the team-kit skills did not load, and stop."),
+    "codex": ("$review-pr Review {pr} at commit {head} for the unit in {repo}#{issue}, and post the result on {repo}#{issue}. "
+              "Sign the result with key {key}. "
+              "If the review-pr skill is not available in this session, stop and say the team-kit skills did not load."),
 }
 # A triage session investigates one incident and changes nothing. It may run while the andon cord
 # is pulled: diagnosing the incident is what the stopped line waits for.
@@ -127,6 +142,18 @@ class SecurityResult:
     @property
     def serious(self) -> int:
         return self.counts["high"] + self.counts["medium"]
+
+
+@dataclass(frozen=True)
+class ReviewResult:
+    pr: str
+    head: str
+    counts: dict[str, int]
+    sig: str | None = None
+
+    @property
+    def high(self) -> int:
+        return self.counts["high"]
 
 
 @dataclass(frozen=True)
@@ -282,6 +309,60 @@ def verify_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key
     if not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/[0-9]+", pr_url, re.I):
         raise ContractError(f"{pr_url!r} is not a pull request in {repo}")
     prompt = VERIFY_PROMPTS[backend].format(repo=repo, issue=int(issue), pr=pr_url, head=head, key=key)
+    return cloud_argv(backend, prompt, 1, env_id)
+
+
+def parse_review(text: str) -> ReviewResult:
+    """Read a pull request review result header: `pr:`, `head:`, `findings: N high, N medium, N low`, `sig:`."""
+    body = (text or "").lstrip()
+    if not body.startswith(REVIEW_MARKER):
+        raise ContractError("a review result must start with <!-- team-kit:review v1 -->")
+    fields: dict[str, str] = {}
+    for line in body[len(REVIEW_MARKER):].strip().splitlines():
+        match = re.match(r"^([a-z]+):\s*(\S.*?)\s*$", line)
+        if not match or match.group(1) not in REVIEW_FIELDS:
+            break
+        fields[match.group(1)] = match.group(2).strip("`")
+    pr = fields.get("pr", "")
+    if not re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+", pr, re.I):
+        raise ContractError("pr must be a GitHub pull request URL")
+    head = fields.get("head", "")
+    if not SHA.match(head):
+        raise ContractError("head must be a full 40-character commit")
+    counts = {}
+    for severity in SEVERITIES:
+        found = re.search(rf"(?:^|,)\s*([0-9]+)\s+{severity}\b", fields.get("findings", ""))
+        if not found:
+            raise ContractError("findings must read `N high, N medium, N low`")
+        counts[severity] = int(found.group(1))
+    return ReviewResult(pr=pr, head=head, counts=counts, sig=fields.get("sig"))
+
+
+def review_signature(key: str, counts: dict[str, int], pr_url: str, head: str) -> str:
+    """HMAC-SHA256 of `<high>|<medium>|<low>|<pr>|<head>` under the reviewer's key, as hex."""
+    message = "|".join(str(int(counts[s])) for s in SEVERITIES) + f"|{pr_url}|{head.lower()}"
+    return hmac.new(key.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+
+def review_signed(result: ReviewResult, key: str, pr_url: str, head: str) -> bool:
+    if not result.sig or result.pr != pr_url or result.head.lower() != head.lower():
+        return False
+    return hmac.compare_digest(result.sig.lower(), review_signature(key, result.counts, pr_url, head))
+
+
+def review_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key: str, env_id: str | None = None) -> list[str]:
+    """The command that starts one read-only pull request review for one unit PR head."""
+    if backend not in REVIEW_PROMPTS:
+        raise ContractError(f"review_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
+    if not REPO.match(repo):
+        raise ContractError(f"repo {repo!r} is not OWNER/REPO")
+    if not SHA.match(head or ""):
+        raise ContractError("the pull request's head must be a full 40-character commit")
+    if not re.fullmatch(r"[0-9a-f]{32,}", key or ""):
+        raise ContractError("the review key must be hex")
+    if not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/[0-9]+", pr_url, re.I):
+        raise ContractError(f"{pr_url!r} is not a pull request in {repo}")
+    prompt = REVIEW_PROMPTS[backend].format(repo=repo, issue=int(issue), pr=pr_url, head=head, key=key)
     return cloud_argv(backend, prompt, 1, env_id)
 
 

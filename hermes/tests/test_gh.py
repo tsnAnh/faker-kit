@@ -7,7 +7,7 @@ import time
 import pytest
 from conftest import SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
-from team_kit_contracts import LAUNCHED_MARKER, diagnosis_signature, security_signature, size_marker, verdict_signature
+from team_kit_contracts import LAUNCHED_MARKER, diagnosis_signature, review_signature, security_signature, size_marker, verdict_signature
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, Refused, checks_state, main
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
@@ -82,6 +82,15 @@ class FakeGh:
             return json.dumps([{"number": i["number"], "title": i["title"], "labels": [{"name": n} for n in sorted(i["labels"])],
                                 "createdAt": i["createdAt"], "closedAt": i["closedAt"], "stateReason": (i["state_reason"] or "").upper(),
                                 "body": i["body"], "author": {"login": i["author"]}} for i in found])
+        if args[:2] == ["pr", "list"]:
+            state = args[args.index("--state") + 1].upper()
+            found = []
+            for (r, number), pr in self.prs.items():
+                if r != repo or pr.get("state") != state:
+                    continue
+                found.append({"number": number, "url": f"https://github.com/{repo}/pull/{number}",
+                              "headRefOid": pr.get("headRefOid"), "body": pr.get("body", "")})
+            return json.dumps(found)
         if args[:2] == ["issue", "create"]:
             number = self.add_issue(repo, labels=(args[args.index("--label") + 1],), body=args[args.index("--body") + 1], title=args[args.index("--title") + 1])
             return f"https://github.com/{repo}/issues/{number}\n"
@@ -419,23 +428,140 @@ def test_tick_ignores_a_report_from_an_untrusted_login(team_kit_home, gh, capsys
     assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
 
 
-def pr(gh, number, state="OPEN", merged=False, checks=("SUCCESS",)):
+def pr(gh, number, state="OPEN", merged=False, checks=("SUCCESS",), issue=None, head=None):
     rollup = [{"__typename": "CheckRun", "status": "COMPLETED" if c != "PENDING" else "IN_PROGRESS", "conclusion": c if c != "PENDING" else ""} for c in checks]
-    gh.prs[(REPO, number)] = {"state": state, "mergedAt": "2026-10-01T00:00:00Z" if merged else None, "headRefOid": "a" * 40, "statusCheckRollup": rollup}
+    body = f"<!-- team-kit:pr v1 card=u issue={issue} -->\nCloses #{issue}\n" if issue else ""
+    gh.prs[(REPO, number)] = {"state": state, "mergedAt": "2026-10-01T00:00:00Z" if merged else None,
+                              "headRefOid": head or "a" * 40, "statusCheckRollup": rollup, "body": body}
     return f"https://github.com/{REPO}/pull/{number}"
 
 
 HEAD = "a" * 40
 
 
+def test_tick_starts_one_pr_review_for_a_new_unit_pr_head(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude")
+    n, cloud = reviewing_unit(gh, team_kit_home, capsys)
+    [(backend, _, argv, workdir)] = cloud.started
+    saved = review_record(team_kit_home, n)
+    assert backend == "claude" and argv[:2] == ["claude", "--cloud"]
+    assert argv[2].startswith(f"/review-pr Review https://github.com/{REPO}/pull/7 at commit {HEAD} for the unit in {REPO}#{n},")
+    assert saved["key"] in argv[2] and saved["key"] not in gh.comments[(REPO, n)][-1]["body"]
+    assert workdir.name == f"{n}-review"
+    assert (team_kit_home / "reviews" / "meo-beo" / f"{n}.json").stat().st_mode & 0o077 == 0
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert len(cloud.started) == 1, "same PR head already has one review in flight"
+
+
+def test_tick_starts_a_new_pr_review_when_the_head_moves(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude")
+    n, cloud = reviewing_unit(gh, team_kit_home, capsys)
+    first = review_record(team_kit_home, n)["key"]
+    gh.prs[(REPO, 7)]["headRefOid"] = "b" * 40
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    saved = review_record(team_kit_home, n)
+    assert len(cloud.started) == 2
+    assert saved["head"] == "b" * 40 and saved["key"] != first
+
+
+@pytest.mark.parametrize("forgery", ["unsigned", "wrong key", "edited", "untrusted", "stale head", "before launch"])
+def test_only_the_reviewers_own_signed_review_result_counts(team_kit_home, kit, capsys, forgery):
+    gh = FakeGh(kit, review_backend="claude")
+    n, _ = reviewing_unit(gh, team_kit_home, capsys)
+    if forgery == "unsigned":
+        review_result(gh, n, team_kit_home, sign=False)
+    elif forgery == "wrong key":
+        review_result(gh, n, team_kit_home, key="f" * 32)
+    elif forgery == "edited":
+        review_result(gh, n, team_kit_home, edited=True)
+    elif forgery == "untrusted":
+        review_result(gh, n, team_kit_home, login="stranger")
+    elif forgery == "stale head":
+        review_result(gh, n, team_kit_home, head="b" * 40)
+    else:
+        review_result(gh, n, team_kit_home)
+        comments = gh.comments[(REPO, n)]
+        comments.insert(0, comments.pop())
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/7", at=NOW)
+    assert tick(gh, capsys, cloud=FakeCloud()) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
+
+
+def test_a_high_pr_review_finding_gates_the_done_report(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude")
+    n, _ = reviewing_unit(gh, team_kit_home, capsys)
+    review_result(gh, n, team_kit_home, high=1, at=NOW)
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/7", at=NOW)
+    [notice] = tick(gh, capsys, cloud=FakeCloud())
+    assert "PR review still has 1 high finding" in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+
+
+def test_lower_pr_review_findings_do_not_block_ready_state(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude", verifier_backend="none")
+    n, _ = reviewing_unit(gh, team_kit_home, capsys)
+    review_result(gh, n, team_kit_home, medium=1, low=2, at=NOW)
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/7", at=NOW)
+    [notice] = tick(gh, capsys, cloud=FakeCloud())
+    assert "ready for you to merge" in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
+
+
+def test_review_backend_none_does_not_start_pr_reviews(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="none")
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    pr(gh, 7, issue=n)
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert cloud.started == []
+
+
+def test_codex_pr_review_uses_the_codex_environment(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="codex", codex_env="env_2")
+    reviewing_unit(gh, team_kit_home, capsys)
+    assert gh.calls
+    cloud = FakeCloud()
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    pr(gh, 8, issue=n)
+    tick(gh, capsys, cloud=cloud)
+    [(backend, _, argv, _)] = cloud.started
+    assert backend == "codex" and argv[:5] == ["codex", "cloud", "exec", "--env", "env_2"] and argv[-1].startswith("$review-pr ")
+
+
 def record(team_kit_home, n):
     return json.loads((team_kit_home / "verify" / "meo-beo" / f"{n}.json").read_text())
+
+
+def review_record(team_kit_home, n):
+    return json.loads((team_kit_home / "reviews" / "meo-beo" / f"{n}.json").read_text())
 
 
 def verdict(gh, n, team_kit_home, verification="live-ui-verified", head=HEAD, key=None, login="Codertocat", at=NOW - 60, sign=True, edited=False):
     key = key or record(team_kit_home, n)["key"]
     sig = verdict_signature(key, verification, head) if sign else "0" * 64
     gh.comment(REPO, n, f"<!-- team-kit:verdict v1 -->\nverification: {verification}\npr: https://github.com/{REPO}/pull/7\nhead: {head}\nsig: {sig}\n\n## Execution\n- ran it\n", login=login, at=at)
+    if edited:
+        gh.comments[(REPO, n)][-1]["updated_at"] = iso(at + 5)
+
+
+def reviewing_unit(gh, team_kit_home, capsys, pr_number=7, head=HEAD):
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    pr(gh, pr_number, issue=n, head=head)
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
+    return n, cloud
+
+
+def review_result(gh, n, team_kit_home, high=0, medium=0, low=0, head=HEAD, key=None, login="Codertocat",
+                  at=NOW - 60, sign=True, edited=False, pr_number=7):
+    record = review_record(team_kit_home, n)
+    counts = {"high": high, "medium": medium, "low": low}
+    pr_url = f"https://github.com/{REPO}/pull/{pr_number}"
+    sig = review_signature(key or record["key"], counts, pr_url, head) if sign else "0" * 64
+    gh.comment(REPO, n, f"<!-- team-kit:review v1 -->\npr: {pr_url}\nhead: {head}\nfindings: {high} high, {medium} medium, {low} low\nsig: {sig}\n\n## Findings\n"
+                        "- severity: low\n  file: README.md:1\n  evidence: checked\n  fix: none\n",
+               login=login, at=at)
     if edited:
         gh.comments[(REPO, n)][-1]["updated_at"] = iso(at + 5)
 
@@ -612,13 +738,14 @@ def test_verification_can_be_turned_off(team_kit_home, kit, capsys):
     assert not cloud.started and gh.labels(REPO, n) == {"agent-task", "agent:review"}
 
 
-@pytest.mark.parametrize("config", [{"verifier_backend": "gemini"}, {"accept_verifications": ["verifier-blocked"]}, {"accept_verifications": []}, {"verifier_backend": "codex"}])
+@pytest.mark.parametrize("config", [{"verifier_backend": "gemini"}, {"accept_verifications": ["verifier-blocked"]}, {"accept_verifications": []},
+                                    {"verifier_backend": "codex"}, {"review_backend": "gemini"}, {"review_backend": "codex"}])
 def test_a_bad_verifier_setting_is_refused(team_kit_home, kit, capsys, config):
     gh = FakeGh(kit, **config)
     n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
     gh.report(REPO, n, "done", pr=pr(gh, 7))
     [notice] = tick(gh, capsys)
-    assert "tick could not handle" in notice and ("verifier_backend" in notice or "accept_verifications" in notice)
+    assert "tick could not handle" in notice and ("verifier_backend" in notice or "accept_verifications" in notice or "review_backend" in notice)
     assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
 
 
