@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -66,19 +65,9 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(mirror_notice(policy, read_text(args.file)), ensure_ascii=False))
             return 0
         max_events = 1 if args.once else args.max_events
-        while True:
-            try:
-                SlackRelay(policy).run(max_events=max_events)
-            except SlackError:
-                if max_events is not None:
-                    raise
-                print("team-kit-slack: relay disconnected; reconnecting", file=sys.stderr)
-                time.sleep(10)
-                continue
-            if max_events is not None:
-                return 0
-            print("team-kit-slack: relay disconnected; reconnecting", file=sys.stderr)
-            time.sleep(10)
+        # The relay reconnects itself with backoff. A bounded run (--once, --max-events) gives up after a few tries.
+        SlackRelay(policy).run(max_events=max_events, max_reconnects=3 if max_events is not None else None)
+        return 0
     except (SlackError, PolicyError) as err:
         print(f"team-kit-slack: refused: {err}", file=sys.stderr)
         return 1

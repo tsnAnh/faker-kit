@@ -12,23 +12,32 @@ import socket
 import ssl
 import struct
 import subprocess
+import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
 from team_kit_guard.policy import Policy, SlackConfig
 
 NOTICE = "team-kit notice:"
-MAX_SLACK_TEXT = 1_200
-ENV_LINE = re.compile(r"\A([A-Za-z_][A-Za-z0-9_]*)=(.*)\Z")
 
 
 class SlackError(Exception):
     pass
+
+
+MAX_SLACK_TEXT = 1_200
+ENV_LINE = re.compile(r"\A([A-Za-z_][A-Za-z0-9_]*)=(.*)\Z")
+NOTICE_IN_TEXT = re.compile(r"team-kit\s+notice\s*:", re.IGNORECASE)
+SEEN_LIMIT = 2_000
+# What a dropped Socket Mode connection raises: our own refusals, and socket timeouts, resets, and closes.
+RECONNECT_ERRORS = (SlackError, OSError, EOFError)
 
 
 def profile_home(root: Path, profile: str) -> Path:
@@ -279,6 +288,13 @@ class SocketModeTransport:
 
 
 class BotChat:
+    """Delivers a notice into a profile's Bot Chat as an inbound turn.
+
+    Hermes's own cron delivery to `bot-chat:<profile>` runs `hermes -p <profile> chat --in ~ -c "Bot Chat"
+    --create-if-missing -Q --query-file <file>` (hermes-agent pull request #91487), so this uses the same
+    command. hermes/README.md lists it among the things to check in the first pilot, because the tests fake Hermes.
+    """
+
     def __init__(self, root: Path | None = None, runner=subprocess.run):
         self.root = root or Path.home() / ".hermes"
         self.runner = runner
@@ -317,7 +333,9 @@ def clean_slack_text(text: str) -> str:
 
 
 def inline_untrusted(source: str, text: str) -> str:
-    return f'<untrusted source="{html.escape(source, quote=True)}">{html.escape(text, quote=False)}</untrusted>'
+    """Fence text so it can neither close the fence nor pass for a second notice."""
+    body = NOTICE_IN_TEXT.sub(lambda m: m.group(0)[:-1] + "&#58;", html.escape(text, quote=False))
+    return f'<untrusted source="{html.escape(source, quote=True)}">{body}</untrusted>'
 
 
 def author(event: dict) -> str:
@@ -338,12 +356,30 @@ def notice_from_payload(config: SlackConfig, payload: dict) -> str | None:
     return f"{NOTICE} proposal from {author(event)} in #{config.channel_name}: {inline_untrusted(source, text)}"
 
 
+def stderr_log(line: str) -> None:
+    print(f"team-kit-slack: {line}", file=sys.stderr, flush=True)
+
+
+def event_keys(payload: dict) -> list[str]:
+    keys = []
+    if payload.get("envelope_id"):
+        keys.append(f"envelope:{payload['envelope_id']}")
+    event_id = (payload.get("payload") or {}).get("event_id")
+    if event_id:
+        keys.append(f"event:{event_id}")
+    return keys
+
+
 @dataclass
 class SlackRelay:
     policy: Policy
     env: Mapping[str, str] | None = None
     transport: object | None = None
     bot_chat: object | None = None
+    sleep: object = time.sleep
+    log: object = stderr_log
+    max_backoff: float = 300.0
+    seen: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
 
     def __post_init__(self) -> None:
         self.config = slack_config(self.policy)
@@ -353,27 +389,68 @@ class SlackRelay:
         if self.bot_chat is None:
             self.bot_chat = BotChat(self.policy.home.parent)
 
-    def handle(self, payload: dict) -> str | None:
+    def _seen(self, keys: list[str]) -> bool:
+        return any(key in self.seen for key in keys)
+
+    def _remember(self, keys: list[str]) -> None:
+        for key in keys:
+            self.seen[key] = None
+        while len(self.seen) > SEEN_LIMIT:
+            self.seen.popitem(last=False)
+
+    def handle(self, payload: dict) -> bool:
+        """Ack and relay one payload. True when it was a new events_api event, the only kind run counts.
+
+        Slack retries an event with the same envelope_id or event_id, so each is relayed once. An event
+        is remembered only after its delivery succeeds, so a failed delivery is not lost to the dedupe.
+        """
         envelope = payload.get("envelope_id")
         if envelope:
             self.transport.ack(str(envelope))
+        if payload.get("type") != "events_api":
+            return False
+        keys = event_keys(payload)
+        if self._seen(keys):
+            return False
         notice = notice_from_payload(self.config, payload)
         if notice:
             self.bot_chat.deliver(self.config.bot, notice)
-        return notice
+        self._remember(keys)
+        return True
 
-    def run(self, max_events: int | None = None) -> int:
-        count = 0
-        self.transport.connect()
-        try:
-            while max_events is None or count < max_events:
-                payload = self.transport.receive()
-                if payload is None:
-                    break
-                self.handle(payload)
-                count += 1
-        finally:
-            self.transport.close()
+    def run(self, max_events: int | None = None, max_reconnects: int | None = None) -> int:
+        """Relay until max_events new events_api events, reconnecting with backoff when the socket drops.
+
+        Slack's `hello`, `disconnect`, and retried events are not counted. max_reconnects bounds the
+        reconnects (None: forever); when it runs out, the relay stops with an error.
+        """
+        count, reconnects, backoff = 0, 0, 1.0
+        while max_events is None or count < max_events:
+            why = "connection closed"
+            try:
+                self.transport.connect()
+                while max_events is None or count < max_events:
+                    payload = self.transport.receive()
+                    if payload is None:
+                        break
+                    backoff = 1.0
+                    if payload.get("type") == "disconnect":
+                        why = "Slack asked to reconnect"
+                        break
+                    if self.handle(payload):
+                        count += 1
+            except RECONNECT_ERRORS as err:
+                why = f"connection error {type(err).__name__}"
+            finally:
+                self.transport.close()
+            if max_events is not None and count >= max_events:
+                break
+            if max_reconnects is not None and reconnects >= max_reconnects:
+                raise SlackError(f"relay gave up after {reconnects} reconnects: {why}")
+            reconnects += 1
+            self.log(f"{why}; reconnecting in {backoff:g}s")
+            self.sleep(backoff)
+            backoff = min(backoff * 2, self.max_backoff)
         return count
 
 

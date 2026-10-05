@@ -78,6 +78,7 @@ These depend on Hermes and the cloud CLIs, and the tests fake them:
 - the session line `claude --cloud` and `codex cloud exec` print, which `team_kit_cloud.py` waits for,
 - that a cloud session loads skills through the relative links `vendor_kit.py` writes in `.claude/skills/` and `.agents/skills/` (the launch prompt has the agent report "the team-kit skills did not load" if not),
 - that the ids `hermes cron list --all` prints are what `hermes cron resume` takes, and that `every 30m` is a valid schedule,
+- that `team-kit-slack`'s Bot Chat delivery is the Bot Chat Desktop shows and the scheduled jobs' `bot-chat:<profile>` delivery uses. It runs `hermes -p <profile> chat --in ~ -c "Bot Chat" --create-if-missing -Q --query-file <file>`, the command Hermes's cron scheduler documents for that delivery (hermes-agent pull request #91487). Hermes offers no separate "deliver to bot-chat" command, and the tests only fake it, so this path is unconfirmed until a real Slack mention shows up in Desktop's Bot Chat,
 - the argument names of Hermes's `patch`, `read_file`, and `search_files` tools, which the guard checks (`path`, `mode`, `patch`), and the tool names in each role's allowlist (`ROLE_TOOLS` in `plugin/team_kit_guard/policy.py`).
 
 ## Upgrade from the webhook version
