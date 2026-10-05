@@ -77,16 +77,12 @@ Comment on the unit issue, not as a GitHub review, with `templates/dispatch/revi
 - `sig:` is the HMAC-SHA256, in lowercase hex, of `<high>|<medium>|<low>|<pr>|<head>` under the key, with no newline.
 - Then the sections Findings and Checked and Clear.
 
-One shell-safe way to sign without putting the key in argv:
+Sign with one of these, replacing `<key>` with the key from your prompt. Do not read the key with `read`: an agent's shell has no terminal, so it gets end of input and signs with an empty key.
 
 ```bash
-read -rsp 'review key: ' TEAM_KIT_REVIEW_KEY; printf '\n'
-export TEAM_KIT_REVIEW_KEY
-TEAM_KIT_REVIEW_MSG='<high>|<medium>|<low>|<pr>|<head>' python3 - <<'PY'
-import hashlib, hmac, os
-print(hmac.new(os.environ["TEAM_KIT_REVIEW_KEY"].encode(), os.environ["TEAM_KIT_REVIEW_MSG"].encode(), hashlib.sha256).hexdigest())
-PY
-unset TEAM_KIT_REVIEW_KEY TEAM_KIT_REVIEW_MSG
+printf '%s' "<high>|<medium>|<low>|<pr>|<head>" | openssl dgst -sha256 -hmac "<key>" | awk '{print $NF}'
+# or
+python3 -c 'import hmac,hashlib,sys; print(hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "<key>" "<high>|<medium>|<low>|<pr>|<head>"
 ```
 
 Sign the counts and values you post. If you change the finding counts, sign again.

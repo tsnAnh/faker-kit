@@ -65,6 +65,7 @@ from team_kit_contracts import (  # noqa: E402
     LAUNCHED_MARKER,
     DIAGNOSIS_MARKER,
     INCIDENT_MARKER,
+    BRANCH,
     PR_MARKER,
     REVIEW_LAUNCHED_MARKER,
     REVIEW_MARKER,
@@ -385,21 +386,67 @@ class Gh:
         return {"pr": pr, "state": str(data.get("state", "")).lower(), "merged": bool(data.get("mergedAt")),
                 "head": head if SHA.match(head) else None, "checks": checks_state(data.get("statusCheckRollup"))}
 
-    def unit_pr(self, number: int) -> dict | None:
-        """The open pull request for a unit, found by the marker follow-brief puts in its body."""
-        data = json.loads(self.run(["pr", "list", "-R", self.repo, "--state", "open",
-                                    "--search", f"team-kit:pr v1 issue={int(number)}",
-                                    "--json", "number,url,headRefOid,body", "--limit", "20"]))
-        found = []
-        for pr in data:
+    def unit_branch(self, comments: list[dict]) -> str | None:
+        """The branch the unit's agent works on: from its latest trusted report, else its latest launch."""
+        reports = [c for c in comments if (c.get("body") or "").lstrip().startswith(REPORT_MARKER) and self.trusted(c)]
+        if reports:
+            try:
+                branch = parse_report(reports[-1]["body"]).branch
+            except ContractError:
+                branch = None
+            if branch and BRANCH.fullmatch(branch) and not branch.startswith("-"):
+                return branch
+        launch = self.last_launch(comments)
+        if launch >= 0:
+            found = re.search(r"^branch:\s*(\S+)\s*$", comments[launch].get("body") or "", re.M)
+            if found and BRANCH.fullmatch(found.group(1)) and not found.group(1).startswith("-"):
+                return found.group(1)
+        return None
+
+    def unit_pr(self, number: int, comments: list[dict] | None = None) -> dict | None:
+        """The open pull request for a unit, read by the number in its report or by its branch.
+
+        It must carry the marker follow-brief puts in its body and come from a branch in this same
+        repository, never a fork. It must also be on the branch the unit's report or launch names,
+        or be opened by a trusted login: anyone can paste the marker into a pull request, and a
+        match starts a keyed reviewer. No search is used: its index lags and it stops at 20."""
+        comments = comments if comments is not None else self.comments(number)
+        fields = "number,url,state,headRefOid,headRefName,isCrossRepository,headRepository,headRepositoryOwner,author,body"
+        branch = self.unit_branch(comments)
+        reports = [c for c in comments if (c.get("body") or "").lstrip().startswith(REPORT_MARKER) and self.trusted(c)]
+        reported = None
+        if reports:
+            try:
+                reported = parse_report(reports[-1]["body"]).pr
+            except ContractError:
+                reported = None
+        candidates: list[dict] = []
+        found = re.fullmatch(rf"https://github\.com/{re.escape(self.repo)}/pull/([0-9]+)", reported or "", re.I)
+        if found:
+            candidates = [json.loads(self.run(["pr", "view", found.group(1), "-R", self.repo, "--json", fields]))]
+        elif branch:
+            candidates = json.loads(self.run(["pr", "list", "-R", self.repo, "--head", branch, "--state", "open",
+                                              "--json", fields, "--limit", "100"]))
+        trusted = set(self.policy.trusted_authors) | {str(d).lower() for d in self.dispatch_config().get("trusted_dispatchers") or []}
+        accepted = []
+        for pr in candidates:
             body = str(pr.get("body") or "")
             marker = PR_MARKER.search(body)
             head = str(pr.get("headRefOid") or "")
             url = str(pr.get("url") or "")
-            if marker and int(marker.group("issue")) == int(number) and SHA.match(head) \
-                    and re.fullmatch(rf"https://github\.com/{re.escape(self.repo)}/pull/[0-9]+", url, re.I):
-                found.append({"pr": int(pr["number"]), "url": url, "head": head})
-        return sorted(found, key=lambda item: item["pr"])[0] if found else None
+            if str(pr.get("state") or "OPEN").upper() != "OPEN" or not marker or int(marker.group("issue")) != int(number):
+                continue
+            if not SHA.match(head) or not re.fullmatch(rf"https://github\.com/{re.escape(self.repo)}/pull/[0-9]+", url, re.I):
+                continue
+            owner = str((pr.get("headRepositoryOwner") or {}).get("login") or "")
+            name = str((pr.get("headRepository") or {}).get("name") or "")
+            if pr.get("isCrossRepository") is not False or f"{owner}/{name}".lower() != self.repo.lower():
+                continue
+            author = str((pr.get("author") or {}).get("login") or "").lower()
+            if str(pr.get("headRefName") or "") != branch and author not in trusted:
+                continue
+            accepted.append({"pr": int(pr["number"]), "url": url, "head": head})
+        return sorted(accepted, key=lambda item: item["pr"])[0] if accepted else None
 
     def read(self, issue: int | None, pr: int | None) -> str:
         kind, number = ("pr", pr) if pr else ("issue", issue)
@@ -576,7 +623,7 @@ class Gh:
             reason = str(err) if isinstance(err, (CloudError, Refused)) else type(err).__name__ + (f": {err.filename}" if getattr(err, "filename", None) else "")
             raise Refused(f"launch failed: {reason}") from err
         try:
-            self.run(["issue", "comment", str(number), "-R", self.repo, "--body", f"{LAUNCHED_MARKER}\nsession: {session}\nbackend: {config['backend']}\n"])
+            self.run(["issue", "comment", str(number), "-R", self.repo, "--body", f"{LAUNCHED_MARKER}\nsession: {session}\nbackend: {config['backend']}\nbranch: dispatch/{brief.card}\n"])
         except Exception:  # noqa: BLE001 - the agent is running; a missing comment must not undo that
             pass
         return {"issue": number, "unit": brief.card, "backend": config["backend"], "session": session}
@@ -619,19 +666,22 @@ class Gh:
         report = self.report_status(number, comments, since_launch=True)
         status = report["status"]
         if status == "none":
+            pending = None
             config = self.dispatch_config()
             reviewer = config.get("review_backend", "none")
             if reviewer != "none" and cloud is not None:
-                opened = self.unit_pr(number)
+                opened = self.unit_pr(number, comments)
                 if opened:
                     state, notice = Review(self).ensure(issue, opened["url"], opened["head"], reviewer, config, cloud, gate_high=False)
                     if state == "gate":
                         return notice
+                    if state == "retry":
+                        pending = notice
             launch = self.last_launch(comments)
             started = timestamp(comments[launch].get("created_at")) if launch >= 0 else timestamp(issue.get("createdAt"))
             if started is not None and self.now() - started > REPORT_DEADLINE_SECONDS:
                 return self.gate(issue, "no report 24 hours after launch; check its session")
-            return None
+            return pending
         if status != "done":
             return self.gate(issue, f"the agent reported {status}")
         if not report["pr"]:
@@ -895,14 +945,34 @@ class Review:
     def drop(self, number: int) -> None:
         self.path(number).unlink(missing_ok=True)
 
+    def failed_path(self, number: int) -> Path:
+        return self.path(number).with_suffix(".failed")
+
+    def failed(self, issue: dict, pr_url: str, head: str | None, why: str, gate_high: bool) -> tuple[str, str | None]:
+        """A review that cannot start. After a done report the unit is the owner's to look at. Before
+        one the agent is still working, so its slot and label stay: say it once, try again next tick."""
+        text = f"the PR review could not start: {why}"
+        if gate_high:
+            return "gate", self.gh.gate(issue, text)
+        number = int(issue["number"])
+        mark = {"pr": pr_url, "head": head or ""}
+        try:
+            if json.loads(self.failed_path(number).read_text()) == mark:
+                return "retry", None
+        except (OSError, ValueError):
+            pass
+        self.failed_path(number).parent.mkdir(parents=True, exist_ok=True)
+        self.failed_path(number).write_text(json.dumps(mark))
+        return "retry", f"{NOTICE} #{number}: {text}; it is still running and I will try again next tick. https://github.com/{self.gh.repo}/issues/{number}"
+
     def ensure(self, issue: dict, pr_url: str, head: str | None, backend: str, config: dict, cloud: Cloud, gate_high: bool) -> tuple[str, str | None]:
-        """Return (`clear` | `wait` | `gate`, notice)."""
+        """Return (`clear` | `wait` | `retry` | `gate`, notice). `retry` only before a done report."""
         number = int(issue["number"])
         if not head:
-            return "gate", self.gh.gate(issue, f"the PR review could not start: {pr_url} has no readable head commit")
+            return self.failed(issue, pr_url, head, f"{pr_url} has no readable head commit", gate_high)
         record = self.record(number)
         if not record or record.get("pr") != pr_url or record.get("head") != head:
-            return self.start(issue, pr_url, head, backend, config, cloud)
+            return self.start(issue, pr_url, head, backend, config, cloud, gate_high)
         if record.get("done"):
             return self.done(issue, record, gate_high)
         accepted = self.accept(number, record)
@@ -922,7 +992,8 @@ class Review:
             return "gate", self.gh.gate(issue, f"the PR review still has {high} high {word} on {record['pr']}; fix them before reporting done")
         return "clear", None
 
-    def start(self, issue: dict, pr_url: str, head: str, backend: str, config: dict, cloud: Cloud) -> tuple[str, str | None]:
+    def start(self, issue: dict, pr_url: str, head: str, backend: str, config: dict, cloud: Cloud,
+              gate_high: bool = True) -> tuple[str, str | None]:
         number = int(issue["number"])
         with self.lock(number):
             current = self.record(number)
@@ -932,7 +1003,7 @@ class Review:
             try:
                 command = review_argv(backend, self.gh.repo, number, pr_url, head, key, config.get("codex_env"))
             except ContractError as err:
-                return "gate", self.gh.gate(issue, f"the PR review could not start: {err}")
+                return self.failed(issue, pr_url, head, str(err), gate_high)
             self.write(number, {"pr": pr_url, "head": head, "key": key, "backend": backend, "started": self.gh.now()})
         owner, name = self.gh.repo.split("/")
         workdir = self.gh.policy.home / "checkouts" / f"{owner}__{name}" / f"{number}-review-{head}"
@@ -944,7 +1015,8 @@ class Review:
                 if current and current.get("key") == key:
                     self.drop(number)
             why = str(err) if isinstance(err, (CloudError, Refused)) else type(err).__name__
-            return "gate", self.gh.gate(issue, f"the PR review could not start: {why}")
+            return self.failed(issue, pr_url, head, why, gate_high)
+        self.failed_path(number).unlink(missing_ok=True)
         with self.lock(number):
             current = self.record(number) or {}
             if current.get("key") == key and current.get("pr") == pr_url and current.get("head") == head:

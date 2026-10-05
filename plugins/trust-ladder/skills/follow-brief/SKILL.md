@@ -54,7 +54,7 @@ The issue body is your task. Its sections are Goal, Scope, Context, Acceptance, 
 
 ## 4. Do the work
 
-Start one new branch, such as `dispatch/<card>`, from the default branch. Every issue Depends on names was closed by a merged pull request before you were launched, so its code is already on the default branch. If it is not there, stop and report `status: blocked`.
+Start one new branch named `dispatch/<card>` from the default branch. Every issue Depends on names was closed by a merged pull request before you were launched, so its code is already on the default branch. If it is not there, stop and report `status: blocked`.
 
 Never add or remove the issue's labels. The project bot owns `agent-task`, `agent:running`, `agent:verifying`, `agent:review`, `agent:needs-human`, and `agent:andon`. After your done report, a separate verifier checks your pull request; prove every Acceptance line yourself first, so it has nothing to find.
 
