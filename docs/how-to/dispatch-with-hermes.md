@@ -64,7 +64,7 @@ Two limits apply to every launch, and both count open issues labeled `agent:runn
 
 A unit over either limit stays queued, and the next tick launches it when a slot frees up, oldest first. A unit frees its slot once its agent has reported and its checks have finished, not when you merge.
 
-Each tick also records that project's open and closed unit issues in `~/.hermes/team-kit/units/<bot>.json`. Other project bots use those files for `OWNER/REPO#n` dependencies instead of using their GitHub tokens on another repository. If the file is missing, malformed, or older than 24 hours, the downstream unit stays queued with a reason until the upstream bot's next healthy tick.
+Each tick also records that project's open and closed unit issues in `~/.hermes/team-kit/units/<bot>.json`. Other project bots use those files for `OWNER/REPO#n` dependencies instead of using their GitHub tokens on another repository. The file lists the 200 newest closed units plus a `wants` list of the other-project issues that bot's queued briefs depend on; the owning bot publishes every issue another bot wants, whatever its age, from its next tick. A dependency on a plain issue (no `agent-task` label) is never a unit, so `dispatch` refuses it and tick gates a unit that names one. If the file is missing, malformed, or older than 24 hours, the downstream unit stays queued with a reason until the upstream bot's next healthy tick.
 
 ## Install
 

@@ -89,7 +89,11 @@ BRANCH = re.compile(r"\A(?!.*\.\.)(?!/)(?!.*/\Z)[A-Za-z0-9_./-]{1,100}\Z")
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 ENV_ID = re.compile(r"\A[A-Za-z0-9_-]+\Z")
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
-DEPENDENCY = re.compile(r"\A(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<issue>[1-9][0-9]*)\Z")
+# A line starts with a reference (after an optional bullet) and may carry trailing text, as briefs
+# written before the stricter parser did: `- #3 (schema)`. Every further reference on the line counts too,
+# so `#3, #4` never drops #4 silently.
+DEPENDENCY = re.compile(r"\A(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<issue>[1-9][0-9]*)\b")
+DEPENDENCY_MORE = re.compile(r"(?<![A-Za-z0-9_.#/-])(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<issue>[1-9][0-9]*)\b")
 DEPENDENCY_BULLET = re.compile(r"\A[-*]\s+")
 NONE_WORDS = {"none", "none.", "-", "n/a"}
 
@@ -183,7 +187,9 @@ def parse_depends(brief: Brief, repo: str) -> list[tuple[str, int]]:
     """The issues this unit waits for, from its Depends on section.
 
     `#12` names an issue in this unit's repository; `OWNER/REPO#12` names one explicitly.
-    "none" means no dependency. Anything else is an error, so a typo cannot drop a dependency.
+    One reference per line, with an optional leading `- ` and any trailing text (`- #3 (schema)`).
+    "none" means no dependency. A line that does not start with a reference is an error, so a typo
+    cannot drop a dependency.
     """
     text = brief.sections["Depends on"].strip()
     if text.lower() in NONE_WORDS:
@@ -195,9 +201,10 @@ def parse_depends(brief: Brief, repo: str) -> list[tuple[str, int]]:
         match = DEPENDENCY.match(line)
         if not match:
             raise ContractError('Depends on must be "none" or list one issue per line as #n or OWNER/REPO#n')
-        ref = (match.group("repo") or repo, int(match.group("issue")))
-        if ref not in found:
-            found.append(ref)
+        for hit in [match, *DEPENDENCY_MORE.finditer(line, match.end())]:
+            ref = (hit.group("repo") or repo, int(hit.group("issue")))
+            if ref not in found:
+                found.append(ref)
     if not found:
         raise ContractError('Depends on must be "none" or list one issue per line as #n or OWNER/REPO#n')
     return found

@@ -208,6 +208,7 @@ def in_flight(run: Runner, repo: str) -> int:
 # counting to labelling. A count older than this is ignored: no cloud session runs that long.
 IN_FLIGHT_FRESH_SECONDS = 24 * 3600
 UNIT_STATE_FRESH_SECONDS = 24 * 3600
+MAX_WANTED = 200  # issues other bots may make this bot look up and publish per tick
 
 
 class InFlight:
@@ -255,17 +256,49 @@ class UnitStates:
         self.policy, self.bot, self.now = policy, bot, now
         self.directory = policy.home / "units"
 
-    def publish(self, open_units: list[dict], closed_units: list[dict]) -> None:
+    def publish(self, open_units: list[dict], closed_units: list[dict], wanted: list[dict] = (), wants: list[tuple[str, int]] = ()) -> None:
+        """Write this bot's units file: the recent units, every issue another bot wants whatever its age
+        (`wanted`, issues of this repository as the API returns them), and `wants`, the other-project
+        issues this bot's queued briefs depend on, so their bots publish those."""
         units: dict[str, dict] = {}
         for issue in open_units:
             units[str(int(issue["number"]))] = self.entry(issue, "open")
         for issue in closed_units:
             units[str(int(issue["number"]))] = self.entry(issue, "closed")
+        for issue in wanted:
+            units[str(int(issue["number"]))] = self.api_entry(issue)
+        listed = [{"repo": repo, "number": int(number)} for repo, number in sorted(set(wants))]
         self.directory.mkdir(parents=True, exist_ok=True)
         target = self.directory / f"{self.bot.name}.json"
         tmp = target.with_name(f".{target.name}.{os.getpid()}")
-        tmp.write_text(json.dumps({"at": self.now(), "repo": self.bot.repo, "units": units}, sort_keys=True))
+        tmp.write_text(json.dumps({"at": self.now(), "repo": self.bot.repo, "units": units, "wants": listed}, sort_keys=True))
         tmp.replace(target)
+
+    def wanted_by_others(self) -> list[int]:
+        """Issue numbers of this repository that other project bots' published `wants` name."""
+        found: set[int] = set()
+        for name, other in self.policy.bots.items():
+            if name == self.bot.name or other.role != "project":
+                continue
+            try:
+                wants = json.loads((self.directory / f"{name}.json").read_text()).get("wants") or []
+                for want in wants:
+                    if self.bot.owns(str(want["repo"])):
+                        found.add(int(want["number"]))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                continue
+        return sorted(found)[:MAX_WANTED]
+
+    def api_entry(self, issue: dict) -> dict:
+        """An issue read directly, so it may be old, or not an agent-task unit at all."""
+        reason_text = str(issue.get("state_reason") or "").lower()
+        is_pull = "pull_request" in issue
+        return {
+            "state": "closed" if str(issue.get("state") or "").lower() == "closed" else "open",
+            "state_reason": reason_text,
+            "labels": [] if is_pull else sorted(labels_of(issue)),
+            "closed_at": issue.get("closed_at"),
+        }
 
     def entry(self, issue: dict, state: str) -> dict:
         reason_value = issue.get("stateReason", issue.get("state_reason"))
@@ -299,6 +332,9 @@ class UnitStates:
             return "waiting", f"{repo}#{number} state is unknown in {owner.name}'s published unit states"
         if not isinstance(unit, dict):
             return "waiting", f"{repo}#{number} state is unknown in {owner.name}'s published unit states"
+        if TASK_LABEL not in {str(label).lower() for label in unit.get("labels") or []}:
+            return "invalid", (f"{repo}#{number} is not an {TASK_LABEL} unit in {owner.name}'s project, so its state is never "
+                               f"published as done; depend on a unit, or remove the line")
         if str(unit.get("state") or "").lower() != "closed":
             return "waiting", f"{repo}#{number} is still open according to {owner.name}'s published unit states"
         if str(unit.get("state_reason") or "").lower() not in ("", "completed"):
@@ -565,6 +601,12 @@ class Gh:
         if brief.card != unit:
             raise Refused(f"brief marker names unit {brief.card}, not {unit}")
         refs = self.depends(brief)
+        states = UnitStates(self.policy, self.bot, self.now)
+        for repo, number in refs:
+            if not self.bot.owns(repo):
+                state, detail = states.dependency(repo, number)
+                if state == "invalid":
+                    raise Refused(detail)
         body = brief_text.rstrip("\n") + "\n\n" + size_marker(size) + "\n"
         url = self.run(["issue", "create", "-R", self.repo, "--title", brief.title, "--body", body, "--label", TASK_LABEL]).strip()
         number = int(url.rstrip("/").rsplit("/", 1)[-1])
@@ -660,6 +702,8 @@ class Gh:
                 waiting.append(detail)
             elif state == "dropped":
                 dropped.append(detail)
+            elif state == "invalid":
+                raise Unfit(detail)
         return waiting, dropped
 
     def gate(self, issue: dict, why: str) -> str:
@@ -1214,16 +1258,18 @@ class Project:
         queued: list[dict] = []
         cord, andon_notices = gh.sync_andon()
         notices.extend(andon_notices)
+        closed_units: list[dict] | None
         try:
             units = gh.units()
-            closed_units = gh.units("closed")
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
             units, problems[gh.repo] = [], reason(err)
+            fetched = False
         else:
-            try:
-                UnitStates(self.policy, self.bot, self.now).publish(units, closed_units)
-            except Exception as err:  # noqa: BLE001 - reported once, retried next tick
-                problems["units"] = reason(err)
+            fetched = True
+        try:
+            closed_units = gh.units("closed")
+        except Exception as err:  # noqa: BLE001 - open units still run; the closed list only feeds publishing
+            closed_units, problems[f"{gh.repo} closed units"] = None, reason(err)
         for issue in units:
             labels = labels_of(issue)
             if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
@@ -1237,6 +1283,11 @@ class Project:
             elif not labels & {REVIEW_LABEL, HUMAN_LABEL}:
                 queued.append(issue)
         queued.sort(key=lambda issue: (issue.get("createdAt") or "", int(issue["number"])))
+        if fetched and closed_units is not None:
+            try:
+                self.publish(units, closed_units, queued, problems)
+            except Exception as err:  # noqa: BLE001 - reported once, retried next tick
+                problems["units"] = reason(err)
         for issue in [] if cord else queued:
             try:
                 gh.launch(int(issue["number"]), local_commit, cloud)
@@ -1260,6 +1311,27 @@ class Project:
         except Exception as err:  # noqa: BLE001
             problems["count"] = reason(err)
         return notices + self.new_problems(problems)
+
+    def publish(self, units: list[dict], closed_units: list[dict], queued: list[dict], problems: dict[str, str]) -> None:
+        """Publish unit states for the other project bots: this repository's recent units, every issue another
+        bot wants whatever its age, and the other-project issues this bot's own queued briefs want."""
+        gh, states = self.gh, UnitStates(self.policy, self.bot, self.now)
+        wants: list[tuple[str, int]] = []
+        for issue in queued:
+            try:
+                refs = gh.depends(parse_brief(gh.issue(int(issue["number"])).get("body") or ""))
+            except Exception:  # noqa: BLE001 - launching the unit gates it with the reason
+                continue
+            wants.extend(ref for ref in refs if not self.bot.owns(ref[0]))
+        wanted, failed = [], []
+        for number in states.wanted_by_others():
+            try:
+                wanted.append(gh.issue(number))
+            except Exception:  # noqa: BLE001 - its dependents keep waiting; said once below
+                failed.append(f"#{number}")
+        if failed:
+            problems["wanted units"] = f"could not read {', '.join(failed)} for the other project bots that want them"
+        states.publish(units, closed_units, wanted, wants)
 
     def new_problems(self, problems: dict[str, str]) -> list[str]:
         """A notice for each problem tick has not reported yet, so a lasting one is said once."""

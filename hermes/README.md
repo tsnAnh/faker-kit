@@ -56,7 +56,7 @@ Under `~/.hermes/team-kit/`:
 - `security/<bot>.json`, the last commit a security review covered, and the running review's range and key.
 - `checkouts/`, shallow clones `claude --cloud` starts from. Pruned after 3 days.
 - `in-flight/<bot>.json`, each project bot's count of running units, for `max_in_flight_total`.
-- `units/<bot>.json`, each project bot's open and closed unit issue states, for cross-project Depends on refs.
+- `units/<bot>.json`, each project bot's recent unit issue states, every issue another bot wants (its `wants` list names the other-project issues its own queued briefs depend on), for cross-project Depends on refs. A dependency must be an `agent-task` unit; `dispatch` refuses a plain issue and tick gates a unit that names one.
 - `status/<bot>.json`, when the bot's last digest ran, for "Done since last".
 
 ## What only you do
