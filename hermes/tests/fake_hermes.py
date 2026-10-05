@@ -61,6 +61,15 @@ elif args[:1] == ["cron"]:
                      "enabled": enabled, "state": "active" if enabled else "paused",
                      "paused_reason": args[args.index("--paused-reason") + 1] if "--paused-reason" in args else None})
         jobs_path.write_text(json.dumps(jobs))
+    elif args[1] == "edit":
+        job = next((j for j in jobs if j["id"] == args[2]), None)
+        if job is None:
+            print("no such job", file=sys.stderr)
+            sys.exit(1)
+        # Like Hermes, edit changes configuration only; pause state is separate.
+        if "--schedule" in args:
+            job["schedule"] = args[args.index("--schedule") + 1]
+        jobs_path.write_text(json.dumps(jobs))
     elif args[1] == "delete":
         jobs = [job for job in jobs if job["id"] != args[2]]
         jobs_path.write_text(json.dumps(jobs))

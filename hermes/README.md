@@ -54,7 +54,7 @@ Under `~/.hermes/team-kit/`:
 - `verify/<bot>/`, one private record per verifier: its commit and the key that signs its verdict.
 - `incidents/<bot>.json`, each open incident, its triage session's key, and the last green commit.
 - `security/<bot>.json`, the last commit a security review covered, and the running review's range and key.
-- `etag/`, cached GitHub REST responses and ETags, keyed by endpoint, so idle polling can send conditional requests.
+- `etag/<bot>/`, that bot's cached GitHub REST responses and ETags, keyed by endpoint, so idle polling can send conditional requests. Bots never share an entry.
 - `checkouts/`, shallow clones `claude --cloud` starts from. Pruned after 3 days.
 - `in-flight/<bot>.json`, each project bot's count of running units, for `max_in_flight_total`.
 - `status/<bot>.json`, when the bot's last digest ran, for "Done since last".
@@ -75,6 +75,7 @@ These depend on Hermes and the cloud CLIs, and the tests fake them:
 - the session line `claude --cloud` and `codex cloud exec` print, which `team_kit_cloud.py` waits for,
 - that a cloud session loads skills through the relative links `vendor_kit.py` writes in `.claude/skills/` and `.agents/skills/` (the launch prompt has the agent report "the team-kit skills did not load" if not),
 - that the ids `hermes cron list --all` prints are what `hermes cron resume` takes, and that `every 30m` is a valid schedule,
+- the `Schedule:` line `hermes cron list --all` prints: `cron_jobs` in `lib/install_config.py` compares it with `every 10m` to decide whether to run `hermes cron edit <id> --schedule`, so verify its format on real Hermes (a mismatch re-edits the job on every `add-project` or install, and a changed schedule would never be noticed if the line is absent),
 - the argument names of Hermes's `patch`, `read_file`, and `search_files` tools, which the guard checks (`path`, `mode`, `patch`), and the tool names in each role's allowlist (`ROLE_TOOLS` in `plugin/team_kit_guard/policy.py`).
 
 ## Upgrade from the webhook version

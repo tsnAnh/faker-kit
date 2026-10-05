@@ -93,7 +93,7 @@ from team_kit_contracts import (  # noqa: E402
     verdict_signed,
     verify_argv,
 )
-from team_kit_guard.policy import Bot, Policy, PolicyError, load_policy  # noqa: E402
+from team_kit_guard.policy import NAME, Bot, Policy, PolicyError, load_policy  # noqa: E402
 
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
@@ -230,8 +230,12 @@ def included_response(text: str) -> tuple[int, dict[str, str], str]:
 
 
 class EtagCache:
-    def __init__(self, home: Path):
-        self.directory = home / "etag"
+    """Each bot's own cached GitHub responses, under home/etag/<bot>/, so bots never share a cache entry."""
+
+    def __init__(self, home: Path, bot: str):
+        if not NAME.match(bot):
+            raise Refused(f"bot {bot!r} is not a profile name")
+        self.directory = home / "etag" / bot
 
     def path(self, endpoint: str) -> Path:
         return self.directory / f"{hashlib.sha256(endpoint.encode()).hexdigest()}.json"
@@ -243,14 +247,25 @@ class EtagCache:
             return None
         return data if isinstance(data, dict) and data.get("endpoint") == endpoint else None
 
-    def write(self, endpoint: str, etag: str, body: str) -> None:
-        self.directory.mkdir(parents=True, exist_ok=True)
+    def write(self, endpoint: str, etag: str, body: str, more: bool = False) -> None:
+        self.directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.directory.mkdir(mode=0o700, exist_ok=True)
         self.directory.chmod(0o700)
         path = self.path(endpoint)
         tmp = path.with_name(f".{path.name}.{os.getpid()}")
         tmp.touch(mode=0o600)
-        tmp.write_text(json.dumps({"endpoint": endpoint, "etag": etag, "body": body}))
+        tmp.write_text(json.dumps({"endpoint": endpoint, "etag": etag, "body": body, "more": more}))
         tmp.replace(path)
+
+
+def has_next_page(link: str | None) -> bool:
+    """Whether a GitHub Link header names a next page. Only its presence counts: the next page's URL
+    is built from our own path, never fetched from the header."""
+    return bool(link) and any(re.search(r'rel="?next"?', part) for part in link.split(","))
+
+
+ISSUE_PAGE_SIZE = 100  # GitHub's maximum per_page
+ISSUE_PAGE_LIMIT = 50  # 5000 issues; past that something is wrong, so refuse instead of looping
 
 
 class InFlight:
@@ -301,13 +316,12 @@ class Gh:
         self.repo = bot.repo
         self.andon = Andon(policy.home, now)
         self._cord: tuple[Cord | None] | None = None
-        self.etags = EtagCache(policy.home)
+        self.etags = EtagCache(policy.home, bot.name)
 
     # reading ------------------------------------------------------------------------------------
 
-    def api_body(self, path: str, conditional: bool = True) -> str:
-        if not conditional:
-            return self.run(["api", path])
+    def api_page(self, path: str) -> tuple[str, bool]:
+        """A conditional GET: the body, and whether GitHub's Link header says another page follows."""
         endpoint = f"GET {path}"
         cached = self.etags.read(endpoint)
         args = ["api", "--include"]
@@ -317,14 +331,20 @@ class Gh:
         status, headers, body = included_response(text)
         if status == 304:
             if cached and isinstance(cached.get("body"), str):
-                return cached["body"]
+                return cached["body"], bool(cached.get("more"))
             raise Refused(f"gh api failed: HTTP 304 without a cached body for {path}")
         if not 200 <= status < 300:
             raise Refused(f"gh api failed: HTTP {status}")
+        more = has_next_page(headers.get("link"))
         etag = headers.get("etag")
         if etag:
-            self.etags.write(endpoint, etag, body)
-        return body
+            self.etags.write(endpoint, etag, body, more)
+        return body, more
+
+    def api_body(self, path: str, conditional: bool = True) -> str:
+        if not conditional:
+            return self.run(["api", path])
+        return self.api_page(path)[0]
 
     def api_json(self, path: str, conditional: bool = True):
         return json.loads(self.api_body(path, conditional))
@@ -400,9 +420,20 @@ class Gh:
     def issue(self, number: int, repo: str | None = None) -> dict:
         return self.api_json(f"repos/{repo or self.repo}/issues/{int(number)}")
 
-    def issue_list(self, label: str, state: str, limit: int = 200) -> list[dict]:
-        query = urllib.parse.urlencode({"state": state, "labels": label, "per_page": str(limit)})
-        issues = self.api_json(f"repos/{self.repo}/issues?{query}")
+    def issue_list(self, label: str, state: str) -> list[dict]:
+        """Every issue with the label, all pages of it: GitHub returns at most 100 a page."""
+        issues: list[dict] = []
+        for page in range(1, ISSUE_PAGE_LIMIT + 1):
+            query = urllib.parse.urlencode({"state": state, "labels": label, "per_page": str(ISSUE_PAGE_SIZE), "page": str(page)})
+            body, more = self.api_page(f"repos/{self.repo}/issues?{query}")
+            items = json.loads(body)
+            if not isinstance(items, list):
+                raise Refused(f"gh api returned no issue list for {label}")
+            issues.extend(items)
+            if not more or not items:
+                break
+        else:
+            raise Refused(f"more than {ISSUE_PAGE_LIMIT * ISSUE_PAGE_SIZE} {label} issues in {self.repo}")
         out = []
         for issue in issues:
             if "pull_request" in issue:
@@ -475,7 +506,7 @@ class Gh:
 
     def andon_issues(self) -> list[dict]:
         """Open agent:andon issues a trusted login opened, the machine's own included."""
-        issues = self.issue_list(ANDON_LABEL, "open", 50)
+        issues = self.issue_list(ANDON_LABEL, "open")
         return [i for i in issues if str((i.get("author") or {}).get("login") or "").lower() in self.policy.trusted_authors]
 
     def sync_andon(self) -> tuple[Cord | None, list[str]]:

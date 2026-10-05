@@ -198,8 +198,8 @@ class Admin:
             if current and current.get("schedule") == job["schedule"]:
                 continue
             if current and current.get("schedule"):
-                hermes("-p", bot.name, "cron", "delete", current["id"])
-                self.create_job(bot.name, job, bool(current["enabled"]))
+                # Edit in place: the job keeps its id, its enabled or paused state, and its paused reason.
+                hermes("-p", bot.name, "cron", "edit", current["id"], "--schedule", job["schedule"])
                 rescheduled.append(job["name"])
                 continue
             if current:

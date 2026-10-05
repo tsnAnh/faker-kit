@@ -3,6 +3,7 @@ import contextlib
 import hashlib
 import io
 import json
+import subprocess
 import time
 import urllib.parse
 
@@ -10,7 +11,8 @@ import pytest
 from conftest import SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
 from team_kit_contracts import LAUNCHED_MARKER, diagnosis_signature, security_signature, size_marker, verdict_signature
-from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, Refused, checks_state, main
+from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, Gh, Refused, checks_state, main, run_gh
+from team_kit_guard.policy import load_policy
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
 REPO = SHOP
@@ -62,14 +64,15 @@ class FakeGh:
                 if word == "-H" and args[i + 1].lower().startswith("if-none-match:"):
                     given = args[i + 1].split(":", 1)[1].strip()
 
-            def finish(body):
+            def finish(body, link=None):
                 if not include:
                     return body
                 etag = '"' + hashlib.sha256(body.encode()).hexdigest() + '"'
                 if given == etag:
                     return f"HTTP/2 304 Not Modified\r\netag: {etag}\r\n\r\n"
                 self.work += 1
-                return f"HTTP/2 200 OK\r\netag: {etag}\r\n\r\n{body}"
+                extra = f"link: {link}\r\n" if link else ""
+                return f"HTTP/2 200 OK\r\netag: {etag}\r\n{extra}\r\n{body}"
 
             if "/contents/" in path:
                 name = path.split("/contents/", 1)[1]
@@ -83,12 +86,18 @@ class FakeGh:
                 params = urllib.parse.parse_qs(query)
                 label = (params.get("labels") or [""])[0]
                 state = (params.get("state") or ["open"])[0]
+                per_page = min(int((params.get("per_page") or ["30"])[0]), 100)
+                page = int((params.get("page") or ["1"])[0])
                 found = [i for (r, _), i in self.issues.items() if r == repo and label in i["labels"] and i["state"] == state]
+                link = None
+                if len(found) > page * per_page:
+                    link = f'<https://api.github.com/repositories/1/issues?page={page + 1}>; rel="next"'
+                found = found[(page - 1) * per_page:page * per_page]
                 body = json.dumps([{"number": i["number"], "title": i["title"], "body": i["body"],
                                     "labels": [{"name": n} for n in sorted(i["labels"])], "user": {"login": i["author"]},
                                     "created_at": i["createdAt"], "closed_at": i["closedAt"], "state_reason": i["state_reason"]}
                                    for i in found])
-                return finish(body)
+                return finish(body, link)
             if path.endswith("/check-runs?per_page=100"):
                 sha = path.split("/commits/")[1].split("/")[0]
                 return finish(json.dumps({"check_runs": self.runs.get(sha, [])}))
@@ -394,11 +403,11 @@ def test_idle_tick_uses_etags_and_reduces_uncached_github_work(team_kit_home, gh
     assert tick(gh, capsys) == ["[SILENT]"]
     first = [c for c in gh.calls if c[0] == "api"]
     assert [c[-1] for c in first] == [
-        f"repos/{REPO}/issues?state=open&labels=agent%3Aandon&per_page=50",
-        f"repos/{REPO}/issues?state=open&labels=agent-task&per_page=200",
+        f"repos/{REPO}/issues?state=open&labels=agent%3Aandon&per_page=100&page=1",
+        f"repos/{REPO}/issues?state=open&labels=agent-task&per_page=100&page=1",
     ]
     assert gh.work == 2
-    saved = [json.loads(path.read_text()) for path in sorted((team_kit_home / "etag").glob("*.json"))]
+    saved = [json.loads(path.read_text()) for path in sorted((team_kit_home / "etag" / "meo-beo").glob("*.json"))]
     assert sorted(item["endpoint"] for item in saved) == sorted(f"GET {c[-1]}" for c in first)
 
     before_calls, before_work = len(gh.calls), gh.work
@@ -406,6 +415,80 @@ def test_idle_tick_uses_etags_and_reduces_uncached_github_work(team_kit_home, gh
     second = [c for c in gh.calls[before_calls:] if c[0] == "api"]
     assert len(second) == 2 and gh.work == before_work
     assert all(any(arg.startswith("If-None-Match: ") for arg in c) for c in second)
+
+
+def gh_for(team_kit_home, run, bot):
+    policy = load_policy()
+    return Gh(policy, policy.bot(bot), run, lambda: NOW)
+
+
+def test_two_bots_reading_the_same_endpoint_keep_separate_etag_caches(team_kit_home, gh):
+    gh.add_issue(REPO, labels=("agent-task",))
+    path = f"repos/{REPO}/issues?state=open&labels=agent-task&per_page=100&page=1"
+    first, second = gh_for(team_kit_home, gh, "meo-beo"), gh_for(team_kit_home, gh, "sep-crm")
+    first.api_body(path)
+    assert gh.work == 1
+    assert len(list((team_kit_home / "etag" / "meo-beo").glob("*.json"))) == 1
+    assert not (team_kit_home / "etag" / "sep-crm").exists()
+    # The second bot has no entry of its own, so it sends no If-None-Match and gets a full body.
+    second.api_body(path)
+    assert gh.work == 2
+    assert not any(a.startswith("If-None-Match") for a in gh.calls[-1])
+    assert len(list((team_kit_home / "etag" / "sep-crm").glob("*.json"))) == 1
+    # Each now revalidates its own entry.
+    first.api_body(path)
+    second.api_body(path)
+    assert gh.work == 2
+    assert not list((team_kit_home / "etag").glob("*.json")), "no cache entries outside a bot's directory"
+
+
+def test_a_changed_etag_returns_the_new_body(team_kit_home, gh):
+    n = gh.add_issue(REPO, labels=("agent-task",), title="before")
+    bot = gh_for(team_kit_home, gh, "meo-beo")
+    assert [i["title"] for i in bot.units()] == ["before"]
+    gh.issues[(REPO, n)]["title"] = "after"
+    assert [i["title"] for i in bot.units()] == ["after"]
+    assert gh.work == 2
+    again = gh_for(team_kit_home, gh, "meo-beo")
+    assert [i["title"] for i in again.units()] == ["after"]
+    assert gh.work == 2, "the refreshed ETag is what the next read revalidates"
+
+
+def test_units_past_the_first_hundred_are_not_dropped(team_kit_home, gh):
+    numbers = [gh.add_issue(REPO, labels=("agent-task",)) for _ in range(230)]
+    bot = gh_for(team_kit_home, gh, "meo-beo")
+    assert [i["number"] for i in bot.units()] == numbers
+    pages = [c[-1] for c in gh.calls if c[0] == "api"]
+    assert [p.rsplit("page=", 1)[1] for p in pages] == ["1", "2", "3"]
+    assert all("per_page=100" in p for p in pages)
+    # An idle second read revalidates every page and does no new work, still seeing all of them.
+    before = gh.work
+    assert [i["number"] for i in bot.units()] == numbers
+    assert gh.work == before
+
+
+def test_exactly_a_hundred_units_take_one_page(team_kit_home, gh):
+    for _ in range(100):
+        gh.add_issue(REPO, labels=("agent-task",))
+    assert len(gh_for(team_kit_home, gh, "meo-beo").units()) == 100
+    assert len([c for c in gh.calls if c[0] == "api"]) == 1
+
+
+def test_run_gh_returns_a_304_but_raises_on_any_other_failure(monkeypatch):
+    def fake(stdout, code, stderr=""):
+        return lambda *a, **k: subprocess.CompletedProcess(a[0], code, stdout, stderr)
+
+    api = ["api", "--include", "repos/acme/shop/issues"]
+    monkeypatch.setattr(subprocess, "run", fake("HTTP/2.0 304 Not Modified\r\n\r\n", 1, "gh: HTTP 304"))
+    assert run_gh(api).startswith("HTTP/2.0 304")
+    for status in ("HTTP/2.0 404 Not Found\r\n\r\n{}", "HTTP/2.0 500 Server Error\r\n\r\n", ""):
+        monkeypatch.setattr(subprocess, "run", fake(status, 1, "gh: failed"))
+        with pytest.raises(Refused, match="gh api failed"):
+            run_gh(api)
+    # Without --include a non-zero exit is never read as a 304.
+    monkeypatch.setattr(subprocess, "run", fake("HTTP/2.0 304 Not Modified\r\n\r\n", 1, "boom"))
+    with pytest.raises(Refused):
+        run_gh(["api", "repos/acme/shop/issues"])
 
 
 def test_tick_launches_a_queued_unit_once_its_dependency_merged(team_kit_home, gh, capsys):

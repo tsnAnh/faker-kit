@@ -130,10 +130,33 @@ def test_add_project_reschedules_existing_tick_and_incident_jobs(ready):
     )
     assert code == 0, out
     assert sorted(out["jobs_rescheduled"]) == ["team-kit-incidents", "team-kit-tick"]
-    assert sorted(c[4] for c in hermes_calls(root) if c[2:4] == ["cron", "delete"]) == ["job-0", "job-3"]
+    calls = hermes_calls(root)
+    assert not [c for c in calls if c[2:4] in (["cron", "delete"], ["cron", "remove"])], "a reschedule never deletes a job"
+    assert sorted(c[4] for c in calls if c[2:4] == ["cron", "edit"]) == ["job-0", "job-3"]
     by_name = {job["name"]: job for job in jobs(root, "meo-beo")}
-    assert by_name["team-kit-tick"]["schedule"] == "every 10m" and by_name["team-kit-tick"]["enabled"]
-    assert by_name["team-kit-incidents"]["schedule"] == "every 5m" and by_name["team-kit-incidents"]["enabled"]
+    assert len(by_name) == 4
+    assert by_name["team-kit-tick"]["schedule"] == "every 10m" and by_name["team-kit-tick"]["id"] == "job-0"
+    assert by_name["team-kit-incidents"]["schedule"] == "every 5m" and by_name["team-kit-incidents"]["id"] == "job-3"
+    assert by_name["team-kit-tick"]["enabled"] and by_name["team-kit-incidents"]["enabled"]
+
+
+def test_rescheduling_a_paused_job_keeps_it_paused_with_its_reason(ready):
+    root, _ = ready
+    add_shop(ready)
+    code, out = admin(
+        ready,
+        "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP, "--tick-every", "15m",
+        profile="ong-xay",
+    )
+    assert code == 0, out
+    assert out["jobs_rescheduled"] == ["team-kit-tick"]
+    tick = next(j for j in jobs(root, "meo-beo") if j["name"] == "team-kit-tick")
+    assert tick["schedule"] == "every 15m" and not tick["enabled"]
+    assert tick["paused_reason"] == "Awaiting the bot's GitHub login"
+    # Nothing changes when the schedule already matches.
+    before = len(hermes_calls(root))
+    admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP, "--tick-every", "15m", profile="ong-xay")
+    assert not [c for c in hermes_calls(root)[before:] if c[2:4] in (["cron", "edit"], ["cron", "create"], ["cron", "delete"])]
 
 
 def test_add_project_again_refreshes_the_bot_without_duplicating_jobs(ready):
