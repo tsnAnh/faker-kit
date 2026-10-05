@@ -101,6 +101,41 @@ def test_a_second_project_gets_its_own_bot_and_jobs(ready):
     assert len(jobs(root, "sep-crm")) == 4 and len(jobs(root, "meo-beo")) == 4
 
 
+def test_add_project_can_set_custom_tick_and_incident_intervals(ready):
+    root, _ = ready
+    code, out = admin(
+        ready,
+        "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP,
+        "--tick-every", "10m", "--incidents-every", "5m",
+        profile="ong-xay",
+    )
+    assert code == 0, out
+    assert out["tick_every"] == "10m" and out["incidents_every"] == "5m"
+    assert bots(root)["meo-beo"] == {"role": "project", "project": "shop", "repo": SHOP, "tick_every": "10m", "incidents_every": "5m"}
+    created = {c[c.index("--name") + 1]: c for c in hermes_calls(root) if c[2:4] == ["cron", "create"]}
+    assert created["team-kit-tick"][4] == "every 10m"
+    assert created["team-kit-incidents"][4] == "every 5m"
+
+
+def test_add_project_reschedules_existing_tick_and_incident_jobs(ready):
+    root, _ = ready
+    add_shop(ready)
+    (root / "profiles" / "meo-beo" / ".env").write_text("GH_TOKEN=x\n")
+    admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay")
+    code, out = admin(
+        ready,
+        "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP,
+        "--tick-every", "10m", "--incidents-every", "5m",
+        profile="ong-xay",
+    )
+    assert code == 0, out
+    assert sorted(out["jobs_rescheduled"]) == ["team-kit-incidents", "team-kit-tick"]
+    assert sorted(c[4] for c in hermes_calls(root) if c[2:4] == ["cron", "delete"]) == ["job-0", "job-3"]
+    by_name = {job["name"]: job for job in jobs(root, "meo-beo")}
+    assert by_name["team-kit-tick"]["schedule"] == "every 10m" and by_name["team-kit-tick"]["enabled"]
+    assert by_name["team-kit-incidents"]["schedule"] == "every 5m" and by_name["team-kit-incidents"]["enabled"]
+
+
 def test_add_project_again_refreshes_the_bot_without_duplicating_jobs(ready):
     root, _ = ready
     add_shop(ready)
@@ -130,6 +165,7 @@ def test_a_project_has_one_repository(ready):
         (["--bot", "Sep Crm", "--project", "crm", "--repo", "acme/crm"], "must be lowercase letters"),
         (["--bot", "default", "--project", "crm", "--repo", "acme/crm"], "the owner's own Hermes profile"),
         (["--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm;id"], "is not OWNER/REPO"),
+        (["--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm", "--tick-every", "0m"], "--tick-every must be"),
     ],
 )
 def test_add_project_refuses_before_changing_anything(ready, args, why):

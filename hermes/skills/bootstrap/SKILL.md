@@ -12,7 +12,7 @@ If the shell does not find `team-kit-admin`, run it as `~/.hermes/bin/team-kit-a
 | Command | Does |
 |---|---|
 | `team-kit-admin status` | Every bot, project, repository, label, and job on this machine. Read-only |
-| `team-kit-admin add-project --bot B --project P --repo R [--model M]` | Creates or refreshes project bot B for repository R: profile, guard, `dispatch` skill, paused jobs, and the eleven labels |
+| `team-kit-admin add-project --bot B --project P --repo R [--model M] [--tick-every 10m] [--incidents-every 5m]` | Creates or refreshes project bot B for repository R: profile, guard, `dispatch` skill, paused jobs, schedules, and the eleven labels |
 | `team-kit-admin vendor --project P` | Opens a pull request that copies the pinned kit into the repository's `.agents/team-kit/`, so cloud sessions there have its skills |
 | `team-kit-admin setup-repo --project P --backend claude\|codex [--codex-env E]` | Starts one cloud session that opens the project's setup pull request |
 | `team-kit-admin protect --project P --check NAME [--check NAME ...]` | Requires those checks on the project's default branch, admins included |
@@ -41,16 +41,17 @@ Ask with `clarify`, one question at a time, only what you do not know yet:
 4. **The coding agent**: `claude` (Claude Code cloud) or `codex` (Codex cloud). For `codex`, the repository's Codex cloud environment id.
 5. **The project bot's GitHub login**, the account whose token the owner will give it in step 7. It opens the unit issues, so it must be in `trusted_authors` in `~/.hermes/team-kit/guard.yaml` before step 5, which writes those logins into the repository's `trusted_dispatchers`. If `status` does not list it, ask the owner to add it and run `status` again.
 6. **The model** for the project bot, if the owner wants a particular one.
+7. **The polling cadence**, only if the owner wants lower or higher latency than the defaults: tick every `30m`, incidents every `10m`.
 
 Then restate the whole plan in a short list and ask the owner to confirm before step 3.
 
 ## 3. Create the project bot
 
 ```text
-team-kit-admin add-project --bot <bot> --project <project> --repo <OWNER/REPO> [--model <model>]
+team-kit-admin add-project --bot <bot> --project <project> --repo <OWNER/REPO> [--model <model>] [--tick-every <interval>] [--incidents-every <interval>]
 ```
 
-It prints the labels it created, the jobs it created paused, and next steps.
+Intervals are positive minutes or hours, such as `10m` or `1h`. It prints the labels it created, the jobs it created paused or rescheduled, and next steps.
 
 ## 4. Vendor the kit
 

@@ -40,6 +40,7 @@ import base64
 import contextlib
 import datetime as dt
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -48,6 +49,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Callable
@@ -142,6 +144,10 @@ class Waiting(Refused):
 def run_gh(args: list[str], input: str | None = None) -> str:
     done = subprocess.run(["gh", *args], capture_output=True, text=True, input=input)
     if done.returncode != 0:
+        if args[:1] == ["api"] and "--include" in args:
+            status = re.match(r"HTTP/\S+\s+([0-9]{3})", done.stdout)
+            if status and status.group(1) == "304":
+                return done.stdout
         raise Refused(f"gh {args[0]} failed: {done.stderr.strip()[:300]}")
     return done.stdout
 
@@ -206,6 +212,47 @@ def in_flight(run: Runner, repo: str) -> int:
 IN_FLIGHT_FRESH_SECONDS = 24 * 3600
 
 
+def included_response(text: str) -> tuple[int, dict[str, str], str]:
+    normal = text.replace("\r\n", "\n")
+    if not normal.startswith("HTTP/"):
+        return 200, {}, text
+    header_text, _, body = normal.partition("\n\n")
+    lines = header_text.splitlines()
+    match = re.match(r"HTTP/\S+\s+([0-9]{3})", lines[0] if lines else "")
+    if match is None:
+        return 200, {}, body
+    headers = {}
+    for line in lines[1:]:
+        key, sep, value = line.partition(":")
+        if sep:
+            headers[key.strip().lower()] = value.strip()
+    return int(match.group(1)), headers, body
+
+
+class EtagCache:
+    def __init__(self, home: Path):
+        self.directory = home / "etag"
+
+    def path(self, endpoint: str) -> Path:
+        return self.directory / f"{hashlib.sha256(endpoint.encode()).hexdigest()}.json"
+
+    def read(self, endpoint: str) -> dict | None:
+        try:
+            data = json.loads(self.path(endpoint).read_text())
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) and data.get("endpoint") == endpoint else None
+
+    def write(self, endpoint: str, etag: str, body: str) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.directory.chmod(0o700)
+        path = self.path(endpoint)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.touch(mode=0o600)
+        tmp.write_text(json.dumps({"endpoint": endpoint, "etag": etag, "body": body}))
+        tmp.replace(path)
+
+
 class InFlight:
     def __init__(self, policy: Policy, bot: Bot, run: Runner, now: Callable[[], float] = time.time):
         self.policy, self.bot, self.run, self.now = policy, bot, run, now
@@ -254,14 +301,39 @@ class Gh:
         self.repo = bot.repo
         self.andon = Andon(policy.home, now)
         self._cord: tuple[Cord | None] | None = None
+        self.etags = EtagCache(policy.home)
 
     # reading ------------------------------------------------------------------------------------
+
+    def api_body(self, path: str, conditional: bool = True) -> str:
+        if not conditional:
+            return self.run(["api", path])
+        endpoint = f"GET {path}"
+        cached = self.etags.read(endpoint)
+        args = ["api", "--include"]
+        if cached and cached.get("etag"):
+            args += ["-H", f"If-None-Match: {cached['etag']}"]
+        text = self.run([*args, path])
+        status, headers, body = included_response(text)
+        if status == 304:
+            if cached and isinstance(cached.get("body"), str):
+                return cached["body"]
+            raise Refused(f"gh api failed: HTTP 304 without a cached body for {path}")
+        if not 200 <= status < 300:
+            raise Refused(f"gh api failed: HTTP {status}")
+        etag = headers.get("etag")
+        if etag:
+            self.etags.write(endpoint, etag, body)
+        return body
+
+    def api_json(self, path: str, conditional: bool = True):
+        return json.loads(self.api_body(path, conditional))
 
     def file(self, path: str) -> str:
         if not REPO_PATH.match(path):
             raise Refused(f"{path!r} is not a plain path inside the repository")
         try:
-            data = json.loads(self.run(["api", f"repos/{self.repo}/contents/{path}"]))
+            data = self.api_json(f"repos/{self.repo}/contents/{path}")
             return base64.b64decode(data["content"]).decode()
         except (ValueError, TypeError, KeyError):
             raise Refused(f"{path} is not a readable file in {self.repo}") from None
@@ -326,9 +398,30 @@ class Gh:
         return refs
 
     def issue(self, number: int, repo: str | None = None) -> dict:
-        return json.loads(self.run(["api", f"repos/{repo or self.repo}/issues/{int(number)}"]))
+        return self.api_json(f"repos/{repo or self.repo}/issues/{int(number)}")
+
+    def issue_list(self, label: str, state: str, limit: int = 200) -> list[dict]:
+        query = urllib.parse.urlencode({"state": state, "labels": label, "per_page": str(limit)})
+        issues = self.api_json(f"repos/{self.repo}/issues?{query}")
+        out = []
+        for issue in issues:
+            if "pull_request" in issue:
+                continue
+            out.append({
+                "number": int(issue["number"]),
+                "title": issue.get("title") or "",
+                "body": issue.get("body") or "",
+                "labels": issue.get("labels") or [],
+                "author": issue.get("author") or issue.get("user") or {},
+                "createdAt": issue.get("createdAt") or issue.get("created_at"),
+                "closedAt": issue.get("closedAt") or issue.get("closed_at"),
+                "stateReason": str(issue.get("stateReason") or issue.get("state_reason") or "").upper(),
+            })
+        return sorted(out, key=lambda i: int(i["number"]))
 
     def units(self, state: str = "open", search: str | None = None) -> list[dict]:
+        if not search:
+            return self.issue_list(TASK_LABEL, state)
         args = ["issue", "list", "-R", self.repo, "--label", TASK_LABEL, "--state", state,
                 "--json", "number,title,labels,createdAt,closedAt,stateReason", "--limit", "200"]
         if search:
@@ -382,8 +475,7 @@ class Gh:
 
     def andon_issues(self) -> list[dict]:
         """Open agent:andon issues a trusted login opened, the machine's own included."""
-        issues = json.loads(self.run(["issue", "list", "-R", self.repo, "--label", ANDON_LABEL, "--state", "open",
-                                      "--json", "number,title,body,author", "--limit", "50"]))
+        issues = self.issue_list(ANDON_LABEL, "open", 50)
         return [i for i in issues if str((i.get("author") or {}).get("login") or "").lower() in self.policy.trusted_authors]
 
     def sync_andon(self) -> tuple[Cord | None, list[str]]:
@@ -1134,8 +1226,8 @@ class Project:
         try:
             units = gh.units()
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
-            units, problems[gh.repo] = [], reason(err)
-        for issue in units:
+            units, problems[gh.repo] = None, reason(err)
+        for issue in units or []:
             labels = labels_of(issue)
             if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
                 try:
@@ -1167,7 +1259,12 @@ class Project:
             problems["security"] = reason(err)
         try:
             # Refresh this bot's count for the other bots, whatever launched or did not.
-            InFlight(self.policy, self.bot, self.run, self.now).count_own()
+            labels = [labels_of(issue) for issue in (units or [])]
+            no_launchable = units is not None and not any(not (l & {RUNNING_LABEL, VERIFYING_LABEL, REVIEW_LABEL, HUMAN_LABEL}) for l in labels)
+            if no_launchable:
+                InFlight(self.policy, self.bot, self.run, self.now).write({gh.repo: sum(1 for l in labels if l & {RUNNING_LABEL, VERIFYING_LABEL})})
+            else:
+                InFlight(self.policy, self.bot, self.run, self.now).count_own()
         except Exception as err:  # noqa: BLE001
             problems["count"] = reason(err)
         return notices + self.new_problems(problems)

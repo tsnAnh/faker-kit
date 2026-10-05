@@ -1,8 +1,10 @@
 import base64
 import contextlib
+import hashlib
 import io
 import json
 import time
+import urllib.parse
 
 import pytest
 from conftest import SHOP, TEMPLATES, fill_brief
@@ -28,6 +30,7 @@ class FakeGh:
         self.files = {".agents/dispatch.json": json.dumps(dispatch), ".agents/dispatch.md": STANDING,
                       ".agents/team-kit/KIT.json": json.dumps({"version": 1, "kit_ref": kit_ref})}
         self.issues, self.comments, self.prs, self.calls = {}, {}, {}, []
+        self.work = 0
         self.next = 40
         self.main_head = "c" * 40
         self.pr_files, self.history, self.pr_comments = {}, {}, {}
@@ -53,28 +56,54 @@ class FakeGh:
         self.calls.append(args)
         if args[0] == "api":
             path = args[-1]
+            include = "--include" in args
+            given = None
+            for i, word in enumerate(args):
+                if word == "-H" and args[i + 1].lower().startswith("if-none-match:"):
+                    given = args[i + 1].split(":", 1)[1].strip()
+
+            def finish(body):
+                if not include:
+                    return body
+                etag = '"' + hashlib.sha256(body.encode()).hexdigest() + '"'
+                if given == etag:
+                    return f"HTTP/2 304 Not Modified\r\netag: {etag}\r\n\r\n"
+                self.work += 1
+                return f"HTTP/2 200 OK\r\netag: {etag}\r\n\r\n{body}"
+
             if "/contents/" in path:
                 name = path.split("/contents/", 1)[1]
                 if name not in self.files:
                     raise Refused("gh api failed: Not Found")
-                return json.dumps({"content": base64.b64encode(self.files[name].encode()).decode()})
+                return finish(json.dumps({"content": base64.b64encode(self.files[name].encode()).decode()}))
             if path.count("/") == 2:
-                return json.dumps({"default_branch": "main"})
+                return finish(json.dumps({"default_branch": "main"}))
+            if "/issues?" in path:
+                repo, query = path.removeprefix("repos/").split("/issues?", 1)
+                params = urllib.parse.parse_qs(query)
+                label = (params.get("labels") or [""])[0]
+                state = (params.get("state") or ["open"])[0]
+                found = [i for (r, _), i in self.issues.items() if r == repo and label in i["labels"] and i["state"] == state]
+                body = json.dumps([{"number": i["number"], "title": i["title"], "body": i["body"],
+                                    "labels": [{"name": n} for n in sorted(i["labels"])], "user": {"login": i["author"]},
+                                    "created_at": i["createdAt"], "closed_at": i["closedAt"], "state_reason": i["state_reason"]}
+                                   for i in found])
+                return finish(body)
             if path.endswith("/check-runs?per_page=100"):
                 sha = path.split("/commits/")[1].split("/")[0]
-                return json.dumps({"check_runs": self.runs.get(sha, [])})
+                return finish(json.dumps({"check_runs": self.runs.get(sha, [])}))
             if "/commits/" in path:
-                return json.dumps({"sha": self.main_head})
+                return finish(json.dumps({"sha": self.main_head}))
             if "/pulls/" in path and "/files" in path:
-                return json.dumps(self.pr_files.get(int(path.split("/pulls/")[1].split("/")[0]), []))
+                return finish(json.dumps(self.pr_files.get(int(path.split("/pulls/")[1].split("/")[0]), [])))
             if "/commits?path=" in path:
-                return json.dumps([{"author": {"login": a}} for a in self.history.get(path.split("path=")[1].split("&")[0], [])])
+                return finish(json.dumps([{"author": {"login": a}} for a in self.history.get(path.split("path=")[1].split("&")[0], [])]))
             repo, rest = path.removeprefix("repos/").split("/issues/")
             if rest.endswith("/comments"):
-                return json.dumps(self.comments.get((repo, int(rest.split("/")[0])), []))
+                return finish(json.dumps(self.comments.get((repo, int(rest.split("/")[0])), [])))
             issue = self.issues[(repo, int(rest))]
-            return json.dumps({"number": issue["number"], "body": issue["body"], "state": issue["state"], "state_reason": issue["state_reason"],
-                               "labels": [{"name": n} for n in sorted(issue["labels"])], "user": {"login": issue["author"]}})
+            return finish(json.dumps({"number": issue["number"], "body": issue["body"], "state": issue["state"], "state_reason": issue["state_reason"],
+                                      "labels": [{"name": n} for n in sorted(issue["labels"])], "user": {"login": issue["author"]}}))
         repo = args[args.index("-R") + 1]
         if args[:2] == ["issue", "list"]:
             label, state = args[args.index("--label") + 1], args[args.index("--state") + 1]
@@ -200,7 +229,7 @@ def test_only_project_bots_run_it(team_kit_home, gh, capsys, bot, why):
 
 def test_each_bot_works_only_on_its_own_repository(team_kit_home, gh, capsys):
     assert run(gh, "kit-check", bot="sep-crm") == 0
-    assert gh.calls[0] == ["api", "repos/acme/crm/contents/.agents/dispatch.json"]
+    assert gh.calls[0][-1] == "repos/acme/crm/contents/.agents/dispatch.json"
     with pytest.raises(SystemExit):
         run(gh, "kit-check", "--repo", "acme/crm")
 
@@ -359,6 +388,24 @@ def tick(gh, capsys, cloud=None):
 
 def test_tick_is_silent_with_nothing_to_report(team_kit_home, gh, capsys):
     assert tick(gh, capsys) == ["[SILENT]"]
+
+
+def test_idle_tick_uses_etags_and_reduces_uncached_github_work(team_kit_home, gh, capsys):
+    assert tick(gh, capsys) == ["[SILENT]"]
+    first = [c for c in gh.calls if c[0] == "api"]
+    assert [c[-1] for c in first] == [
+        f"repos/{REPO}/issues?state=open&labels=agent%3Aandon&per_page=50",
+        f"repos/{REPO}/issues?state=open&labels=agent-task&per_page=200",
+    ]
+    assert gh.work == 2
+    saved = [json.loads(path.read_text()) for path in sorted((team_kit_home / "etag").glob("*.json"))]
+    assert sorted(item["endpoint"] for item in saved) == sorted(f"GET {c[-1]}" for c in first)
+
+    before_calls, before_work = len(gh.calls), gh.work
+    assert tick(gh, capsys) == ["[SILENT]"]
+    second = [c for c in gh.calls[before_calls:] if c[0] == "api"]
+    assert len(second) == 2 and gh.work == before_work
+    assert all(any(arg.startswith("If-None-Match: ") for arg in c) for c in second)
 
 
 def test_tick_launches_a_queued_unit_once_its_dependency_merged(team_kit_home, gh, capsys):

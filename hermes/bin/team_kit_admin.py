@@ -5,7 +5,7 @@ The bootstrap bot may run these, and the guard asks the owner to approve each on
 
   status                                                     every project, repository, bot, and job, read-only
   add-project   --bot B --project P --repo R [--model M]     create or refresh a project bot for one repository:
-                                                             profile, skill, paused jobs, labels, bots.yaml
+                [--tick-every 10m] [--incidents-every 5m]    profile, skill, paused jobs, labels, bots.yaml
   vendor        --project P                                  open a pull request that copies the pinned kit into the
                                                              repository, so cloud sessions have its skills
   setup-repo    --project P --backend claude|codex [--codex-env E]
@@ -55,7 +55,19 @@ from install_config import InstallError, apply_profile, config_set, cron_jobs, c
 from team_kit_andon import ANDON_LABEL, MACHINE, Andon, AndonError, clean_reason, issue_body  # noqa: E402
 from team_kit_cloud import Cloud, CloudError  # noqa: E402
 from team_kit_contracts import ContractError, bootstrap_prompt, cloud_argv  # noqa: E402
-from team_kit_guard.policy import NAME, REPO, RESERVED_NAMES, Policy, PolicyError, load_policy, team_kit_home  # noqa: E402
+from team_kit_guard.policy import (  # noqa: E402
+    DEFAULT_INCIDENTS_EVERY,
+    DEFAULT_TICK_EVERY,
+    INTERVAL,
+    NAME,
+    REPO,
+    RESERVED_NAMES,
+    Bot,
+    Policy,
+    PolicyError,
+    load_policy,
+    team_kit_home,
+)
 
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
 LABELS = (
@@ -72,6 +84,8 @@ LABELS = (
     (ANDON_LABEL, "b60205", "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"),
 )
 JOBS = ("team-kit-tick", "team-kit-status", "team-kit-security", "team-kit-incidents")
+SCHEDULE_DEFAULTS = {"tick_every": DEFAULT_TICK_EVERY, "incidents_every": DEFAULT_INCIDENTS_EVERY}
+SCHEDULE_FIELDS = {"team-kit-tick": "tick_every", "team-kit-incidents": "incidents_every"}
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
 
 Runner = Callable[..., str]
@@ -167,16 +181,32 @@ class Admin:
             # An earlier version kept webhook triage scripts here; nothing uses them now.
             shutil.rmtree(home / "scripts" / "team-kit", ignore_errors=True)
 
-    def ensure_jobs(self, bot: str) -> list[str]:
-        existing = cron_jobs(hermes("-p", bot, "cron", "list", "--all"))
-        created = []
-        for job in cron_spec(self.pkg / "cron" / "project-jobs.md", bot):
-            if job["name"] in existing:
+    def create_job(self, bot: str, job: dict, enabled: bool) -> None:
+        args = ["-p", bot, "cron", "create", job["schedule"], job["prompt"], "--name", job["name"], "--deliver", job["deliver"], "--skill", job["skill"]]
+        if not enabled:
+            args += ["--paused", "--paused-reason", JOBS_PAUSED_REASON]
+        hermes(*args)
+
+    def ensure_jobs(self, bot: Bot) -> tuple[list[str], list[str]]:
+        existing = cron_jobs(hermes("-p", bot.name, "cron", "list", "--all"))
+        created, rescheduled = [], []
+        for job in cron_spec(self.pkg / "cron" / "project-jobs.md", bot.name):
+            field = SCHEDULE_FIELDS.get(job["name"])
+            if field:
+                job = {**job, "schedule": f"every {getattr(bot, field)}"}
+            current = existing.get(job["name"])
+            if current and current.get("schedule") == job["schedule"]:
                 continue
-            hermes("-p", bot, "cron", "create", job["schedule"], job["prompt"], "--name", job["name"], "--deliver", job["deliver"],
-                   "--skill", job["skill"], "--paused", "--paused-reason", JOBS_PAUSED_REASON)
+            if current and current.get("schedule"):
+                hermes("-p", bot.name, "cron", "delete", current["id"])
+                self.create_job(bot.name, job, bool(current["enabled"]))
+                rescheduled.append(job["name"])
+                continue
+            if current:
+                continue
+            self.create_job(bot.name, job, False)
             created.append(job["name"])
-        return created
+        return created, rescheduled
 
     # commands --------------------------------------------------------------------------------------
 
@@ -210,25 +240,33 @@ class Admin:
                      "Add the bot in Hermes Desktop Bot Mode"],
         }
 
-    def add_project(self, bot: str, project: str, repo: str, model: str | None) -> dict:
+    def add_project(self, bot: str, project: str, repo: str, model: str | None, tick_every: str | None, incidents_every: str | None) -> dict:
         check_name(bot, "bot")
         check_name(project, "project")
         check_repo(repo)
+        check_interval(tick_every, "--tick-every")
+        check_interval(incidents_every, "--incidents-every")
         data = self.bots_file()
         current = data["bots"].get(bot)
         if current and (current.get("role") != "project" or current.get("project") != project):
             raise Refused(f"{bot} is already the {current.get('role')} bot{' of ' + current['project'] if current.get('project') else ''}")
         if current and str(current.get("repo", "")).lower() != repo.lower():
             raise Refused(f"project {project} is {current.get('repo')}; a project has one repository, so start another project for {repo}")
-        data["bots"][bot] = {"role": "project", "project": project, "repo": current.get("repo") if current else repo}
-        load_policy_from(self.home, data)  # refuses a repository another project owns
+        entry = {"role": "project", "project": project, "repo": current.get("repo") if current else repo}
+        for key, value in (("tick_every", tick_every), ("incidents_every", incidents_every)):
+            effective = value if value is not None else (current or {}).get(key)
+            if effective and effective != SCHEDULE_DEFAULTS[key]:
+                entry[key] = effective
+        data["bots"][bot] = entry
+        project_bot = load_policy_from(self.home, data).bot(bot)  # refuses a repository another project owns
         for name, color, description in LABELS:
             self.run(["label", "create", name, "-R", repo, "--color", color, "--description", description, "--force"])
         self.setup_files(bot, "project", project, model)
-        created = self.ensure_jobs(bot)
+        created, rescheduled = self.ensure_jobs(project_bot)
         self.write_bots(data)
         return {
             "bot": bot, "project": project, "repo": repo, "labels": [n for n, _, _ in LABELS], "jobs_created_paused": created,
+            "jobs_rescheduled": rescheduled, "tick_every": project_bot.tick_every, "incidents_every": project_bot.incidents_every,
             "next": [f"team-kit-admin setup-repo --project {project} --backend claude|codex",
                      f"The owner puts the bot's GitHub token in {profile_home(self.root, bot) / '.env'} as GH_TOKEN",
                      f"team-kit-admin activate --bot {bot}"],
@@ -464,7 +502,8 @@ class Admin:
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
             item = {"bot": bot.name, "role": bot.role}
             if bot.role == "project":
-                item.update(project=bot.project, github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"))
+                item.update(project=bot.project, tick_every=bot.tick_every, incidents_every=bot.incidents_every,
+                            github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"))
                 try:
                     item["jobs"] = {n: j["enabled"] for n, j in cron_jobs(hermes("-p", bot.name, "cron", "list", "--all")).items() if n.startswith("team-kit-")}
                 except InstallError as err:
@@ -500,7 +539,7 @@ class Admin:
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
             self.setup_files(bot.name, bot.role, bot.project, None)
             if bot.role == "project":
-                self.ensure_jobs(bot.name)
+                self.ensure_jobs(bot)
             done.append(bot.name)
         return {"synced": done}
 
@@ -542,6 +581,11 @@ def check_repo(value: str) -> None:
         raise Refused(f"repository {value!r} is not OWNER/REPO")
 
 
+def check_interval(value: str | None, what: str) -> None:
+    if value is not None and not INTERVAL.match(value):
+        raise Refused(f"{what} must be a positive interval like 10m or 1h")
+
+
 def git(path: Path, *args: str) -> str:
     done = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True)
     if done.returncode != 0:
@@ -562,6 +606,8 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--project", required=True)
     cmd.add_argument("--repo", required=True, help="the project's one OWNER/REPO")
     cmd.add_argument("--model")
+    cmd.add_argument("--tick-every")
+    cmd.add_argument("--incidents-every")
     cmd = sub.add_parser("vendor")
     cmd.add_argument("--project", required=True)
     cmd = sub.add_parser("setup-repo")
@@ -621,7 +667,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
         elif args.command == "add-bootstrap":
             out = admin.add_bootstrap(args.bot, args.model)
         elif args.command == "add-project":
-            out = admin.add_project(args.bot, args.project, args.repo, args.model)
+            out = admin.add_project(args.bot, args.project, args.repo, args.model, args.tick_every, args.incidents_every)
         elif args.command == "add-chief":
             out = admin.add_chief(args.bot, args.model)
         elif args.command == "vendor":
