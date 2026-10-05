@@ -11,6 +11,7 @@ from __future__ import annotations
 import fnmatch
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 LEVELS = ("low", "medium", "high")
 RISK_LABELS = tuple(f"risk:{level}" for level in LEVELS)
@@ -37,6 +38,8 @@ SMALL_LINES, LARGE_LINES = 150, 600
 MANY_FILES = 25
 CODEOWNERS_PATHS = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
 MAX_REVIEWERS = 3
+REPAIR_COMMIT = re.compile(r"\b(revert(?:ed|s|ing)?|hot[- ]?fix(?:ed|es)?|roll ?back(?:ed|s|ing)?)\b", re.I)
+OVERRIDE_REASON = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9 _.,:/@+-]{0,119}\Z")
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,13 @@ class Risk:
                 "Hermes never approves or requests a review. The owner decides who reads this and merges it.\n")
 
 
+@dataclass(frozen=True)
+class RiskOverride:
+    level: str
+    paths: tuple[str, ...]
+    reason: str = "repository risk override"
+
+
 def matches(path: str, pattern: str) -> bool:
     path = path.lstrip("/")
     if pattern.endswith("/"):
@@ -73,11 +83,44 @@ def first_hit(paths: list[str], patterns) -> list[str]:
     return sorted({p for p in paths for pattern in patterns if matches(p, pattern)})
 
 
-def score(files: list[dict], verification: str | None, high_paths=(), medium_paths=(), checks: str = "passed") -> Risk:
+def listed_paths(prefix: str, paths: list[str]) -> str:
+    return prefix + ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
+
+
+def normalize_risk_overrides(value: Any) -> tuple[RiskOverride, ...]:
+    if value in (None, []):
+        return ()
+    if isinstance(value, tuple) and all(isinstance(v, RiskOverride) for v in value):
+        return value
+    if not isinstance(value, list):
+        raise ValueError(".agents/dispatch.json risk_overrides must be a list of {level, paths, reason} rules")
+    overrides: list[RiskOverride] = []
+    for index, raw in enumerate(value, 1):
+        if isinstance(raw, RiskOverride):
+            overrides.append(raw)
+            continue
+        if not isinstance(raw, dict) or not set(raw) <= {"level", "paths", "reason"}:
+            raise ValueError(f".agents/dispatch.json risk_overrides[{index}] must hold only level, paths, and reason")
+        level = raw.get("level")
+        if level not in ("medium", "high"):
+            raise ValueError(f".agents/dispatch.json risk_overrides[{index}].level must be medium or high")
+        paths = raw.get("paths")
+        if not isinstance(paths, list) or not paths or not all(isinstance(p, str) and p for p in paths):
+            raise ValueError(f".agents/dispatch.json risk_overrides[{index}].paths must be a non-empty list of path patterns")
+        reason = raw.get("reason", "repository risk override")
+        if not isinstance(reason, str) or not OVERRIDE_REASON.match(reason):
+            raise ValueError(f".agents/dispatch.json risk_overrides[{index}].reason must be 1-120 plain characters")
+        overrides.append(RiskOverride(level, tuple(paths), reason))
+    return tuple(overrides)
+
+
+def score(files: list[dict], verification: str | None, high_paths=(), medium_paths=(), checks: str = "passed",
+          risk_overrides=(), recent_repair_paths=(), codeowners_unowned_paths=()) -> Risk:
     """files: the pull request's files, each {filename, status, additions, deletions}.
     verification: the verifier's verdict, or None when nobody verified it. checks: passed or none."""
     paths = [str(f.get("filename") or "") for f in files]
     lines = sum(int(f.get("additions") or 0) + int(f.get("deletions") or 0) for f in files)
+    overrides = normalize_risk_overrides(risk_overrides)
     level, reasons = 0, []
 
     def bump(to: int, why: str) -> None:
@@ -93,10 +136,24 @@ def score(files: list[dict], verification: str | None, high_paths=(), medium_pat
         bump(1, f"{len(files)} files changed")
     high = first_hit(paths, (*HIGH_PATHS, *high_paths))
     if high:
-        bump(2, "touches " + ", ".join(high[:5]) + (f" and {len(high) - 5} more" if len(high) > 5 else ""))
+        bump(2, listed_paths("touches ", high))
+    for override in (o for o in overrides if o.level == "high"):
+        hit = first_hit(paths, override.paths)
+        if hit:
+            bump(2, listed_paths(f"{override.reason}: ", hit))
     medium = [p for p in first_hit(paths, (*MEDIUM_PATHS, *medium_paths)) if p not in high]
     if medium:
-        bump(1, "touches " + ", ".join(medium[:5]) + (f" and {len(medium) - 5} more" if len(medium) > 5 else ""))
+        bump(1, listed_paths("touches ", medium))
+    for override in (o for o in overrides if o.level == "medium"):
+        hit = first_hit(paths, override.paths)
+        if hit:
+            bump(1, listed_paths(f"{override.reason}: ", hit))
+    recent_repairs = first_hit(paths, tuple(recent_repair_paths))
+    if recent_repairs:
+        bump(1, listed_paths("recent revert or hotfix touched ", recent_repairs))
+    unowned = first_hit(paths, tuple(codeowners_unowned_paths))
+    if unowned:
+        bump(1, listed_paths("CODEOWNERS has no owner for ", unowned))
     removed_tests = [f["filename"] for f in files if f.get("status") == "removed" and TEST_PATH.search(str(f.get("filename") or ""))]
     test_files = [f for f in files if TEST_PATH.search(str(f.get("filename") or ""))]
     test_net = sum(int(f.get("additions") or 0) - int(f.get("deletions") or 0) for f in test_files)
@@ -111,6 +168,11 @@ def score(files: list[dict], verification: str | None, high_paths=(), medium_pat
     elif verification == "type-check-only":
         bump(1, "verified by type-check only")
     return Risk(LEVELS[level], tuple(reasons))
+
+
+def is_repair_commit(commit: dict) -> bool:
+    message = str(((commit.get("commit") or {}).get("message")) or commit.get("message") or "")
+    return bool(REPAIR_COMMIT.search(message))
 
 
 def parse_codeowners(text: str) -> list[tuple[str, tuple[str, ...]]]:
@@ -143,13 +205,21 @@ def owners_for(paths: list[str], rules: list[tuple[str, tuple[str, ...]]]) -> li
     """Each path's owners come from the last rule that matches it, as GitHub reads CODEOWNERS."""
     found: dict[str, int] = {}
     for path in paths:
-        owners: tuple[str, ...] = ()
-        for pattern, rule_owners in rules:
-            if codeowners_match(path, pattern):
-                owners = rule_owners
-        for owner in owners:
+        for owner in owners_for_path(path, rules):
             found[owner] = found.get(owner, 0) + 1
     return [o for o, _ in sorted(found.items(), key=lambda kv: (-kv[1], kv[0].lower()))]
+
+
+def owners_for_path(path: str, rules: list[tuple[str, tuple[str, ...]]]) -> tuple[str, ...]:
+    owners: tuple[str, ...] = ()
+    for pattern, rule_owners in rules:
+        if codeowners_match(path, pattern):
+            owners = rule_owners
+    return owners
+
+
+def unowned_paths(paths: list[str], rules: list[tuple[str, tuple[str, ...]]]) -> list[str]:
+    return sorted({path for path in paths if not owners_for_path(path, rules)})
 
 
 def pick_reviewers(candidates: list[str], exclude: set[str]) -> tuple[str, ...]:
