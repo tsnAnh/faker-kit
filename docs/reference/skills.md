@@ -2,7 +2,7 @@
 
 # Skills
 
-Every skill in the kit: 100 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 101 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
