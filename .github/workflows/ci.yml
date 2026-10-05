@@ -37,6 +37,9 @@ jobs:
       - name: pstack script tests
         working-directory: plugins/pstack/skills/faker-mode/scripts
         run: bun install --frozen-lockfile && bun test orch watch-pr
+      - name: orchestrate engine, runtimes, and lint
+        working-directory: plugins/trust-ladder/skills/orchestrate/scripts
+        run: bun install --frozen-lockfile && bun x biome check . && bun x tsc --noEmit && bun test
 
   agents-load-the-kit:
     runs-on: ubuntu-latest

@@ -2,7 +2,7 @@
 
 # Skills
 
-Every skill in the kit: 97 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 98 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
@@ -151,6 +151,7 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 | [setup-routines](../../plugins/trust-ladder/skills/setup-routines/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-routines run the gardener and the verification-skill upkeep every night` | Put the team's upkeep on a schedule so it happens without anyone remembering. |
 | [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-dispatch for this repo: backend claude, project shop` | Prepare one repository for team-kit dispatch, so a Hermes project bot can brief cloud coding agents there and the owner only merges. |
 | [follow-brief](../../plugins/trust-ladder/skills/follow-brief/SKILL.md) | trust-ladder | Engineers, Leads | `/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill` | Work one unit a Hermes project bot handed to a cloud coding agent, from its GitHub issue to a pull request and a report. |
+| [orchestrate](../../plugins/trust-ladder/skills/orchestrate/SKILL.md) | trust-ladder | Engineers, Leads | `/orchestrate migrate every service to the new config loader, workers on Claude Code in the cloud, verifiers on Codex` | Use only when the user explicitly types `/orchestrate <goal>` (Codex `$orchestrate <goal>`) to decompose a large task, run a tree of parallel workers, subplanners, and verifiers as Claude Code or Codex agents, in the... |
 | [swarm](../../plugins/pstack/skills/swarm/SKILL.md) | pstack | Engineers | `take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win` | Fan out N parallel workers, drain them, and return one report. |
 
 ## Dormant: the benny automation pack
