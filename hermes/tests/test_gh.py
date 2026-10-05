@@ -7,7 +7,7 @@ import time
 import pytest
 from conftest import SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
-from team_kit_contracts import LAUNCHED_MARKER, size_marker, verdict_signature
+from team_kit_contracts import LAUNCHED_MARKER, security_signature, size_marker, verdict_signature
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, Refused, checks_state, main
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
@@ -29,6 +29,7 @@ class FakeGh:
                       ".agents/team-kit/KIT.json": json.dumps({"version": 1, "kit_ref": kit_ref})}
         self.issues, self.comments, self.prs, self.calls = {}, {}, {}, []
         self.next = 40
+        self.main_head = "c" * 40
 
     def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small"):
         self.next += 1
@@ -55,6 +56,10 @@ class FakeGh:
                 if name not in self.files:
                     raise Refused("gh api failed: Not Found")
                 return json.dumps({"content": base64.b64encode(self.files[name].encode()).decode()})
+            if path.count("/") == 2:
+                return json.dumps({"default_branch": "main"})
+            if "/commits/" in path:
+                return json.dumps({"sha": self.main_head})
             repo, rest = path.removeprefix("repos/").split("/issues/")
             if rest.endswith("/comments"):
                 return json.dumps(self.comments.get((repo, int(rest.split("/")[0])), []))
@@ -978,3 +983,92 @@ def test_the_cord_holds_even_when_github_will_not_open_its_issue(team_kit_home, 
     n = gh.add_issue(REPO)
     assert run(gh, "launch", "--issue", str(n)) == 1
     assert "andon pulled" in capsys.readouterr().err
+
+
+# Security review -----------------------------------------------------------------------------------
+
+
+def security_record(team_kit_home):
+    return json.loads((team_kit_home / "security" / "meo-beo.json").read_text())
+
+
+def security_result(gh, team_kit_home, high=0, medium=0, low=0, head=None, key=None, login="Codertocat", sign=True, edited=False):
+    running = security_record(team_kit_home)["running"]
+    head = head or running["head"]
+    counts = {"high": high, "medium": medium, "low": low}
+    sig = security_signature(key or running["key"], counts, head) if sign else "0" * 64
+    base = running["base"] or "none"
+    gh.comment(REPO, running["issue"], f"<!-- team-kit:security v1 -->\nrange: {base}..{head}\nfindings: {high} high, {medium} medium, {low} low\nsig: {sig}\n\n## Findings\n- none\n",
+               login=login, at=NOW)
+    if edited:
+        gh.comments[(REPO, running["issue"])][-1]["updated_at"] = iso(NOW + 5)
+
+
+def test_a_security_review_covers_each_new_commit_once(team_kit_home, gh, capsys):
+    cloud = FakeCloud()
+    assert run(gh, "security", cloud=cloud) == 0
+    started = out(capsys)
+    assert started["state"] == "started" and started["range"] == f"none..{gh.main_head}"
+    tracking = gh.issues[(REPO, started["issue"])]
+    assert tracking["labels"] == {"agent:security"} and tracking["title"] == "Security review: main"
+    [(backend, _, argv, workdir)] = cloud.started
+    running = security_record(team_kit_home)["running"]
+    assert argv[2].startswith(f"/review-main-security Review the last 20 commits up to {gh.main_head} on main of {REPO}, "
+                              f"and post the result on {REPO}#{started['issue']}. Sign the result with key {running['key']}.")
+    assert workdir.name == "security"
+    assert (team_kit_home / "security" / "meo-beo.json").stat().st_mode & 0o077 == 0
+    launched = gh.comments[(REPO, started["issue"])][-1]["body"]
+    assert launched.startswith("<!-- team-kit:security-launched v1 -->") and running["key"] not in launched
+    assert run(gh, "security", cloud=cloud) == 0 and out(capsys)["state"] == "running"
+    assert tick(gh, capsys) == ["[SILENT]"], "no result yet"
+    security_result(gh, team_kit_home, low=2)
+    assert tick(gh, capsys) == ["[SILENT]"], "low findings only: nothing to tell the owner"
+    assert security_record(team_kit_home) == {"reviewed": gh.main_head, "at": NOW}
+    assert run(gh, "security", cloud=cloud) == 0 and out(capsys) == {"state": "current", "head": gh.main_head}
+    old, gh.main_head = gh.main_head, "d" * 40
+    assert run(gh, "security", cloud=cloud) == 0
+    again = out(capsys)
+    assert again["issue"] == started["issue"], "one tracking issue per project"
+    assert cloud.started[-1][2][2].startswith(f"/review-main-security Review the commits after {old} up to {gh.main_head} on main")
+
+
+def test_serious_findings_reach_the_owner_and_only_a_signed_result_counts(team_kit_home, gh, capsys):
+    assert run(gh, "security") == 0
+    issue = out(capsys)["issue"]
+    security_result(gh, team_kit_home, high=3, sign=False)
+    security_result(gh, team_kit_home, high=3, key="1" * 32)
+    security_result(gh, team_kit_home, high=3, login="mallory")
+    security_result(gh, team_kit_home, high=0, edited=True)
+    security_result(gh, team_kit_home, high=0, head="e" * 40)
+    assert tick(gh, capsys) == ["[SILENT]"]
+    security_result(gh, team_kit_home, high=1, medium=2, low=4)
+    assert tick(gh, capsys) == [f"team-kit notice: the security review of none..ccccccc found 1 high, 2 medium: https://github.com/{REPO}/issues/{issue}"]
+    assert "running" not in security_record(team_kit_home)
+
+
+def test_a_security_review_with_no_result_in_a_day_is_said_once_and_retried(team_kit_home, gh, capsys):
+    assert main(["security"], run=gh, bot="meo-beo", cloud=FakeCloud(), now=lambda: NOW - REPORT_DEADLINE_SECONDS - 60) == 0
+    capsys.readouterr()
+    [notice] = tick(gh, capsys)
+    assert notice.startswith("team-kit notice: the security review of none..ccccccc posted no signed result in a day")
+    assert tick(gh, capsys) == ["[SILENT]"]
+    cloud = FakeCloud()
+    assert run(gh, "security", cloud=cloud) == 0 and out(capsys)["range"] == f"none..{gh.main_head}"
+
+
+def test_a_security_review_respects_its_setting_the_andon_cord_and_a_failed_start(team_kit_home, kit, capsys):
+    off = FakeGh(kit, security_backend="none")
+    assert run(off, "security") == 0 and out(capsys)["state"] == "off"
+    gh = FakeGh(kit)
+    assert run(gh, "andon", "raise", "incident") == 0
+    capsys.readouterr()
+    assert run(gh, "security") == 0 and out(capsys)["state"] == "stopped"
+    assert run(gh, "andon", "clear") == 0
+    capsys.readouterr()
+    broken = FakeGh(kit)
+    assert run(broken, "security", cloud=FakeCloud(fail="claude exited 1 before starting a session: not signed in")) == 1
+    assert "could not start" in capsys.readouterr().err
+    assert not (team_kit_home / "security" / "meo-beo.json").exists() or "running" not in security_record(team_kit_home)
+    bad = FakeGh(kit, security_backend="codex")
+    assert run(bad, "security") == 1
+    assert "security_backend codex needs codex_env" in capsys.readouterr().err

@@ -64,9 +64,10 @@ LABELS = (
     ("agent:verifying", "5319e7", "A separate verifier session is checking this unit's pull request"),
     ("agent:review", "0e8a16", "Verified and the checks passed; the owner merges"),
     ("agent:needs-human", "d93f0b", "A dispatched unit needs the owner"),
+    ("agent:security", "0052cc", "The tracking issue where Hermes's daily security reviews of the default branch post their results"),
     (ANDON_LABEL, "b60205", "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"),
 )
-JOBS = ("team-kit-tick", "team-kit-status")
+JOBS = ("team-kit-tick", "team-kit-status", "team-kit-security")
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
 
 Runner = Callable[..., str]

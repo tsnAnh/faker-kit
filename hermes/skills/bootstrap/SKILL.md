@@ -12,7 +12,7 @@ If the shell does not find `team-kit-admin`, run it as `~/.hermes/bin/team-kit-a
 | Command | Does |
 |---|---|
 | `team-kit-admin status` | Every bot, project, repository, label, and job on this machine. Read-only |
-| `team-kit-admin add-project --bot B --project P --repo R [--model M]` | Creates or refreshes project bot B for repository R: profile, guard, `dispatch` skill, paused jobs, and the six labels |
+| `team-kit-admin add-project --bot B --project P --repo R [--model M]` | Creates or refreshes project bot B for repository R: profile, guard, `dispatch` skill, paused jobs, and the seven labels |
 | `team-kit-admin vendor --project P` | Opens a pull request that copies the pinned kit into the repository's `.agents/team-kit/`, so cloud sessions there have its skills |
 | `team-kit-admin setup-repo --project P --backend claude\|codex [--codex-env E]` | Starts one cloud session that opens the project's setup pull request |
 | `team-kit-admin protect --project P --check NAME [--check NAME ...]` | Requires those checks on the project's default branch, admins included |

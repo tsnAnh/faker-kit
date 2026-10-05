@@ -13,6 +13,7 @@
   show          --path P                           a file from the default branch (the owner's repo; trusted)
   kit-check                                        compare this machine's kit commit with kit_ref and the vendored kit
   andon         [raise REASON... | clear]          show, pull, or clear this project's andon cord (the owner asked)
+  security                                         start a security review of the default branch's new commits
 
 GitHub holds every unit's state, as labels on its issue:
 
@@ -59,6 +60,8 @@ from team_kit_contracts import (  # noqa: E402
     DEFAULT_ACCEPTED,
     LAUNCHED_MARKER,
     REPORT_MARKER,
+    SECURITY_LAUNCHED_MARKER,
+    SECURITY_MARKER,
     UNIT_ATTEMPTS,
     VERDICT_MARKER,
     VERIFICATIONS,
@@ -69,7 +72,10 @@ from team_kit_contracts import (  # noqa: E402
     parse_brief,
     parse_depends,
     parse_report,
+    parse_security,
     parse_size,
+    security_argv,
+    security_signed,
     parse_verdict,
     size_marker,
     verdict_signed,
@@ -85,6 +91,7 @@ RUNNING_LABEL = "agent:running"
 VERIFYING_LABEL = "agent:verifying"
 REVIEW_LABEL = "agent:review"
 HUMAN_LABEL = "agent:needs-human"
+SECURITY_LABEL = "agent:security"
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
 SILENT = "[SILENT]"
 NOTICE = "team-kit notice:"
@@ -255,6 +262,11 @@ class Gh:
             raise Refused(f".agents/dispatch.json verifier_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
         if verifier == "codex" and not config.get("codex_env"):
             raise Refused(".agents/dispatch.json verifier_backend codex needs codex_env, the Codex cloud environment id")
+        security = config.get("security_backend", config["backend"])
+        if security not in VERIFIER_BACKENDS:
+            raise Refused(f".agents/dispatch.json security_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
+        if security == "codex" and not config.get("codex_env"):
+            raise Refused(".agents/dispatch.json security_backend codex needs codex_env, the Codex cloud environment id")
         accepted = config.get("accept_verifications", list(DEFAULT_ACCEPTED))
         if not isinstance(accepted, list) or not accepted or any(v not in VERIFICATIONS[:3] for v in accepted):
             raise Refused(f".agents/dispatch.json accept_verifications must list some of {', '.join(VERIFICATIONS[:3])}")
@@ -717,6 +729,119 @@ class Gh:
         return {"issue": number, "pr": report["pr"], "head": pr["head"], "verifier": backend}
 
 
+class Security:
+    """A daily security review of the default branch's new commits, in a cloud session that changes nothing.
+
+    The record at policy.home/security/<bot>.json holds the last commit reviewed and, while a review
+    runs, its range, its tracking issue, and the key that signs its result. Each project has one open
+    tracking issue labelled agent:security, and every review posts its result there.
+    """
+
+    def __init__(self, gh: Gh):
+        self.gh = gh
+        self.path = gh.policy.home / "security" / f"{gh.bot.name}.json"
+
+    def record(self) -> dict:
+        try:
+            data = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def write(self, data: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}")
+        tmp.touch(mode=0o600)
+        tmp.write_text(json.dumps(data))
+        tmp.replace(self.path)
+
+    def tracking_issue(self, branch: str) -> int:
+        gh = self.gh
+        found = json.loads(gh.run(["issue", "list", "-R", gh.repo, "--label", SECURITY_LABEL, "--state", "open",
+                                   "--json", "number,author", "--limit", "20"]))
+        own = sorted(int(i["number"]) for i in found if str((i.get("author") or {}).get("login") or "").lower() in gh.policy.trusted_authors)
+        if own:
+            return own[0]
+        body = (f"Hermes reviews every new commit on `{branch}` for security issues, once a day, in a cloud session "
+                "that changes nothing. Each review posts its result here. Keep this issue open.\n")
+        url = gh.run(["issue", "create", "-R", gh.repo, "--title", f"Security review: {branch}", "--label", SECURITY_LABEL, "--body", body]).strip()
+        return int(url.rstrip("/").rsplit("/", 1)[-1])
+
+    def start(self, local_commit: str, cloud: Cloud) -> dict:
+        """What the team-kit-security job runs: review the commits since the last review, if any."""
+        gh = self.gh
+        config = gh.dispatch_config()
+        gh.kit_check(local_commit, config)
+        backend = config.get("security_backend", config["backend"])
+        if backend == "none":
+            return {"state": "off", "why": "security_backend is none in .agents/dispatch.json"}
+        cord = gh.cord()
+        if cord:
+            return {"state": "stopped", "why": cord.describe()}
+        record = self.record()
+        if record.get("running"):
+            return {"state": "running", "range": f"{record['running'].get('base') or 'none'}..{record['running']['head']}"}
+        repo = json.loads(gh.run(["api", f"repos/{gh.repo}"]))
+        branch = str(repo.get("default_branch") or "")
+        head = str(json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{branch}"])).get("sha") or "")
+        if not SHA.match(head):
+            raise Refused(f"cannot read the head of {branch}")
+        base = record.get("reviewed")
+        if base == head:
+            return {"state": "current", "head": head}
+        issue = self.tracking_issue(branch)
+        key = secrets.token_hex(16)
+        argv = security_argv(backend, gh.repo, issue, branch, base, head, key, config.get("codex_env"))
+        owner, name = gh.repo.split("/")
+        workdir = gh.policy.home / "checkouts" / f"{owner}__{name}" / "security"
+        try:
+            session = cloud.start(backend, gh.repo, argv, workdir)
+        except Exception as err:  # noqa: BLE001 - tried again tomorrow
+            raise Refused(f"the security review could not start: {reason(err)}") from None
+        self.write({**record, "running": {"issue": issue, "base": base, "head": head, "key": key, "started": gh.now(), "session": session}})
+        try:
+            gh.run(["issue", "comment", str(issue), "-R", gh.repo, "--body",
+                    f"{SECURITY_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\nrange: {base or 'none'}..{head}\n"])
+        except Exception:  # noqa: BLE001 - the review runs; tick tracks it from the record
+            pass
+        return {"state": "started", "issue": issue, "range": f"{base or 'none'}..{head}", "session": session}
+
+    def check(self) -> str | None:
+        """Called by tick: read a running review's signed result. Returns a notice, or None."""
+        gh = self.gh
+        record = self.record()
+        running = record.get("running")
+        if not running:
+            return None
+        comments = gh.comments(int(running["issue"]))
+        starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(SECURITY_LAUNCHED_MARKER) and gh.trusted(c)]
+        result, url = None, None
+        for comment in comments[(starts[-1] + 1) if starts else 0:]:
+            body = (comment.get("body") or "").lstrip()
+            if not body.startswith(SECURITY_MARKER) or not gh.trusted(comment):
+                continue
+            if comment.get("updated_at") and comment.get("updated_at") != comment.get("created_at"):
+                continue  # an edited result never counts
+            try:
+                candidate = parse_security(body)
+            except ContractError:
+                continue
+            if security_signed(candidate, running["key"], running["head"]):
+                result, url = candidate, comment.get("html_url") or f"https://github.com/{gh.repo}/issues/{running['issue']}"
+                break
+        span = f"{(running.get('base') or 'none')[:7]}..{running['head'][:7]}"
+        if result is None:
+            if gh.now() - float(running.get("started", 0)) > REPORT_DEADLINE_SECONDS:
+                self.write({k: v for k, v in record.items() if k != "running"})
+                return f"{NOTICE} the security review of {span} posted no signed result in a day; it runs again tomorrow. Its session: {running.get('session')}"
+            return None
+        self.write({**{k: v for k, v in record.items() if k != "running"}, "reviewed": running["head"], "at": gh.now()})
+        if not result.serious:
+            return None
+        counts = ", ".join(f"{result.counts[s]} {s}" for s in ("high", "medium") if result.counts[s])
+        return f"{NOTICE} the security review of {span} found {counts}: {url}"
+
+
 class Project:
     """tick and status for the bot's project."""
 
@@ -757,6 +882,12 @@ class Project:
             except Exception as err:  # noqa: BLE001 - a pin mismatch or a GitHub hiccup is not the unit's fault
                 problems[gh.repo] = reason(err)
                 break
+        try:
+            notice = Security(gh).check()
+            if notice:
+                notices.append(notice)
+        except Exception as err:  # noqa: BLE001 - reported once, retried next tick
+            problems["security"] = reason(err)
         try:
             # Refresh this bot's count for the other bots, whatever launched or did not.
             InFlight(self.policy, self.bot, self.run, self.now).count_own()
@@ -823,7 +954,7 @@ def brief_text(policy: Policy, bot: Bot, path: str) -> str:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="team-kit-gh")
     sub = top.add_subparsers(dest="command", required=True)
-    for name in ("project", "tick", "status"):
+    for name in ("project", "tick", "status", "security"):
         sub.add_parser(name)
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
@@ -857,6 +988,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         cloud = cloud or Cloud(run_gh=run)
         if args.command == "project":
             out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
+        elif args.command == "security":
+            out = Security(Gh(policy, me, run, now)).start(commit(policy), cloud)
         elif args.command == "andon":
             gh = Gh(policy, me, run, now)
             if args.action != "raise" and args.reason:

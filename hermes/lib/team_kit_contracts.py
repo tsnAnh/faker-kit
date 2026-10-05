@@ -21,6 +21,12 @@ VERIFICATIONS = ("live-ui-verified", "unit-test-verified", "type-check-only", "v
 DEFAULT_ACCEPTED = ("live-ui-verified", "unit-test-verified")
 VERDICT_FIELDS = ("verification", "pr", "head", "sig")
 VERIFIER_BACKENDS = ("claude", "codex", "none")
+SECURITY_LAUNCHED_MARKER = "<!-- team-kit:security-launched v1 -->"
+SECURITY_MARKER = "<!-- team-kit:security v1 -->"
+SECURITY_FIELDS = ("range", "findings", "sig")
+SEVERITIES = ("high", "medium", "low")
+# With no earlier review, the first one covers this many commits up to the head.
+FIRST_REVIEW_COMMITS = 20
 
 BRIEF_SECTIONS = ("Goal", "Scope", "Context", "Acceptance", "Verify", "Timebox", "Forbidden", "Depends on", "Standing orders")
 REPORT_STATUSES = ("done", "partial", "blocked")
@@ -52,6 +58,18 @@ VERIFY_PROMPTS = {
     "codex": ("$verify-unit Verify {pr} at commit {head} against the brief in {repo}#{issue}. Sign the verdict with key {key}. "
               "If the verify-unit skill is not available in this session, stop and say the team-kit skills did not load."),
 }
+# A security reviewer reads the default branch's new commits and never changes anything. Like a
+# verifier, it signs its result with a key only its prompt holds.
+SECURITY_PROMPTS = {
+    "claude": ("/review-main-security Review {span} on {branch} of {repo}, and post the result on {repo}#{issue}. "
+               "Sign the result with key {key}. "
+               "If the review-main-security skill is not available in this session, comment on that issue with "
+               "`<!-- team-kit:security v1 -->` as the first line, say the team-kit skills did not load, and stop."),
+    "codex": ("$review-main-security Review {span} on {branch} of {repo}, and post the result on {repo}#{issue}. "
+              "Sign the result with key {key}. "
+              "If the review-main-security skill is not available in this session, stop and say the team-kit skills did not load."),
+}
+BRANCH = re.compile(r"\A(?!.*\.\.)(?!/)(?!.*/\Z)[A-Za-z0-9_./-]{1,100}\Z")
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 ENV_ID = re.compile(r"\A[A-Za-z0-9_-]+\Z")
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
@@ -81,6 +99,18 @@ class Verdict:
     pr: str | None
     head: str | None
     sig: str | None = None
+
+
+@dataclass(frozen=True)
+class SecurityResult:
+    base: str | None
+    head: str
+    counts: dict[str, int]
+    sig: str | None = None
+
+    @property
+    def serious(self) -> int:
+        return self.counts["high"] + self.counts["medium"]
 
 
 @dataclass(frozen=True)
@@ -229,6 +259,60 @@ def verify_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key
     if not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/[0-9]+", pr_url, re.I):
         raise ContractError(f"{pr_url!r} is not a pull request in {repo}")
     prompt = VERIFY_PROMPTS[backend].format(repo=repo, issue=int(issue), pr=pr_url, head=head, key=key)
+    return cloud_argv(backend, prompt, 1, env_id)
+
+
+def parse_security(text: str) -> SecurityResult:
+    """Read a security review's header: `range: <base|none>..<head>`, `findings: N high, N medium, N low`, `sig:`."""
+    body = (text or "").lstrip()
+    if not body.startswith(SECURITY_MARKER):
+        raise ContractError("a security result must start with <!-- team-kit:security v1 -->")
+    fields: dict[str, str] = {}
+    for line in body[len(SECURITY_MARKER):].strip().splitlines():
+        match = re.match(r"^([a-z]+):\s*(\S.*?)\s*$", line)
+        if not match or match.group(1) not in SECURITY_FIELDS:
+            break
+        fields[match.group(1)] = match.group(2).strip("`")
+    span = re.fullmatch(r"([0-9a-f]{7,40}|none)\.\.([0-9a-f]{40})", fields.get("range", ""))
+    if not span:
+        raise ContractError("range must be `<base commit or none>..<full head commit>`")
+    counts = {}
+    for severity in SEVERITIES:
+        found = re.search(rf"(?:^|,)\s*([0-9]+)\s+{severity}\b", fields.get("findings", ""))
+        if not found:
+            raise ContractError("findings must read `N high, N medium, N low`")
+        counts[severity] = int(found.group(1))
+    base = None if span.group(1) == "none" else span.group(1)
+    return SecurityResult(base=base, head=span.group(2), counts=counts, sig=fields.get("sig"))
+
+
+def security_signature(key: str, counts: dict[str, int], head: str) -> str:
+    """HMAC-SHA256 of `<high>|<medium>|<low>|<head>` under the reviewer's key, as hex."""
+    message = "|".join(str(int(counts[s])) for s in SEVERITIES) + f"|{head.lower()}"
+    return hmac.new(key.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+
+def security_signed(result: SecurityResult, key: str, head: str) -> bool:
+    if not result.sig or result.head.lower() != head.lower():
+        return False
+    return hmac.compare_digest(result.sig.lower(), security_signature(key, result.counts, head))
+
+
+def security_argv(backend: str, repo: str, issue: int, branch: str, base: str | None, head: str, key: str,
+                  env_id: str | None = None) -> list[str]:
+    """The command that starts one security review of the default branch from base to head."""
+    if backend not in SECURITY_PROMPTS:
+        raise ContractError(f"security_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
+    if not REPO.match(repo):
+        raise ContractError(f"repo {repo!r} is not OWNER/REPO")
+    if not BRANCH.match(branch or ""):
+        raise ContractError(f"{branch!r} is not a branch name")
+    if not SHA.match(head or "") or (base is not None and not SHA.match(base)):
+        raise ContractError("the review's commits must be full 40-character SHAs")
+    if not re.fullmatch(r"[0-9a-f]{32,}", key or ""):
+        raise ContractError("the reviewer key must be hex")
+    span = f"the commits after {base} up to {head}" if base else f"the last {FIRST_REVIEW_COMMITS} commits up to {head}"
+    prompt = SECURITY_PROMPTS[backend].format(span=span, branch=branch, repo=repo, issue=int(issue), key=key)
     return cloud_argv(backend, prompt, 1, env_id)
 
 

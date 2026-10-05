@@ -7,6 +7,10 @@ from team_kit_contracts import (
     parse_brief,
     parse_depends,
     parse_report,
+    parse_security,
+    security_argv,
+    security_signature,
+    security_signed,
     parse_size,
     parse_verdict,
     report_status,
@@ -192,3 +196,39 @@ def test_a_signed_verdict_holds_only_for_its_key_value_and_commit():
     assert not verdict_signed(verdict, KEY, "b" * 40)
     assert not verdict_signed(parse_verdict(text.replace("live-ui-verified", "unit-test-verified", 1)), KEY, HEAD)
     assert not verdict_signed(parse_verdict(text.replace(f"sig: `{sig}`", "")), KEY, HEAD)
+
+
+def test_a_security_result_reads_its_header_and_holds_only_for_its_key_and_commit():
+    text = f"<!-- team-kit:security v1 -->\nrange: none..{HEAD}\nfindings: 1 high, 0 medium, 3 low\nsig: SIG\n\n## Findings\nrange: ignored\n"
+    counts = {"high": 1, "medium": 0, "low": 3}
+    sig = security_signature(KEY, counts, HEAD)
+    result = parse_security(text.replace("SIG", sig))
+    assert (result.base, result.head, result.counts, result.serious) == (None, HEAD, counts, 1)
+    assert security_signed(result, KEY, HEAD)
+    assert not security_signed(result, "1" * 32, HEAD)
+    assert not security_signed(parse_security(text.replace("SIG", sig).replace("1 high", "0 high")), KEY, HEAD)
+    assert parse_security(text.replace("none..", "b" * 7 + "..")).base == "b" * 7
+
+
+@pytest.mark.parametrize(
+    ("text", "why"),
+    [
+        ("range: none..x", "must start with"),
+        ("<!-- team-kit:security v1 -->\nrange: main..HEAD\nfindings: 0 high, 0 medium, 0 low", "range must be"),
+        (f"<!-- team-kit:security v1 -->\nrange: none..{HEAD}\nfindings: none", "findings must read"),
+    ],
+)
+def test_a_malformed_security_result_is_rejected(text, why):
+    with pytest.raises(ContractError, match=why):
+        parse_security(text)
+
+
+def test_security_argv_names_the_range_the_issue_and_the_key():
+    first = security_argv("claude", "acme/shop", 9, "main", None, HEAD, KEY)
+    assert first[2].startswith(f"/review-main-security Review the last 20 commits up to {HEAD} on main of acme/shop, and post the result on acme/shop#9. Sign the result with key {KEY}.")
+    later = security_argv("codex", "acme/shop", 9, "release/2", "b" * 40, HEAD, KEY, "env_1")
+    assert later[:5] == ["codex", "cloud", "exec", "--env", "env_1"] and later[-1].startswith(f"$review-main-security Review the commits after {'b' * 40} up to {HEAD} on release/2")
+    for args in (("claude", "acme/shop", 9, "main; id", None, HEAD, KEY), ("claude", "acme/shop", 9, "main", "abc", HEAD, KEY),
+                 ("claude", "acme/shop", 9, "main", None, HEAD, "short"), ("none", "acme/shop", 9, "main", None, HEAD, KEY)):
+        with pytest.raises(ContractError):
+            security_argv(*args)

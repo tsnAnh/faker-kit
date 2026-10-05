@@ -4,7 +4,7 @@
 
 Where everything in Lauren Tan's talk and her two pstack guide posts lives in this kit, plus every skill those skills reference. `node scripts/validate.mjs` fails if a skill in the kit is missing from the catalog, so this page cannot fall behind.
 
-- 98 skills from 9 plugins, plus 3 dormant automation skills.
+- 99 skills from 9 plugins, plus 3 dormant automation skills.
 - 12 skills are named in the posts, and all of them are here.
 - 27 ideas, bots, and tools from the talk and posts are mapped to the skills that carry them.
 
@@ -102,7 +102,7 @@ Found by scanning each vendored plugin for another plugin's skill names. Each re
 
 | Plugin | Skills | Why it is here |
 |---|---|---|
-| trust-ladder | 23 | This kit's own plugin: the ladder, lint packs, templates, the compat layer, and the skills for non-engineers. |
+| trust-ladder | 24 | This kit's own plugin: the ladder, lint packs, templates, the compat layer, and the skills for non-engineers. |
 | pstack | 48 | The plugin the talk and both posts are about. Vendored with the principles, playbooks, agents, and the benny automation pack. `make-bot-ui` is left out: it builds pages for the upstream editor's Grok Bot. |
 | team-workflows | 18 | pstack routes to its `control-ui`, `control-cli`, and `deslop`; the talk's CI and review workflow lives here. |
 | thermos | 3 | The review panel team-workflows's `thermo-nuclear-code-quality-review` belongs to. |
