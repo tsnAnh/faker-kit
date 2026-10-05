@@ -2,7 +2,7 @@
 
 # Skills
 
-Every skill in the kit: 99 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 100 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
@@ -153,6 +153,7 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 | [follow-brief](../../plugins/trust-ladder/skills/follow-brief/SKILL.md) | trust-ladder | Engineers, Leads | `/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill` | Work one unit a Hermes project bot handed to a cloud coding agent, from its GitHub issue to a pull request and a report. |
 | [verify-unit](../../plugins/trust-ladder/skills/verify-unit/SKILL.md) | trust-ladder | Engineers, Leads | `/verify-unit Verify https://github.com/OWNER/REPO/pull/7 at commit <sha> against the brief in OWNER/REPO#123. Sign the verdict with key <key>.` | Independently verify one unit a Hermes project bot dispatched, from its brief and its pull request, without changing either. |
 | [review-main-security](../../plugins/trust-ladder/skills/review-main-security/SKILL.md) | trust-ladder | Engineers, Leads | `/review-main-security Review the commits after <base> up to <head> on main of OWNER/REPO, and post the result on OWNER/REPO#9. Sign the result with key <key>.` | Review the new commits on a repository's default branch for security issues, from a Hermes project bot's daily job, without changing anything. |
+| [orchestrate](../../plugins/trust-ladder/skills/orchestrate/SKILL.md) | trust-ladder | Engineers, Leads | `/orchestrate migrate every service to the new config loader, workers on Claude Code in the cloud, verifiers on Codex` | Use only when the user explicitly types `/orchestrate <goal>` (Codex `$orchestrate <goal>`) to decompose a large task, run a tree of parallel workers, subplanners, and verifiers as Claude Code or Codex agents, in the... |
 | [swarm](../../plugins/pstack/skills/swarm/SKILL.md) | pstack | Engineers | `take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win` | Fan out N parallel workers, drain them, and return one report. |
 
 ## Dormant: the benny automation pack
