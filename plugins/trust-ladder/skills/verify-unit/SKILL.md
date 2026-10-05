@@ -1,13 +1,13 @@
 ---
 name: verify-unit
-description: Independently verify one unit a Hermes project bot dispatched, from its brief and its pull request, without changing either. Checks out the pull request's head, proves each Acceptance line by running the real thing (the repository's verification skill, the brief's Verify section, scripts/check.sh), and posts a verdict comment whose header Hermes reads to decide whether the owner gets the pull request to merge. Never edits, pushes, approves, or merges. Use when the prompt says "/verify-unit Verify <pull request> against the brief in OWNER/REPO#n" (Codex `$verify-unit`).
+description: Independently verify one unit a Hermes project bot dispatched, from its brief and its pull request, without changing either. Checks out the commit the prompt names, proves each Acceptance line by running the real thing (the repository's verification skill, the brief's Verify section, scripts/check.sh), and posts a verdict comment, signed with the prompt's key, whose header Hermes reads to decide whether the owner gets the pull request to merge. Never edits, pushes, approves, or merges. Use when the prompt says "/verify-unit Verify <pull request> at commit <sha> against the brief in OWNER/REPO#n" (Codex `$verify-unit`).
 ---
 
 # Verify a unit
 
-Another agent worked the brief in a GitHub issue and opened a pull request. You did not write that change, and that is the point: the owner merges only what a second agent has proven. A Hermes project bot started you with a prompt like `/verify-unit Verify https://github.com/OWNER/REPO/pull/7 against the brief in OWNER/REPO#123` (Codex: `$verify-unit ...`).
+Another agent worked the brief in a GitHub issue and opened a pull request. You did not write that change, and that is the point: the owner merges only what a second agent has proven. A Hermes project bot started you with a prompt like `/verify-unit Verify https://github.com/OWNER/REPO/pull/7 at commit <sha> against the brief in OWNER/REPO#123. Sign the verdict with key <key>.` (Codex: `$verify-unit ...`).
 
-Nobody is watching this session. Hermes reads only your verdict comment's header lines.
+Nobody is watching this session. Hermes reads only your verdict comment's header lines, and only a verdict signed with the key from your prompt, because the coding agent posts as the same GitHub user. The key is a secret: never write it in a comment, a file in the repository, or a command whose output you post.
 
 ## 1. Check the brief and the pull request
 
@@ -25,13 +25,13 @@ Use `gh`, or the session's GitHub tools where `gh` is missing. Go on only if all
 
 If one fails, post a verdict (step 4) with `verification: verifier-blocked` and say which check failed. Change nothing.
 
-Note the pull request's `headRefOid`. That commit is what you verify, and the `head:` line of your verdict names it.
+The commit in your prompt is what you verify, and the `head:` line of your verdict names it. If the pull request's `headRefOid` is already another commit, still verify the one in your prompt and say in Notes that the head moved: Hermes then opens a gate for the owner rather than pass a commit nobody checked.
 
 ## 2. Check out exactly that commit
 
 ```bash
 git fetch origin "pull/<pr>/head"
-git checkout --detach <headRefOid>
+git checkout --detach <commit from the prompt>
 ```
 
 Never commit, push, or open a branch of your own. Never edit a tracked file to make something pass. Scratch files outside the repository, or untracked ones you delete afterwards, are fine.
@@ -55,7 +55,16 @@ Comment on the issue, not the pull request, with `templates/dispatch/verdict.md`
 
 - The first line is `<!-- team-kit:verdict v1 -->`.
 - The next line is `verification:` and one value.
-- Then `pr:` (the pull request URL) and `head:` (the commit you verified), one per line.
+- Then `pr:` (the pull request URL), `head:` (the full commit from your prompt), and `sig:`, one per line.
+- `sig:` is the HMAC-SHA256, in lowercase hex, of `<verification>|<head>` under the key, such as `live-ui-verified|3f2a...` with no newline:
+
+  ```bash
+  printf '%s' "<verification>|<head>" | openssl dgst -sha256 -hmac "<key>" | awk '{print $NF}'
+  # or
+  python3 -c 'import hmac,hashlib,sys; print(hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "<key>" "<verification>|<head>"
+  ```
+
+  Sign the value you post. If you change the verification after signing, sign again.
 - Then the sections Execution, Findings, and Notes.
 
 ```bash
@@ -72,7 +81,7 @@ Pick the strongest value your Execution section supports:
 | `verifier-blocked` | The environment kept you from running the verification; the change may be fine but is unproven |
 | `verifier-failed` | You ran it and at least one Acceptance line does not hold, or the change breaks something else |
 
-Hermes passes the unit to the owner only for the values `accept_verifications` in `.agents/dispatch.json` lists (default: `live-ui-verified` and `unit-test-verified`); anything else opens a gate. A verdict for an older commit than the pull request's head is ignored, so if the head moves while you work, verify the new head.
+Hermes passes the unit to the owner only for the values `accept_verifications` in `.agents/dispatch.json` lists (default: `live-ui-verified` and `unit-test-verified`); anything else opens a gate. Hermes takes the first signed verdict and ignores an edited comment, so post once and never edit it. A verdict for any commit other than the one in your prompt does not count.
 
 ## Codex cloud
 

@@ -28,6 +28,7 @@ Your tools:
 | `team-kit-gh project` | Your bot name, project, and repository |
 | `team-kit-gh dispatch --unit <id> --size <size> --brief-file <path>` | Checks the pin and the brief, opens the unit's issue, then launches it or queues it. Prints `{issue, url, unit, depends, state, session or why}` |
 | `team-kit-gh launch --issue <n>` | Launches one queued or gated unit now. Only when the owner asks |
+| `team-kit-gh verify --issue <n>` | Starts a new verifier on the unit's current pull request head, without redoing the coding work. Only when the owner asks |
 | `team-kit-gh status` | The three-line digest: in flight, waiting on you, done since last |
 | `team-kit-gh tick` | What the `team-kit-tick` job runs. You do not need it in chat |
 | `team-kit-gh report-status --issue <n>` | The latest report's parsed header only: `status`, `pr`, `head`. Safe to read |
@@ -49,7 +50,7 @@ On its GitHub issue, as labels. `team-kit-gh` sets them; you never do.
 | `agent:needs-human` | A gate. The agent stopped and needs the owner |
 | closed as completed | Done: its pull request merged |
 
-`team-kit-tick` runs every 30 minutes. It launches what can start. When an agent reports done and the checks pass, it starts a verifier session on the pull request, which keeps the unit's slot. When the verdict arrives, it moves the unit to `agent:review` or opens a gate and frees the slot.
+`team-kit-tick` runs every 30 minutes. It launches what can start. When an agent reports done and the checks pass, it starts a verifier session on the pull request, which keeps the unit's slot. The verifier signs its verdict with a key only this machine and that session hold, so a comment from the coding agent, or from anyone else, never counts. When the signed verdict arrives, tick reads the pull request's checks again and moves the unit to `agent:review`, or opens a gate and frees the slot.
 
 ## Trust
 
@@ -131,6 +132,7 @@ When `team-kit-gh` refuses, do not retry with changed arguments. Tell the owner 
 - **Brief rejected.** Missing sections, a unit id that does not match the marker, a Depends on line that names no issue or another repository's issue, or Standing orders that differ from `.agents/dispatch.md`. Fix the brief file and dispatch again. If Standing orders differ, read `.agents/dispatch.md` again with `team-kit-gh show` and paste it verbatim.
 - **Already launched, or waiting for review.** `launch` refuses a running or verifying unit, or one in `agent:review`. Nothing to do.
 - **The verifier fell short.** "the verifier reported verifier-failed" or another value. Read its verdict comment on the issue and tell the owner what failed. To retry after a fix, `launch` the unit again: a new coding agent works the brief, then a new verifier checks it.
+- **The pull request moved, or no verdict came.** "changed during verification", "no signed verdict 24 hours after the verifier started", or "no record of its verifier". The coding work may be fine. When the owner asks, `team-kit-gh verify --issue <n>` checks the current head again. It refuses while the checks fail or are pending.
 
 Work for another project goes to that project's bot.
 
