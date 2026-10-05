@@ -147,12 +147,18 @@ function checkNoEditorName() {
   if (!forbidden) return;
   const word = new RegExp(`[A-Za-z0-9_]*${forbidden.pattern}[A-Za-z0-9_]*`, `g${forbidden.flags ?? ""}`);
   const allowed = new Set(forbidden.allowedWords ?? []);
+  // License files keep the copyright notice the MIT license requires, as in the vendored plugins.
+  const skip = (forbidden.skipFiles ?? []).map((glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`));
+  const exceptions = forbidden.ownExceptions ?? [];
   for (const file of OWN_ROOTS.flatMap((r) => textFiles(path.join(ROOT, r)))) {
+    if (skip.some((re) => re.test(rel(file)))) continue;
     const buf = fs.readFileSync(file);
     if (buf.includes(0)) continue;
     const text = buf.toString("utf8");
     for (const match of text.matchAll(word)) {
-      if (!allowed.has(match[0])) report(rel(file), `line ${text.slice(0, match.index).split("\n").length} names "${match[0]}"; the kit keeps the upstream editor's name out (upstream/renames.json)`);
+      if (allowed.has(match[0])) continue;
+      if (exceptions.some((e) => e.file === rel(file) && e.word === match[0])) continue;
+      report(rel(file), `line ${text.slice(0, match.index).split("\n").length} names "${match[0]}"; the kit keeps the upstream editor's name out (upstream/renames.json)`);
     }
   }
 }
