@@ -7,6 +7,7 @@ import hashlib
 import html
 import json
 import os
+import random
 import re
 import socket
 import ssl
@@ -379,6 +380,9 @@ class SlackRelay:
     sleep: object = time.sleep
     log: object = stderr_log
     max_backoff: float = 300.0
+    stable_after: float = 60.0
+    clock: object = time.monotonic
+    rand: object = random.random
     seen: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
 
     def __post_init__(self) -> None:
@@ -399,7 +403,10 @@ class SlackRelay:
             self.seen.popitem(last=False)
 
     def handle(self, payload: dict) -> bool:
-        """Ack and relay one payload. True when it was a new events_api event, the only kind run counts.
+        """Ack and relay one payload. True only when a proposal was relayed to Bot Chat, the only thing run counts.
+
+        A payload that is not an events_api event, a retry, an event from another channel, a non-mention,
+        or one a filter drops (a bot, a subtype) returns False.
 
         Slack retries an event with the same envelope_id or event_id, so each is relayed once. An event
         is remembered only after its delivery succeeds, so a failed delivery is not lost to the dedupe.
@@ -416,24 +423,29 @@ class SlackRelay:
         if notice:
             self.bot_chat.deliver(self.config.bot, notice)
         self._remember(keys)
-        return True
+        return bool(notice)
 
     def run(self, max_events: int | None = None, max_reconnects: int | None = None) -> int:
-        """Relay until max_events new events_api events, reconnecting with backoff when the socket drops.
+        """Relay until max_events proposals were relayed, reconnecting with backoff when the socket drops.
 
-        Slack's `hello`, `disconnect`, and retried events are not counted. max_reconnects bounds the
-        reconnects (None: forever); when it runs out, the relay stops with an error.
+        Only an event that was relayed as a proposal counts toward max_events; Slack's `hello`,
+        `disconnect`, retries, other channels, and non-mentions do not. The reconnect delay grows from 1 s
+        to max_backoff (with jitter) and resets only after a real events_api event or a connection that
+        stayed up for stable_after seconds, so a server that accepts and then drops never gets a fast retry
+        loop. max_reconnects bounds the reconnects (None: forever); when it runs out, the relay stops with an error.
         """
         count, reconnects, backoff = 0, 0, 1.0
         while max_events is None or count < max_events:
             why = "connection closed"
+            started = self.clock()
             try:
                 self.transport.connect()
                 while max_events is None or count < max_events:
                     payload = self.transport.receive()
                     if payload is None:
                         break
-                    backoff = 1.0
+                    if payload.get("type") == "events_api":
+                        backoff = 1.0
                     if payload.get("type") == "disconnect":
                         why = "Slack asked to reconnect"
                         break
@@ -447,9 +459,12 @@ class SlackRelay:
                 break
             if max_reconnects is not None and reconnects >= max_reconnects:
                 raise SlackError(f"relay gave up after {reconnects} reconnects: {why}")
+            if self.clock() - started >= self.stable_after:
+                backoff = 1.0
+            delay = min(backoff, self.max_backoff) * (0.5 + self.rand() / 2)
             reconnects += 1
-            self.log(f"{why}; reconnecting in {backoff:g}s")
-            self.sleep(backoff)
+            self.log(f"{why}; reconnecting in {delay:.1f}s")
+            self.sleep(delay)
             backoff = min(backoff * 2, self.max_backoff)
         return count
 
