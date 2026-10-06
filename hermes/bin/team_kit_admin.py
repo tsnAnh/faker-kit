@@ -371,10 +371,10 @@ class Admin:
         if cord:
             raise Refused(f"{cord.describe()}; clear it before starting a setup session")
         prompt = bootstrap_prompt(repo, project, backend, commit, sorted(policy.trusted_authors), codex_env)
-        argv = cloud_argv(backend, prompt, 1, codex_env)
+        command = cloud_argv(backend, prompt, 1, codex_env)
         owner, name = repo.split("/")
         try:
-            session = self.cloud.start(backend, repo, argv, self.home / "checkouts" / f"{owner}__{name}" / "setup")
+            session = self.cloud.start(backend, repo, command, self.home / "checkouts" / f"{owner}__{name}" / "setup")
         except CloudError as err:
             raise Refused(f"setup launch failed: {err}") from err
         return {"project": project, "repo": repo, "backend": backend, "kit_ref": commit, "session": session}

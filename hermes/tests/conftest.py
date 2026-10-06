@@ -75,7 +75,46 @@ def executable(path, text):
     path.chmod(0o755)
 
 
-FAKE_CLAUDE = "#!/bin/sh\necho \"$PWD\" > \"$HOME/.fake-claude-cwd\"\nprintf '%s\\n' \"$@\" > \"$HOME/.fake-claude-args\"\necho 'Started https://claude.ai/code/session_01BOOTstrap'\n"
+FAKE_CLAUDE = """import os
+import pathlib
+import sys
+
+# Mirrors the real CLI's startup for `claude --cloud` with the task piped on stdin: it reads the
+# keyboard from stdin when that is a terminal, else from /dev/tty, and refuses (exit 1) when neither
+# opens, when CI is set, or when stdout is not that same terminal.
+home = pathlib.Path(os.environ["HOME"])
+(home / ".fake-claude-cwd").write_text(os.getcwd())
+(home / ".fake-claude-args").write_text("\\n".join(sys.argv[1:]))
+(home / ".fake-claude-tty").write_text(str(os.isatty(1)))
+(home / ".fake-claude-stdin-tty").write_text(str(os.isatty(0)))
+(home / ".fake-claude-ci").write_text(repr(os.environ.get("CI")))
+if sys.argv[1:] != ["--cloud"]:
+    print("claude: --cloud takes the task from stdin here")
+    sys.exit(1)
+if not os.isatty(1):
+    print("claude: --cloud needs a terminal on stdout")
+    sys.exit(1)
+if os.environ.get("CI"):
+    print("No cloud session was created or opened: it would open in this terminal and need the keyboard. CI is set.")
+    sys.exit(1)
+if os.isatty(0):
+    keyboard = 0
+else:
+    try:
+        keyboard = os.open("/dev/tty", os.O_RDONLY)
+    except OSError as error:
+        print(f"No cloud session was created or opened: it would open in this terminal and need the keyboard. /dev/tty: {error.strerror}")
+        sys.exit(1)
+    if os.tcgetpgrp(keyboard) != os.tcgetpgrp(1):
+        print("claude: /dev/tty is not the terminal on stdout")
+        sys.exit(1)
+task = sys.stdin.read()
+if os.isatty(0) or not task.strip():
+    print('Error: --cloud requires a description. Usage: claude --cloud "your task description"')
+    sys.exit(1)
+(home / ".fake-claude-prompt").write_text(task)
+print("Started https://claude.ai/code/session_01BOOTstrap")
+"""
 
 
 @pytest.fixture(scope="session")
@@ -102,7 +141,7 @@ def machine(tmp_path):
     tests = Path(__file__).resolve().parent
     executable(bin_dir / "hermes", f"#!{sys.executable}\n" + (tests / "fake_hermes.py").read_text())
     executable(bin_dir / "gh", f"#!{sys.executable}\n" + (tests / "fake_gh.py").read_text())
-    executable(bin_dir / "claude", FAKE_CLAUDE)
+    executable(bin_dir / "claude", f"#!{sys.executable}\n" + FAKE_CLAUDE)
     env = {"HOME": str(home), "PATH": f"{bin_dir}:/usr/bin:/bin", "TMPDIR": str(tmp_path), "TEAM_KIT_SOURCE_URL": "https://github.com/tsnAnh/team-kit.git"}
     return home / ".hermes", env
 

@@ -152,11 +152,14 @@ def test_setup_repo_starts_one_cloud_session_on_the_vendored_kit(ready, kit_sour
     home = root.parent
     assert (home / ".fake-claude-cwd").read_text().strip() == str(root / "team-kit" / "checkouts" / "acme__shop" / "setup")
     args = (home / ".fake-claude-args").read_text()
-    assert args.startswith("--cloud\nSet up acme/shop for team-kit dispatch")
-    assert f"vendored in this repository at .agents/team-kit/, at commit {kit_source[1]}" in args
-    assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in args
-    assert "clone" not in args.lower(), "the setup session never clones the kit, which may be private"
-    assert "trusted_dispatchers: codertocat, meo-beo-gh" in args
+    assert args == "--cloud"
+    assert (home / ".fake-claude-tty").read_text() == "True"
+    prompt = (home / ".fake-claude-prompt").read_text()
+    assert prompt.startswith("Set up acme/shop for team-kit dispatch")
+    assert f"vendored in this repository at .agents/team-kit/, at commit {kit_source[1]}" in prompt
+    assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in prompt
+    assert "clone" not in prompt.lower(), "the setup session never clones the kit, which may be private"
+    assert "trusted_dispatchers: codertocat, meo-beo-gh" in prompt
 
 
 @pytest.mark.parametrize(("kit", "why"), [(None, "has no vendored kit"), ("0" * 40, "has the kit at 000000000000")])
