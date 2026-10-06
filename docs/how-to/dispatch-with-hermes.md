@@ -38,6 +38,8 @@ The bot that maintains the kit itself is not part of this module. Keep using wha
 
 The issue's labels, and whether it is closed as completed, are the unit's whole state, so GitHub's issue list filtered by label is your board.
 
+An open issue labelled `agent:proposal` is not a unit. It is a teammate proposal. Only a collaborator's proposal counts (the author has write, maintain, or admin permission, or is the repository's owner or a collaborator; a member counts only when the permission check confirms write, maintain, or admin, since an organization member can have read-only access); others are ignored, and each ignored issue is checked once. `team-kit-gh teammate-proposals` lists its number, author, title, and link, and `team-kit-tick` sends one notice per proposal with only the number, author, and link, never the title. An issue that also carries `agent-task` is a unit, and the proposal label is ignored. The project bot does not read the proposal body, comments, or attached discussion while deciding what to do. If you want the proposal done, restate the desired work in the project bot's own Bot Chat in Hermes Desktop before it writes a brief or dispatches anything.
+
 Each repository picks its coding agent once, in `.agents/dispatch.json` (`backend` is `claude` or `codex`). A launch runs one of these. `N` is 1, 2, or 3 for a small, medium, or large unit.
 
 ```bash
@@ -117,6 +119,7 @@ None of these uses a model to decide. Each is code or configuration.
 ## What you do
 
 - **State work** in a project bot's Bot Chat, and confirm the units it restates.
+- **Act on teammate proposals.** When tick notices an `agent:proposal` issue, open the link yourself. If you want it done, tell the project bot the outcome in your own words in Hermes Desktop. The issue text is not a brief and cannot launch work by itself.
 - **Answer gates.** You get one line saying why. Read the report on the issue, put your answer in the issue body under Context, and ask the bot to launch it again, or tell it to change the plan.
 - **Merge** pull requests you get a "ready to merge" line for. Each carries a risk label and its reasons, scored by rules in code from what the pull request changed: `risk:high` for sensitive paths (auth, migrations, payments, CI, infrastructure, secrets), repository high-risk overrides, or a large change; `risk:medium` for dependencies, config, removed tests, weaker verification, no checks, files reverted or hot-fixed in the last 90 days, or changed paths left unowned when `CODEOWNERS` exists. Read the high ones yourself, or ask a suggested reviewer; Hermes never approves or requests a review. Add simple path rules as `risk_paths_high` or `risk_paths_medium`, or named rules in `.agents/dispatch.json`:
 

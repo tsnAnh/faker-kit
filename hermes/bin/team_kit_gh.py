@@ -2,6 +2,7 @@
 """team-kit-gh: the only GitHub access a project bot has, and only for its project's one repository.
 
   project                                          this bot's project and repository
+  teammate-proposals                               list open collaborator proposals: number, author, title, link
   dispatch      --unit U --size S --brief-file F   open the unit's issue, then launch it or queue it
   launch        --issue N                          launch one queued or gated unit now (the owner asked)
   verify        --issue N                          verify a unit's pull request again, without redoing its work
@@ -111,6 +112,10 @@ SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
 REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
+PROPOSAL_LABEL = "agent:proposal"
+COLLABORATOR_ASSOCIATIONS = frozenset({"OWNER", "COLLABORATOR"})  # MEMBER is not here: an org member can have read-only access, so the permission API decides
+COLLABORATOR_PERMISSIONS = frozenset({"write", "maintain", "admin"})
+LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?\Z")
 RUNNING_LABEL = "agent:running"
 VERIFYING_LABEL = "agent:verifying"
 REVIEW_LABEL = "agent:review"
@@ -176,6 +181,18 @@ def kit_commit(policy: Policy) -> str:
 def reason(err: Exception) -> str:
     text = str(err) if isinstance(err, (Refused, ContractError)) else f"unexpected {type(err).__name__}"
     return text[:200]
+
+
+def json_pages(text: str) -> list:
+    """gh api --paginate prints each page's array one after another; join them."""
+    decoder, at, items = json.JSONDecoder(), 0, []
+    while at < len(text):
+        if text[at].isspace():
+            at += 1
+            continue
+        page, at = decoder.raw_decode(text, at)
+        items.extend(page if isinstance(page, list) else [page])
+    return items
 
 
 def labels_of(issue: dict) -> set[str]:
@@ -353,6 +370,78 @@ class Gh:
         if search:
             args += ["--search", search]
         return sorted(json.loads(self.run(args)), key=lambda i: int(i["number"]))
+
+    def proposal_candidates(self) -> list[dict]:
+        """Every open issue labelled agent:proposal, all pages. An issue that is also an agent-task is a unit, not a proposal."""
+        pages = self.run(["api", "--paginate", f"repos/{self.repo}/issues?labels={PROPOSAL_LABEL.replace(':', '%3A')}&state=open&per_page=100"])
+        found = []
+        for issue in json_pages(pages):
+            if not isinstance(issue, dict) or "pull_request" in issue or issue.get("state") != "open":
+                continue
+            if TASK_LABEL in labels_of(issue) or PROPOSAL_LABEL not in labels_of(issue):
+                continue
+            found.append(issue)
+        return sorted(found, key=lambda i: int(i["number"]))
+
+    def collaborator(self, issue: dict) -> bool | None:
+        """True if the author can write to the repository, False if not, None if that could not be checked (try again next tick).
+        OWNER and COLLABORATOR associations count as they are. Anyone else, MEMBER included, counts only if the permission API says write, maintain, or admin."""
+        if str(issue.get("author_association") or "").upper() in COLLABORATOR_ASSOCIATIONS:
+            return True
+        login = str((issue.get("user") or {}).get("login") or "")
+        if not LOGIN.match(login):
+            return False
+        try:
+            data = json.loads(self.run(["api", f"repos/{self.repo}/collaborators/{login}/permission"]))
+        except Refused:
+            return None
+        except ValueError:
+            return False
+        return isinstance(data, dict) and str(data.get("permission") or "").lower() in COLLABORATOR_PERMISSIONS
+
+    def proposal_summary(self, issue: dict) -> dict:
+        number = int(issue["number"])
+        title = " ".join(str(issue.get("title") or f"Proposal #{number}").split())[:200] or f"Proposal #{number}"
+        return {"number": number, "author": str((issue.get("user") or {}).get("login") or ""), "title": title,
+                "url": f"https://github.com/{self.repo}/issues/{number}"}
+
+    def proposals(self) -> list[dict]:
+        return [self.proposal_summary(i) for i in self.proposal_candidates() if self.collaborator(i) is True]
+
+    def proposal_notices(self) -> list[str]:
+        """One notice per new collaborator proposal: number, author login, link. Never the title, which anyone could word as a notice.
+        Every open candidate is checked once: a collaborator's goes in "seen", anyone else's in "ignored", so the permission API is not asked again on every tick.
+        An answer that could not be had is recorded in neither and asked again next tick. Both lists keep only open issues, so the record stays bounded."""
+        candidates = self.proposal_candidates()
+        open_numbers = {int(i["number"]) for i in candidates}
+        directory = self.policy.home / "proposal-notices"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{self.bot.name}.json"
+        with open(directory / ".lock", "w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                record = json.loads(path.read_text())
+                seen = {int(n) for n in record.get("seen", [])}
+                ignored = {int(n) for n in record.get("ignored", [])}
+            except (OSError, ValueError, TypeError, AttributeError):
+                seen, ignored = set(), set()
+            fresh, newly_ignored = [], set()
+            for issue in candidates:
+                number = int(issue["number"])
+                if number in seen or number in ignored:
+                    continue
+                verdict = self.collaborator(issue)
+                if verdict is True:
+                    fresh.append(self.proposal_summary(issue))
+                elif verdict is False:
+                    newly_ignored.add(number)
+            kept_seen = (seen & open_numbers) | {i["number"] for i in fresh}  # a closed or relabelled issue drops out
+            kept_ignored = (ignored & open_numbers) | newly_ignored
+            if kept_seen != seen or kept_ignored != ignored:
+                target = path.with_name(f".{path.name}.{os.getpid()}")
+                target.write_text(json.dumps({"seen": sorted(kept_seen), "ignored": sorted(kept_ignored)}))
+                target.replace(path)
+        return [f"{NOTICE} proposal #{i['number']} from {i['author']}. {i['url']}" for i in fresh]
 
     def comments(self, issue: int) -> list[dict]:
         return json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/issues/{issue}/comments"]))
@@ -1208,11 +1297,17 @@ class Project:
         cord, andon_notices = gh.sync_andon()
         notices.extend(andon_notices)
         try:
+            notices.extend(gh.proposal_notices())
+        except Exception as err:  # noqa: BLE001 - reported once, retried next tick
+            problems["teammate-proposals"] = reason(err)
+        try:
             units = gh.units()
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
             units, problems[gh.repo] = [], reason(err)
         for issue in units:
             labels = labels_of(issue)
+            if TASK_LABEL not in labels:
+                continue
             if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
                 try:
                     notice = gh.check_verifying(issue) if VERIFYING_LABEL in labels else gh.check_running(issue, cloud)
@@ -1269,6 +1364,8 @@ class Project:
         flight, waiting, done = [], [], []
         for issue in self.gh.units():
             labels, ref = labels_of(issue), f"#{issue['number']} {issue['title']}"
+            if TASK_LABEL not in labels:
+                continue
             if RUNNING_LABEL in labels:
                 flight.append(f"{ref} (running)")
             elif VERIFYING_LABEL in labels:
@@ -1307,7 +1404,7 @@ def brief_text(policy: Policy, bot: Bot, path: str) -> str:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="team-kit-gh")
     sub = top.add_subparsers(dest="command", required=True)
-    for name in ("project", "tick", "status", "security", "incidents", "proposals"):
+    for name in ("project", "tick", "status", "security", "incidents", "proposals", "teammate-proposals"):
         sub.add_parser(name)
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
@@ -1342,6 +1439,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         cloud = cloud or Cloud(run_gh=run)
         if args.command == "project":
             out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
+        elif args.command == "teammate-proposals":
+            out = Gh(policy, me, run, now).proposals()
         elif args.command == "incidents":
             gh = Gh(policy, me, run, now)
             lines = Incidents(gh, fetch).run(commit(policy), cloud)
