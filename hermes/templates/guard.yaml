@@ -31,7 +31,7 @@ untrusted_readers:
   - tool: browser_*
   - tool: x_search
   - tool: terminal
-    command: "team-kit-gh proposals"
+    command: "team-kit-gh teammate-proposals*"
   - tool: terminal
     command: "team-kit-gh read *"
 

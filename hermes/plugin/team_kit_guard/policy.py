@@ -50,7 +50,7 @@ NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
 RESERVED_NAMES = frozenset({"default"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
-PROJECT_COMMANDS = ("project", "proposals", "dispatch", "launch", "verify", "andon", "security", "incidents", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
+PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "proposals", "teammate-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
 BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon")
 BOOTSTRAP_READ_ONLY = ("status",)
 # The chief of staff reads every project and changes nothing, so it has no write command at all.
