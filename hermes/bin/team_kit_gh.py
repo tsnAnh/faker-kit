@@ -45,6 +45,7 @@ import base64
 import contextlib
 import datetime as dt
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -116,7 +117,7 @@ from team_kit_contracts import (  # noqa: E402
     verdict_signed,
     verify_argv,
 )
-from team_kit_guard.policy import Bot, Policy, PolicyError, load_policy  # noqa: E402
+from team_kit_guard.policy import NAME, Bot, Policy, PolicyError, load_policy  # noqa: E402
 
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
@@ -172,6 +173,10 @@ class Waiting(Refused):
 def run_gh(args: list[str], input: str | None = None) -> str:
     done = subprocess.run(["gh", *args], capture_output=True, text=True, input=input)
     if done.returncode != 0:
+        if args[:1] == ["api"] and "--include" in args:
+            status = re.match(r"HTTP/\S+\s+([0-9]{3})", done.stdout)
+            if status and status.group(1) == "304":
+                return done.stdout
         raise Refused(f"gh {args[0]} failed: {done.stderr.strip()[:300]}")
     return done.stdout
 
@@ -248,6 +253,62 @@ def in_flight(run: Runner, repo: str) -> int:
 IN_FLIGHT_FRESH_SECONDS = 24 * 3600
 UNIT_STATE_FRESH_SECONDS = 24 * 3600
 MAX_WANTED = 200  # issues other bots may make this bot look up and publish per tick
+
+
+def included_response(text: str) -> tuple[int, dict[str, str], str]:
+    normal = text.replace("\r\n", "\n")
+    if not normal.startswith("HTTP/"):
+        return 200, {}, text
+    header_text, _, body = normal.partition("\n\n")
+    lines = header_text.splitlines()
+    match = re.match(r"HTTP/\S+\s+([0-9]{3})", lines[0] if lines else "")
+    if match is None:
+        return 200, {}, body
+    headers = {}
+    for line in lines[1:]:
+        key, sep, value = line.partition(":")
+        if sep:
+            headers[key.strip().lower()] = value.strip()
+    return int(match.group(1)), headers, body
+
+
+class EtagCache:
+    """Each bot's own cached GitHub responses, under home/etag/<bot>/, so bots never share a cache entry."""
+
+    def __init__(self, home: Path, bot: str):
+        if not NAME.match(bot):
+            raise Refused(f"bot {bot!r} is not a profile name")
+        self.directory = home / "etag" / bot
+
+    def path(self, endpoint: str) -> Path:
+        return self.directory / f"{hashlib.sha256(endpoint.encode()).hexdigest()}.json"
+
+    def read(self, endpoint: str) -> dict | None:
+        try:
+            data = json.loads(self.path(endpoint).read_text())
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) and data.get("endpoint") == endpoint else None
+
+    def write(self, endpoint: str, etag: str, body: str, more: bool = False) -> None:
+        self.directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.directory.mkdir(mode=0o700, exist_ok=True)
+        self.directory.chmod(0o700)
+        path = self.path(endpoint)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.touch(mode=0o600)
+        tmp.write_text(json.dumps({"endpoint": endpoint, "etag": etag, "body": body, "more": more}))
+        tmp.replace(path)
+
+
+def has_next_page(link: str | None) -> bool:
+    """Whether a GitHub Link header names a next page. Only its presence counts: the next page's URL
+    is built from our own path, never fetched from the header."""
+    return bool(link) and any(re.search(r'rel="?next"?', part) for part in link.split(","))
+
+
+ISSUE_PAGE_SIZE = 100  # GitHub's maximum per_page
+ISSUE_PAGE_LIMIT = 50  # 5000 issues; past that something is wrong, so refuse instead of looping
 
 
 class InFlight:
@@ -391,14 +452,44 @@ class Gh:
         self.repo = bot.repo
         self.andon = Andon(policy.home, now)
         self._cord: tuple[Cord | None] | None = None
+        self.etags = EtagCache(policy.home, bot.name)
 
     # reading ------------------------------------------------------------------------------------
+
+    def api_page(self, path: str) -> tuple[str, bool]:
+        """A conditional GET: the body, and whether GitHub's Link header says another page follows."""
+        endpoint = f"GET {path}"
+        cached = self.etags.read(endpoint)
+        args = ["api", "--include"]
+        if cached and cached.get("etag"):
+            args += ["-H", f"If-None-Match: {cached['etag']}"]
+        text = self.run([*args, path])
+        status, headers, body = included_response(text)
+        if status == 304:
+            if cached and isinstance(cached.get("body"), str):
+                return cached["body"], bool(cached.get("more"))
+            raise Refused(f"gh api failed: HTTP 304 without a cached body for {path}")
+        if not 200 <= status < 300:
+            raise Refused(f"gh api failed: HTTP {status}")
+        more = has_next_page(headers.get("link"))
+        etag = headers.get("etag")
+        if etag:
+            self.etags.write(endpoint, etag, body, more)
+        return body, more
+
+    def api_body(self, path: str, conditional: bool = True) -> str:
+        if not conditional:
+            return self.run(["api", path])
+        return self.api_page(path)[0]
+
+    def api_json(self, path: str, conditional: bool = True):
+        return json.loads(self.api_body(path, conditional))
 
     def file(self, path: str) -> str:
         if not REPO_PATH.match(path):
             raise Refused(f"{path!r} is not a plain path inside the repository")
         try:
-            data = json.loads(self.run(["api", f"repos/{self.repo}/contents/{path}"]))
+            data = self.api_json(f"repos/{self.repo}/contents/{path}")
             return base64.b64decode(data["content"]).decode()
         except (ValueError, TypeError, KeyError):
             raise Refused(f"{path} is not a readable file in {self.repo}") from None
@@ -483,9 +574,41 @@ class Gh:
         return out
 
     def issue(self, number: int, repo: str | None = None) -> dict:
-        return json.loads(self.run(["api", f"repos/{repo or self.repo}/issues/{int(number)}"]))
+        return self.api_json(f"repos/{repo or self.repo}/issues/{int(number)}")
+
+    def issue_list(self, label: str, state: str) -> list[dict]:
+        """Every issue with the label, all pages of it: GitHub returns at most 100 a page."""
+        issues: list[dict] = []
+        for page in range(1, ISSUE_PAGE_LIMIT + 1):
+            query = urllib.parse.urlencode({"state": state, "labels": label, "per_page": str(ISSUE_PAGE_SIZE), "page": str(page)})
+            body, more = self.api_page(f"repos/{self.repo}/issues?{query}")
+            items = json.loads(body)
+            if not isinstance(items, list):
+                raise Refused(f"gh api returned no issue list for {label}")
+            issues.extend(items)
+            if not more or not items:
+                break
+        else:
+            raise Refused(f"more than {ISSUE_PAGE_LIMIT * ISSUE_PAGE_SIZE} {label} issues in {self.repo}")
+        out = []
+        for issue in issues:
+            if "pull_request" in issue:
+                continue
+            out.append({
+                "number": int(issue["number"]),
+                "title": issue.get("title") or "",
+                "body": issue.get("body") or "",
+                "labels": issue.get("labels") or [],
+                "author": issue.get("author") or issue.get("user") or {},
+                "createdAt": issue.get("createdAt") or issue.get("created_at"),
+                "closedAt": issue.get("closedAt") or issue.get("closed_at"),
+                "stateReason": str(issue.get("stateReason") or issue.get("state_reason") or "").upper(),
+            })
+        return sorted(out, key=lambda i: int(i["number"]))
 
     def units(self, state: str = "open", search: str | None = None) -> list[dict]:
+        if not search:
+            return self.issue_list(TASK_LABEL, state)
         args = ["issue", "list", "-R", self.repo, "--label", TASK_LABEL, "--state", state,
                 "--json", "number,title,labels,createdAt,closedAt,stateReason", "--limit", "200"]
         if search:
@@ -680,8 +803,7 @@ class Gh:
 
     def andon_issues(self) -> list[dict]:
         """Open agent:andon issues a trusted login opened, the machine's own included."""
-        issues = json.loads(self.run(["issue", "list", "-R", self.repo, "--label", ANDON_LABEL, "--state", "open",
-                                      "--json", "number,title,body,author", "--limit", "50"]))
+        issues = self.issue_list(ANDON_LABEL, "open")
         return [i for i in issues if str((i.get("author") or {}).get("login") or "").lower() in self.policy.trusted_authors]
 
     def sync_andon(self) -> tuple[Cord | None, list[str]]:
@@ -1797,7 +1919,12 @@ class Project:
             problems["security"] = reason(err)
         try:
             # Refresh this bot's count for the other bots, whatever launched or did not.
-            InFlight(self.policy, self.bot, self.run, self.now).count_own()
+            labels = [labels_of(issue) for issue in (units or [])]
+            no_launchable = units is not None and not any(not (l & {RUNNING_LABEL, VERIFYING_LABEL, REVIEW_LABEL, HUMAN_LABEL}) for l in labels)
+            if no_launchable:
+                InFlight(self.policy, self.bot, self.run, self.now).write({gh.repo: sum(1 for l in labels if l & {RUNNING_LABEL, VERIFYING_LABEL})})
+            else:
+                InFlight(self.policy, self.bot, self.run, self.now).count_own()
         except Exception as err:  # noqa: BLE001
             problems["count"] = reason(err)
         return notices + self.new_problems(problems)

@@ -1,5 +1,6 @@
 import base64
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -12,7 +13,8 @@ import pytest
 from conftest import HERMES, SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
 from team_kit_contracts import LAUNCHED_MARKER, REVIEW_LAUNCHED_MARKER, ReviewResult, diagnosis_signature, review_argv, review_signature, review_signed, security_signature, size_marker, verdict_signature
-from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, PROPOSAL_LABEL, REPORT_DEADLINE_SECONDS, UNIT_STATE_FRESH_SECONDS, Refused, checks_state, main
+from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, PROPOSAL_LABEL, REPORT_DEADLINE_SECONDS, UNIT_STATE_FRESH_SECONDS, Gh, Refused, checks_state, main, run_gh
+from team_kit_guard.policy import load_policy
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
 REPO = SHOP
@@ -32,6 +34,7 @@ class FakeGh:
         self.files = {".agents/dispatch.json": json.dumps(dispatch), ".agents/dispatch.md": STANDING,
                       ".agents/team-kit/KIT.json": json.dumps({"version": 1, "kit_ref": kit_ref})}
         self.issues, self.comments, self.prs, self.calls = {}, {}, {}, []
+        self.work = 0
         self.next = 40
         self.main_head = "c" * 40
         self.pr_files, self.history, self.pr_comments = {}, {}, {}
@@ -60,48 +63,78 @@ class FakeGh:
         self.calls.append(args)
         if args[0] == "api":
             path = args[-1]
+            include = "--include" in args
+            given = None
+            for i, word in enumerate(args):
+                if word == "-H" and args[i + 1].lower().startswith("if-none-match:"):
+                    given = args[i + 1].split(":", 1)[1].strip()
+
+            def finish(body, link=None):
+                if not include:
+                    return body
+                etag = '"' + hashlib.sha256(body.encode()).hexdigest() + '"'
+                if given == etag:
+                    return f"HTTP/2 304 Not Modified\r\netag: {etag}\r\n\r\n"
+                self.work += 1
+                extra = f"link: {link}\r\n" if link else ""
+                return f"HTTP/2 200 OK\r\netag: {etag}\r\n{extra}\r\n{body}"
+
             if "/contents/" in path:
                 name = path.split("/contents/", 1)[1]
                 if name not in self.files:
                     raise Refused("gh api failed: Not Found")
-                return json.dumps({"content": base64.b64encode(self.files[name].encode()).decode()})
+                return finish(json.dumps({"content": base64.b64encode(self.files[name].encode()).decode()}))
             if path.count("/") == 2:
-                return json.dumps({"default_branch": "main"})
+                return finish(json.dumps({"default_branch": "main"}))
+            if "/issues?" in path:
+                repo, query = path.removeprefix("repos/").split("/issues?", 1)
+                params = urllib.parse.parse_qs(query)
+                label = (params.get("labels") or [""])[0]
+                state = (params.get("state") or ["open"])[0]
+                found = [i for (r, _), i in sorted(self.issues.items()) if r == repo and label in i["labels"] and i["state"] == state]
+
+                def row(i):
+                    return {"number": i["number"], "title": i["title"], "body": i["body"], "state": i["state"],
+                            "author_association": i["association"], "labels": [{"name": n} for n in sorted(i["labels"])],
+                            "user": {"login": i["author"]}, "created_at": i["createdAt"], "closed_at": i["closedAt"],
+                            "state_reason": i["state_reason"], **({"pull_request": {}} if i["pull_request"] else {})}
+
+                if "--paginate" in args:  # pages run together, as gh prints them
+                    rows = [row(i) for i in found]
+                    return "".join(json.dumps(rows[at:at + 2]) for at in range(0, len(rows), 2)) if rows else "[]"
+                per_page = min(int((params.get("per_page") or ["30"])[0]), 100)
+                page = int((params.get("page") or ["1"])[0])
+                link = None
+                if len(found) > page * per_page:
+                    link = f'<https://api.github.com/repositories/1/issues?page={page + 1}>; rel="next"'
+                return finish(json.dumps([row(i) for i in found[(page - 1) * per_page:page * per_page]]), link)
             if path.endswith("/check-runs?per_page=100"):
                 sha = path.split("/commits/")[1].split("/")[0]
-                return json.dumps({"check_runs": self.runs.get(sha, [])})
+                return finish(json.dumps({"check_runs": self.runs.get(sha, [])}))
             if "/commits/" in path:
                 ref = path.split("/commits/")[1]
                 if ref in self.parents:
-                    return json.dumps({"sha": ref, "parents": [{"sha": p} for p in self.parents[ref]]})
-                return json.dumps({"sha": self.main_head})
+                    return finish(json.dumps({"sha": ref, "parents": [{"sha": p} for p in self.parents[ref]]}))
+                return finish(json.dumps({"sha": self.main_head}))
             if "/pulls/" in path and "/files" in path:
-                return json.dumps(self.pr_files.get(int(path.split("/pulls/")[1].split("/")[0]), []))
+                return finish(json.dumps(self.pr_files.get(int(path.split("/pulls/")[1].split("/")[0]), [])))
             if "/commits?path=" in path:
                 query = urllib.parse.parse_qs(path.split("?", 1)[1])
                 commits = []
                 for entry in self.history.get(query.get("path", [""])[0], []):
                     commits.append(entry if isinstance(entry, dict) else {"author": {"login": entry}, "commit": {"message": "Change"}})
-                return json.dumps(commits)
+                return finish(json.dumps(commits))
             if "/collaborators/" in path:
                 if self.fail_permissions:
                     raise Refused("gh api failed: HTTP 502")
-                return json.dumps({"permission": self.permissions.get(path.split("/collaborators/")[1].split("/")[0], "none")})
-            if "/issues?" in path:
-                repo = path.removeprefix("repos/").split("/issues?")[0]
-                label = path.split("labels=")[1].split("&")[0].replace("%3A", ":")
-                found = [i for (r, _), i in sorted(self.issues.items()) if r == repo and label in i["labels"] and i["state"] == "open"]
-                rows = [{"number": i["number"], "title": i["title"], "state": i["state"], "author_association": i["association"],
-                         "user": {"login": i["author"]}, "labels": [{"name": n} for n in sorted(i["labels"])],
-                         **({"pull_request": {}} if i["pull_request"] else {})} for i in found]
-                return "".join(json.dumps(rows[at:at + 2]) for at in range(0, len(rows), 2)) if rows else "[]"  # pages run together, as gh prints them
+                return finish(json.dumps({"permission": self.permissions.get(path.split("/collaborators/")[1].split("/")[0], "none")}))
             repo, rest = path.removeprefix("repos/").split("/issues/")
             if rest.endswith("/comments"):
-                return json.dumps(self.comments.get((repo, int(rest.split("/")[0])), []))
+                return finish(json.dumps(self.comments.get((repo, int(rest.split("/")[0])), [])))
             issue = self.issues[(repo, int(rest))]
-            return json.dumps({"number": issue["number"], "body": issue["body"], "state": issue["state"], "state_reason": issue["state_reason"],
-                               "labels": [{"name": n} for n in sorted(issue["labels"])], "user": {"login": issue["author"]},
-                               "closed_at": issue["closedAt"]})
+            return finish(json.dumps({"number": issue["number"], "body": issue["body"], "state": issue["state"], "state_reason": issue["state_reason"],
+                                      "labels": [{"name": n} for n in sorted(issue["labels"])], "user": {"login": issue["author"]},
+                                      "closed_at": issue["closedAt"]}))
         repo = args[args.index("-R") + 1]
         if args[:2] == ["issue", "list"]:
             label, state = args[args.index("--label") + 1], args[args.index("--state") + 1]
@@ -282,7 +315,7 @@ def test_only_project_bots_run_it(team_kit_home, gh, capsys, bot, why):
 
 def test_each_bot_works_only_on_its_own_repository(team_kit_home, gh, capsys):
     assert run(gh, "kit-check", bot="sep-crm") == 0
-    assert gh.calls[0] == ["api", "repos/acme/crm/contents/.agents/dispatch.json"]
+    assert gh.calls[0][-1] == "repos/acme/crm/contents/.agents/dispatch.json"
     with pytest.raises(SystemExit):
         run(gh, "kit-check", "--repo", "acme/crm")
 
@@ -484,6 +517,98 @@ def test_tick_publishes_this_projects_unit_state(team_kit_home, gh, capsys):
     assert published["units"][str(open_issue)]["state"] == "open"
     assert published["units"][str(closed_issue)]["state"] == "closed"
     assert published["units"][str(closed_issue)]["state_reason"] == "completed"
+
+
+def test_idle_tick_uses_etags_and_reduces_uncached_github_work(team_kit_home, gh, capsys):
+    assert tick(gh, capsys) == ["[SILENT]"]
+    first = [c for c in gh.calls if c[0] == "api"]
+    assert [c[-1] for c in first] == [
+        f"repos/{REPO}/issues?state=open&labels=agent%3Aandon&per_page=100&page=1",
+        f"repos/{REPO}/issues?state=open&labels=agent-task&per_page=100&page=1",
+    ]
+    assert gh.work == 2
+    saved = [json.loads(path.read_text()) for path in sorted((team_kit_home / "etag" / "meo-beo").glob("*.json"))]
+    assert sorted(item["endpoint"] for item in saved) == sorted(f"GET {c[-1]}" for c in first)
+
+    before_calls, before_work = len(gh.calls), gh.work
+    assert tick(gh, capsys) == ["[SILENT]"]
+    second = [c for c in gh.calls[before_calls:] if c[0] == "api"]
+    assert len(second) == 2 and gh.work == before_work
+    assert all(any(arg.startswith("If-None-Match: ") for arg in c) for c in second)
+
+
+def gh_for(team_kit_home, run, bot):
+    policy = load_policy()
+    return Gh(policy, policy.bot(bot), run, lambda: NOW)
+
+
+def test_two_bots_reading_the_same_endpoint_keep_separate_etag_caches(team_kit_home, gh):
+    gh.add_issue(REPO, labels=("agent-task",))
+    path = f"repos/{REPO}/issues?state=open&labels=agent-task&per_page=100&page=1"
+    first, second = gh_for(team_kit_home, gh, "meo-beo"), gh_for(team_kit_home, gh, "sep-crm")
+    first.api_body(path)
+    assert gh.work == 1
+    assert len(list((team_kit_home / "etag" / "meo-beo").glob("*.json"))) == 1
+    assert not (team_kit_home / "etag" / "sep-crm").exists()
+    # The second bot has no entry of its own, so it sends no If-None-Match and gets a full body.
+    second.api_body(path)
+    assert gh.work == 2
+    assert not any(a.startswith("If-None-Match") for a in gh.calls[-1])
+    assert len(list((team_kit_home / "etag" / "sep-crm").glob("*.json"))) == 1
+    # Each now revalidates its own entry.
+    first.api_body(path)
+    second.api_body(path)
+    assert gh.work == 2
+    assert not list((team_kit_home / "etag").glob("*.json")), "no cache entries outside a bot's directory"
+
+
+def test_a_changed_etag_returns_the_new_body(team_kit_home, gh):
+    n = gh.add_issue(REPO, labels=("agent-task",), title="before")
+    bot = gh_for(team_kit_home, gh, "meo-beo")
+    assert [i["title"] for i in bot.units()] == ["before"]
+    gh.issues[(REPO, n)]["title"] = "after"
+    assert [i["title"] for i in bot.units()] == ["after"]
+    assert gh.work == 2
+    again = gh_for(team_kit_home, gh, "meo-beo")
+    assert [i["title"] for i in again.units()] == ["after"]
+    assert gh.work == 2, "the refreshed ETag is what the next read revalidates"
+
+
+def test_units_past_the_first_hundred_are_not_dropped(team_kit_home, gh):
+    numbers = [gh.add_issue(REPO, labels=("agent-task",)) for _ in range(230)]
+    bot = gh_for(team_kit_home, gh, "meo-beo")
+    assert [i["number"] for i in bot.units()] == numbers
+    pages = [c[-1] for c in gh.calls if c[0] == "api"]
+    assert [p.rsplit("page=", 1)[1] for p in pages] == ["1", "2", "3"]
+    assert all("per_page=100" in p for p in pages)
+    # An idle second read revalidates every page and does no new work, still seeing all of them.
+    before = gh.work
+    assert [i["number"] for i in bot.units()] == numbers
+    assert gh.work == before
+
+
+def test_exactly_a_hundred_units_take_one_page(team_kit_home, gh):
+    for _ in range(100):
+        gh.add_issue(REPO, labels=("agent-task",))
+    assert len(gh_for(team_kit_home, gh, "meo-beo").units()) == 100
+    assert len([c for c in gh.calls if c[0] == "api"]) == 1
+
+
+def test_run_gh_returns_a_304_but_raises_on_any_other_failure(monkeypatch):
+    def fake(stdout, code, stderr=""):
+        return lambda *a, **k: subprocess.CompletedProcess(a[0], code, stdout, stderr)
+
+    api = ["api", "--include", "repos/acme/shop/issues"]
+    monkeypatch.setattr(subprocess, "run", fake("HTTP/2.0 304 Not Modified\r\n\r\n", 1, "gh: HTTP 304"))
+    assert run_gh(api).startswith("HTTP/2.0 304")
+    for status in ("HTTP/2.0 404 Not Found\r\n\r\n{}", "HTTP/2.0 500 Server Error\r\n\r\n", ""):
+        monkeypatch.setattr(subprocess, "run", fake(status, 1, "gh: failed"))
+        with pytest.raises(Refused, match="gh api failed"):
+            run_gh(api)
+    # Without --include a non-zero exit is never read as a 304.
+    monkeypatch.setattr(subprocess, "run", fake("HTTP/2.0 304 Not Modified\r\n\r\n", 1, "boom"))
+    with pytest.raises(Refused):
+        run_gh(["api", "repos/acme/shop/issues"])
 
 
 def test_tick_launches_a_queued_unit_once_its_dependency_merged(team_kit_home, gh, capsys):

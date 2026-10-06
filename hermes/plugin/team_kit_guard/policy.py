@@ -24,6 +24,9 @@ from pathlib import Path
 GUARD_VERSION = 2
 BOTS_VERSION = 1
 ROLES = ("bootstrap", "project", "chief")
+DEFAULT_TICK_EVERY = "30m"
+DEFAULT_INCIDENTS_EVERY = "10m"
+INTERVAL = re.compile(r"\A[1-9][0-9]*(?:m|h)\Z")
 
 DEFAULT_READ_ONLY_TOOLS = (
     "read_file", "search_files",
@@ -107,6 +110,8 @@ class Bot:
     role: str
     project: str | None = None
     repo: str | None = None
+    tick_every: str = DEFAULT_TICK_EVERY
+    incidents_every: str = DEFAULT_INCIDENTS_EVERY
 
     @property
     def repos(self) -> tuple[str, ...]:
@@ -196,8 +201,19 @@ def parse_bots(data) -> dict[str, Bot]:
         if repo.lower() in seen_repos:
             raise PolicyError(f"bots.yaml: {repo} belongs to both {seen_repos[repo.lower()]} and {name}")
         seen_repos[repo.lower()] = name
-        bots[name] = Bot(name=name, role="project", project=project, repo=repo)
+        tick_every = _interval(raw.get("tick_every"), f"bots.yaml: {name} tick_every", DEFAULT_TICK_EVERY)
+        incidents_every = _interval(raw.get("incidents_every"), f"bots.yaml: {name} incidents_every", DEFAULT_INCIDENTS_EVERY)
+        bots[name] = Bot(name=name, role="project", project=project, repo=repo, tick_every=tick_every, incidents_every=incidents_every)
     return bots
+
+
+def _interval(value, where: str, default: str) -> str:
+    if value is None:
+        return default
+    value = str(value)
+    if not INTERVAL.match(value):
+        raise PolicyError(f"{where} must be a positive interval like 10m or 1h")
+    return value
 
 
 def parse_policy(data, bots=None, home: Path | None = None) -> Policy:

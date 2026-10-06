@@ -49,15 +49,31 @@ elif args[:1] == ["cron"]:
         for job in jobs:
             print(f"  {job['id']} [{'active' if job['enabled'] else 'paused'}]")
             print(f"    Name:      {job['name']}")
+            print(f"    Schedule:  {job.get('schedule', '')}")
     elif args[1] == "create":
         if "--paused" not in args:
             # Deliberately model the unsafe legacy default as active.
             enabled = True
         else:
             enabled = False
-        jobs.append({"id": f"job-{len(jobs)}", "name": args[args.index("--name") + 1],
+        used = [int(job["id"].removeprefix("job-")) for job in jobs if job["id"].startswith("job-") and job["id"].removeprefix("job-").isdigit()]
+        jobs.append({"id": f"job-{max(used, default=-1) + 1}", "name": args[args.index("--name") + 1],
+                     "schedule": args[2], "prompt": args[3],
+                     "deliver": args[args.index("--deliver") + 1], "skill": args[args.index("--skill") + 1],
                      "enabled": enabled, "state": "active" if enabled else "paused",
                      "paused_reason": args[args.index("--paused-reason") + 1] if "--paused-reason" in args else None})
+        jobs_path.write_text(json.dumps(jobs))
+    elif args[1] == "edit":
+        job = next((j for j in jobs if j["id"] == args[2]), None)
+        if job is None:
+            print("no such job", file=sys.stderr)
+            sys.exit(1)
+        # Like Hermes, edit changes configuration only; pause state is separate.
+        if "--schedule" in args:
+            job["schedule"] = args[args.index("--schedule") + 1]
+        jobs_path.write_text(json.dumps(jobs))
+    elif args[1] == "delete":
+        jobs = [job for job in jobs if job["id"] != args[2]]
         jobs_path.write_text(json.dumps(jobs))
     elif args[1] == "resume":
         job = next((j for j in jobs if j["id"] == args[2]), None)
