@@ -22,7 +22,6 @@ CLAUDE = ("/faker-mode Work the brief in acme/shop#123 using the follow-brief sk
 CODEX = ("$faker-mode Work the brief in acme/shop#123 using the follow-brief skill. "
          "If the follow-brief skill is not available in this session, stop and say the team-kit skills did not load.")
 
-
 @pytest.mark.parametrize(
     ("backend", "size", "expected"),
     [
@@ -36,6 +35,62 @@ def test_launch_argv_is_exact_and_needs_no_shell(backend, size, expected):
     argv = launch_argv(backend, "acme/shop", 123, size, "env_7")
     assert argv == expected
     assert argv[-1].startswith(PREFIXES)
+
+
+def status_cloud(output, calls=None, error=None):
+    def run_status(argv):
+        if calls is not None:
+            calls.append(argv)
+        if error:
+            raise error
+        return output
+
+    return Cloud(run_gh=lambda *a, **k: "", run_status=run_status)
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ("[PENDING] Verify acme/shop#123\nenv-1  \u2022  3s ago\nno diff\n", "pending"),
+        ("[READY] Verify acme/shop#123\nEnv  \u2022  1m ago\n+5/-2 \u2022 3 files\n", "ready"),
+        ("[APPLIED] Work the brief\nEnv  \u2022  1h ago\nno diff\n", "applied"),
+        ("\x1b[31m[ERROR]\x1b[0m Work the brief\n", "error"),
+        ("", "unknown"),
+        ("Error: not signed in\n", "unknown"),
+        ("run [READY] anything\n", "unknown"),
+    ],
+)
+def test_task_status_reads_only_the_label_codex_cloud_status_prints(output, expected):
+    assert status_cloud(output).task_status("codex", "task_abc123") == expected
+
+
+def test_task_status_runs_exactly_codex_cloud_status_with_the_task_id():
+    calls = []
+    cloud = status_cloud("[READY] t\n", calls)
+    assert cloud.task_status("codex", "task_abc123") == "ready"
+    assert cloud.task_status("codex", "https://chatgpt.com/codex/tasks/task_e_9Zy-1?x=1#top") == "ready"
+    assert calls == [["codex", "cloud", "status", "task_abc123"], ["codex", "cloud", "status", "task_e_9Zy-1"]]
+
+
+@pytest.mark.parametrize(
+    ("backend", "session"),
+    [
+        ("claude", "https://claude.ai/code/session_01ABCDEF"),
+        ("codex", "https://claude.ai/code/session_01ABCDEF"),
+        ("codex", "task_abc; rm -rf /"),
+        ("codex", "--help"),
+        ("codex", ""),
+    ],
+)
+def test_task_status_never_calls_the_cli_for_anything_but_a_codex_task_id(backend, session):
+    calls = []
+    assert status_cloud("[READY] t\n", calls).task_status(backend, session) == "unknown"
+    assert calls == []
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError("codex"), subprocess.TimeoutExpired("codex", 30), OSError("boom")])
+def test_task_status_is_unknown_when_the_cli_cannot_be_run(error):
+    assert status_cloud("", error=error).task_status("codex", "task_abc123") == "unknown"
 
 
 def test_a_claude_session_without_the_kit_posts_a_report_tick_can_read():

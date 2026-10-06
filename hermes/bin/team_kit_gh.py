@@ -61,7 +61,7 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
         sys.path.insert(0, str(candidate))
 
 from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord, clean_reason, issue_body  # noqa: E402
-from team_kit_cloud import Cloud, CloudError  # noqa: E402
+from team_kit_cloud import FINISHED, Cloud, CloudError  # noqa: E402
 from team_kit_risk import (  # noqa: E402
     CODEOWNERS_PATHS,
     REPAIR_HISTORY_FILES,
@@ -700,14 +700,51 @@ class Gh:
         self.relabel(int(issue["number"]), add=HUMAN_LABEL, remove=held)
         return f"{NOTICE} #{issue['number']} needs you: {why}. https://github.com/{self.repo}/issues/{issue['number']}"
 
+    @staticmethod
+    def launched_task(comment: dict | None) -> tuple[str, str]:
+        """The backend and session a trusted launch comment names, or two empty strings."""
+        body = (comment or {}).get("body") or ""
+        session = re.search(r"^session: (\S+)$", body, re.M)
+        backend = re.search(r"^backend: (claude|codex)$", body, re.M)
+        return (backend.group(1) if backend else ""), (session.group(1) if session else "")
+
+    @staticmethod
+    def task_ended(cloud: Cloud | None, backend: str, session: str) -> str | None:
+        """ready, applied, or error when a Codex cloud task has stopped; None while it runs or cannot be read.
+
+        The only question put to the CLI is `codex cloud status <task id>`. Nothing it prints reaches
+        a notice, and a task that cannot be read keeps the one-day fallback.
+        """
+        if cloud is None or backend != "codex" or not session:
+            return None
+        try:
+            state = cloud.task_status(backend, session)
+        except Exception:  # noqa: BLE001 - an unreadable status is no news
+            return None
+        return state if state in FINISHED else None
+
+    @staticmethod
+    def ended_words(state: str) -> str:
+        return "failed" if state == "error" else "finished"
+
     def check_running(self, issue: dict, cloud: Cloud | None = None) -> str | None:
         """One running unit: free its slot when its agent has finished. Returns a notice, or None."""
         number = int(issue["number"])
         comments = self.comments(number)
         report = self.report_status(number, comments, since_launch=True)
         status = report["status"]
+        launch = self.last_launch(comments)
+        if status == "none" and launch >= 0:
+            ended = self.task_ended(cloud, *self.launched_task(comments[launch]))
+            if ended:
+                # A task comments before it finishes, so read the issue again before judging it.
+                comments = self.comments(number)
+                launch = self.last_launch(comments)
+                report = self.report_status(number, comments, since_launch=True)
+                status = report["status"]
+                if status == "none":
+                    return self.gate(issue, f"the Codex task {self.ended_words(ended)} without a report; check its session")
         if status == "none":
-            launch = self.last_launch(comments)
             started = timestamp(comments[launch].get("created_at")) if launch >= 0 else timestamp(issue.get("createdAt"))
             if started is not None and self.now() - started > REPORT_DEADLINE_SECONDS:
                 return self.gate(issue, "no report 24 hours after launch; check its session")
@@ -855,29 +892,39 @@ class Gh:
             pass
         return None
 
-    def check_verifying(self, issue: dict) -> str | None:
+    def check_verifying(self, issue: dict, cloud: Cloud | None = None) -> str | None:
         """One unit under verification: move it on when its verdict arrives. Returns a notice, or None."""
         number = int(issue["number"])
         record = self.verify_record(number)
         if record is None:
             return self.gate(issue, f"this machine has no record of its verifier; run `team-kit-gh verify --issue {number}` to start one")
+        def find(comments: list[dict]):
+            # Only comments after the latest launch of either kind can answer this verifier.
+            starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith((LAUNCHED_MARKER, VERIFY_LAUNCHED_MARKER)) and self.trusted(c)]
+            for comment in comments[(starts[-1] + 1) if starts else 0:]:
+                body = (comment.get("body") or "").lstrip()
+                if not body.startswith(VERDICT_MARKER) or not self.trusted(comment):
+                    continue
+                if comment.get("updated_at") and comment.get("updated_at") != comment.get("created_at"):
+                    continue  # an edited verdict never counts
+                try:
+                    candidate = parse_verdict(body)
+                except ContractError:
+                    continue
+                if verdict_signed(candidate, record["key"], record["head"]):
+                    return candidate  # the first signed verdict is the verifier's answer
+            return None
+
         comments = self.comments(number)
-        # Only comments after the latest launch of either kind can answer this verifier.
-        starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith((LAUNCHED_MARKER, VERIFY_LAUNCHED_MARKER)) and self.trusted(c)]
-        verdict = None
-        for comment in comments[(starts[-1] + 1) if starts else 0:]:
-            body = (comment.get("body") or "").lstrip()
-            if not body.startswith(VERDICT_MARKER) or not self.trusted(comment):
-                continue
-            if comment.get("updated_at") and comment.get("updated_at") != comment.get("created_at"):
-                continue  # an edited verdict never counts
-            try:
-                candidate = parse_verdict(body)
-            except ContractError:
-                continue
-            if verdict_signed(candidate, record["key"], record["head"]):
-                verdict = candidate
-                break  # the first signed verdict is the verifier's answer
+        verdict = find(comments)
+        if verdict is None:
+            launches = [c for c in comments if (c.get("body") or "").startswith(VERIFY_LAUNCHED_MARKER) and self.trusted(c)]
+            ended = self.task_ended(cloud, str(record.get("backend") or ""), self.launched_task(launches[-1] if launches else None)[1])
+            if ended:
+                verdict = find(self.comments(number))  # the task comments before it finishes
+                if verdict is None:
+                    self.drop_verify_record(number)
+                    return self.gate(issue, f"the Codex verifier {self.ended_words(ended)} without a signed verdict; check its session")
         if verdict is None:
             if self.now() - float(record.get("started", 0)) > REPORT_DEADLINE_SECONDS:
                 self.drop_verify_record(number)
@@ -1014,7 +1061,7 @@ class Security:
             session = cloud.start(backend, gh.repo, argv, workdir)
         except Exception as err:  # noqa: BLE001 - tried again tomorrow
             raise Refused(f"the security review could not start: {reason(err)}") from None
-        self.write({**record, "running": {"issue": issue, "base": base, "head": head, "key": key, "started": gh.now(), "session": session}})
+        self.write({**record, "running": {"issue": issue, "base": base, "head": head, "key": key, "started": gh.now(), "session": session, "backend": backend}})
         try:
             gh.run(["issue", "comment", str(issue), "-R", gh.repo, "--body",
                     f"{SECURITY_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\nrange: {base or 'none'}..{head}\n"])
@@ -1022,30 +1069,40 @@ class Security:
             pass
         return {"state": "started", "issue": issue, "range": f"{base or 'none'}..{head}", "session": session}
 
-    def check(self) -> str | None:
+    def check(self, cloud: Cloud | None = None) -> str | None:
         """Called by tick: read a running review's signed result. Returns a notice, or None."""
         gh = self.gh
         record = self.record()
         running = record.get("running")
         if not running:
             return None
-        comments = gh.comments(int(running["issue"]))
-        starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(SECURITY_LAUNCHED_MARKER) and gh.trusted(c)]
-        result, url = None, None
-        for comment in comments[(starts[-1] + 1) if starts else 0:]:
-            body = (comment.get("body") or "").lstrip()
-            if not body.startswith(SECURITY_MARKER) or not gh.trusted(comment):
-                continue
-            if comment.get("updated_at") and comment.get("updated_at") != comment.get("created_at"):
-                continue  # an edited result never counts
-            try:
-                candidate = parse_security(body)
-            except ContractError:
-                continue
-            if security_signed(candidate, running["key"], running["head"]):
-                result, url = candidate, comment.get("html_url") or f"https://github.com/{gh.repo}/issues/{running['issue']}"
-                break
+
+        def find() -> tuple:
+            comments = gh.comments(int(running["issue"]))
+            starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(SECURITY_LAUNCHED_MARKER) and gh.trusted(c)]
+            for comment in comments[(starts[-1] + 1) if starts else 0:]:
+                body = (comment.get("body") or "").lstrip()
+                if not body.startswith(SECURITY_MARKER) or not gh.trusted(comment):
+                    continue
+                if comment.get("updated_at") and comment.get("updated_at") != comment.get("created_at"):
+                    continue  # an edited result never counts
+                try:
+                    candidate = parse_security(body)
+                except ContractError:
+                    continue
+                if security_signed(candidate, running["key"], running["head"]):
+                    return candidate, comment.get("html_url") or f"https://github.com/{gh.repo}/issues/{running['issue']}"
+            return None, None
+
+        result, url = find()
         span = f"{(running.get('base') or 'none')[:7]}..{running['head'][:7]}"
+        if result is None:
+            ended = gh.task_ended(cloud, str(running.get("backend") or ""), str(running.get("session") or ""))
+            if ended:
+                result, url = find()  # the task comments before it finishes
+                if result is None:
+                    self.write({k: v for k, v in record.items() if k != "running"})
+                    return f"{NOTICE} the Codex task for the security review of {span} {gh.ended_words(ended)} without a signed result; it runs again tomorrow. Its session: {running.get('session')}"
         if result is None:
             if gh.now() - float(running.get("started", 0)) > REPORT_DEADLINE_SECONDS:
                 self.write({k: v for k, v in record.items() if k != "running"})
@@ -1172,7 +1229,7 @@ class Incidents:
         for key in [k for k in data["streaks"] if k not in watched]:
             del data["streaks"][key]
         for incident in data["open"].values():
-            notice = self.check_triage(incident)
+            notice = self.check_triage(incident, cloud)
             if notice:
                 notices.append(notice)
         return notices
@@ -1201,7 +1258,7 @@ class Incidents:
             except Exception as err:  # noqa: BLE001 - the incident stands without a diagnosis
                 notices.append(f"{NOTICE} incident #{number}: the triage session could not start: {reason(err)}")
             else:
-                incident["triage"] = {"key": key_hex, "started": gh.now(), "session": session}
+                incident["triage"] = {"key": key_hex, "started": gh.now(), "session": session, "backend": backend}
                 try:
                     gh.run(["issue", "comment", str(number), "-R", gh.repo, "--body", f"{TRIAGE_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\n"])
                 except Exception:  # noqa: BLE001
@@ -1224,38 +1281,51 @@ class Incidents:
             notice += " The andon cord it pulled is cleared."
         return [notice]
 
-    def check_triage(self, incident: dict) -> str | None:
+    def check_triage(self, incident: dict, cloud: Cloud | None = None) -> str | None:
         gh = self.gh
         triage = incident.get("triage")
         if not triage or triage.get("done"):
             return None
         number = int(incident["issue"])
-        comments = gh.comments(number)
-        starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(TRIAGE_LAUNCHED_MARKER) and gh.trusted(c)]
-        for comment in comments[(starts[-1] + 1) if starts else 0:]:
-            body = (comment.get("body") or "").lstrip()
-            if not body.startswith(DIAGNOSIS_MARKER) or not gh.trusted(comment):
-                continue
-            if comment.get("updated_at") and comment.get("updated_at") != comment.get("created_at"):
-                continue
-            try:
-                diagnosis = parse_diagnosis(body)
-            except ContractError:
-                continue
-            if diagnosis_signed(diagnosis, triage["key"], number):
-                triage["done"] = True
-                where = comment.get("html_url") or f"https://github.com/{gh.repo}/issues/{number}"
-                suspect = f"suspects {diagnosis.suspect[:7]}" if diagnosis.suspect else "names no suspect commit"
-                lead = f"{NOTICE} incident #{number}: the triage session {suspect} ({diagnosis.confidence} confidence)"
+        def find():
+            comments = gh.comments(number)
+            starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(TRIAGE_LAUNCHED_MARKER) and gh.trusted(c)]
+            for comment in comments[(starts[-1] + 1) if starts else 0:]:
+                body = (comment.get("body") or "").lstrip()
+                if not body.startswith(DIAGNOSIS_MARKER) or not gh.trusted(comment):
+                    continue
+                if comment.get("updated_at") and comment.get("updated_at") != comment.get("created_at"):
+                    continue
                 try:
-                    proposed = self.proposed_fix(diagnosis)
-                except Exception as err:  # noqa: BLE001 - the diagnosis stands; the owner says the fix
-                    return f"{lead}. No fix is proposed: cannot read the suspect commit: {reason(err)}: {where}"
-                if proposed:
-                    triage["proposed_fix"] = proposed
-                    return (f"{lead}. If you reply `ok #{number}`, I will brief exactly `{proposed}` as a small unit; "
-                            f"nothing dispatches without your reply: {where}")
-                return f"{lead}: {where}"
+                    diagnosis = parse_diagnosis(body)
+                except ContractError:
+                    continue
+                if diagnosis_signed(diagnosis, triage["key"], number):
+                    return diagnosis, comment.get("html_url") or f"https://github.com/{gh.repo}/issues/{number}"
+            return None, None
+
+        diagnosis, where = find()
+        ended = None
+        if diagnosis is None:
+            ended = gh.task_ended(cloud, str(triage.get("backend") or ""), str(triage.get("session") or ""))
+            if ended:
+                diagnosis, where = find()  # the task comments before it finishes
+        if diagnosis is not None:
+            triage["done"] = True
+            suspect = f"suspects {diagnosis.suspect[:7]}" if diagnosis.suspect else "names no suspect commit"
+            lead = f"{NOTICE} incident #{number}: the triage session {suspect} ({diagnosis.confidence} confidence)"
+            try:
+                proposed = self.proposed_fix(diagnosis)
+            except Exception as err:  # noqa: BLE001 - the diagnosis stands; the owner says the fix
+                return f"{lead}. No fix is proposed: cannot read the suspect commit: {reason(err)}: {where}"
+            if proposed:
+                triage["proposed_fix"] = proposed
+                return (f"{lead}. If you reply `ok #{number}`, I will brief exactly `{proposed}` as a small unit; "
+                        f"nothing dispatches without your reply: {where}")
+            return f"{lead}: {where}"
+        if ended:
+            triage["done"] = True
+            return f"{NOTICE} incident #{number}: the Codex triage task {gh.ended_words(ended)} without a signed diagnosis. Its session: {triage.get('session')}"
         if gh.now() - float(triage.get("started", 0)) > REPORT_DEADLINE_SECONDS:
             triage["done"] = True
             return f"{NOTICE} incident #{number}: the triage session posted no signed diagnosis in a day. Its session: {triage.get('session')}"
@@ -1310,7 +1380,7 @@ class Project:
                 continue
             if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
                 try:
-                    notice = gh.check_verifying(issue) if VERIFYING_LABEL in labels else gh.check_running(issue, cloud)
+                    notice = gh.check_verifying(issue, cloud) if VERIFYING_LABEL in labels else gh.check_running(issue, cloud)
                 except Exception as err:  # noqa: BLE001 - one broken unit never stops the others
                     problems[f"{gh.repo}#{issue['number']}"] = reason(err)
                     continue
@@ -1331,7 +1401,7 @@ class Project:
                 problems[gh.repo] = reason(err)
                 break
         try:
-            notice = Security(gh).check()
+            notice = Security(gh).check(cloud)
             if notice:
                 notices.append(notice)
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick

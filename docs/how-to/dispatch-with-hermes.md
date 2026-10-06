@@ -57,6 +57,14 @@ A unit is one pull request. The bot splits work only when one pull request would
 
 The agent drives the real app with the repository's verification skill, named as `verification_skill` in `.agents/dispatch.json` and in each brief's Verify section, and puts the evidence in its report. Then a second session checks it: the agent that wrote a change never grades it. Set `verifier_backend` to the other agent from `backend` when you have both, so a second model family looks at every change; `none` turns verification off. A `codex` verifier needs `codex_env`, and its environment must let tasks comment on issues. Without a verification skill both prove the change with tests only, which reaches `unit-test-verified` at most; the setup pull request then lists `/create-verification-skill` for you. A cloud session runs on Linux, so iOS builds cannot run there; the repository's `AGENTS.md` says what a cloud session cannot prove.
 
+### Codex tasks that finish without a signed comment
+
+A Codex cloud task reports the same way a Claude Code session does: by commenting on the issue with the `team-kit` header. The Codex command line can say whether a task has finished, but it has no way to read what the task answered, so Hermes never tries to read a final message.
+
+Each tick, for a Codex coding, verifier, security, or triage task that has not yet commented, Hermes runs `codex cloud status <task id>` on the machine that runs the bot and reads only the state in brackets at the start of its first line (`PENDING`, `READY`, `APPLIED`, or `ERROR`). Nothing else the command prints is used, and it is never put in a notice. If the task has finished (`READY` or `APPLIED`) or failed (`ERROR`), Hermes reads the issue once more in case the comment arrived while it asked, and then, with still no signed comment, opens the usual gate or sends the notice at once. It does not wait a day.
+
+When the state cannot be read, whether `codex` is not installed, not signed in, too slow, or prints something else, the one-day deadline applies as before. To see what your installed version prints, run `codex --version` and `codex cloud status --help`, and try `codex cloud status <task id>` on a task you started.
+
 ### How many run at once
 
 Two limits apply to every launch, and both count open issues labeled `agent:running`:

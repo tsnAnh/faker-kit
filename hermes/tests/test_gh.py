@@ -167,8 +167,11 @@ class FakeGh:
 
 
 class FakeCloud:
-    def __init__(self, fail=None):
-        self.started, self.fail = [], fail
+    """Starts nothing. `status` is what `codex cloud status` would say for every Codex task: pending, ready,
+    applied, error, or unknown; a callable runs first, and an Exception is raised as the CLI failing."""
+
+    def __init__(self, fail=None, status="unknown"):
+        self.started, self.fail, self.status, self.status_calls, self.on_status = [], fail, status, [], None
 
     def start(self, backend, repo, argv, workdir):
         self.started.append((backend, repo, argv, workdir))
@@ -176,7 +179,17 @@ class FakeCloud:
             raise self.fail
         if self.fail:
             raise CloudError(self.fail)
+        if backend == "codex":
+            return f"https://chatgpt.com/codex/tasks/task_e_0{len(self.started)}ABCDEF"
         return f"https://claude.ai/code/session_0{len(self.started)}ABCDEF"
+
+    def task_status(self, backend, session):
+        self.status_calls.append((backend, session))
+        if self.on_status:
+            self.on_status()
+        if isinstance(self.status, Exception):
+            raise self.status
+        return self.status
 
 
 @pytest.fixture
@@ -770,6 +783,151 @@ def test_tick_gates_a_unit_with_no_report_a_day_after_launch(team_kit_home, gh, 
     found = tick(gh, capsys)
     assert ("no report 24 hours after launch" in found[0]) == gated
     assert ("agent:needs-human" in gh.labels(REPO, n)) == gated
+
+
+CODEX_LAUNCH = f"{LAUNCHED_MARKER}\nsession: https://chatgpt.com/codex/tasks/task_e_abc123\nbackend: codex\n"
+
+
+def codex_unit(kit, **config):
+    gh = FakeGh(kit, backend="codex", codex_env="env_7", **config)
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.comment(REPO, n, CODEX_LAUNCH, at=NOW - 3600)
+    return gh, n
+
+
+@pytest.mark.parametrize(("status", "words"), [("ready", "finished"), ("applied", "finished"), ("error", "failed")])
+def test_tick_gates_a_finished_codex_task_with_no_report_without_waiting_a_day(team_kit_home, kit, capsys, status, words):
+    gh, n = codex_unit(kit)
+    cloud = FakeCloud(status=status)
+    [notice] = tick(gh, capsys, cloud)
+    assert notice == f"team-kit notice: #{n} needs you: the Codex task {words} without a report; check its session. https://github.com/{REPO}/issues/{n}"
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+    assert cloud.status_calls == [("codex", "https://chatgpt.com/codex/tasks/task_e_abc123")]
+
+
+@pytest.mark.parametrize("status", ["pending", "unknown", RuntimeError("codex exploded: token=abc")])
+def test_tick_keeps_waiting_while_a_codex_task_runs_or_its_status_cannot_be_read(team_kit_home, kit, capsys, status):
+    gh, n = codex_unit(kit)
+    assert tick(gh, capsys, FakeCloud(status=status)) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
+
+
+@pytest.mark.parametrize("status", ["unknown", RuntimeError("no codex"), "pending"])
+def test_the_one_day_fallback_still_gates_a_codex_task_whose_status_is_not_final(team_kit_home, kit, capsys, status):
+    gh, n = codex_unit(kit)
+    gh.comments[(REPO, n)][-1]["created_at"] = iso(NOW - REPORT_DEADLINE_SECONDS - 60)
+    assert "no report 24 hours after launch" in tick(gh, capsys, FakeCloud(status=status))[0]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+
+
+def test_a_report_posted_just_before_the_task_finished_is_still_read(team_kit_home, kit, capsys):
+    gh, n = codex_unit(kit)
+    cloud = FakeCloud(status="ready")
+    cloud.on_status = lambda: gh.report(REPO, n, "blocked", at=NOW - 5)
+    [notice] = tick(gh, capsys, cloud)
+    assert "the agent reported blocked" in notice and "without a report" not in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+
+
+def test_tick_asks_no_status_of_a_claude_session_or_a_unit_that_already_reported(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, verifier_backend="none")
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.comment(REPO, n, f"{LAUNCHED_MARKER}\nsession: https://claude.ai/code/session_01ABCDEF\nbackend: claude\n", at=NOW - 3600)
+    cloud = FakeCloud(status="ready")
+    assert tick(gh, capsys, cloud) == ["[SILENT]"]
+    gh.report(REPO, n, "done", pr=pr(gh, 7))
+    assert "ready for you to merge" in tick(gh, capsys, cloud)[0]
+    assert cloud.status_calls == []
+    codex, m = codex_unit(kit, verifier_backend="none")
+    codex.report(REPO, m, "done", pr=pr(codex, 8))
+    assert "ready for you to merge" in tick(codex, capsys, cloud)[0]
+    assert cloud.status_calls == []
+
+
+def codex_verifier(kit, team_kit_home, capsys):
+    gh = FakeGh(kit, verifier_backend="codex", codex_env="env_7")
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.report(REPO, n, "done", pr=pr(gh, 7))
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"} and cloud.started[0][0] == "codex"
+    return gh, n, cloud
+
+
+@pytest.mark.parametrize(("status", "words"), [("ready", "finished"), ("error", "failed")])
+def test_tick_gates_a_finished_codex_verifier_with_no_verdict_and_drops_its_record(team_kit_home, kit, capsys, status, words):
+    gh, n, cloud = codex_verifier(kit, team_kit_home, capsys)
+    cloud.status = "pending"
+    assert tick(gh, capsys, cloud) == ["[SILENT]"]
+    cloud.status = status
+    [notice] = tick(gh, capsys, cloud)
+    assert notice == f"team-kit notice: #{n} needs you: the Codex verifier {words} without a signed verdict; check its session. https://github.com/{REPO}/issues/{n}"
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+    assert not (team_kit_home / "verify" / "meo-beo" / f"{n}.json").exists()
+    assert {c[1] for c in cloud.status_calls} == {"https://chatgpt.com/codex/tasks/task_e_01ABCDEF"}
+
+
+def test_a_signed_verdict_beats_a_finished_status_and_costs_no_status_call(team_kit_home, kit, capsys):
+    gh, n, cloud = codex_verifier(kit, team_kit_home, capsys)
+    verdict(gh, n, team_kit_home, at=NOW)
+    cloud.status = "error"
+    assert "verified: live-ui-verified" in tick(gh, capsys, cloud)[0]
+    assert cloud.status_calls == []
+
+
+def test_an_unreadable_codex_verifier_status_keeps_the_one_day_fallback(team_kit_home, kit, capsys):
+    gh, n, cloud = codex_verifier(kit, team_kit_home, capsys)
+    cloud.status = RuntimeError("codex missing")
+    assert tick(gh, capsys, cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"}
+    path = team_kit_home / "verify" / "meo-beo" / f"{n}.json"
+    data = json.loads(path.read_text())
+    data["started"] = NOW - REPORT_DEADLINE_SECONDS - 60
+    path.write_text(json.dumps(data))
+    assert "no signed verdict 24 hours after the verifier started" in tick(gh, capsys, cloud)[0]
+
+
+def test_tick_tells_the_owner_early_when_a_codex_security_review_ends_without_a_result(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, security_backend="codex", codex_env="env_7")
+    cloud = FakeCloud()
+    assert run(gh, "security", cloud=cloud) == 0
+    capsys.readouterr()
+    assert security_record(team_kit_home)["running"]["backend"] == "codex"
+    cloud.status = "pending"
+    assert tick(gh, capsys, cloud) == ["[SILENT]"]
+    cloud.status = "error"
+    [notice] = tick(gh, capsys, cloud)
+    assert notice == ("team-kit notice: the Codex task for the security review of none..ccccccc failed without a signed result; it runs again tomorrow. "
+                      "Its session: https://chatgpt.com/codex/tasks/task_e_01ABCDEF")
+    assert "running" not in security_record(team_kit_home)
+    assert tick(gh, capsys, cloud) == ["[SILENT]"]
+
+
+def test_a_signed_security_result_beats_a_finished_status(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, security_backend="codex", codex_env="env_7")
+    cloud = FakeCloud(status="ready")
+    assert run(gh, "security", cloud=cloud) == 0
+    capsys.readouterr()
+    security_result(gh, team_kit_home, high=1)
+    assert "found 1 high" in tick(gh, capsys, cloud)[0]
+    assert cloud.status_calls == []
+
+
+def test_tick_tells_the_owner_early_when_a_codex_triage_task_ends_without_a_diagnosis(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, codex_env="env_7", incidents={"triage_backend": "codex"})
+    green(gh, "1" * 40)
+    assert poll(gh, capsys) == ["[SILENT]"]
+    red(gh, "2" * 40, "test")
+    cloud = FakeCloud()
+    poll(gh, capsys, cloud=cloud)
+    n = incidents(team_kit_home)["open"]["main"]["issue"]
+    assert incidents(team_kit_home)["open"]["main"]["triage"]["backend"] == "codex"
+    cloud.status = "pending"
+    assert poll(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    cloud.status = "ready"
+    assert poll(gh, capsys, cloud=cloud) == [f"team-kit notice: incident #{n}: the Codex triage task finished without a signed diagnosis. "
+                                             "Its session: https://chatgpt.com/codex/tasks/task_e_01ABCDEF"]
+    assert poll(gh, capsys, cloud=cloud) == ["[SILENT]"]
 
 
 def test_tick_never_relaunches_a_gated_unit(team_kit_home, gh, capsys):
