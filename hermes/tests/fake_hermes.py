@@ -6,7 +6,9 @@ from pathlib import Path
 
 import yaml
 
-root = Path(os.environ["HOME"]) / ".hermes"
+# Like Hermes, honor HERMES_HOME (a profile's own directory counts as its root's child).
+_home = os.environ.get("HERMES_HOME")
+root = (Path(_home).parent.parent if Path(_home).parent.name == "profiles" else Path(_home)) if _home else Path(os.environ["HOME"]) / ".hermes"
 args = sys.argv[1:]
 with (root / "calls.log").open("a") as log:
     log.write(json.dumps(args) + "\n")
