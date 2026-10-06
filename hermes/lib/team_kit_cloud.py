@@ -4,22 +4,30 @@
 runs from a fresh shallow clone of the unit's own repository. `codex cloud exec` names its
 environment, which is bound to a repository, so it runs from an empty directory.
 
-Claude Code refuses to start a new cloud session unless stdout is a terminal, so every agent runs
-with stdout and stderr on a pseudo-terminal. The prompt is written to the agent's stdin (`claude
---cloud` with no value reads it there, `codex cloud exec -` likewise), never to argv. The terminal
-output has its escape sequences stripped and is read for the session URL. A redacted snapshot up to
-the session URL or startup error is written to a log next to the working directory. No shell is
-involved. The process is started in its own session and may keep running after this returns.
+Claude Code refuses to start a new cloud session unless it can read the keyboard: stdin is a
+terminal, or else it opens `/dev/tty` (the CLI's terminal-input check, which fails with "No cloud
+session was created or opened: it would open in this terminal and need the keyboard"). A bare
+`claude --cloud` takes its description from piped stdin, so stdin stays a pipe and the pseudo-terminal
+must be the child's controlling terminal for `/dev/tty` to open. Every agent therefore runs in its own
+session with the pseudo-terminal slave acquired as its controlling terminal (TIOCSCTTY) and on stdout
+and stderr. The prompt is written to the agent's stdin (`codex cloud exec -` likewise), never to
+argv. The CLI also gives up the terminal when `CI` is set, so `CI` is removed from the child's
+environment. The terminal output has its escape sequences stripped and is read for the session URL.
+A redacted snapshot up to the session URL or startup error is written to a log next to the working
+directory. No shell is involved. After the session is known the output keeps being drained and the
+child is reaped in a background thread, so it may keep running after this returns.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import fcntl
 import select
 import shutil
 import signal
 import subprocess
+import termios
 import threading
 import time
 from dataclasses import dataclass, field
@@ -72,8 +80,26 @@ def _read_available(fd: int, timeout: float) -> bytes:
     return data
 
 
-def _drain(fd: int) -> None:
-    """Keep reading after the session is known, so a running agent never blocks on a full terminal."""
+def _acquire_terminal() -> None:
+    """Runs in the child after setsid: make the pseudo-terminal on stdout its controlling terminal."""
+    fcntl.ioctl(1, termios.TIOCSCTTY, 0)
+
+
+def _child_env() -> dict[str, str]:
+    """The environment the agent inherits, minus CI, which makes the CLI refuse the terminal."""
+    return {key: value for key, value in os.environ.items() if key != "CI"}
+
+
+def _reap(proc, timeout: float | None = None) -> None:
+    try:
+        proc.wait(timeout)
+    except Exception:  # still running or already gone; nothing more to do here
+        pass
+
+
+def _drain(fd: int, proc=None) -> None:
+    """Keep reading after the session is known, so a running agent never blocks on a full terminal,
+    then reap it once it exits."""
     try:
         while True:
             select.select([fd], [], [])
@@ -86,6 +112,8 @@ def _drain(fd: int) -> None:
             os.close(fd)
         except OSError:
             pass
+        if proc is not None:
+            _reap(proc)
 
 
 @dataclass
@@ -120,7 +148,9 @@ class Cloud:
                     stdin=subprocess.PIPE,
                     stdout=slave,
                     stderr=slave,
+                    env=_child_env(),
                     start_new_session=True,
+                    preexec_fn=_acquire_terminal,
                 )
             finally:
                 os.close(slave)
@@ -138,7 +168,7 @@ class Cloud:
                 if found:
                     self._write_log(log, text, command)
                     keep_master = True
-                    threading.Thread(target=_drain, args=(master,), daemon=True).start()
+                    threading.Thread(target=_drain, args=(master, proc), daemon=True).start()
                     return found.group(0)
                 code = proc.poll()
                 if code is not None:
@@ -156,6 +186,7 @@ class Cloud:
                         os.killpg(proc.pid, signal.SIGTERM)
                     except (OSError, AttributeError):
                         proc.kill()
+                    _reap(proc, 5)
                     raw += _read_available(master, 0.05)
                     self._write_log(log, clean_terminal_text(raw), command)
                     raise CloudError(f"{argv[0]} printed no session in {int(self.wait_seconds)}s; see {log}")

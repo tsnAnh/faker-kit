@@ -147,6 +147,14 @@ if sys.argv[1:] != ['--cloud']:
     print('bad argv', sys.argv[1:]); sys.exit(2)
 if not os.isatty(1):
     print('--cloud requires an interactive terminal'); sys.exit(1)
+if os.environ.get('CI'):
+    print('No cloud session was created or opened: it would open in this terminal and need the keyboard. CI is set.'); sys.exit(1)
+try:
+    keyboard = 0 if os.isatty(0) else os.open('/dev/tty', os.O_RDONLY)
+except OSError as error:
+    print('No cloud session was created or opened: it would open in this terminal and need the keyboard.', error.strerror); sys.exit(1)
+if os.tcgetpgrp(keyboard) != os.tcgetpgrp(1):
+    print('/dev/tty is not the terminal on stdout'); sys.exit(1)
 task = sys.stdin.read()
 if not task.startswith('/faker-mode'):
     print('task text was', repr(task[:20])); sys.exit(2)
@@ -232,3 +240,63 @@ def test_an_agent_that_prints_no_session_in_time_is_an_error(tmp_path):
     argv = fake_agent("import time; time.sleep(30)")
     with pytest.raises(CloudError, match="no session in 2s"):
         cloud([], wait=2.0).start("codex", "acme/shop", command(argv), tmp_path / "w")
+
+
+def test_the_pseudo_terminal_is_the_childs_controlling_terminal_so_dev_tty_opens(tmp_path):
+    script = ("import os; fd = os.open('/dev/tty', os.O_RDONLY); "
+              "print('tty', os.tcgetpgrp(fd) == os.tcgetpgrp(1), 'stdin_tty', os.isatty(0), 'sid', os.getsid(0) == os.getpid()); "
+              "print('Session: https://claude.ai/code/session_01ABCdef', flush=True)")
+    workdir = tmp_path / "w"
+    assert cloud([]).start("claude", "acme/shop", command(fake_agent(script)), workdir) == "https://claude.ai/code/session_01ABCdef"
+    log = (tmp_path / "w.log").read_text()
+    assert "tty True stdin_tty False" in log
+
+
+def test_the_fake_claude_fails_on_a_pseudo_terminal_that_is_not_the_controlling_terminal(tmp_path):
+    # The old launch: new session, pty on stdout, never acquired. /dev/tty then fails with ENXIO.
+    import os
+
+    wrapper = tmp_path / "claude"
+    wrapper.write_text(f"#!{sys.executable}\n" + FAKE_CLAUDE_CLOUD)
+    wrapper.chmod(0o755)
+    master, slave = os.openpty()
+    try:
+        proc = subprocess.Popen([str(wrapper), "--cloud"], stdin=subprocess.PIPE, stdout=slave, stderr=slave, start_new_session=True)
+        os.close(slave)
+        proc.communicate(b"/faker-mode x")
+        out = os.read(master, 65536).decode()
+    finally:
+        os.close(master)
+    assert proc.returncode == 1 and "need the keyboard" in out
+
+
+def test_ci_is_not_passed_to_the_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("CI", "true")
+    script = "import os; print('ci', repr(os.environ.get('CI'))); print('task_e1b2c3d4e5', flush=True)"
+    cloud([]).start("claude", "acme/shop", command(fake_agent(script)), tmp_path / "w")
+    assert "ci None" in (tmp_path / "w.log").read_text()
+
+
+def test_the_child_survives_until_the_session_exists_is_reaped_and_leaks_no_descriptors(tmp_path):
+    import os
+
+    before = len(os.listdir("/proc/self/fd"))
+    script = ("import time; time.sleep(0.5); print('Session: https://claude.ai/code/session_01ABCdef', flush=True); time.sleep(0.3)")
+    procs = []
+
+    def spy(*args, **kwargs):
+        proc = subprocess.Popen(*args, **kwargs)
+        procs.append(proc)
+        return proc
+
+    runner = cloud([])
+    runner.popen = spy
+    assert runner.start("claude", "acme/shop", command(fake_agent(script)), tmp_path / "w") == "https://claude.ai/code/session_01ABCdef"
+    deadline = time.time() + 10
+    while procs[0].returncode is None and time.time() < deadline:
+        time.sleep(0.05)
+    assert procs[0].returncode == 0, "the drain thread reaps the child after it exits"
+    deadline = time.time() + 5
+    while len(os.listdir("/proc/self/fd")) > before and time.time() < deadline:
+        time.sleep(0.05)
+    assert len(os.listdir("/proc/self/fd")) <= before
