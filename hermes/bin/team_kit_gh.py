@@ -49,6 +49,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Callable
@@ -60,7 +61,19 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
 
 from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord, clean_reason, issue_body  # noqa: E402
 from team_kit_cloud import Cloud, CloudError  # noqa: E402
-from team_kit_risk import CODEOWNERS_PATHS, RISK_LABELS, Risk, owners_for, parse_codeowners, pick_reviewers, score  # noqa: E402
+from team_kit_risk import (  # noqa: E402
+    CODEOWNERS_PATHS,
+    REPAIR_HISTORY_FILES,
+    RISK_LABELS,
+    Risk,
+    is_repair_commit,
+    normalize_risk_overrides,
+    owners_for,
+    parse_codeowners,
+    pick_reviewers,
+    score,
+    unowned_paths,
+)
 from team_kit_contracts import (  # noqa: E402
     DEFAULT_ACCEPTED,
     LAUNCHED_MARKER,
@@ -111,6 +124,7 @@ HEALTH_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,31}\Z")
 # many passing ones, so one blip never pages the owner. A failed check run is definite at once.
 HEALTH_STREAK = 2
 HEALTH_TIMEOUT_SECONDS = 10
+RECENT_REPAIR_DAYS = 90
 NOTICE = "team-kit notice:"
 # A running unit with no report this long after its launch is a gate: its session died. The same
 # for checks still pending this long after a done report.
@@ -299,6 +313,10 @@ class Gh:
             extra = config.get(key, [])
             if not isinstance(extra, list) or not all(isinstance(p, str) and p for p in extra):
                 raise Refused(f".agents/dispatch.json {key} must be a list of path patterns")
+        try:
+            normalize_risk_overrides(config.get("risk_overrides", []))
+        except ValueError as err:
+            raise Refused(str(err)) from None
         accepted = config.get("accept_verifications", list(DEFAULT_ACCEPTED))
         if not isinstance(accepted, list) or not accepted or any(v not in VERIFICATIONS[:3] for v in accepted):
             raise Refused(f".agents/dispatch.json accept_verifications must list some of {', '.join(VERIFICATIONS[:3])}")
@@ -378,6 +396,13 @@ class Gh:
     def read(self, issue: int | None, pr: int | None) -> str:
         kind, number = ("pr", pr) if pr else ("issue", issue)
         return self.run([kind, "view", str(number), "-R", self.repo, "--comments"])
+
+    def commits_for_path(self, path: str, per_page: int = 10, since: str | None = None) -> list[dict]:
+        params = {"path": path, "per_page": str(per_page)}
+        if since:
+            params["since"] = since
+        query = urllib.parse.urlencode(params, safe="/:")
+        return json.loads(self.run(["api", f"repos/{self.repo}/commits?{query}"]))
 
     # andon --------------------------------------------------------------------------------------
 
@@ -633,15 +658,34 @@ class Gh:
     def risk(self, pr: int, verification: str | None, checks: str = "passed") -> Risk:
         config = self.dispatch_config()
         files = json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/pulls/{int(pr)}/files?per_page=100"]))
-        found = score(files, verification, tuple(config.get("risk_paths_high", [])), tuple(config.get("risk_paths_medium", [])), checks)
         paths = [str(f.get("filename") or "") for f in files]
         candidates: list[str] = []
+        codeowners_unowned: list[str] = []
         for path in CODEOWNERS_PATHS:
             try:
-                candidates = owners_for(paths, parse_codeowners(self.file(path)))
+                rules = parse_codeowners(self.file(path))
             except Refused:
                 continue
+            candidates = owners_for(paths, rules)
+            codeowners_unowned = unowned_paths(paths, rules)
             break
+        since = dt.datetime.fromtimestamp(self.now(), dt.timezone.utc) - dt.timedelta(days=RECENT_REPAIR_DAYS)
+        recent_repairs: list[str] = []
+        # Files with history, most-changed first; only the first REPAIR_HISTORY_FILES are looked up.
+        with_history = sorted((f for f in files if str(f.get("filename") or "") and f.get("status") != "added"),
+                              key=lambda f: -(int(f.get("additions") or 0) + int(f.get("deletions") or 0)))
+        unchecked = max(0, len(with_history) - REPAIR_HISTORY_FILES)
+        for f in with_history[:REPAIR_HISTORY_FILES]:
+            path = str(f.get("filename") or "")
+            try:
+                commits = self.commits_for_path(path, per_page=30, since=since.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            except (Refused, ValueError):
+                continue
+            if any(isinstance(c, dict) and is_repair_commit(c) for c in commits):
+                recent_repairs.append(path)
+        found = score(files, verification, tuple(config.get("risk_paths_high", [])), tuple(config.get("risk_paths_medium", [])), checks,
+                      normalize_risk_overrides(config.get("risk_overrides", [])), tuple(recent_repairs), tuple(codeowners_unowned),
+                      unchecked)
         if not candidates:
             # No CODEOWNERS: whoever last changed the files this pull request changes most.
             biggest = sorted(files, key=lambda f: -(int(f.get("additions") or 0) + int(f.get("deletions") or 0)))[:3]
@@ -649,7 +693,7 @@ class Gh:
                 if f.get("status") == "added":
                     continue
                 try:
-                    commits = json.loads(self.run(["api", f"repos/{self.repo}/commits?path={f['filename']}&per_page=10"]))
+                    commits = self.commits_for_path(str(f["filename"]), per_page=10)
                 except (Refused, ValueError):
                     continue
                 candidates += [str((c.get("author") or {}).get("login") or "") for c in commits if isinstance(c, dict)]

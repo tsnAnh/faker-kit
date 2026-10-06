@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import time
+import urllib.parse
 
 import pytest
 from conftest import HERMES, SHOP, TEMPLATES, fill_brief
@@ -72,7 +73,11 @@ class FakeGh:
             if "/pulls/" in path and "/files" in path:
                 return json.dumps(self.pr_files.get(int(path.split("/pulls/")[1].split("/")[0]), []))
             if "/commits?path=" in path:
-                return json.dumps([{"author": {"login": a}} for a in self.history.get(path.split("path=")[1].split("&")[0], [])])
+                query = urllib.parse.parse_qs(path.split("?", 1)[1])
+                commits = []
+                for entry in self.history.get(query.get("path", [""])[0], []):
+                    commits.append(entry if isinstance(entry, dict) else {"author": {"login": entry}, "commit": {"message": "Change"}})
+                return json.dumps(commits)
             repo, rest = path.removeprefix("repos/").split("/issues/")
             if rest.endswith("/comments"):
                 return json.dumps(self.comments.get((repo, int(rest.split("/")[0])), []))
@@ -1136,6 +1141,59 @@ def test_without_codeowners_the_last_people_to_change_the_files_are_suggested(te
     assert "risk medium (325 lines changed), suggested reviewers @lan, @minh, @huy)" in notice
 
 
+def test_recent_revert_or_hotfix_history_makes_a_pull_request_medium_risk(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    gh.pr_files[7] = files(("src/cart.ts", "modified", 6, 2))
+    gh.history["src/cart.ts"] = [{"author": {"login": "lan"}, "commit": {"message": "Revert \"cart total rounding\""}}]
+    verdict(gh, n, team_kit_home, verification="unit-test-verified", at=NOW)
+    [notice] = tick(gh, capsys)
+    assert "risk medium (recent revert or hotfix touched src/cart.ts), suggested reviewers @lan)" in notice
+    assert any(c[0] == "api" and "/commits?path=src/cart.ts&per_page=30&since=" in c[-1] for c in gh.calls)
+
+
+def test_a_bracketed_path_with_a_recent_revert_matches_itself(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    gh.pr_files[7] = files(("app/[id]/page.tsx", "modified", 6, 2))
+    gh.history["app/[id]/page.tsx"] = [{"author": {"login": "lan"}, "commit": {"message": "revert: id page cache"}}]
+    verdict(gh, n, team_kit_home, verification="unit-test-verified", at=NOW)
+    [notice] = tick(gh, capsys)
+    assert "risk medium (recent revert or hotfix touched app/[id]/page.tsx), suggested reviewers @lan)" in notice
+
+
+def test_a_feature_commit_that_mentions_rollback_is_not_a_repair(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    gh.pr_files[7] = files(("src/deploy.ts", "modified", 6, 2))
+    gh.history["src/deploy.ts"] = [{"author": {"login": "lan"}, "commit": {"message": "add rollback support"}}]
+    verdict(gh, n, team_kit_home, verification="unit-test-verified", at=NOW)
+    [notice] = tick(gh, capsys)
+    assert "risk low" in notice and "revert or hotfix touched" not in notice
+
+
+def test_revert_history_lookups_are_capped_to_the_most_changed_files(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    # 30 changed files, f00.ts changed least and f29.ts most, plus one added file with no history.
+    gh.pr_files[7] = files(*[(f"src/f{i:02}.ts", "modified", i + 1, 0) for i in range(30)], ("src/new.ts", "added", 1, 0))
+    gh.history["src/f00.ts"] = [{"author": {"login": "lan"}, "commit": {"message": "Revert \"f00\""}}]
+    verdict(gh, n, team_kit_home, verification="unit-test-verified", at=NOW)
+    [notice] = tick(gh, capsys)
+    looked_up = [urllib.parse.parse_qs(c[-1].split("?", 1)[1])["path"][0]
+                 for c in gh.calls if c[0] == "api" and "/commits?" in c[-1] and "since=" in c[-1]]
+    assert len(looked_up) == 25
+    assert set(looked_up) == {f"src/f{i:02}.ts" for i in range(5, 30)}
+    # f00.ts was not looked up, so its revert is not seen, and the notice says the cap was hit.
+    assert "revert or hotfix touched" not in notice
+    assert "revert and hotfix history checked for the 25 most-changed files only, 5 more not checked" in notice
+
+
+def test_codeowners_with_unowned_changed_paths_makes_a_pull_request_medium_risk(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    gh.pr_files[7] = files(("src/cart.ts", "modified", 6, 2), ("docs/guide.md", "modified", 1, 1))
+    gh.files["CODEOWNERS"] = "docs/ @docs-team\n"
+    verdict(gh, n, team_kit_home, verification="unit-test-verified", at=NOW)
+    [notice] = tick(gh, capsys)
+    assert "risk medium (CODEOWNERS has no owner for src/cart.ts), suggested reviewers @docs-team)" in notice
+
+
 def test_a_failed_risk_score_never_holds_a_unit_back(team_kit_home, gh, capsys):
     n = verifying_unit(gh, team_kit_home)
     real = gh.__call__
@@ -1160,6 +1218,17 @@ def test_risk_paths_in_dispatch_json_add_to_the_defaults_and_are_checked(team_ki
     bad = FakeGh(kit, risk_paths_medium="apps/")
     assert run(bad, "kit-check") == 1
     assert "risk_paths_medium must be a list" in capsys.readouterr().err
+
+
+def test_risk_overrides_in_dispatch_json_add_repository_rules_and_are_checked(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, risk_overrides=[{"level": "medium", "paths": ["apps/mobile/"], "reason": "mobile release surface"}])
+    n = verifying_unit(gh, team_kit_home)
+    gh.pr_files[7] = files(("apps/mobile/paywall.swift", "modified", 4, 1))
+    verdict(gh, n, team_kit_home, at=NOW)
+    assert "risk medium (mobile release surface: apps/mobile/paywall.swift)" in tick(gh, capsys)[0]
+    bad = FakeGh(kit, risk_overrides=[{"level": "urgent", "paths": ["apps/mobile/"]}])
+    assert run(bad, "kit-check") == 1
+    assert "risk_overrides[1].level must be medium or high" in capsys.readouterr().err
 
 
 # Incidents -----------------------------------------------------------------------------------------
