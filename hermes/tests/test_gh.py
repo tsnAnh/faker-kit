@@ -501,7 +501,7 @@ def test_tick_launches_a_queued_unit_once_its_cross_project_dependency_merged(te
     cloud = FakeCloud()
     assert tick(gh, capsys, cloud) == ["[SILENT]"]
     assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
-    assert f"{REPO}#{n} using the follow-brief skill." in cloud.started[0][2][-1]
+    assert f"{REPO}#{n} using the follow-brief skill." in cloud.started[0][2].prompt
     assert cross_repo_issue_reads(gh) == [], "cross-project dependencies use published state, not another repo token"
 
 
