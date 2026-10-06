@@ -2,6 +2,7 @@
 """team-kit-gh: the only GitHub access a project bot has, and only for its project's one repository.
 
   project                                          this bot's project and repository
+  teammate-proposals                               list open collaborator proposals: number, author, title, link
   dispatch      --unit U --size S --brief-file F   open the unit's issue, then launch it or queue it
   launch        --issue N                          launch one queued or gated unit now (the owner asked)
   verify        --issue N                          verify a unit's pull request again, without redoing its work
@@ -15,6 +16,7 @@
   andon         [raise REASON... | clear]          show, pull, or clear this project's andon cord (the owner asked)
   security                                         start a security review of the default branch's new commits
   incidents                                        poll the default branch's checks and health URLs; open, triage, and close incidents
+  proposals                                        the fixes proposed for open incidents, each with its incident number
 
 GitHub holds every unit's state, as labels on its issue:
 
@@ -48,6 +50,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Callable
@@ -59,7 +62,19 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
 
 from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord, clean_reason, issue_body  # noqa: E402
 from team_kit_cloud import FINISHED, Cloud, CloudError  # noqa: E402
-from team_kit_risk import CODEOWNERS_PATHS, RISK_LABELS, Risk, owners_for, parse_codeowners, pick_reviewers, score  # noqa: E402
+from team_kit_risk import (  # noqa: E402
+    CODEOWNERS_PATHS,
+    REPAIR_HISTORY_FILES,
+    RISK_LABELS,
+    Risk,
+    is_repair_commit,
+    normalize_risk_overrides,
+    owners_for,
+    parse_codeowners,
+    pick_reviewers,
+    score,
+    unowned_paths,
+)
 from team_kit_contracts import (  # noqa: E402
     DEFAULT_ACCEPTED,
     LAUNCHED_MARKER,
@@ -97,6 +112,10 @@ SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
 REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
+PROPOSAL_LABEL = "agent:proposal"
+COLLABORATOR_ASSOCIATIONS = frozenset({"OWNER", "COLLABORATOR"})  # MEMBER is not here: an org member can have read-only access, so the permission API decides
+COLLABORATOR_PERMISSIONS = frozenset({"write", "maintain", "admin"})
+LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?\Z")
 RUNNING_LABEL = "agent:running"
 VERIFYING_LABEL = "agent:verifying"
 REVIEW_LABEL = "agent:review"
@@ -110,6 +129,7 @@ HEALTH_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,31}\Z")
 # many passing ones, so one blip never pages the owner. A failed check run is definite at once.
 HEALTH_STREAK = 2
 HEALTH_TIMEOUT_SECONDS = 10
+RECENT_REPAIR_DAYS = 90
 NOTICE = "team-kit notice:"
 # A running unit with no report this long after its launch is a gate: its session died. The same
 # for checks still pending this long after a done report.
@@ -161,6 +181,18 @@ def kit_commit(policy: Policy) -> str:
 def reason(err: Exception) -> str:
     text = str(err) if isinstance(err, (Refused, ContractError)) else f"unexpected {type(err).__name__}"
     return text[:200]
+
+
+def json_pages(text: str) -> list:
+    """gh api --paginate prints each page's array one after another; join them."""
+    decoder, at, items = json.JSONDecoder(), 0, []
+    while at < len(text):
+        if text[at].isspace():
+            at += 1
+            continue
+        page, at = decoder.raw_decode(text, at)
+        items.extend(page if isinstance(page, list) else [page])
+    return items
 
 
 def labels_of(issue: dict) -> set[str]:
@@ -298,6 +330,10 @@ class Gh:
             extra = config.get(key, [])
             if not isinstance(extra, list) or not all(isinstance(p, str) and p for p in extra):
                 raise Refused(f".agents/dispatch.json {key} must be a list of path patterns")
+        try:
+            normalize_risk_overrides(config.get("risk_overrides", []))
+        except ValueError as err:
+            raise Refused(str(err)) from None
         accepted = config.get("accept_verifications", list(DEFAULT_ACCEPTED))
         if not isinstance(accepted, list) or not accepted or any(v not in VERIFICATIONS[:3] for v in accepted):
             raise Refused(f".agents/dispatch.json accept_verifications must list some of {', '.join(VERIFICATIONS[:3])}")
@@ -334,6 +370,78 @@ class Gh:
         if search:
             args += ["--search", search]
         return sorted(json.loads(self.run(args)), key=lambda i: int(i["number"]))
+
+    def proposal_candidates(self) -> list[dict]:
+        """Every open issue labelled agent:proposal, all pages. An issue that is also an agent-task is a unit, not a proposal."""
+        pages = self.run(["api", "--paginate", f"repos/{self.repo}/issues?labels={PROPOSAL_LABEL.replace(':', '%3A')}&state=open&per_page=100"])
+        found = []
+        for issue in json_pages(pages):
+            if not isinstance(issue, dict) or "pull_request" in issue or issue.get("state") != "open":
+                continue
+            if TASK_LABEL in labels_of(issue) or PROPOSAL_LABEL not in labels_of(issue):
+                continue
+            found.append(issue)
+        return sorted(found, key=lambda i: int(i["number"]))
+
+    def collaborator(self, issue: dict) -> bool | None:
+        """True if the author can write to the repository, False if not, None if that could not be checked (try again next tick).
+        OWNER and COLLABORATOR associations count as they are. Anyone else, MEMBER included, counts only if the permission API says write, maintain, or admin."""
+        if str(issue.get("author_association") or "").upper() in COLLABORATOR_ASSOCIATIONS:
+            return True
+        login = str((issue.get("user") or {}).get("login") or "")
+        if not LOGIN.match(login):
+            return False
+        try:
+            data = json.loads(self.run(["api", f"repos/{self.repo}/collaborators/{login}/permission"]))
+        except Refused:
+            return None
+        except ValueError:
+            return False
+        return isinstance(data, dict) and str(data.get("permission") or "").lower() in COLLABORATOR_PERMISSIONS
+
+    def proposal_summary(self, issue: dict) -> dict:
+        number = int(issue["number"])
+        title = " ".join(str(issue.get("title") or f"Proposal #{number}").split())[:200] or f"Proposal #{number}"
+        return {"number": number, "author": str((issue.get("user") or {}).get("login") or ""), "title": title,
+                "url": f"https://github.com/{self.repo}/issues/{number}"}
+
+    def proposals(self) -> list[dict]:
+        return [self.proposal_summary(i) for i in self.proposal_candidates() if self.collaborator(i) is True]
+
+    def proposal_notices(self) -> list[str]:
+        """One notice per new collaborator proposal: number, author login, link. Never the title, which anyone could word as a notice.
+        Every open candidate is checked once: a collaborator's goes in "seen", anyone else's in "ignored", so the permission API is not asked again on every tick.
+        An answer that could not be had is recorded in neither and asked again next tick. Both lists keep only open issues, so the record stays bounded."""
+        candidates = self.proposal_candidates()
+        open_numbers = {int(i["number"]) for i in candidates}
+        directory = self.policy.home / "proposal-notices"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{self.bot.name}.json"
+        with open(directory / ".lock", "w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                record = json.loads(path.read_text())
+                seen = {int(n) for n in record.get("seen", [])}
+                ignored = {int(n) for n in record.get("ignored", [])}
+            except (OSError, ValueError, TypeError, AttributeError):
+                seen, ignored = set(), set()
+            fresh, newly_ignored = [], set()
+            for issue in candidates:
+                number = int(issue["number"])
+                if number in seen or number in ignored:
+                    continue
+                verdict = self.collaborator(issue)
+                if verdict is True:
+                    fresh.append(self.proposal_summary(issue))
+                elif verdict is False:
+                    newly_ignored.add(number)
+            kept_seen = (seen & open_numbers) | {i["number"] for i in fresh}  # a closed or relabelled issue drops out
+            kept_ignored = (ignored & open_numbers) | newly_ignored
+            if kept_seen != seen or kept_ignored != ignored:
+                target = path.with_name(f".{path.name}.{os.getpid()}")
+                target.write_text(json.dumps({"seen": sorted(kept_seen), "ignored": sorted(kept_ignored)}))
+                target.replace(path)
+        return [f"{NOTICE} proposal #{i['number']} from {i['author']}. {i['url']}" for i in fresh]
 
     def comments(self, issue: int) -> list[dict]:
         return json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/issues/{issue}/comments"]))
@@ -377,6 +485,13 @@ class Gh:
     def read(self, issue: int | None, pr: int | None) -> str:
         kind, number = ("pr", pr) if pr else ("issue", issue)
         return self.run([kind, "view", str(number), "-R", self.repo, "--comments"])
+
+    def commits_for_path(self, path: str, per_page: int = 10, since: str | None = None) -> list[dict]:
+        params = {"path": path, "per_page": str(per_page)}
+        if since:
+            params["since"] = since
+        query = urllib.parse.urlencode(params, safe="/:")
+        return json.loads(self.run(["api", f"repos/{self.repo}/commits?{query}"]))
 
     # andon --------------------------------------------------------------------------------------
 
@@ -669,15 +784,34 @@ class Gh:
     def risk(self, pr: int, verification: str | None, checks: str = "passed") -> Risk:
         config = self.dispatch_config()
         files = json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/pulls/{int(pr)}/files?per_page=100"]))
-        found = score(files, verification, tuple(config.get("risk_paths_high", [])), tuple(config.get("risk_paths_medium", [])), checks)
         paths = [str(f.get("filename") or "") for f in files]
         candidates: list[str] = []
+        codeowners_unowned: list[str] = []
         for path in CODEOWNERS_PATHS:
             try:
-                candidates = owners_for(paths, parse_codeowners(self.file(path)))
+                rules = parse_codeowners(self.file(path))
             except Refused:
                 continue
+            candidates = owners_for(paths, rules)
+            codeowners_unowned = unowned_paths(paths, rules)
             break
+        since = dt.datetime.fromtimestamp(self.now(), dt.timezone.utc) - dt.timedelta(days=RECENT_REPAIR_DAYS)
+        recent_repairs: list[str] = []
+        # Files with history, most-changed first; only the first REPAIR_HISTORY_FILES are looked up.
+        with_history = sorted((f for f in files if str(f.get("filename") or "") and f.get("status") != "added"),
+                              key=lambda f: -(int(f.get("additions") or 0) + int(f.get("deletions") or 0)))
+        unchecked = max(0, len(with_history) - REPAIR_HISTORY_FILES)
+        for f in with_history[:REPAIR_HISTORY_FILES]:
+            path = str(f.get("filename") or "")
+            try:
+                commits = self.commits_for_path(path, per_page=30, since=since.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            except (Refused, ValueError):
+                continue
+            if any(isinstance(c, dict) and is_repair_commit(c) for c in commits):
+                recent_repairs.append(path)
+        found = score(files, verification, tuple(config.get("risk_paths_high", [])), tuple(config.get("risk_paths_medium", [])), checks,
+                      normalize_risk_overrides(config.get("risk_overrides", [])), tuple(recent_repairs), tuple(codeowners_unowned),
+                      unchecked)
         if not candidates:
             # No CODEOWNERS: whoever last changed the files this pull request changes most.
             biggest = sorted(files, key=lambda f: -(int(f.get("additions") or 0) + int(f.get("deletions") or 0)))[:3]
@@ -685,7 +819,7 @@ class Gh:
                 if f.get("status") == "added":
                     continue
                 try:
-                    commits = json.loads(self.run(["api", f"repos/{self.repo}/commits?path={f['filename']}&per_page=10"]))
+                    commits = self.commits_for_path(str(f["filename"]), per_page=10)
                 except (Refused, ValueError):
                     continue
                 candidates += [str((c.get("author") or {}).get("login") or "") for c in commits if isinstance(c, dict)]
@@ -1153,7 +1287,6 @@ class Incidents:
         if not triage or triage.get("done"):
             return None
         number = int(incident["issue"])
-
         def find():
             comments = gh.comments(number)
             starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(TRIAGE_LAUNCHED_MARKER) and gh.trusted(c)]
@@ -1180,7 +1313,16 @@ class Incidents:
         if diagnosis is not None:
             triage["done"] = True
             suspect = f"suspects {diagnosis.suspect[:7]}" if diagnosis.suspect else "names no suspect commit"
-            return f"{NOTICE} incident #{number}: the triage session {suspect} ({diagnosis.confidence} confidence): {where}"
+            lead = f"{NOTICE} incident #{number}: the triage session {suspect} ({diagnosis.confidence} confidence)"
+            try:
+                proposed = self.proposed_fix(diagnosis)
+            except Exception as err:  # noqa: BLE001 - the diagnosis stands; the owner says the fix
+                return f"{lead}. No fix is proposed: cannot read the suspect commit: {reason(err)}: {where}"
+            if proposed:
+                triage["proposed_fix"] = proposed
+                return (f"{lead}. If you reply `ok #{number}`, I will brief exactly `{proposed}` as a small unit; "
+                        f"nothing dispatches without your reply: {where}")
+            return f"{lead}: {where}"
         if ended:
             triage["done"] = True
             return f"{NOTICE} incident #{number}: the Codex triage task {gh.ended_words(ended)} without a signed diagnosis. Its session: {triage.get('session')}"
@@ -1188,6 +1330,28 @@ class Incidents:
             triage["done"] = True
             return f"{NOTICE} incident #{number}: the triage session posted no signed diagnosis in a day. Its session: {triage.get('session')}"
         return None
+
+    def proposed_fix(self, diagnosis) -> str | None:
+        """`revert <full sha>`, naming `git revert -m 1` when the suspect is a merge commit, for a high-confidence suspect only.
+
+        The parent count comes from the GitHub API, so the text is decided in code, never by a model.
+        """
+        if diagnosis.confidence != "high" or not diagnosis.suspect or not SHA.match(diagnosis.suspect):
+            return None
+        gh = self.gh
+        commit = json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{diagnosis.suspect}"]))
+        if str(commit.get("sha") or "") != diagnosis.suspect or not isinstance(commit.get("parents"), list):
+            raise Refused(f"GitHub returned no commit {diagnosis.suspect}")
+        if len(commit["parents"]) > 1:
+            return f"revert {diagnosis.suspect} (a merge commit: git revert -m 1 {diagnosis.suspect})"
+        return f"revert {diagnosis.suspect}"
+
+    def proposals(self) -> dict:
+        """The fixes proposed for open incidents and not yet briefed, from this machine's state alone."""
+        data = self.state()
+        found = [{"incident": int(i["issue"]), "fix": i["triage"]["proposed_fix"]}
+                 for i in data["open"].values() if isinstance(i.get("triage"), dict) and i["triage"].get("proposed_fix")]
+        return {"proposals": sorted(found, key=lambda p: p["incident"])}
 
 
 class Project:
@@ -1203,11 +1367,17 @@ class Project:
         cord, andon_notices = gh.sync_andon()
         notices.extend(andon_notices)
         try:
+            notices.extend(gh.proposal_notices())
+        except Exception as err:  # noqa: BLE001 - reported once, retried next tick
+            problems["teammate-proposals"] = reason(err)
+        try:
             units = gh.units()
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
             units, problems[gh.repo] = [], reason(err)
         for issue in units:
             labels = labels_of(issue)
+            if TASK_LABEL not in labels:
+                continue
             if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
                 try:
                     notice = gh.check_verifying(issue, cloud) if VERIFYING_LABEL in labels else gh.check_running(issue, cloud)
@@ -1264,6 +1434,8 @@ class Project:
         flight, waiting, done = [], [], []
         for issue in self.gh.units():
             labels, ref = labels_of(issue), f"#{issue['number']} {issue['title']}"
+            if TASK_LABEL not in labels:
+                continue
             if RUNNING_LABEL in labels:
                 flight.append(f"{ref} (running)")
             elif VERIFYING_LABEL in labels:
@@ -1302,7 +1474,7 @@ def brief_text(policy: Policy, bot: Bot, path: str) -> str:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="team-kit-gh")
     sub = top.add_subparsers(dest="command", required=True)
-    for name in ("project", "tick", "status", "security", "incidents"):
+    for name in ("project", "tick", "status", "security", "incidents", "proposals", "teammate-proposals"):
         sub.add_parser(name)
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
@@ -1337,11 +1509,15 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         cloud = cloud or Cloud(run_gh=run)
         if args.command == "project":
             out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
+        elif args.command == "teammate-proposals":
+            out = Gh(policy, me, run, now).proposals()
         elif args.command == "incidents":
             gh = Gh(policy, me, run, now)
             lines = Incidents(gh, fetch).run(commit(policy), cloud)
             print("\n".join(lines) if lines else SILENT)
             return 0
+        elif args.command == "proposals":
+            out = Incidents(Gh(policy, me, run, now), fetch).proposals()
         elif args.command == "security":
             out = Security(Gh(policy, me, run, now)).start(commit(policy), cloud)
         elif args.command == "andon":
