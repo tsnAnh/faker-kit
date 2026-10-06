@@ -4,7 +4,7 @@
 
 Where everything in Lauren Tan's talk and her two pstack guide posts lives in this kit, plus every skill those skills reference. `node scripts/validate.mjs` fails if a skill in the kit is missing from the catalog, so this page cannot fall behind.
 
-- 101 skills from 9 plugins, plus 3 dormant automation skills.
+- 102 skills from 9 plugins, plus 3 dormant automation skills.
 - 12 skills are named in the posts, and all of them are here.
 - 27 ideas, bots, and tools from the talk and posts are mapped to the skills that carry them.
 
@@ -27,7 +27,7 @@ What it describes:
 | Agents leaving comments to justify papering over a problem | `/no-comments`, the Comment Sicko agent, and the agnostic pack's `no-new-comments` check |
 | A gardener who watches the codebase for spreading smells | `gardener`, with a daily routine template |
 | Extracting what reviewers keep saying into the codebase: the style guide | `style-guide-from-reviews`, then `correct` to promote each entry down the ladder |
-| Grok Bot routines that react to Slack threads and Sentry alerts | `setup-routines`: Claude Code routines or Codex scheduled tasks |
+| Automation routines that react to Slack threads and Sentry alerts | `setup-routines`: Claude Code routines or Codex scheduled tasks |
 | Automations, and an SDK for building more bots | `setup-routines`, and trust-ladder's `orchestrate`, ported from the upstream orchestrate plugin to run Claude Code and Codex agents. The SDK plugin was left out; see below |
 | Cloud agents | `setup-cloud-agents` |
 | Automatically reproducing bug reports and opening pull requests | pstack's benny pack and the `reproduce-bugs` routine |
@@ -102,8 +102,8 @@ Found by scanning each vendored plugin for another plugin's skill names. Each re
 
 | Plugin | Skills | Why it is here |
 |---|---|---|
-| trust-ladder | 26 | This kit's own plugin: the ladder, lint packs, templates, the compat layer, and the skills for non-engineers. |
-| pstack | 48 | The plugin the talk and both posts are about. Vendored with the principles, playbooks, agents, and the benny automation pack. `make-bot-ui` is left out: it builds pages for the upstream editor's Grok Bot. |
+| trust-ladder | 27 | This kit's own plugin: the ladder, lint packs, templates, the compat layer, and the skills for non-engineers. |
+| pstack | 48 | The plugin the talk and both posts are about. Vendored with the principles, playbooks, agents, and the benny automation pack. `make-bot-ui` is left out: it builds pages for the upstream bot. |
 | team-workflows | 18 | pstack routes to its `control-ui`, `control-cli`, and `deslop`; the talk's CI and review workflow lives here. |
 | thermos | 3 | The review panel team-workflows's `thermo-nuclear-code-quality-review` belongs to. |
 | continual-learning | 1 | Turns transcripts into AGENTS.md updates: the rules layer learning on its own. Its cadence hook runs in Claude Code and Codex. |
@@ -124,5 +124,5 @@ From the upstream plugin repository:
 | create-plugin | Scaffolds plugins in the upstream editor's format; this kit ships Claude Code, Codex, and Pi manifests. |
 | docs-canvas | Renders into the upstream editor's canvas; not referenced by the talk, posts, or pstack. |
 | pr-review-canvas (standalone) | The same skill ships in team-workflows, which is included. |
-| grok-voice | Voice features for Grok apps; unrelated to the trust ladder. |
+| voice plugin | Voice features for upstream apps; unrelated to the trust ladder. |
 | third_party connectors | MCP connector bundles for the upstream editor; Claude Code, Codex, and Pi connect to services their own way. |

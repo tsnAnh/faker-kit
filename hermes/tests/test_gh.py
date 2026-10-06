@@ -2,14 +2,17 @@ import base64
 import contextlib
 import io
 import json
+import os
+import subprocess
+import sys
 import time
 import urllib.parse
 
 import pytest
 from conftest import HERMES, SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
-from team_kit_contracts import LAUNCHED_MARKER, diagnosis_signature, security_signature, size_marker, verdict_signature
-from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, REPORT_DEADLINE_SECONDS, PROPOSAL_LABEL, Refused, checks_state, main
+from team_kit_contracts import LAUNCHED_MARKER, REVIEW_LAUNCHED_MARKER, ReviewResult, diagnosis_signature, review_argv, review_signature, review_signed, security_signature, size_marker, verdict_signature
+from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, PROPOSAL_LABEL, REPORT_DEADLINE_SECONDS, Refused, checks_state, main
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
 REPO = SHOP
@@ -119,6 +122,16 @@ class FakeGh:
                 return values[name]
 
             return json.dumps([{name: field(i, name) for name in fields} for i in found])
+        if args[:2] == ["pr", "list"]:
+            state = args[args.index("--state") + 1].upper()
+            found = []
+            assert "--search" not in args, "the unit's PR is read by number or branch, never searched"
+            head = args[args.index("--head") + 1] if "--head" in args else None
+            for (r, number), pr in self.prs.items():
+                if r != repo or pr.get("state") != state or (head and pr.get("headRefName") != head):
+                    continue
+                found.append({"number": number, "url": f"https://github.com/{repo}/pull/{number}", **pr_json(pr)})
+            return json.dumps(found)
         if args[:2] == ["issue", "create"]:
             number = self.add_issue(repo, labels=(args[args.index("--label") + 1],), body=args[args.index("--body") + 1], title=args[args.index("--title") + 1])
             return f"https://github.com/{repo}/issues/{number}\n"
@@ -146,7 +159,8 @@ class FakeGh:
         if args[:2] == ["pr", "view"]:
             pr = self.prs[(repo, int(args[2]))]
             pr.setdefault("labels", [])
-            return json.dumps({k: v for k, v in pr.items() if k in args[-1].split(",")})
+            return json.dumps({k: v for k, v in {**pr, "url": f"https://github.com/{repo}/pull/{args[2]}", "number": int(args[2]), **pr_json(pr)}.items()
+                               if k in args[-1].split(",")})
         if args[:2] == ["pr", "edit"]:
             pr = self.prs[(repo, int(args[2]))]
             names = {label["name"] for label in pr.setdefault("labels", [])}
@@ -469,17 +483,236 @@ def test_tick_ignores_a_report_from_an_untrusted_login(team_kit_home, gh, capsys
     assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
 
 
-def pr(gh, number, state="OPEN", merged=False, checks=("SUCCESS",)):
+def pr_json(pr):
+    return {"headRefOid": pr.get("headRefOid"), "body": pr.get("body", ""), "state": pr.get("state"), "headRefName": pr.get("headRefName"),
+            "isCrossRepository": pr.get("isCrossRepository", False), "author": {"login": pr.get("author", BOT_LOGIN)},
+            "headRepository": {"name": pr.get("headRepo", REPO).split("/")[1]}, "headRepositoryOwner": {"login": pr.get("headRepo", REPO).split("/")[0]}}
+
+
+def pr(gh, number, state="OPEN", merged=False, checks=("SUCCESS",), issue=None, head=None, branch=None, author=None, fork=False):
     rollup = [{"__typename": "CheckRun", "status": "COMPLETED" if c != "PENDING" else "IN_PROGRESS", "conclusion": c if c != "PENDING" else ""} for c in checks]
-    gh.prs[(REPO, number)] = {"state": state, "mergedAt": "2026-10-01T00:00:00Z" if merged else None, "headRefOid": "a" * 40, "statusCheckRollup": rollup}
+    body = f"<!-- team-kit:pr v1 card=u issue={issue} -->\nCloses #{issue}\n" if issue else ""
+    gh.prs[(REPO, number)] = {"state": state, "mergedAt": "2026-10-01T00:00:00Z" if merged else None,
+                              "headRefOid": head or "a" * 40, "statusCheckRollup": rollup, "body": body,
+                              "headRefName": branch or "dispatch/x", "author": author or BOT_LOGIN,
+                              "isCrossRepository": fork, "headRepo": "mallory/shop" if fork else REPO}
     return f"https://github.com/{REPO}/pull/{number}"
 
 
 HEAD = "a" * 40
 
 
+def test_tick_starts_one_pr_review_for_a_new_unit_pr_head(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude")
+    n, cloud = reviewing_unit(gh, team_kit_home, capsys)
+    [(backend, _, command, workdir)] = cloud.started
+    saved = review_record(team_kit_home, n)
+    assert backend == "claude" and command.argv == ("claude", "--cloud")
+    assert command.prompt.startswith(f"/review-pr Review https://github.com/{REPO}/pull/7 at commit {HEAD} for the unit in {REPO}#{n},")
+    assert saved["key"] in command.prompt
+    assert saved["key"] not in " ".join(command.argv)
+    assert saved["key"] not in gh.comments[(REPO, n)][-1]["body"]
+    assert workdir.name == f"{n}-review-{HEAD}"
+    assert (team_kit_home / "reviews" / "meo-beo" / f"{n}.json").stat().st_mode & 0o077 == 0
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert len(cloud.started) == 1, "same PR head already has one review in flight"
+
+
+def test_pr_review_start_is_locked_across_processes(tmp_path):
+    script = r'''
+import multiprocessing as mp
+import queue
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from team_kit_gh import Review
+
+ctx = mp.get_context("fork")
+barrier = ctx.Barrier(2)
+started = ctx.Queue()
+results = ctx.Queue()
+
+
+class StubGh:
+    def __init__(self, root):
+        self.policy = SimpleNamespace(home=Path(root))
+        self.bot = SimpleNamespace(name="bot")
+        self.repo = "acme/shop"
+
+    def now(self):
+        return 1000.0
+
+    def gate(self, issue, why):
+        return why
+
+    def run(self, args):
+        return ""
+
+    def comments(self, number):
+        return []
+
+    def trusted(self, comment):
+        return True
+
+
+class CountingCloud:
+    def start(self, backend, repo, command, workdir):
+        started.put((backend, repo, command.argv))
+        return "session"
+
+
+class RacingReview(Review):
+    def __init__(self, gh):
+        super().__init__(gh)
+        self.initial_read = True
+
+    def record(self, number):
+        value = super().record(number)
+        if self.initial_read:
+            self.initial_read = False
+            barrier.wait()
+        return value
+
+
+def worker(root):
+    review = RacingReview(StubGh(root))
+    issue = {"number": 7, "labels": [{"name": "agent:running"}]}
+    result = review.ensure(issue, "https://github.com/acme/shop/pull/9", "a" * 40, "claude", {}, CountingCloud(), False)
+    results.put(result)
+
+
+processes = [ctx.Process(target=worker, args=(sys.argv[1],)) for _ in range(2)]
+for process in processes:
+    process.start()
+for process in processes:
+    process.join(10)
+    if process.is_alive():
+        process.terminate()
+        process.join()
+        raise SystemExit("review lock regression hung")
+launches = []
+while True:
+    try:
+        launches.append(started.get_nowait())
+    except queue.Empty:
+        break
+outcomes = [results.get(timeout=1) for _ in range(2)]
+print(f"same_head_process_launches={len(launches)}; exit_codes={[p.exitcode for p in processes]}; outcomes={outcomes}")
+assert len(launches) == 1
+assert [p.exitcode for p in processes] == [0, 0]
+'''
+    env = {**os.environ, "PYTHONPATH": f"{HERMES / 'bin'}:{HERMES / 'lib'}"}
+    done = subprocess.run([sys.executable, "-c", script, str(tmp_path)], text=True, capture_output=True, env=env, check=True)
+    assert "same_head_process_launches=1" in done.stdout
+
+
+def test_tick_starts_a_new_pr_review_when_the_head_moves(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude")
+    n, cloud = reviewing_unit(gh, team_kit_home, capsys)
+    first = review_record(team_kit_home, n)["key"]
+    moved_head = HEAD[:7] + "b" * 33
+    gh.prs[(REPO, 7)]["headRefOid"] = moved_head
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    saved = review_record(team_kit_home, n)
+    assert len(cloud.started) == 2
+    assert saved["head"] == moved_head and saved["key"] != first
+    assert cloud.started[0][3].name != cloud.started[1][3].name
+    assert cloud.started[1][3].name.endswith(moved_head)
+
+
+def test_a_late_stale_review_launch_does_not_hide_the_current_signed_result(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude", verifier_backend="none")
+    n, cloud = reviewing_unit(gh, team_kit_home, capsys)
+    old_head = HEAD
+    new_head = "b" * 40
+    gh.prs[(REPO, 7)]["headRefOid"] = new_head
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    review_result(gh, n, team_kit_home, medium=1, head=new_head)
+    gh.comment(REPO, n,
+               f"{REVIEW_LAUNCHED_MARKER}\nsession: late-stale-review\nbackend: claude\n"
+               f"pr: https://github.com/{REPO}/pull/7\nhead: {old_head}\n")
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/7", at=NOW)
+    [notice] = tick(gh, capsys, cloud=FakeCloud())
+    assert "ready for you to merge" in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
+
+
+@pytest.mark.parametrize("forgery", ["unsigned", "wrong key", "edited", "untrusted", "stale head", "before launch"])
+def test_only_the_reviewers_own_signed_review_result_counts(team_kit_home, kit, capsys, forgery):
+    gh = FakeGh(kit, review_backend="claude")
+    n, _ = reviewing_unit(gh, team_kit_home, capsys)
+    if forgery == "unsigned":
+        review_result(gh, n, team_kit_home, sign=False)
+    elif forgery == "wrong key":
+        review_result(gh, n, team_kit_home, key="f" * 32)
+    elif forgery == "edited":
+        review_result(gh, n, team_kit_home, edited=True)
+    elif forgery == "untrusted":
+        review_result(gh, n, team_kit_home, login="stranger")
+    elif forgery == "stale head":
+        review_result(gh, n, team_kit_home, head="b" * 40)
+    else:
+        review_result(gh, n, team_kit_home)
+        comments = gh.comments[(REPO, n)]
+        comments.insert(0, comments.pop())
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/7", at=NOW)
+    assert tick(gh, capsys, cloud=FakeCloud()) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
+
+
+def test_a_high_pr_review_finding_gates_the_done_report(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude")
+    n, _ = reviewing_unit(gh, team_kit_home, capsys)
+    review_result(gh, n, team_kit_home, high=1, at=NOW)
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/7", at=NOW)
+    [notice] = tick(gh, capsys, cloud=FakeCloud())
+    assert "PR review still has 1 high finding" in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+
+
+def test_lower_pr_review_findings_do_not_block_ready_state(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude", verifier_backend="none")
+    n, _ = reviewing_unit(gh, team_kit_home, capsys)
+    review_result(gh, n, team_kit_home, medium=1, low=2, at=NOW)
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/7", at=NOW)
+    [notice] = tick(gh, capsys, cloud=FakeCloud())
+    assert "ready for you to merge" in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
+
+
+def test_review_backend_none_does_not_start_pr_reviews(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="none")
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    pr(gh, 7, issue=n)
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert cloud.started == []
+
+
+def test_codex_pr_review_uses_stdin_outside_argv(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="codex", codex_env="env_2")
+    reviewing_unit(gh, team_kit_home, capsys)
+    assert gh.calls
+    cloud = FakeCloud()
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.comment(REPO, n, f"{LAUNCHED_MARKER}\nsession: s\nbackend: codex\nbranch: dispatch/x\n")
+    pr(gh, 8, issue=n)
+    tick(gh, capsys, cloud=cloud)
+    [(backend, _, command, _)] = cloud.started
+    saved = review_record(team_kit_home, n)
+    assert backend == "codex"
+    assert command.argv == ("codex", "cloud", "exec", "--env", "env_2", "--attempts", "1", "-")
+    assert command.prompt.startswith("$review-pr ")
+    assert saved["key"] in command.prompt
+    assert saved["key"] not in " ".join(command.argv)
+
+
 def record(team_kit_home, n):
     return json.loads((team_kit_home / "verify" / "meo-beo" / f"{n}.json").read_text())
+
+
+def review_record(team_kit_home, n):
+    return json.loads((team_kit_home / "reviews" / "meo-beo" / f"{n}.json").read_text())
 
 
 def verdict(gh, n, team_kit_home, verification="live-ui-verified", head=HEAD, key=None, login="Codertocat", at=NOW - 60, sign=True, edited=False):
@@ -488,6 +721,141 @@ def verdict(gh, n, team_kit_home, verification="live-ui-verified", head=HEAD, ke
     gh.comment(REPO, n, f"<!-- team-kit:verdict v1 -->\nverification: {verification}\npr: https://github.com/{REPO}/pull/7\nhead: {head}\nsig: {sig}\n\n## Execution\n- ran it\n", login=login, at=at)
     if edited:
         gh.comments[(REPO, n)][-1]["updated_at"] = iso(at + 5)
+
+
+def reviewing_unit(gh, team_kit_home, capsys, pr_number=7, head=HEAD, **pr_kwargs):
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.comment(REPO, n, f"{LAUNCHED_MARKER}\nsession: s\nbackend: claude\nbranch: dispatch/x\n")
+    pr(gh, pr_number, issue=n, head=head, **pr_kwargs)
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
+    return n, cloud
+
+
+def review_result(gh, n, team_kit_home, high=0, medium=0, low=0, head=HEAD, key=None, login="Codertocat",
+                  at=NOW - 60, sign=True, edited=False, pr_number=7):
+    record = review_record(team_kit_home, n)
+    counts = {"high": high, "medium": medium, "low": low}
+    pr_url = f"https://github.com/{REPO}/pull/{pr_number}"
+    sig = review_signature(key or record["key"], counts, pr_url, head) if sign else "0" * 64
+    gh.comment(REPO, n, f"<!-- team-kit:review v1 -->\npr: {pr_url}\nhead: {head}\nfindings: {high} high, {medium} medium, {low} low\nsig: {sig}\n\n## Findings\n"
+                        "- severity: low\n  file: README.md:1\n  evidence: checked\n  fix: none\n",
+               login=login, at=at)
+    if edited:
+        gh.comments[(REPO, n)][-1]["updated_at"] = iso(at + 5)
+
+
+def test_the_review_pr_skill_signing_recipe_signs_with_the_key_it_is_given(tmp_path):
+    """Run the recipe the skill prints, as an agent's shell would: no terminal, key in the prompt."""
+    text = (HERMES.parent / "plugins" / "trust-ladder" / "skills" / "review-pr" / "SKILL.md").read_text()
+    assert "read -rsp" not in text and "read -rs" not in text
+    block = text.split("Sign with one of these", 1)[1].split("```bash\n", 1)[1].split("```", 1)[0]
+    openssl = next(line for line in block.splitlines() if line.startswith("printf"))
+    python = next(line for line in block.splitlines() if line.startswith("python3 -c"))
+    key, pr_url, counts = "0123456789abcdef" * 2, f"https://github.com/{REPO}/pull/7", {"high": 1, "medium": 2, "low": 3}
+    message = f"1|2|3|{pr_url}|{HEAD}"
+    for recipe in (openssl, python):
+        script = recipe.replace("<key>", key).replace("<high>|<medium>|<low>|<pr>|<head>", message)
+        done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30)
+        sig = done.stdout.strip()
+        assert done.returncode == 0 and len(sig) == 64, done.stderr
+        assert sig == review_signature(key, counts, pr_url, HEAD)
+        assert review_signed(ReviewResult(pr=pr_url, head=HEAD, counts=counts, sig=sig), key, pr_url, HEAD)
+        assert not review_signed(ReviewResult(pr=pr_url, head=HEAD, counts=counts, sig=sig), "f" * 32, pr_url, HEAD)
+
+
+def test_the_review_key_is_sensitive_so_it_is_redacted_from_logs():
+    key = "0123456789abcdef" * 2
+    command = review_argv("claude", REPO, 3, f"https://github.com/{REPO}/pull/7", HEAD, key)
+    assert command.sensitive == (key,)
+    assert key not in " ".join(command.argv)
+    assert review_argv("codex", REPO, 3, f"https://github.com/{REPO}/pull/7", HEAD, key, "env_1").sensitive == (key,)
+
+
+@pytest.mark.parametrize(("kwargs", "reviewed"), [
+    ({}, True),
+    ({"fork": True}, False),
+    ({"fork": True, "author": "meo-beo-gh"}, False),
+    ({"author": "mallory", "branch": "mallory/other"}, False),
+    ({"author": "mallory"}, True),
+    ({"author": "Codertocat", "branch": "elsewhere"}, False),
+])
+def test_only_the_units_own_pr_starts_a_keyed_reviewer(team_kit_home, kit, capsys, kwargs, reviewed):
+    gh = FakeGh(kit, review_backend="claude")
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.comment(REPO, n, f"{LAUNCHED_MARKER}\nsession: s\nbackend: claude\nbranch: dispatch/x\n")
+    pr(gh, 7, issue=n, **kwargs)
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    assert len(cloud.started) == (1 if reviewed else 0)
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
+
+
+def test_a_trusted_author_may_use_another_branch_but_a_fork_never_wins_the_lowest_number(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude")
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.comment(REPO, n, f"{LAUNCHED_MARKER}\nsession: s\nbackend: claude\nbranch: dispatch/x\n")
+    pr(gh, 3, issue=n, fork=True, head="c" * 40)
+    gh.prs[(REPO, 3)]["headRefName"] = "dispatch/x"
+    pr(gh, 9, issue=n, author="Codertocat", branch="dispatch/x")
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    [(_, _, command, _)] = cloud.started
+    assert f"/pull/9 at commit {HEAD}" in command.prompt
+
+
+def test_the_unit_pr_is_read_from_the_reports_number_or_its_branch_never_a_search(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude")
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.comment(REPO, n, f"{LAUNCHED_MARKER}\nsession: s\nbackend: claude\nbranch: dispatch/x\n")
+    for number in range(1, 26):  # more than `gh pr list` returned per page before
+        pr(gh, number, issue=999, branch=f"other/{number}")
+    pr(gh, 40, issue=n)
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"]
+    [(_, _, command, _)] = cloud.started
+    assert f"/pull/40 at commit {HEAD}" in command.prompt
+    assert not any("--search" in call for call in gh.calls)
+    # With a partial report that names a PR, that number is read directly, wherever its branch is.
+    other = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    pr(gh, 41, issue=other, branch="elsewhere", author="Codertocat")
+    gh.report(REPO, other, "partial", pr=f"https://github.com/{REPO}/pull/41")
+    gh.comments[(REPO, other)].insert(0, {"user": {"login": BOT_LOGIN}, "body": f"{LAUNCHED_MARKER}\nsession: s\nbackend: claude\n", "created_at": iso(NOW - 900)})
+    gh.comments[(REPO, other)][1]["created_at"] = iso(NOW - 600)
+    gh.comments[(REPO, other)].append({"user": {"login": BOT_LOGIN}, "body": f"{LAUNCHED_MARKER}\nsession: s2\nbackend: claude\n", "created_at": iso(NOW - 300)})
+    cloud2 = FakeCloud()
+    tick(gh, capsys, cloud=cloud2)
+    assert any(call[:3] == ["pr", "view", "41"] for call in gh.calls)
+    [(_, _, command, _)] = cloud2.started
+    assert f"/pull/41 at commit {HEAD}" in command.prompt
+
+
+def test_a_review_that_fails_to_start_before_the_done_report_does_not_gate_the_unit(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude")
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.comment(REPO, n, f"{LAUNCHED_MARKER}\nsession: s\nbackend: claude\nbranch: dispatch/x\n")
+    pr(gh, 7, issue=n)
+    broken = FakeCloud(fail="claude exited 1 before starting a session: not signed in")
+    [notice] = tick(gh, capsys, cloud=broken)
+    assert notice.startswith(f"team-kit notice: #{n}: the PR review could not start: claude exited 1 before starting a session: not signed in")
+    assert "still running" in notice and "try again next tick" in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}, "the agent is still running: keep its label and slot"
+    assert tick(gh, capsys, cloud=broken) == ["[SILENT]"], "said once"
+    assert len(broken.started) == 2, "and tried again on the next tick"
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
+    fixed = FakeCloud()
+    assert tick(gh, capsys, cloud=fixed) == ["[SILENT]"]
+    assert len(fixed.started) == 1 and review_record(team_kit_home, n)["session"]
+
+
+def test_a_review_that_fails_to_start_after_the_done_report_still_gates(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude")
+    n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    gh.report(REPO, n, "done", pr=pr(gh, 7))
+    [notice] = tick(gh, capsys, cloud=FakeCloud(fail="not signed in"))
+    assert "the PR review could not start: not signed in" in notice and "needs you" in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
 
 
 def test_a_done_unit_with_passing_checks_goes_to_a_verifier_then_to_review(team_kit_home, gh, capsys):
@@ -665,13 +1033,14 @@ def test_verification_can_be_turned_off(team_kit_home, kit, capsys):
     assert not cloud.started and gh.labels(REPO, n) == {"agent-task", "agent:review"}
 
 
-@pytest.mark.parametrize("config", [{"verifier_backend": "gemini"}, {"accept_verifications": ["verifier-blocked"]}, {"accept_verifications": []}, {"verifier_backend": "codex"}])
+@pytest.mark.parametrize("config", [{"verifier_backend": "gemini"}, {"accept_verifications": ["verifier-blocked"]}, {"accept_verifications": []},
+                                    {"verifier_backend": "codex"}, {"review_backend": "gemini"}, {"review_backend": "codex"}])
 def test_a_bad_verifier_setting_is_refused(team_kit_home, kit, capsys, config):
     gh = FakeGh(kit, **config)
     n = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
     gh.report(REPO, n, "done", pr=pr(gh, 7))
     [notice] = tick(gh, capsys)
-    assert "tick could not handle" in notice and ("verifier_backend" in notice or "accept_verifications" in notice)
+    assert "tick could not handle" in notice and ("verifier_backend" in notice or "accept_verifications" in notice or "review_backend" in notice)
     assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
 
 

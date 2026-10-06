@@ -10,7 +10,7 @@ Schedule: `every 30m`
 Deliver: `bot-chat:{bot}`
 Skill: `dispatch`
 
-Launches queued units whose dependencies merged and that fit under the limits, turns a finished agent's report into "ready to merge" or a gate, and frees the slot either way.
+Launches queued units whose dependencies merged and that fit under the limits, starts signed read-only pull request reviews when unit PR heads appear or move, turns a finished agent's report into "ready to merge" or a gate, and frees the slot either way.
 
 ```text
 Run `team-kit-gh tick` in the terminal. Print its output exactly as it is, and nothing else.

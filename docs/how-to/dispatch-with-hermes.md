@@ -47,7 +47,7 @@ claude --cloud                      # prompt on stdin
 codex cloud exec --env ENV_ID --attempts N -   # prompt on stdin
 ```
 
-The prompt always starts with `/faker-mode` or `$faker-mode`. The `faker-mode` skill cannot load itself, so the prompt has to run it as a command. Team-kit does not put prompt text in process arguments: both commands read it on stdin (`claude --cloud` with no value, Codex via `-`). That keeps prompt material, including one-use signing keys for verifier, security, and incident sessions, out of process listings. Claude Code only starts a new cloud session when its output is a terminal, so Hermes runs each command on a pseudo-terminal, strips the terminal escape sequences, and reads the session URL from what it prints. For `claude`, the launch first clones the repository into `~/.hermes/team-kit/checkouts/`, because `claude --cloud` works on the repository in its current directory.
+The prompt always starts with `/faker-mode` or `$faker-mode`. The `faker-mode` skill cannot load itself, so the prompt has to run it as a command. Team-kit does not put prompt text in process arguments: both commands read it on stdin (`claude --cloud` with no value, Codex via `-`). That keeps prompt material, including one-use signing keys for verifier, PR review, security, and incident sessions, out of process listings. Claude Code only starts a new cloud session when its output is a terminal, so Hermes runs each command on a pseudo-terminal, strips the terminal escape sequences, and reads the session URL from what it prints. For `claude`, the launch first clones the repository into `~/.hermes/team-kit/checkouts/`, because `claude --cloud` works on the repository in its current directory.
 
 ### When work splits into several units
 
