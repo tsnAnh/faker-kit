@@ -524,17 +524,20 @@ def test_idle_tick_uses_etags_and_reduces_uncached_github_work(team_kit_home, gh
     first = [c for c in gh.calls if c[0] == "api"]
     assert [c[-1] for c in first] == [
         f"repos/{REPO}/issues?state=open&labels=agent%3Aandon&per_page=100&page=1",
+        f"repos/{REPO}/issues?labels=agent%3Aproposal&state=open&per_page=100",
         f"repos/{REPO}/issues?state=open&labels=agent-task&per_page=100&page=1",
+        f"repos/{REPO}/issues?state=closed&labels=agent-task&per_page=100&page=1",
     ]
-    assert gh.work == 2
+    cached = [c for c in first if "--include" in c]
+    assert gh.work == len(cached)
     saved = [json.loads(path.read_text()) for path in sorted((team_kit_home / "etag" / "meo-beo").glob("*.json"))]
-    assert sorted(item["endpoint"] for item in saved) == sorted(f"GET {c[-1]}" for c in first)
+    assert sorted(item["endpoint"] for item in saved) == sorted(f"GET {c[-1]}" for c in cached)
 
     before_calls, before_work = len(gh.calls), gh.work
     assert tick(gh, capsys) == ["[SILENT]"]
     second = [c for c in gh.calls[before_calls:] if c[0] == "api"]
-    assert len(second) == 2 and gh.work == before_work
-    assert all(any(arg.startswith("If-None-Match: ") for arg in c) for c in second)
+    assert len(second) == len(first) and gh.work == before_work
+    assert all(any(arg.startswith("If-None-Match: ") for arg in c) for c in second if "--include" in c)
 
 
 def gh_for(team_kit_home, run, bot):
@@ -748,7 +751,7 @@ def test_tick_gates_a_unit_that_names_a_plain_issue_in_another_project(team_kit_
 def test_a_failed_closed_fetch_does_not_hide_open_units(team_kit_home, kit, capsys):
     class ClosedFails(FakeGh):
         def __call__(self, args, input=None):
-            if args[:2] == ["issue", "list"] and args[args.index("--state") + 1] == "closed":
+            if args[0] == "api" and "/issues?" in args[-1] and "labels=agent-task" in args[-1] and "state=closed" in args[-1]:
                 raise Refused("gh issue failed: rate limited")
             return super().__call__(args, input)
 
@@ -764,7 +767,7 @@ def test_a_failed_closed_fetch_does_not_hide_open_units(team_kit_home, kit, caps
 def test_a_failed_open_fetch_is_reported_and_nothing_is_published(team_kit_home, kit, capsys):
     class OpenFails(FakeGh):
         def __call__(self, args, input=None):
-            if args[:2] == ["issue", "list"] and args[args.index("--state") + 1] == "open":
+            if args[0] == "api" and "/issues?" in args[-1] and "labels=agent-task" in args[-1] and "state=open" in args[-1]:
                 raise Refused("gh issue failed: rate limited")
             return super().__call__(args, input)
 
