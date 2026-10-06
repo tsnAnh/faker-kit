@@ -498,6 +498,8 @@ def test_add_chief_creates_a_read_only_bot_with_the_chief_skill_and_no_jobs(read
     assert sorted(p.name for p in (home / "skills").iterdir()) == ["chief"]
     assert (home / "SOUL.md").read_text().startswith("You are this machine's team-kit chief of staff.")
     assert (home / "plugins" / "team_kit_guard" / "plugin.yaml").exists()
+    drafts = root / "team-kit" / "drafts" / "chanh-van"
+    assert drafts.is_dir() and (drafts.stat().st_mode & 0o777) == 0o700, "the chief's drafts folder exists and is private"
     assert not any(c[:2] == ["-p", "chanh-van"] and c[2:4] == ["cron", "create"] for c in hermes_calls(root)), "the chief has no jobs"
     code, err = admin(ready, "add-chief", "--bot", "meo-beo", profile="ong-xay")
     assert code == 1 and "already a project bot" in err

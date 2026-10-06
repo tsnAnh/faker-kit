@@ -1,6 +1,6 @@
 # team-kit for Hermes
 
-This module runs team-kit dispatch on a [Hermes Agent](https://github.com/NousResearch/hermes-agent) machine: one bootstrap bot that sets projects up, one project bot per project that briefs cloud coding agents (Claude Code or Codex), one pull request per unit, until the owner merges, and an optional, read-only chief of staff that routes the owner's intent across projects. How to use it is in [Dispatch work with Hermes](../docs/how-to/dispatch-with-hermes.md).
+This module runs team-kit dispatch on a [Hermes Agent](https://github.com/NousResearch/hermes-agent) machine: one bootstrap bot that sets projects up, one project bot per project that briefs cloud coding agents (Claude Code or Codex), one pull request per unit, until the owner merges, and an optional chief of staff that routes the owner's intent across projects. The chief reads by default and has one approved write: a local proposal for a project bot. How to use it is in [Dispatch work with Hermes](../docs/how-to/dispatch-with-hermes.md).
 
 It lives outside `plugins/` on purpose. Nothing here loads in a coding agent: plugins are what coding agents load, and this is what the Hermes bots load. The coding agents keep using the `trust-ladder` skills `setup-dispatch` and `follow-brief`, and the brief templates in `plugins/trust-ladder/templates/dispatch/`.
 
@@ -31,7 +31,7 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `install.sh` | Fetches the kit at a commit, writes the wrappers, refreshes every bot | — |
 | `bin/team_kit_admin.py` | `team-kit-admin`: the bootstrap bot's only command, and the installer's helper | `~/.hermes/bin/team-kit-admin` (a wrapper) |
 | `bin/team_kit_gh.py` | `team-kit-gh`: a project bot's only GitHub access, and what its jobs run | `~/.hermes/bin/team-kit-gh` (a wrapper) |
-| `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and changes nothing | `~/.hermes/bin/team-kit-chief` (a wrapper) |
+| `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and, with approval, hands one hashed draft to one project bot | `~/.hermes/bin/team-kit-chief` (a wrapper) |
 | `lib/team_kit_contracts.py` | The brief, size, report, and launch markers, and the cloud command lines | read from the kit checkout |
 | `lib/team_kit_cloud.py` | Starts a `claude --cloud` or `codex cloud exec` session and waits for its id | read from the kit checkout |
 | `lib/team_kit_andon.py` | The andon cords: the local records, and the `agent:andon` issue body | read from the kit checkout |
@@ -50,6 +50,8 @@ Under `~/.hermes/team-kit/`:
 - `guard.yaml`, the policy. You edit it.
 - `bots.yaml`, each bot's role, and for a project bot its project and its one repository. Only `team-kit-admin` writes it.
 - `briefs/<bot>/`, the only place a project bot may write.
+- `drafts/<chief bot>/`, the only place the chief may write, and the only place `propose` reads from: plain `.md` files of at most 20,000 bytes, no symlinks.
+- `proposals/<bot>/`, chief-of-staff handoffs for a project bot. Proposal records expire after 7 days; `team-kit-gh chief-proposals` and `team-kit-gh tick` delete expired and corrupt records.
 - `andon/`, the pulled cords: `_machine.json` and one file per project bot.
 - `verify/<bot>/`, one private record per verifier: its commit and the key that signs its verdict.
 - `reviews/<bot>/`, one private record per unit pull request review: its pull request, head, and the key that signs its finding summary.
@@ -68,6 +70,7 @@ Under `~/.hermes/team-kit/`:
 - Put each bot's GitHub token in its profile's `.env`. No bot ever sees a token in chat.
 - Sign the coding agent in on the machine.
 - Approve each `team-kit-admin` command the bootstrap bot runs.
+- Confirm a chief proposal in the target project bot's Bot Chat before that bot briefs or dispatches it.
 
 ## Still to check in the first pilot
 

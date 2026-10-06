@@ -1,5 +1,7 @@
 import base64
+import hashlib
 import json
+import stat
 import time
 
 import pytest
@@ -96,6 +98,144 @@ def test_show_reads_a_default_branch_file_of_a_known_project_only(chief_home, ca
                       (["--project", "crm", "--path", "AGENTS.md"], "not a readable file")):
         assert run(gh, "show", *args) == 1
         assert why in capsys.readouterr().err
+
+
+def draft(home, name="handoff.md", text="# Add invoices export\n\nBuild the export in the shop project.\n", bot="chanh-van"):
+    folder = home / "drafts" / bot
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
+    path.write_text(text)
+    return path
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def propose(gh, path, digest=None, project="shop", **kw):
+    return run(gh, "propose", "--project", project, "--file", str(path), "--sha256", digest or sha(path), **kw)
+
+
+def test_digest_prints_the_hash_propose_needs(chief_home, capsys):
+    source = draft(chief_home)
+    assert run(FakeGh(), "digest", "--file", str(source)) == 0
+    assert json.loads(capsys.readouterr().out) == {"file": "handoff.md", "sha256": sha(source)}
+
+
+def test_propose_writes_one_proposal_for_the_target_project_bot_only(chief_home, capsys):
+    source = draft(chief_home)
+    assert propose(FakeGh(), source) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["project"] == "shop"
+    assert out["bot"] == "meo-beo"
+    assert out["repo"] == SHOP
+    assert out["from"] == "chanh-van"
+    assert out["sha256"] == sha(source)
+    files = sorted((chief_home / "proposals").glob("*/*"))
+    assert files == [chief_home / "proposals" / "meo-beo" / f"{out['id']}.json"]
+    assert stat.S_IMODE(files[0].stat().st_mode) == 0o600
+    record = json.loads(files[0].read_text())
+    assert record["body"] == source.read_text()
+    assert record["expires_at"] - record["created_at"] == 7 * 24 * 3600
+
+
+def test_propose_accepts_the_tilde_form_of_the_drafts_path(chief_home, capsys, monkeypatch):
+    source = draft(chief_home)
+    monkeypatch.setenv("HOME", str(chief_home.parent.parent))
+    assert run(FakeGh(), "propose", "--project", "shop", "--file", "~/.hermes/team-kit/drafts/chanh-van/handoff.md", "--sha256", sha(source)) == 0
+
+
+def test_propose_refuses_a_hash_that_no_longer_matches_the_file(chief_home, capsys):
+    source = draft(chief_home)
+    approved = sha(source)
+    source.write_text("# Something else the owner never approved\n")
+    assert propose(FakeGh(), source, approved) == 1
+    assert "does not match" in capsys.readouterr().err
+    assert not (chief_home / "proposals").exists()
+
+
+@pytest.mark.parametrize("digest", ["", "abc", "A" * 64, "g" * 64, "a" * 63])
+def test_propose_refuses_a_malformed_hash(chief_home, capsys, digest):
+    source = draft(chief_home)
+    assert run(FakeGh(), "propose", "--project", "shop", "--file", str(source), "--sha256", digest) == 1
+    assert "64 lowercase hex" in capsys.readouterr().err
+    assert not (chief_home / "proposals").exists()
+
+
+def test_propose_requires_a_hash(chief_home, capsys):
+    source = draft(chief_home)
+    with pytest.raises(SystemExit):
+        run(FakeGh(), "propose", "--project", "shop", "--file", str(source))
+
+
+def test_propose_validates_the_project_and_the_file_name(chief_home, capsys):
+    assert propose(FakeGh(), draft(chief_home), project="nope") == 1
+    assert "no project nope" in capsys.readouterr().err
+    for name in (".handoff.md", "handoff.txt"):
+        assert propose(FakeGh(), draft(chief_home, name)) == 1
+        assert "plain .md file" in capsys.readouterr().err
+    assert not (chief_home / "proposals").exists()
+
+
+def test_propose_reads_only_from_the_chiefs_own_drafts_folder(chief_home, tmp_path, capsys):
+    elsewhere = tmp_path / "handoff.md"
+    elsewhere.write_text("# outside\n")
+    others = draft(chief_home, bot="other-chief")
+    nested = draft(chief_home)
+    (chief_home / "drafts" / "chanh-van" / "sub").mkdir()
+    (chief_home / "drafts" / "chanh-van" / "sub" / "deep.md").write_text("# deep\n")
+    for path in (elsewhere, others, chief_home / "drafts" / "chanh-van" / "sub" / "deep.md",
+                 chief_home / "drafts" / "chanh-van" / ".." / "chanh-van" / "sub" / "deep.md", chief_home / "bots.yaml"):
+        assert propose(FakeGh(), path, hashlib.sha256(path.read_bytes()).hexdigest()) == 1, path
+        assert "directly in" in capsys.readouterr().err
+    assert nested.exists() and not (chief_home / "proposals").exists()
+
+
+def test_propose_rejects_symlinks(chief_home, tmp_path, capsys):
+    secret = tmp_path / "secret.md"
+    secret.write_text("# token goes here\n")
+    link = chief_home / "drafts" / "chanh-van" / "link.md"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(secret)
+    assert propose(FakeGh(), link, sha(secret)) == 1
+    assert "symlink" in capsys.readouterr().err
+    assert run(FakeGh(), "digest", "--file", str(link)) == 1
+    capsys.readouterr()
+    link.unlink()
+    real = tmp_path / "real-drafts"
+    real.mkdir()
+    (real / "handoff.md").write_text("# x\n")
+    (chief_home / "drafts" / "chanh-van").rmdir()
+    (chief_home / "drafts" / "chanh-van").symlink_to(real)
+    assert propose(FakeGh(), chief_home / "drafts" / "chanh-van" / "handoff.md", sha(real / "handoff.md")) == 1
+    assert "must not be a symlink" in capsys.readouterr().err
+    assert not (chief_home / "proposals").exists()
+
+
+def test_propose_rejects_files_over_20_kb_and_empty_or_binary_ones(chief_home, capsys):
+    exactly = draft(chief_home, "ok.md", "x" * 20_000)
+    assert propose(FakeGh(), exactly) == 0
+    capsys.readouterr()
+    big = draft(chief_home, "big.md", "x" * 20_001)
+    assert propose(FakeGh(), big) == 1
+    assert "larger than 20000 bytes" in capsys.readouterr().err
+    assert propose(FakeGh(), draft(chief_home, "empty.md", "  \n")) == 1
+    assert "empty" in capsys.readouterr().err
+    binary = chief_home / "drafts" / "chanh-van" / "bin.md"
+    binary.write_bytes(b"\xff\xfe\x00")
+    assert propose(FakeGh(), binary) == 1
+    assert "UTF-8" in capsys.readouterr().err
+    assert len(list((chief_home / "proposals" / "meo-beo").glob("*.json"))) == 1
+
+
+def test_propose_rejects_a_fifo(chief_home, capsys):
+    import os
+
+    fifo = chief_home / "drafts" / "chanh-van" / "pipe.md"
+    fifo.parent.mkdir(parents=True)
+    os.mkfifo(fifo)
+    assert run(FakeGh(), "digest", "--file", str(fifo)) == 1
+    assert "not a regular file" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("bot", ["meo-beo", "ong-xay", "stranger"])

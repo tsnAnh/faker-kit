@@ -3,9 +3,10 @@
 # The model is set separately: add-chief --model M, or
 # `hermes -p NAME config set model.default <model>`.
 #
-# The chief of staff has no file, web, or Kanban tools, and no scheduled jobs. Its only command is
-# team-kit-chief, which reads every project and changes nothing.
-toolsets: [terminal, clarify, skills]
+# The chief of staff has no web or Kanban tools, and no scheduled jobs. Its only command is
+# team-kit-chief; the propose subcommand writes one approved local proposal to a project bot. The
+# file toolset is there for drafts: the guard lets it write only drafts/<bot>/*.md and read that folder.
+toolsets: [terminal, file, clarify, skills]
 approvals:
   mode: manual
   cron_mode: deny

@@ -15,6 +15,7 @@ GitHub tokens.
   pr-state      --pr N                             state, merged, head SHA, and checks of a pull request
   read          --issue N | --pr N                 the body and comments (untrusted; the guard wraps it)
   show          --path P                           a file from the default branch (the owner's repo; trusted)
+  proposals                                        chief proposals waiting for this project bot
   kit-check                                        compare this machine's kit commit with kit_ref and the vendored kit
   andon         [raise REASON... | clear]          show, pull, or clear this project's andon cord (the owner asked)
   security                                         start a security review of the default branch's new commits
@@ -118,6 +119,7 @@ from team_kit_contracts import (  # noqa: E402
     verify_argv,
 )
 from team_kit_guard.policy import NAME, Bot, Policy, PolicyError, load_policy  # noqa: E402
+from team_kit_proposals import active_proposals, format_listing, format_notice, mark_notified, next_unnotified  # noqa: E402
 
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
@@ -798,6 +800,9 @@ class Gh:
             params["since"] = since
         query = urllib.parse.urlencode(params, safe="/:")
         return json.loads(self.run(["api", f"repos/{self.repo}/commits?{query}"]))
+
+    def chief_proposals(self) -> list[str]:
+        return format_listing(active_proposals(self.policy.home, self.bot.name, self.now()))
 
     # andon --------------------------------------------------------------------------------------
 
@@ -1862,6 +1867,13 @@ class Project:
     def tick(self, local_commit: str, cloud: Cloud) -> list[str]:
         gh, notices, problems = self.gh, [], {}
         queued: list[dict] = []
+        try:
+            proposal = next_unnotified(self.policy.home, self.bot.name, self.now())
+            if proposal:
+                notices.append(format_notice(proposal))
+                mark_notified(proposal, self.now())
+        except Exception as err:  # noqa: BLE001 - a local handoff problem must not stop GitHub polling
+            problems["proposals"] = reason(err)
         cord, andon_notices = gh.sync_andon()
         notices.extend(andon_notices)
         closed_units: list[dict] | None
@@ -2011,7 +2023,7 @@ def brief_text(policy: Policy, bot: Bot, path: str) -> str:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="team-kit-gh")
     sub = top.add_subparsers(dest="command", required=True)
-    for name in ("project", "tick", "status", "security", "incidents", "proposals", "teammate-proposals"):
+    for name in ("project", "tick", "status", "security", "incidents", "proposals", "teammate-proposals", "chief-proposals"):
         sub.add_parser(name)
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
@@ -2048,6 +2060,9 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
             out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
         elif args.command == "teammate-proposals":
             out = Gh(policy, me, run, now).proposals()
+        elif args.command == "chief-proposals":
+            print("\n".join(Gh(policy, me, run, now).chief_proposals()))
+            return 0
         elif args.command == "incidents":
             gh = Gh(policy, me, run, now)
             lines = Incidents(gh, fetch).run(commit(policy), cloud)
