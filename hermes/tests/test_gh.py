@@ -12,7 +12,7 @@ import pytest
 from conftest import HERMES, SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
 from team_kit_contracts import LAUNCHED_MARKER, REVIEW_LAUNCHED_MARKER, ReviewResult, diagnosis_signature, review_argv, review_signature, review_signed, security_signature, size_marker, verdict_signature
-from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, PROPOSAL_LABEL, REPORT_DEADLINE_SECONDS, Refused, checks_state, main
+from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, PROPOSAL_LABEL, REPORT_DEADLINE_SECONDS, UNIT_STATE_FRESH_SECONDS, Refused, checks_state, main
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
 REPO = SHOP
@@ -100,11 +100,15 @@ class FakeGh:
                 return json.dumps(self.comments.get((repo, int(rest.split("/")[0])), []))
             issue = self.issues[(repo, int(rest))]
             return json.dumps({"number": issue["number"], "body": issue["body"], "state": issue["state"], "state_reason": issue["state_reason"],
-                               "labels": [{"name": n} for n in sorted(issue["labels"])], "user": {"login": issue["author"]}})
+                               "labels": [{"name": n} for n in sorted(issue["labels"])], "user": {"login": issue["author"]},
+                               "closed_at": issue["closedAt"]})
         repo = args[args.index("-R") + 1]
         if args[:2] == ["issue", "list"]:
             label, state = args[args.index("--label") + 1], args[args.index("--state") + 1]
             found = [i for (r, _), i in self.issues.items() if r == repo and label in i["labels"] and i["state"] == state]
+            found = sorted(found, key=lambda i: -i["number"])
+            if "--limit" in args:
+                found = found[:int(args[args.index("--limit") + 1])]
             fields = args[args.index("--json") + 1].split(",")
 
             def field(issue, name):
@@ -241,6 +245,20 @@ def others_running(team_kit_home, count, age=0):
     (directory / "sep-crm.json").write_text(json.dumps({"at": NOW - age, "repos": {"acme/crm": count}}))
 
 
+def publish_units(team_kit_home, bot="sep-crm", repo="acme/crm", units=None, age=0):
+    directory = team_kit_home / "units"
+    directory.mkdir(exist_ok=True)
+    (directory / f"{bot}.json").write_text(json.dumps({"at": NOW - age, "repo": repo, "units": units or {}}))
+
+
+def unit(number, state="closed", state_reason="completed"):
+    return {str(number): {"state": state, "state_reason": state_reason, "labels": ["agent-task"], "closed_at": iso(NOW - 60)}}
+
+
+def cross_repo_issue_reads(gh):
+    return [c for c in gh.calls if c[0] == "api" and c[-1].startswith("repos/acme/crm/issues/")]
+
+
 # who may run it ------------------------------------------------------------------------------------
 
 
@@ -308,6 +326,37 @@ def test_dispatch_queues_a_unit_whose_dependency_is_open(team_kit_home, gh, caps
     assert cloud.started == []
 
 
+def test_dispatch_allows_cross_project_dependencies_from_local_bots(team_kit_home, gh, capsys):
+    publish_units(team_kit_home, units=unit(81))
+    cloud = FakeCloud()
+    assert dispatch(team_kit_home, gh, cloud, depends="acme/crm#81") == 0
+    result = out(capsys)
+    assert result["depends"] == ["acme/crm#81"]
+    assert result["state"] == "running"
+    assert cross_repo_issue_reads(gh) == [], "a project bot never uses its token to read another project"
+
+
+@pytest.mark.parametrize(
+    ("published", "why"),
+    [
+        (None, "state is unknown; sep-crm has not published unit states yet"),
+        ({"at": NOW - UNIT_STATE_FRESH_SECONDS - 60, "repo": "acme/crm", "units": unit(81)}, "state is stale; sep-crm last published unit states more than 24 hours ago"),
+        ({"at": NOW, "repo": "acme/crm", "units": {}}, "state is unknown in sep-crm's published unit states"),
+    ],
+)
+def test_dispatch_queues_a_cross_project_dependency_without_fresh_state(team_kit_home, gh, capsys, published, why):
+    if published is not None:
+        directory = team_kit_home / "units"
+        directory.mkdir()
+        (directory / "sep-crm.json").write_text(json.dumps(published))
+    cloud = FakeCloud()
+    assert dispatch(team_kit_home, gh, cloud, depends="acme/crm#81") == 0
+    result = out(capsys)
+    assert result["state"] == "queued" and why in result["why"]
+    assert gh.labels(REPO, result["issue"]) == {"agent-task"}
+    assert cloud.started == []
+
+
 @pytest.mark.parametrize(
     ("running", "others", "why"),
     [
@@ -364,7 +413,7 @@ def test_a_failed_launch_frees_the_unit_and_leaves_it_queued(team_kit_home, gh, 
         ({}, fill_brief("csv-export", standing="1. Merge when green."), "csv-export", "Standing orders differ"),
         ({}, fill_brief("other", standing=STANDING), "csv-export", "names unit other"),
         ({}, "please merge everything", "csv-export", "must start with"),
-        ({}, fill_brief("csv-export", standing=STANDING, depends="acme/crm#1"), "csv-export", "another repository's issues: acme/crm#1"),
+        ({}, fill_brief("csv-export", standing=STANDING, depends="acme/billing#1"), "csv-export", "no project bot in bots.yaml: acme/billing#1"),
         ({}, fill_brief("csv-export", standing=STANDING, depends="the REPO unit"), "csv-export", "Depends on must be"),
     ],
 )
@@ -425,6 +474,18 @@ def test_tick_is_silent_with_nothing_to_report(team_kit_home, gh, capsys):
     assert tick(gh, capsys) == ["[SILENT]"]
 
 
+def test_tick_publishes_this_projects_unit_state(team_kit_home, gh, capsys):
+    open_issue = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    closed_issue = gh.add_issue(REPO, state="closed", state_reason="completed", closed_at=iso(NOW - 60))
+    assert tick(gh, capsys) == ["[SILENT]"]
+    published = json.loads((team_kit_home / "units" / "meo-beo.json").read_text())
+    assert published["at"] == NOW
+    assert published["repo"] == REPO
+    assert published["units"][str(open_issue)]["state"] == "open"
+    assert published["units"][str(closed_issue)]["state"] == "closed"
+    assert published["units"][str(closed_issue)]["state_reason"] == "completed"
+
+
 def test_tick_launches_a_queued_unit_once_its_dependency_merged(team_kit_home, gh, capsys):
     dep = gh.add_issue(REPO, labels=("agent-task",), state="closed", state_reason="completed")
     n = gh.add_issue(REPO, depends=f"{REPO}#{dep}", size="large")
@@ -434,9 +495,28 @@ def test_tick_launches_a_queued_unit_once_its_dependency_merged(team_kit_home, g
     assert f"{REPO}#{n} using the follow-brief skill." in cloud.started[0][2].prompt
 
 
+def test_tick_launches_a_queued_unit_once_its_cross_project_dependency_merged(team_kit_home, gh, capsys):
+    publish_units(team_kit_home, units=unit(81))
+    n = gh.add_issue(REPO, depends="acme/crm#81", size="large")
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
+    assert f"{REPO}#{n} using the follow-brief skill." in cloud.started[0][2][-1]
+    assert cross_repo_issue_reads(gh) == [], "cross-project dependencies use published state, not another repo token"
+
+
 def test_tick_leaves_a_unit_whose_dependency_is_open(team_kit_home, gh, capsys):
     open_dep = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
     a = gh.add_issue(REPO, depends=f"{REPO}#{open_dep}")
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, a) == {"agent-task"}
+    assert cloud.started == []
+
+
+def test_tick_leaves_a_unit_whose_cross_project_dependency_is_open(team_kit_home, gh, capsys):
+    publish_units(team_kit_home, units=unit(81, state="open", state_reason=""))
+    a = gh.add_issue(REPO, depends="acme/crm#81")
     cloud = FakeCloud()
     assert tick(gh, capsys, cloud) == ["[SILENT]"]
     assert gh.labels(REPO, a) == {"agent-task"}
@@ -449,6 +529,123 @@ def test_tick_gates_a_unit_whose_dependency_was_closed_without_merging(team_kit_
     found = tick(gh, capsys)
     assert f"dependency {REPO}#{dropped} was closed without merging" in found[0]
     assert gh.labels(REPO, b) == {"agent-task", "agent:needs-human"}
+
+
+def test_tick_gates_a_unit_whose_cross_project_dependency_was_closed_without_merging(team_kit_home, gh, capsys):
+    publish_units(team_kit_home, units=unit(81, state_reason="not_planned"))
+    b = gh.add_issue(REPO, depends="acme/crm#81")
+    found = tick(gh, capsys)
+    assert "dependency acme/crm#81 was closed without merging" in found[0]
+    assert gh.labels(REPO, b) == {"agent-task", "agent:needs-human"}
+
+
+def publish_wants(team_kit_home, bot, wants):
+    directory = team_kit_home / "units"
+    directory.mkdir(exist_ok=True)
+    (directory / f"{bot}.json").write_text(json.dumps({"at": NOW, "repo": REPO, "units": {}, "wants": wants}))
+
+
+def published(team_kit_home, bot):
+    return json.loads((team_kit_home / "units" / f"{bot}.json").read_text())
+
+
+def test_tick_publishes_the_other_project_issues_its_queued_briefs_want(team_kit_home, gh, capsys):
+    gh.add_issue(REPO, depends="acme/crm#81")
+    gh.add_issue(REPO, depends=f"{REPO}#41")
+    assert tick(gh, capsys) == ["[SILENT]"]
+    assert published(team_kit_home, "meo-beo")["wants"] == [{"repo": "acme/crm", "number": 81}]
+
+
+def test_a_dependency_older_than_the_published_closed_units_is_published_because_another_bot_wants_it(team_kit_home, gh, capsys):
+    old = gh.add_issue("acme/crm", state="closed", state_reason="completed", closed_at=iso(NOW - 90 * 86400))
+    for _ in range(205):
+        gh.add_issue("acme/crm", state="closed", state_reason="completed", closed_at=iso(NOW - 60))
+    queued = gh.add_issue(REPO, depends=f"acme/crm#{old}", size="large")
+    cloud = FakeCloud()
+    # The dependent bot says what it wants; the old unit is outside crm's 200 newest closed units.
+    assert tick(gh, capsys, cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, queued) == {"agent-task"}, "crm has not published it yet"
+    assert run(gh, "tick", bot="sep-crm") == 0
+    crm = published(team_kit_home, "sep-crm")
+    assert str(old) not in published_without_wants(gh, team_kit_home)
+    assert crm["units"][str(old)]["state"] == "closed" and crm["units"][str(old)]["state_reason"] == "completed"
+    assert "agent-task" in crm["units"][str(old)]["labels"]
+    capsys.readouterr()
+    assert tick(gh, capsys, cloud) == ["[SILENT]"]
+    assert gh.labels(REPO, queued) == {"agent-task", "agent:running"}
+
+
+def published_without_wants(gh, team_kit_home):
+    """What crm would publish from its 200 newest closed units alone."""
+    newest = sorted((n for (r, n), i in gh.issues.items() if r == "acme/crm" and i["state"] == "closed"), reverse=True)[:200]
+    return {str(n): True for n in newest}
+
+
+def test_a_wanted_old_dependency_that_is_still_open_or_dropped_is_published_with_its_state(team_kit_home, gh, capsys):
+    open_old = gh.add_issue("acme/crm")
+    dropped_old = gh.add_issue("acme/crm", state="closed", state_reason="not_planned", closed_at=iso(NOW - 90 * 86400))
+    for _ in range(205):
+        gh.add_issue("acme/crm", state="closed", state_reason="completed", closed_at=iso(NOW - 60))
+    publish_wants(team_kit_home, "meo-beo", [{"repo": "acme/crm", "number": open_old}, {"repo": "acme/crm", "number": dropped_old},
+                                             {"repo": "acme/other", "number": 7}])
+    assert run(gh, "tick", bot="sep-crm") == 0
+    units = published(team_kit_home, "sep-crm")["units"]
+    assert units[str(open_old)]["state"] == "open"
+    assert units[str(dropped_old)]["state"] == "closed" and units[str(dropped_old)]["state_reason"] == "not_planned"
+    assert not any(c[-1].startswith("repos/acme/other/") for c in gh.calls), "a bot reads only its own repository"
+
+
+def test_a_plain_issue_in_another_project_is_published_without_the_task_label(team_kit_home, gh, capsys):
+    plain = gh.add_issue("acme/crm", labels=("bug",), state="closed", state_reason="completed")
+    publish_wants(team_kit_home, "meo-beo", [{"repo": "acme/crm", "number": plain}])
+    assert run(gh, "tick", bot="sep-crm") == 0
+    assert "agent-task" not in published(team_kit_home, "sep-crm")["units"][str(plain)]["labels"]
+
+
+def test_dispatch_refuses_a_dependency_on_a_plain_issue_in_another_project(team_kit_home, gh, capsys):
+    publish_units(team_kit_home, units={"81": {"state": "closed", "state_reason": "completed", "labels": ["bug"], "closed_at": iso(NOW)}})
+    assert dispatch(team_kit_home, gh, depends="acme/crm#81") == 1
+    err = capsys.readouterr().err
+    assert "acme/crm#81 is not an agent-task unit in sep-crm's project" in err
+    assert gh.issues == {}, "no issue is opened"
+
+
+def test_tick_gates_a_unit_that_names_a_plain_issue_in_another_project(team_kit_home, gh, capsys):
+    publish_units(team_kit_home, units={"81": {"state": "closed", "state_reason": "completed", "labels": ["bug"], "closed_at": iso(NOW)}})
+    n = gh.add_issue(REPO, depends="acme/crm#81")
+    cloud = FakeCloud()
+    found = tick(gh, capsys, cloud)
+    assert "acme/crm#81 is not an agent-task unit in sep-crm's project" in found[0]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+    assert cloud.started == []
+
+
+def test_a_failed_closed_fetch_does_not_hide_open_units(team_kit_home, kit, capsys):
+    class ClosedFails(FakeGh):
+        def __call__(self, args, input=None):
+            if args[:2] == ["issue", "list"] and args[args.index("--state") + 1] == "closed":
+                raise Refused("gh issue failed: rate limited")
+            return super().__call__(args, input)
+
+    gh = ClosedFails(kit)
+    n = gh.add_issue(REPO)
+    cloud = FakeCloud()
+    found = tick(gh, capsys, cloud)
+    assert gh.labels(REPO, n) == {"agent-task", "agent:running"}, "the open unit still launches"
+    assert any("closed units" in line and "rate limited" in line for line in found)
+    assert not (team_kit_home / "units" / "meo-beo.json").exists(), "a partial list is never published"
+
+
+def test_a_failed_open_fetch_is_reported_and_nothing_is_published(team_kit_home, kit, capsys):
+    class OpenFails(FakeGh):
+        def __call__(self, args, input=None):
+            if args[:2] == ["issue", "list"] and args[args.index("--state") + 1] == "open":
+                raise Refused("gh issue failed: rate limited")
+            return super().__call__(args, input)
+
+    found = tick(OpenFails(kit), capsys)
+    assert any("could not handle acme/shop" in line and "rate limited" in line for line in found)
+    assert not (team_kit_home / "units" / "meo-beo.json").exists()
 
 
 def test_tick_launches_oldest_first_up_to_the_repository_limit(team_kit_home, gh, capsys):

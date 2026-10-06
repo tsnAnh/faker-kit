@@ -17,7 +17,7 @@ One Hermes machine runs one bootstrap bot, one bot per project, and, if you want
 | Chief of staff | Optional, one per machine | Reads every project and changes nothing. Tell it what you want across projects; it says which project bot gets which part, in what order, and writes the message you send each bot. Ask it "what's going on" for one line per project. Loads the [chief](../../hermes/skills/chief/SKILL.md) skill | `team-kit-chief`, read-only |
 | Coding agent | One per unit, in the cloud | Works the brief in faker-mode with the [follow-brief](../../plugins/trust-ladder/skills/follow-brief/SKILL.md) skill, opens one pull request, gets its checks green, posts a report | — |
 
-A project is one repository. When a product has an API, a web app, and a mobile app, keep them side by side in that one repository, such as `apps/api/`, `apps/web/`, and `apps/mobile/` in `acme/shop`. Then one cloud agent can carry a feature through all of them in one pull request and prove it end to end, which separate repositories cannot do. The kit's playbooks assume one repository too. A project bot sees only its repository, so brainstorming one project never pulls in another's context. To brainstorm across projects, add several project bots to a group chat. There they only talk; each bot does work only when you ask it in its own Bot Chat. To route one intent across projects, ask the chief of staff instead: ask the bootstrap bot for one (`team-kit-admin add-chief`), and give it a GitHub token that can only read the projects' repositories.
+A project is one repository. When a product has an API, a web app, and a mobile app, keep them side by side in that one repository, such as `apps/api/`, `apps/web/`, and `apps/mobile/` in `acme/shop`. Then one cloud agent can carry a feature through all of them in one pull request and prove it end to end, which separate repositories cannot do. The kit's playbooks assume one repository too. A project bot sees only its repository, so brainstorming one project never pulls in another's context. To brainstorm across projects, add several project bots to a group chat. There they only talk; each bot does work only when you ask it in its own Bot Chat. To route one intent across projects, ask the chief of staff instead: ask the bootstrap bot for one (`team-kit-admin add-chief`), and give it a GitHub token that can only read the projects' repositories. When one local project must wait for another local project's merged unit, the downstream brief may depend on `OWNER/REPO#n`; the downstream bot reads only the upstream bot's published unit-state file on the Hermes machine.
 
 The bot that maintains the kit itself is not part of this module. Keep using whatever you use for it.
 
@@ -34,7 +34,7 @@ The bot that maintains the kit itself is not part of this module. Keep using wha
    - a `partial` or `blocked` report, failed checks, no pull request, or no report within a day opens a gate (`agent:needs-human`), and you get a line saying why;
    - a done report whose checks are still running waits for them;
    - either way the slot frees, and queued units that can start now are launched.
-5. You review and merge. The merge closes the issue, which releases the units that depend on it.
+5. You review and merge. The merge closes the issue, which releases the units that depend on it, including units in other local projects that name it as `OWNER/REPO#n`.
 
 The issue's labels, and whether it is closed as completed, are the unit's whole state, so GitHub's issue list filtered by label is your board.
 
@@ -51,7 +51,7 @@ The prompt always starts with `/faker-mode` or `$faker-mode`. The `faker-mode` s
 
 ### When work splits into several units
 
-A unit is one pull request. The bot splits work only when one pull request would be too big to review, so it goes in steps, or when parts are independent and can run in parallel. Each brief's Depends on section lists the issues it waits for as `#n`. A unit launches only after each of them is closed by a merged pull request, so every agent starts from code that is already on the default branch.
+A unit is one pull request. The bot splits work only when one pull request would be too big to review, so it goes in steps, or when parts are independent and can run in parallel. Each brief's Depends on section lists one issue per line: `#n` for its own repository, or `OWNER/REPO#n` for another project registered in this machine's `bots.yaml`. A unit launches only after each of them is closed by a merged pull request, so every agent starts from code that is already on the default branch. For cross-project work, dispatch the provider unit first so the downstream brief can name its issue; the downstream unit can queue immediately and will launch after the provider merges.
 
 ### How the agent proves its work
 
@@ -73,6 +73,8 @@ Two limits apply to every launch, and both count open issues labeled `agent:runn
 - `max_in_flight_total` in `guard.yaml` caps the whole machine, because every project draws on the same Claude or ChatGPT subscription. Each project bot's GitHub login sees only its own repository, so each bot records its count in `~/.hermes/team-kit/in-flight/` and reads the others' from there.
 
 A unit over either limit stays queued, and the next tick launches it when a slot frees up, oldest first. A unit frees its slot once its agent has reported and its checks have finished, not when you merge.
+
+Each tick also records that project's open and closed unit issues in `~/.hermes/team-kit/units/<bot>.json`. Other project bots use those files for `OWNER/REPO#n` dependencies instead of using their GitHub tokens on another repository. The file lists the 200 newest closed units plus a `wants` list of the other-project issues that bot's queued briefs depend on; the owning bot publishes every issue another bot wants, whatever its age, from its next tick. A dependency on a plain issue (no `agent-task` label) is never a unit, so `dispatch` refuses it and tick gates a unit that names one. If the file is missing, malformed, or older than 24 hours, the downstream unit stays queued with a reason until the upstream bot's next healthy tick.
 
 ## Install
 
@@ -116,7 +118,7 @@ None of these uses a model to decide. Each is code or configuration.
 
 1. **Desktop is the only way in.** No chat platform and no webhook is connected. The machine listens to nothing from outside.
 2. **Roles come from one file.** The guard looks up the calling profile in `bots.yaml`. A profile that is not there gets nothing. Each role has a fixed list of tools, whatever its toolsets say. A project bot may run only `team-kit-gh`, write only its own briefs, and read only its briefs and the kit, so it cannot read a token or another bot's files. The bootstrap bot may run only `team-kit-admin`, and every command but `status` waits for your approval.
-3. **Projects are walled off.** `team-kit-gh` works only on the bot's own repository, including in a brief's Depends on, and each bot's GitHub token covers only that repository.
+3. **Projects are walled off.** `team-kit-gh` works only on the bot's own repository, and each bot's GitHub token covers only that repository. Cross-project Depends on refs are allowed only for repositories owned by another project bot in local `bots.yaml`, and they are resolved from `~/.hermes/team-kit/units/<bot>.json`, not from the other repository's API.
 4. **The guard fails closed.** The `team_kit_guard` plugin checks every tool call against `guard.yaml` and `bots.yaml`. Merges, pushes to `main`, force-pushes, and deletes are denied for every bot. Any error, a timeout, or a missing or invalid file blocks the call.
 5. **Untrusted text is marked.** Output from `team-kit-gh read` and web tools arrives wrapped in `<untrusted source=...>` and taints the turn. After that, every tool that changes something asks you to approve it in Desktop.
 6. **Briefs come only from you and the repository.** The coding agent works only issues written by a login in `trusted_dispatchers` that start with the brief marker. `dispatch` reads a brief only from the bot's own briefs directory.
@@ -152,7 +154,7 @@ Each project bot's `team-kit-status` job sends three lines at 9:00, 13:00, and 1
 - **"kit commit ... differs from kit_ref ..." or "... has no vendored kit".** The machine, `.agents/dispatch.json`, and the vendored `.agents/team-kit/KIT.json` must pin the same kit commit. Ask the bootstrap bot to run `team-kit-admin vendor` for the project and merge its pull request, which moves both, then ask the project bot to run `team-kit-gh kit-check`.
 - **A cloud agent says the team-kit skills did not load.** The repository's vendored kit is missing or its links are broken. Run `python3 .agents/team-kit/vendor_kit.py --check .` in a clone, then vendor again.
 - **Nothing launches, and `status` starts with "andon pulled".** A cord is pulled. Ask the bot that pulled it to clear it once the cause is fixed. Closing the `agent:andon` issue on GitHub does not clear it.
-- **A unit stays queued.** Its dependencies have not merged, or a limit is full. `team-kit-gh status` lists it; the next tick launches it when it can. Raise `max_in_flight` in a pull request, or `max_in_flight_total` in `guard.yaml`, if you can take more.
+- **A unit stays queued.** Its dependencies have not merged, a cross-project dependency's unit-state file is missing or stale, or a limit is full. `team-kit-gh status` lists it; the next tick launches it when it can. Raise `max_in_flight` in a pull request, or `max_in_flight_total` in `guard.yaml`, if you can take more.
 - **A unit stays running.** No report yet. Open the session on the issue's launch comment. After a day without a report, tick opens a gate.
 - **"done without a pull request".** A Codex task that could not push leaves the pull request to you. Open it from the task, with `Closes #<n>` in its body.
 - **Desktop keeps asking you to approve tool calls.** That turn read untrusted text. Approve only a call you asked for. Otherwise deny it and ask again in a new turn.
