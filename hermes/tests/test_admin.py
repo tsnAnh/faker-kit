@@ -65,7 +65,7 @@ def labels(root):
 def test_add_project_creates_the_project_bot_its_labels_and_paused_jobs(ready):
     root, _ = ready
     out = add_shop(ready)
-    assert sorted(out["jobs_created_paused"]) == ["team-kit-incidents", "team-kit-security", "team-kit-status", "team-kit-tick"]
+    assert sorted(out["jobs_created_paused"]) == ["team-kit-incidents", "team-kit-security", "team-kit-status", "team-kit-tick", "team-kit-upstream"]
     assert out["labels"] == LABELS
     assert bots(root)["meo-beo"] == {"role": "project", "project": "shop", "repo": SHOP}
     assert labels(root) == {SHOP: LABELS}
@@ -81,8 +81,9 @@ def test_add_project_creates_the_project_bot_its_labels_and_paused_jobs(ready):
     assert not (home / ".env").exists(), "team-kit writes no .env; the owner puts the token there"
 
     created = {c[4]: c for c in hermes_calls(root) if c[2:4] == ["cron", "create"]}
-    assert sorted(created) == ["0 7 * * *", "0 9,13,17 * * *", "every 10m", "every 30m"]
+    assert sorted(created) == ["0 7 * * *", "0 9 * * 1", "0 9,13,17 * * *", "every 10m", "every 30m"]
     assert created["0 7 * * *"][5].startswith("Run `team-kit-gh security` in the terminal.")
+    assert created["0 9 * * 1"][5].startswith("Run `team-kit-gh upstream` in the terminal.")
     tick = created["every 30m"]
     assert tick[:2] == ["-p", "meo-beo"]
     assert tick[5].startswith("Run `team-kit-gh tick` in the terminal.")
@@ -98,7 +99,7 @@ def test_a_second_project_gets_its_own_bot_and_jobs(ready):
     code, out = admin(ready, "add-project", "--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm", profile="ong-xay")
     assert code == 0, out
     assert bots(root)["sep-crm"]["repo"] == "acme/crm"
-    assert len(jobs(root, "sep-crm")) == 4 and len(jobs(root, "meo-beo")) == 4
+    assert len(jobs(root, "sep-crm")) == 5 and len(jobs(root, "meo-beo")) == 5
 
 
 def test_add_project_can_set_custom_tick_and_incident_intervals(ready):
@@ -134,7 +135,7 @@ def test_add_project_reschedules_existing_tick_and_incident_jobs(ready):
     assert not [c for c in calls if c[2:4] in (["cron", "delete"], ["cron", "remove"])], "a reschedule never deletes a job"
     assert sorted(c[4] for c in calls if c[2:4] == ["cron", "edit"]) == ["job-0", "job-3"]
     by_name = {job["name"]: job for job in jobs(root, "meo-beo")}
-    assert len(by_name) == 4
+    assert len(by_name) == 5
     assert by_name["team-kit-tick"]["schedule"] == "every 10m" and by_name["team-kit-tick"]["id"] == "job-0"
     assert by_name["team-kit-incidents"]["schedule"] == "every 5m" and by_name["team-kit-incidents"]["id"] == "job-3"
     assert by_name["team-kit-tick"]["enabled"] and by_name["team-kit-incidents"]["enabled"]
@@ -165,7 +166,7 @@ def test_add_project_again_refreshes_the_bot_without_duplicating_jobs(ready):
     code, out = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP, profile="ong-xay")
     assert code == 0, out
     assert out["jobs_created_paused"] == []
-    assert len(jobs(root, "meo-beo")) == 4
+    assert len(jobs(root, "meo-beo")) == 5
 
 
 def test_a_project_has_one_repository(ready):
@@ -407,7 +408,7 @@ def test_activate_waits_for_the_bots_github_token_then_resumes_its_jobs(ready):
     (root / "profiles" / "meo-beo" / ".env").write_text("GH_TOKEN=github_pat_secret\n")
     code, out = admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay")
     assert code == 0, out
-    assert sorted(out["resumed"]) == ["team-kit-incidents", "team-kit-security", "team-kit-status", "team-kit-tick"]
+    assert sorted(out["resumed"]) == ["team-kit-incidents", "team-kit-security", "team-kit-status", "team-kit-tick", "team-kit-upstream"]
     assert all(job["enabled"] for job in jobs(root, "meo-beo"))
     assert "github_pat_secret" not in json.dumps(out)
 
@@ -420,7 +421,7 @@ def test_status_reports_every_bot_and_repository_and_refreshes_counts(ready):
     assert out["trusted_authors"] == ["codertocat", "meo-beo-gh"]
     shop = next(b for b in out["bots"] if b["bot"] == "meo-beo")
     assert shop["github_login"] is False
-    assert shop["jobs"] == {"team-kit-tick": False, "team-kit-status": False, "team-kit-security": False, "team-kit-incidents": False}
+    assert shop["jobs"] == {"team-kit-tick": False, "team-kit-status": False, "team-kit-security": False, "team-kit-incidents": False, "team-kit-upstream": False}
     assert shop["repo"] == {"repo": "acme/shop", "labels_missing": [], "running": 0, "dispatch_json": False}
     assert {"bot": "ong-xay", "role": "bootstrap"} in out["bots"]
     counts = json.loads((root / "team-kit" / "in-flight" / "meo-beo.json").read_text())["repos"]
@@ -452,7 +453,7 @@ def test_reinstalling_refreshes_project_bots_and_keeps_their_job_state(ready, ki
     assert done.returncode == 0, done.stderr
     assert (root / "profiles" / "meo-beo" / "SOUL.md").read_text().startswith("You are a team-kit project bot.")
     assert not stale.exists(), "the webhook version's scripts are removed"
-    assert all(job["enabled"] for job in jobs(root, "meo-beo")) and len(jobs(root, "meo-beo")) == 4
+    assert all(job["enabled"] for job in jobs(root, "meo-beo")) and len(jobs(root, "meo-beo")) == 5
     assert (root / "profiles" / "meo-beo" / ".env").read_text() == "GH_TOKEN=x\n"
 
 

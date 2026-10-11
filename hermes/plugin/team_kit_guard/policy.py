@@ -58,7 +58,7 @@ ROUTINE = re.compile(r"\Atrig_[A-Za-z0-9]{8,64}\Z")
 SLACK_CHANNEL_ID = re.compile(r"\A[CG][A-Z0-9]{2,}\Z")
 SLACK_CHANNEL_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,79}\Z")
 
-PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "proposals", "teammate-proposals", "chief-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
+PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "chief-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
 BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon")
 BOOTSTRAP_READ_ONLY = ("status",)
 # The chief of staff reads every project. Its writes are a draft under drafts/<bot>/ and `propose`;

@@ -2773,3 +2773,56 @@ def test_a_custom_host_is_allowed_only_when_the_owner_lists_it(team_kit_home, ki
     guard = team_kit_home / "guard.yaml"
     guard.write_text(guard.read_text() + "  - sentry.grafana.example.com\n")
     assert run(gh, "kit-check") == 0
+
+
+UPSTREAM_PIN = "d" * 40
+UPSTREAM_HEAD = "e" * 40
+UPSTREAM_SOURCE = json.dumps({"repo": "https://github.com/acme/plugins.git", "ref": UPSTREAM_PIN, "plugins": ["pstack"]})
+
+
+def upstream_gh(kit, head=UPSTREAM_HEAD, opt_in=True, source=UPSTREAM_SOURCE):
+    gh = FakeGh(kit, **({"upstream_sync": True} if opt_in else {}))
+    gh.files["upstream/source.json"] = source
+    gh.main_head = head  # FakeGh answers repos/<any>/commits/<ref> with main_head
+    return gh
+
+
+def test_upstream_dispatches_one_sync_unit_when_the_upstream_repository_moved(team_kit_home, kit, capsys):
+    gh, cloud = upstream_gh(kit), FakeCloud()
+    assert run(gh, "upstream", cloud=cloud) == 0
+    [notice] = lines(capsys)
+    [(repo, number)] = [key for key in gh.issues]
+    assert notice == f"team-kit notice: acme/plugins moved from dddddddddddd to eeeeeeeeeeee; sync unit #{number} started."
+    issue = gh.issues[(repo, number)]
+    assert repo == REPO and issue["labels"] == {"agent-task", "agent:running"}
+    assert issue["body"].startswith("<!-- team-kit:brief v1 card=upstream-sync-eeeeeeeeeeee -->")
+    assert f"node scripts/sync-upstream.mjs --ref {UPSTREAM_HEAD}" in issue["body"]
+    assert f"https://github.com/acme/plugins/compare/{UPSTREAM_PIN}...{UPSTREAM_HEAD}" in issue["body"]
+    assert STANDING.strip() in issue["body"] and size_marker("medium") in issue["body"]
+    [(backend, launched_repo, command, _)] = cloud.started
+    assert (backend, launched_repo) == ("claude", REPO) and f"{REPO}#{number} using the follow-brief skill" in command.prompt
+
+
+@pytest.mark.parametrize("case", ["not opted in", "already at the upstream head", "a sync unit is open"])
+def test_upstream_stays_silent_and_opens_nothing(team_kit_home, kit, capsys, case):
+    gh = upstream_gh(kit, head=UPSTREAM_PIN if case == "already at the upstream head" else UPSTREAM_HEAD, opt_in=case != "not opted in")
+    if case == "a sync unit is open":
+        gh.add_issue(REPO, labels=("agent-task", "agent:running"),
+                     body=fill_brief("upstream-sync-0123456789ab", standing=STANDING) + "\n" + size_marker("medium") + "\n")
+    before = set(gh.issues)
+    assert run(gh, "upstream") == 0 and lines(capsys) == ["[SILENT]"]
+    assert set(gh.issues) == before
+    if case == "not opted in":
+        assert not any(c[0] == "api" and "acme/plugins" in c[-1] for c in gh.calls), "a repository that did not opt in never reads another"
+
+
+@pytest.mark.parametrize("source", [
+    json.dumps({"repo": "https://evil.example/acme/plugins.git", "ref": UPSTREAM_PIN}),
+    json.dumps({"repo": "https://github.com/acme/plugins.git", "ref": "main"}),
+    "not json",
+])
+def test_upstream_refuses_a_source_file_it_cannot_trust(team_kit_home, kit, capsys, source):
+    gh = upstream_gh(kit, source=source)
+    assert run(gh, "upstream") == 1
+    assert "upstream/source.json" in capsys.readouterr().err
+    assert gh.issues == {}
