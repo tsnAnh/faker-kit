@@ -12,12 +12,12 @@ If the shell does not find `team-kit-admin`, run it as `~/.hermes/bin/team-kit-a
 | Command | Does |
 |---|---|
 | `team-kit-admin status` | Every bot, project, repository, label, and job on this machine. Read-only |
-| `team-kit-admin add-project --bot B --project P --repo R [--model M] [--tick-every 10m] [--incidents-every 5m] [--routine trig_...]` | Creates or refreshes project bot B for repository R: profile, guard, `dispatch` skill, paused jobs, schedules, and the eleven labels |
+| `team-kit-admin add-project --bot B --project P --repo R [--model M] [--tick-every 10m] [--incidents-every 5m] [--routine trig_...] [--claude-subscription]` | Creates or refreshes project bot B for repository R: profile, guard, `dispatch` skill, paused jobs, schedules, and the eleven labels |
 | `team-kit-admin vendor --project P` | Opens a pull request that copies the pinned kit into the repository's `.agents/team-kit/`, so cloud sessions there have its skills |
 | `team-kit-admin setup-repo --project P --backend claude\|codex [--codex-env E]` | Starts one cloud session that opens the project's setup pull request |
 | `team-kit-admin protect --project P --check NAME [--check NAME ...]` | Requires those checks on the project's default branch, admins included |
 | `team-kit-admin activate --bot B` | Resumes B's jobs, once its GitHub token is in place |
-| `team-kit-admin add-chief --bot B [--model M]` | Creates or refreshes the chief of staff: a bot that reads across projects and can, with owner approval, propose one handoff to a project bot |
+| `team-kit-admin add-chief --bot B [--model M] [--claude-subscription]` | Creates or refreshes the chief of staff: a bot that reads across projects and can, with owner approval, propose one handoff to a project bot |
 | `team-kit-admin andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows the machine's andon cord. Only when the owner asks |
 
 ## Never
@@ -48,7 +48,7 @@ Then restate the whole plan in a short list and ask the owner to confirm before 
 ## 3. Create the project bot
 
 ```text
-team-kit-admin add-project --bot <bot> --project <project> --repo <OWNER/REPO> [--model <model>] [--tick-every <interval>] [--incidents-every <interval>] [--routine <trig_...>]
+team-kit-admin add-project --bot <bot> --project <project> --repo <OWNER/REPO> [--model <model>] [--tick-every <interval>] [--incidents-every <interval>] [--routine <trig_...>] [--claude-subscription]
 ```
 
 Intervals are positive minutes or hours, such as `10m` or `1h`. It prints the labels it created, the jobs it created paused or rescheduled, the routine, and next steps. Without `--routine`, a refresh keeps the routine already in `bots.yaml`.

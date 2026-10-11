@@ -1,5 +1,8 @@
 import json
+import stat
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -536,3 +539,75 @@ def test_add_chief_creates_a_read_only_bot_with_the_chief_skill_and_no_jobs(read
     assert not any(c[:2] == ["-p", "chanh-van"] and c[2:4] == ["cron", "create"] for c in hermes_calls(root)), "the chief has no jobs"
     code, err = admin(ready, "add-chief", "--bot", "meo-beo", profile="ong-xay")
     assert code == 1 and "already a project bot" in err
+
+
+FAKE_CLAUDE_CLI = """import json, sys
+if sys.argv[1:] == ["--version"]:
+    print("{version} (Claude Code)")
+elif sys.argv[1:] == ["auth", "status"]:
+    print(json.dumps({{"loggedIn": {logged_in}, "authMethod": "claude.ai"}}))
+else:
+    sys.exit(2)
+"""
+PROVIDER = "claude-subscription-directsdk-experimental"
+
+
+def fake_claude(ready, version="2.1.296", logged_in=True):
+    _, env = ready
+    path = Path(env["PATH"].split(":")[0]) / "claude"
+    path.write_text(f"#!{sys.executable}\n" + FAKE_CLAUDE_CLI.format(version=version, logged_in=bool(logged_in)))
+    path.chmod(0o755)
+
+
+def with_env(ready, **extra):
+    root, env = ready
+    return root, {**{k: v for k, v in env.items() if k != "CLAUDE_CONFIG_DIR"}, **extra}
+
+
+def config(root, bot):
+    return yaml.safe_load((root / "profiles" / bot / "config.yaml").read_text())
+
+
+def test_claude_subscription_switches_the_bots_model_and_points_the_plugin_at_the_login(ready):
+    root, _ = ready
+    fake_claude(ready)
+    add_shop(ready)
+    home = root / "profiles" / "meo-beo"
+    current = config(root, "meo-beo")
+    current["model"] = {"default": "gpt-x", "provider": "openai-codex", "base_url": "https://example.invalid", "api_mode": "codex_responses"}
+    (home / "config.yaml").write_text(yaml.safe_dump(current))
+    (home / ".env").write_text("GH_TOKEN=keep\n")
+    args = ("add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP, "--claude-subscription")
+    code, out = admin(with_env(ready, CLAUDE_CONFIG_DIR="/owner/.claude"), *args, profile="ong-xay")
+    assert code == 0, out
+    after = config(root, "meo-beo")
+    assert after["model"] == {"default": "sonnet", "provider": PROVIDER}
+    assert set(after["plugins"]["enabled"]) >= {"team_kit_guard", PROVIDER}
+    assert (home / ".env").read_text() == "GH_TOKEN=keep\nCLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR=/owner/.claude\n"
+    assert stat.S_IMODE((home / ".env").stat().st_mode) == 0o600
+    enables = [c for c in hermes_calls(root) if c[2:4] == ["plugins", "enable"]]
+    assert enables and all("--no-allow-tool-override" in c for c in enables), "the plugin never replaces built-in tools"
+
+    installs = len([c for c in hermes_calls(root) if c[2:4] == ["plugins", "install"]])
+    code, out = admin(with_env(ready), *args, "--model", "opus", profile="ong-xay")
+    assert code == 0, out
+    assert len([c for c in hermes_calls(root) if c[2:4] == ["plugins", "install"]]) == installs, "an installed plugin is not installed again"
+    assert config(root, "meo-beo")["model"] == {"default": "opus", "provider": PROVIDER}
+    assert (home / ".env").read_text() == "GH_TOKEN=keep\n", "with the CLI's default config directory the line goes away"
+
+
+@pytest.mark.parametrize(("cli", "why"), [
+    (None, "Claude Code is not installed"),
+    ({"version": "2.1.200"}, "2.1.284 or later is needed"),
+    ({"logged_in": False}, "Claude Code is not logged in here"),
+])
+def test_claude_subscription_refuses_before_changing_anything(ready, cli, why):
+    root, _ = ready
+    if cli is not None:
+        fake_claude(ready, **cli)
+    add_shop(ready)
+    before = (root / "team-kit" / "bots.yaml").read_text(), labels(root), config(root, "meo-beo"), len(hermes_calls(root))
+    code, err = admin(with_env(ready), "add-project", "--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm", "--claude-subscription", profile="ong-xay")
+    assert code == 1 and why in err
+    assert ((root / "team-kit" / "bots.yaml").read_text(), labels(root), config(root, "meo-beo"), len(hermes_calls(root))) == before
+    assert not (root / "profiles" / "sep-crm").exists()

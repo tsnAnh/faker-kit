@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: install.sh --ref COMMIT [--source URL_OR_DIR] [--bootstrap-bot NAME] [--model M] [--no-gateway]
+Usage: install.sh --ref COMMIT [--source URL_OR_DIR] [--bootstrap-bot NAME] [--model M] [--claude-subscription] [--no-gateway]
 
 Install the team-kit Hermes module on this machine, pinned to one kit commit. Run it again
 with a new commit to move every bot to it; it keeps guard.yaml, bots.yaml, job state, and
@@ -15,6 +15,8 @@ anything in a profile it does not own.
   --bootstrap-bot NAME   Create or refresh the bootstrap bot, the one that sets up projects.
                          Any Hermes profile name: lowercase letters, digits, - and _.
   --model M              Model for the bootstrap bot (only with --bootstrap-bot)
+  --claude-subscription  Run the bootstrap bot's model on your Claude subscription through the
+                         logged-in Claude Code CLI (only with --bootstrap-bot)
   --no-gateway           Do not install or restart the default profile's shared gateway
 
 Project bots are not created here. Ask the bootstrap bot for a new project; it runs
@@ -34,13 +36,14 @@ USAGE
 
 die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
-ref='' source=https://github.com/tsnAnh/team-kit.git bootstrap_bot='' model='' gateway=1
+ref='' source=https://github.com/tsnAnh/team-kit.git bootstrap_bot='' model='' claude_subscription='' gateway=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --ref) ref=$2; shift 2 ;;
     --source) source=$2; shift 2 ;;
     --bootstrap-bot) bootstrap_bot=$2; shift 2 ;;
     --model) model=$2; shift 2 ;;
+    --claude-subscription) claude_subscription=1; shift ;;
     --no-gateway) gateway=0; shift ;;
     --dispatcher-model|--launcher-model)
       die "$1 is from version 1. Version 2 has no dispatcher or launcher; see hermes/README.md, Migrate from version 1" ;;
@@ -50,6 +53,7 @@ while [ $# -gt 0 ]; do
 done
 [[ $ref =~ ^[0-9a-f]{40}$ ]] || die "--ref must be a full 40-character commit, the same one as kit_ref"
 [ -z "$model" ] || [ -n "$bootstrap_bot" ] || die "--model needs --bootstrap-bot"
+[ -z "$claude_subscription" ] || [ -n "$bootstrap_bot" ] || die "--claude-subscription needs --bootstrap-bot"
 command -v hermes >/dev/null || die "hermes is not on PATH; install Hermes Agent first"
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -112,7 +116,7 @@ done
 export TEAM_KIT_HOME=$kit_home
 "$py" "$pkg/bin/team_kit_admin.py" sync >/dev/null
 if [ -n "$bootstrap_bot" ]; then
-  "$py" "$pkg/bin/team_kit_admin.py" add-bootstrap --bot "$bootstrap_bot" ${model:+--model "$model"} >/dev/null
+  "$py" "$pkg/bin/team_kit_admin.py" add-bootstrap --bot "$bootstrap_bot" ${model:+--model "$model"} ${claude_subscription:+--claude-subscription} >/dev/null
   printf 'bootstrap bot %s ready; add it in Hermes Desktop Bot Mode and ask it for a project\n' "$bootstrap_bot"
 fi
 

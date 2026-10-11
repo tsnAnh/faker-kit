@@ -42,6 +42,7 @@ One question at a time, only what you do not know yet. Use AskUserQuestion in Cl
 3. **The coding agent**: `claude` (Claude Code cloud, through a routine) or `codex` (Codex cloud, which needs the repository's Codex cloud environment id).
 4. **The bot's GitHub login**: the account whose token the bot will hold. It must be in `trusted_authors`; add it there if the owner agrees. A separate bot account is safest. The owner's own login works.
 5. **The polling cadence**, only if the owner wants other than tick every `30m` and incidents every `10m`.
+6. **Where the bot's own model runs**: on the owner's Claude subscription (`--claude-subscription`), through the Claude Code CLI logged in on this machine, with no API key; or the provider Hermes already uses.
 
 ## 3. Create the routine (claude only)
 
@@ -85,10 +86,12 @@ The project bot starts each Claude Code session by firing this routine. Its save
 
 ```bash
 ~/.hermes/bin/team-kit-admin add-project --bot <bot> --project <project> --repo OWNER/REPO \
-  [--routine trig_...] [--tick-every 10m] [--incidents-every 5m] [--model <model>]
+  [--routine trig_...] [--tick-every 10m] [--incidents-every 5m] [--model <model>] [--claude-subscription]
 ```
 
 It creates the bot's profile, its scheduled jobs (paused), and the team-kit labels in the repository. Pass `--routine` for a `claude` repository. A later run without `--routine` keeps the one already set.
+
+`--claude-subscription` installs Hermes's `claude-subscription-directsdk` provider plugin in the bot's profile and runs the bot's model (`--model`, default `sonnet`) on the owner's subscription. It refuses, before changing anything, unless `claude` is 2.1.284 or later and `claude auth status` shows a login. Run it from the owner's own shell: the Hermes gateway does not inherit that shell, so it records the CLI's config directory (`CLAUDE_CONFIG_DIR`, if set) in the bot's `.env` as `CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR`.
 
 ## 5. The owner puts the tokens in place
 

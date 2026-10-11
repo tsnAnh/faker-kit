@@ -100,6 +100,12 @@ These depend on Hermes and the cloud CLIs, and the tests fake them:
 - **A Codex launch exits before starting a task.** Read `~/.hermes/team-kit/checkouts/<owner>__<repo>/<unit>.log`. It holds the terminal output with escape sequences removed and prompts and signing keys redacted. Run `codex cloud exec` by hand to see whether it needs a sign-in.
 - **"printed no session in 180s".** `codex cloud exec` is waiting for input or a login. The same log shows what it printed; the process group is stopped.
 
+## Run bots on your Claude subscription
+
+`team-kit-admin add-project`, `add-chief`, and `add-bootstrap` (or `install.sh --bootstrap-bot NAME`) take `--claude-subscription`. It installs Hermes's [Claude Subscription DirectSDK](https://hermes-agent.nousresearch.com/docs/plugins/claude-subscription-directsdk) provider plugin into that bot's profile only, enables it without permission to replace built-in tools, and sets the bot's `model.provider` to `claude-subscription-directsdk-experimental` and `model.default` to `--model` or `sonnet`. Each turn then runs through the Claude Code CLI logged in on this machine and counts against your Claude subscription, with no API key.
+
+It refuses before changing anything unless `claude` is 2.1.284 or later and `claude auth status` shows a login. Run it from your own shell: the Hermes gateway runs under launchd and does not inherit your shell, so a `CLAUDE_CONFIG_DIR` set there would leave the plugin logged out (HTTP 401). The command records that directory in the bot's `.env` as `CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR`, a path and not a secret, and removes the line when the CLI uses its default directory. Run the command again without the flag to leave the provider as it is; switch back with `hermes -p <bot> model`.
+
 ## Upgrade to routine launches
 
 Earlier versions started Claude Code sessions with `claude --cloud` on a pseudo-terminal. Claude Code 2.1.296 takes a cloud session's task only as an argument, which would put signing keys in process listings, and stops at a folder-trust prompt for each fresh clone, so Hermes now fires a routine instead. For each project whose `.agents/dispatch.json` uses `backend: claude` (or a `claude` verifier, review, security, or triage backend):
