@@ -181,7 +181,7 @@ KEY = "0" * 32
 
 def test_verify_argv_names_the_commit_and_the_key_and_refuses_another_repository():
     command = verify_argv("claude", "acme/shop", 41, "https://github.com/acme/shop/pull/7", HEAD, KEY)
-    assert command.argv == ("claude", "--cloud")
+    assert command.argv == ()
     assert command.prompt.startswith(f"/verify-unit Verify https://github.com/acme/shop/pull/7 at commit {HEAD} against the brief in acme/shop#41. Sign the verdict with key {KEY}.")
     assert command.sensitive == (KEY,)
     assert KEY not in " ".join(command.argv)
@@ -238,7 +238,7 @@ def test_a_malformed_security_result_is_rejected(text, why):
 
 def test_security_argv_names_the_range_the_issue_and_the_key():
     first = security_argv("claude", "acme/shop", 9, "main", None, HEAD, KEY)
-    assert first.argv == ("claude", "--cloud")
+    assert first.argv == ()
     assert first.prompt.startswith(f"/review-main-security Review the last 20 commits up to {HEAD} on main of acme/shop, and post the result on acme/shop#9. Sign the result with key {KEY}.")
     assert first.sensitive == (KEY,)
     assert KEY not in " ".join(first.argv)
@@ -269,7 +269,7 @@ def test_a_diagnosis_holds_only_for_its_key_and_incident():
 
 def test_triage_argv_keeps_the_summary_plain():
     command = triage_argv("claude", "acme/shop", 12, "main is red: test (ubuntu)", "main", HEAD, None, KEY)
-    assert command.argv == ("claude", "--cloud")
+    assert command.argv == ()
     assert "its last commit with passing checks is unknown" in command.prompt
     assert command.sensitive == (KEY,)
     assert KEY not in " ".join(command.argv)
