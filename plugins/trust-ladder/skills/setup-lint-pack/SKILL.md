@@ -47,7 +47,7 @@ Add the job from the pack's `ci/github-actions.yml`, or make the existing CI run
 
 1. `scripts/check.sh` passes on the repository.
 2. Paste one of the pack's bad fixture lines into a real file. `scripts/check.sh` fails with the rule's message. Revert.
-3. Add one row per pack to `.agents/corrections.tsv` at layer 2, with the proof command.
+3. Add one row per pack to the `## Rules and what enforces them` table in AGENTS.md: the pack, and `scripts/check.sh` as what enforces it.
 
 ## Report
 

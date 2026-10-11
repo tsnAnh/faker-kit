@@ -58,7 +58,7 @@ By the end of this hour, a repository is set up for agents, an agent has shipped
     ```text
     /correct the agent keeps catching Exception and swallowing it
     ```
-    It picks the strongest layer that can hold the rule (a type, a lint rule, an AGENTS.md line, a skill step, or a STYLE.md entry), proves the rule fails on a bad example, and logs it in `.agents/corrections.tsv`.
+    It fixes the mistake at the highest level that works (architecture, then types, a lint or CI check, a test, and docs last), proves the new check fails on a real past mistake, and adds the rule to the table in AGENTS.md.
   </Step>
 </Steps>
 

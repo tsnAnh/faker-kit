@@ -2,7 +2,7 @@
 
 # Skills
 
-Every skill in the kit: 103 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 105 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
@@ -128,6 +128,8 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 | [request-a-change](../../plugins/trust-ladder/skills/request-a-change/SKILL.md) | trust-ladder | Everyone | `/request-a-change the empty cart screen should suggest popular items` | Let anyone on the team, including designers, marketers, and founders, turn a plain-English request or bug report into a reviewed pull request. |
 | [bro](../../plugins/pstack/skills/bro/SKILL.md) | pstack | Everyone | `/bro` | Restate the last message in plain human language, with no jargon. |
 | [teach](../../plugins/pstack/skills/teach/SKILL.md) | pstack | Everyone | `/teach me why you implemented it this way and not with a cache. what were the tradeoffs?` | Explain a body of work plainly so a person actually understands it. |
+| [faker-help](../../plugins/pstack/skills/faker-help/SKILL.md) | pstack | Everyone | `/faker-help which skill should i use to review this branch?` | Guides users through pstack setup, /faker-mode, and picking the skill, playbook, or principle for a task. |
+| [ketchup](../../plugins/pstack/skills/ketchup/SKILL.md) | pstack | Everyone | `/ketchup` | Catch the user up on everything in this chat since their last message, in plain words. |
 | [what-did-i-get-done](../../plugins/team-workflows/skills/what-did-i-get-done/SKILL.md) | team-workflows | Everyone | `/what-did-i-get-done this week` | Summarize authored commits over a user-specified time period into a concise update |
 | [weekly-review](../../plugins/team-workflows/skills/weekly-review/SKILL.md) | team-workflows | Everyone | `/weekly-review for every author on main` | Produce a weekly synthesis of authored commits with highlights by bugfix, tech debt, and net-new work |
 | [create-learning-path](../../plugins/teaching/skills/create-learning-path/SKILL.md) | teaching | Everyone | `/create-learning-path I want to review pull requests with confidence` | Build a personalized learning roadmap with milestones and practice checkpoints |
@@ -137,7 +139,7 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 
 | Skill | Plugin | For | Try | What it does |
 |---|---|---|---|---|
-| [correct](../../plugins/trust-ladder/skills/correct/SKILL.md) | trust-ladder | Engineers | `/correct the agent keeps catching Exception and swallowing it` | Turn a correction you gave an agent into a mechanism so no agent repeats the mistake. |
+| [correct](../../plugins/pstack/skills/correct/SKILL.md) | pstack | Engineers, Leads | `/correct agents keep catching Exception and swallowing it` | Find the mistakes agents keep repeating in this repo and make each one impossible. |
 | [setup-team-kit](../../plugins/trust-ladder/skills/setup-team-kit/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-team-kit` | Prepare a repository so agents can work in it unattended and anyone on the team can use the kit. |
 | [trust-audit](../../plugins/trust-ladder/skills/trust-audit/SKILL.md) | trust-ladder | Engineers, Leads | `/trust-audit how many agents can this repo take?` | Score how far a repository can be trusted to agents, layer by layer (codebase, static analysis, rules and review bots, skills and verification, style guide), with evidence from running its commands. |
 | [check-agent-compatibility](../../plugins/agent-compatibility/skills/check-agent-compatibility/SKILL.md) | agent-compatibility | Engineers, Leads | `/check-agent-compatibility` | Run the full repository compatibility pass: scanner score, startup path, validation loop, and docs reliability. |

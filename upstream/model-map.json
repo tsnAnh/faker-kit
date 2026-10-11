@@ -7,8 +7,8 @@
         "pstack/skills/architect/SKILL.md",
         "pstack/skills/arena/SKILL.md"
       ],
-      "from": "`claude-opus-5-5-max`, `gpt-5.6-sol-max`, `grok-4.7-xhigh-fast`",
-      "to": "`inherit-parent`, `inherit-parent`, `inherit-parent`",
+      "from": "`claude-opus-5-5-xhigh` and `grok-4.7-xhigh-fast`",
+      "to": "`inherit-parent` and `inherit-parent`",
       "count": 3
     },
     {
@@ -16,7 +16,7 @@
       "files": [
         "pstack/skills/setup-pstack/SKILL.md"
       ],
-      "from": "claude-opus-5-5-max, gpt-5.6-sol-max, grok-4.7-xhigh-fast",
+      "from": "claude-opus-5-5-xhigh, grok-4.7-xhigh-fast",
       "to": "inherit-parent, inherit-parent, inherit-parent",
       "count": 4
     },
@@ -26,7 +26,7 @@
         "pstack/skills/arena/SKILL.md",
         "pstack/skills/interrogate/SKILL.md"
       ],
-      "from": "Families go by prefix: `claude-*`, `gpt-*`, and `grok-*`.",
+      "from": "Families go by prefix: `claude-*` and `grok-*`.",
       "to": "Families go by prefix: `claude-*` and `gpt-*`.",
       "count": 2
     },
@@ -35,7 +35,7 @@
       "files": [
         "pstack/skills/arena/SKILL.md"
       ],
-      "from": "With no family match, use `claude-opus-5-5-max`.",
+      "from": "With no family match, use `claude-opus-5-5-xhigh`.",
       "to": "With no family match, use `inherit-parent`.",
       "count": 1
     },
@@ -44,7 +44,7 @@
       "files": [
         "pstack/skills/interrogate/SKILL.md"
       ],
-      "from": "| Reviewer A | `claude-opus-5-5-max` |",
+      "from": "| Reviewer A | `claude-opus-5-5-xhigh` |",
       "to": "| Reviewer A | `inherit-parent` |",
       "count": 1
     },
@@ -53,36 +53,17 @@
       "files": [
         "pstack/skills/interrogate/SKILL.md"
       ],
-      "from": "| Reviewer B | `gpt-5.6-sol-max` |",
+      "from": "| Reviewer B | `grok-4.7-xhigh-fast` |",
       "to": "| Reviewer B | `inherit-parent` |",
       "count": 1
-    },
-    {
-      "id": "pstack-interrogate-reviewer-c",
-      "files": [
-        "pstack/skills/interrogate/SKILL.md"
-      ],
-      "from": "| Reviewer C | `grok-4.7-xhigh-fast` |",
-      "to": "| Reviewer C | `inherit-parent` |",
-      "count": 1
-    },
-    {
-      "id": "pstack-reflect-tooling",
-      "files": [
-        "pstack/skills/reflect/SKILL.md",
-        "pstack/skills/setup-pstack/SKILL.md"
-      ],
-      "from": "gpt-5.6-sol-max",
-      "to": "inherit-parent",
-      "count": 2
     },
     {
       "id": "pstack-budget-example",
       "files": [
         "pstack/skills/setup-pstack/SKILL.md"
       ],
-      "from": "`grok-4.7-xhigh-fast` into `grok-4.7-medium-fast`",
-      "to": "`gpt-6-sol-high` into `gpt-6-sol-medium`",
+      "from": "So `unlimited` turns `claude-opus-5-5-xhigh` into `claude-opus-5-5-max`. Grok slugs top out at `xhigh`, so under `unlimited` the fallback puts Grok at `xhigh` and keeps `grok-4.7-xhigh-fast` as it is. `large` keeps both defaults. `small` turns them into `claude-opus-5-5-medium` and `grok-4.7-medium-fast`.",
+      "to": "So `small` turns `gpt-6-sol-high` into `gpt-6-sol-medium`.",
       "count": 1
     },
     {
@@ -92,23 +73,23 @@
       ],
       "from": "grok-4.7-xhigh-fast",
       "to": "inherit-parent",
-      "count": 17
+      "count": 19
     },
     {
       "id": "pstack-how-explainer-current-agent",
       "files": [
         "pstack/skills/how/SKILL.md"
       ],
-      "from": "the `how explainer` line, default `claude-opus-5-5-max`",
-      "to": "the `how explainer` line, default `inherit-parent`",
-      "count": 2
+      "from": "the `how explainer` line (default `claude-opus-5-5-xhigh`)",
+      "to": "the `how explainer` line (default `inherit-parent`)",
+      "count": 1
     },
     {
       "id": "pstack-why-synthesizer-current-agent",
       "files": [
         "pstack/skills/why/SKILL.md"
       ],
-      "from": "the `why synthesizer` line, default `claude-opus-5-5-max`",
+      "from": "the `why synthesizer` line, default `claude-opus-5-5-xhigh`",
       "to": "the `why synthesizer` line, default `inherit-parent`",
       "count": 1
     },
@@ -117,7 +98,7 @@
       "files": [
         "pstack/skills/reflect/SKILL.md"
       ],
-      "from": "| `reflect judgment, divergent, synthesizer` | `claude-opus-5-5-max` |",
+      "from": "| `reflect judgment, divergent, synthesizer` | `claude-opus-5-5-xhigh` |",
       "to": "| `reflect judgment, divergent, synthesizer` | `inherit-parent` |",
       "count": 2
     },
@@ -126,7 +107,7 @@
       "files": [
         "pstack/skills/reflect/SKILL.md"
       ],
-      "from": "(default `claude-opus-5-5-max`)",
+      "from": "(default `claude-opus-5-5-xhigh`)",
       "to": "(default `inherit-parent`)",
       "count": 1
     },
@@ -135,7 +116,7 @@
       "files": [
         "pstack/skills/poteto-mode/SKILL.md"
       ],
-      "from": "`claude-opus-5-5-max` for prose and judgment",
+      "from": "`claude-opus-5-5-xhigh` for prose and judgment",
       "to": "`inherit-parent` for prose and judgment",
       "count": 1
     },
@@ -144,7 +125,7 @@
       "files": [
         "pstack/skills/poteto-mode/SKILL.md"
       ],
-      "from": "your strongest judgment model (`claude-opus-5-5-max`)",
+      "from": "your strongest judgment model (`claude-opus-5-5-xhigh`)",
       "to": "your strongest judgment model (`inherit-parent`)",
       "count": 1
     },
@@ -153,7 +134,7 @@
       "files": [
         "pstack/skills/setup-pstack/SKILL.md"
       ],
-      "from": "judgment and prose: claude-opus-5-5-max",
+      "from": "judgment and prose: claude-opus-5-5-xhigh",
       "to": "judgment and prose: inherit-parent",
       "count": 1
     },
@@ -162,7 +143,7 @@
       "files": [
         "pstack/skills/setup-pstack/SKILL.md"
       ],
-      "from": "hardest tasks: claude-opus-5-5-max",
+      "from": "hardest tasks: claude-opus-5-5-xhigh",
       "to": "hardest tasks: inherit-parent",
       "count": 1
     },
@@ -171,7 +152,7 @@
       "files": [
         "pstack/skills/setup-pstack/SKILL.md"
       ],
-      "from": "how explainer: claude-opus-5-5-max",
+      "from": "how explainer: claude-opus-5-5-xhigh",
       "to": "how explainer: inherit-parent",
       "count": 1
     },
@@ -180,7 +161,7 @@
       "files": [
         "pstack/skills/setup-pstack/SKILL.md"
       ],
-      "from": "why synthesizer: claude-opus-5-5-max",
+      "from": "why synthesizer: claude-opus-5-5-xhigh",
       "to": "why synthesizer: inherit-parent",
       "count": 1
     },
@@ -189,7 +170,7 @@
       "files": [
         "pstack/skills/setup-pstack/SKILL.md"
       ],
-      "from": "reflect judgment, divergent, synthesizer: claude-opus-5-5-max",
+      "from": "reflect judgment, divergent, synthesizer: claude-opus-5-5-xhigh",
       "to": "reflect judgment, divergent, synthesizer: inherit-parent",
       "count": 1
     },
@@ -198,7 +179,7 @@
       "files": [
         "pstack/README.md"
       ],
-      "from": "code delegates (feature, refactoring, bug fix, perf, hillclimb) go to grok, while the hardest changes, prose, and judgment go to opus 5.5. the default panel is opus 5.5 / sol / grok.",
+      "from": "code delegates (feature, refactoring, bug fix, perf, hillclimb) go to grok, while the hardest changes, prose, and judgment go to opus 5.5. the default panel is opus 5.5 / grok.",
       "to": "code delegates (feature, refactoring, bug fix, perf, hillclimb), the hardest changes, prose, judgment, and every seat of the default panel run on your current coding agent's model.",
       "count": 1
     },

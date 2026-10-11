@@ -32,6 +32,6 @@ Tech debt does not have to be cleaned up before you can act. A lint rule or a ra
 
 ## It compounds
 
-Each correction encoded at layer 1 or 2 is one that no agent, reviewer, or new teammate has to think about again. `.agents/corrections.tsv` records every one; `/trust-audit` scores the layers. As the share of corrections in the strong layers grows, the environment becomes something you can trust, and then you can run agents freely, including agents started by people who are not engineers. Think of a Michelin kitchen: set up so well that even a cook with little experience does good work.
+Each correction encoded at layer 1 or 2 is one that no agent, reviewer, or new teammate has to think about again. The rule table in AGENTS.md pairs every rule with what enforces it; `/trust-audit` scores the layers. As the share of rules a check enforces grows, the environment becomes something you can trust, and then you can run agents freely, including agents started by people who are not engineers. Think of a Michelin kitchen: set up so well that even a cook with little experience does good work.
 
 Continue with [Verification is all you need](verification-is-all-you-need.md).

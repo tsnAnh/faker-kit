@@ -12,7 +12,7 @@ Mark these `[blocking]`. Each one names what to do instead.
 4. **Tests that prove nothing.** A test would still pass if the code under test returned a default value, or it asserts on internals instead of what a caller observes.
 5. **Security, privacy, data loss, money, auth, migrations, concurrency.** Anything that can leak data, lose data, charge wrongly, bypass a permission, fail a migration, or race.
 6. **User-facing copy.** Text that exposes internal details (stack traces, table names, file paths) or is missing from a supported locale.
-7. **A rule that should be a check.** The same review comment has appeared before. Ask for a lint rule or type through the `correct` skill instead of repeating it.
+7. **A rule that should be a check.** The same review comment has appeared before. Ask for a lint rule or type through `/correct` instead of repeating it.
 
 ## Nits
 

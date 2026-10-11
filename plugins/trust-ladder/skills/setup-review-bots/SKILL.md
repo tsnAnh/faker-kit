@@ -50,7 +50,7 @@ Review comments are not status checks, so the gate is conversation resolution: i
 
 Bots catch real bugs and also file noise. The pstack babysit playbook handles review comments with a fix, dismiss, or ask rubric (`references/bugbot-triage.md` in the pstack plugin; "Bugbot" there means any review bot). Copy `templates/review-bot-patterns.md` to `.agents/review-bot-patterns.md`; that file collects this repository's learned dismissal patterns so each agent does not relearn them.
 
-When the same `[blocking]` comment appears on two pull requests, it is a rule that belongs in a check. Run the `correct` skill on it.
+When the same `[blocking]` comment appears on two pull requests, it is a rule that belongs in a check. Run `/correct` on it.
 
 ## 6. Prove it
 

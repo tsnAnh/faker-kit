@@ -22,7 +22,7 @@ The skill inspects the repository before it asks you anything. If the repository
 | 3. Review bots | `.agents/routines/pr-review.md` | The Claude reviewer's instructions. With Codex code review, Claude and Codex review every pull request, with no API keys |
 | 4. Skills | `.claude/skills/`, `.agents/skills/` links | Project skills (such as your verification skill) visible to Claude Code, Codex, and Pi |
 | Team | `.claude/settings.json`, `.codex/config.toml`, `.pi/settings.json`, `CODEOWNERS` | The kit and safe defaults for every teammate's agent, and a named reviewer for every path |
-| Measurement | `.agents/corrections.tsv`, `.agents/trust-audit.tsv` | The ledger of encoded corrections and the first trust score |
+| Measurement | The rule table in AGENTS.md, `.agents/trust-audit.tsv` | Each rule and what enforces it, and the first trust score |
 
 It installs one [lint pack](../reference/lint-packs.md) per detected stack, plus the agnostic pack every repository gets. To add a pack later: `/setup-lint-pack rust`.
 

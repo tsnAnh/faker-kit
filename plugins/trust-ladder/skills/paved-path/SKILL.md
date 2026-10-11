@@ -33,7 +33,7 @@ Run `encode-lint-rule` to forbid the raw library calls and the deleted names. Th
 
 ## 6. Record the path
 
-Add one line to the `Paved paths` section of AGENTS.md: the concern, the blessed API, and what is banned. Add a row to `.agents/corrections.tsv` at layer 1.
+Add one line to the `Paved paths` section of AGENTS.md: the concern, the blessed API, and what is banned. Add a row to the `## Rules and what enforces them` table in AGENTS.md, naming the lint rule that bans the rest.
 
 ## Report
 

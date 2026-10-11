@@ -45,7 +45,14 @@ Each concern has one blessed way. The alternatives are deleted and banned by lin
 - Restate a bug report or request in your own words before changing code.
 - Keep each pull request to one concern. Put the evidence in its description.
 - Every user-facing text change updates every supported locale with a real translation.
-- When you are corrected, or you correct yourself, for something that could happen again, run the `correct` skill so the fix lands in a check, not in chat.
+- When you are corrected for something that could happen again, fix the mistake and add the rule to the table below. If the rule is already there and nothing enforces it, that is a repeat: in the same change, fix it at the highest level that works (architecture, then types, then a lint or CI check whose error names the fix, then a test). For mistakes that keep coming back, the owner runs `/correct`.
+
+## Rules and what enforces them
+
+`/correct` keeps this table. Drop a rule once its mistake can no longer happen.
+
+| Rule | Enforced by |
+|---|---|
 
 ## Review guidelines
 

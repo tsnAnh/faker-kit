@@ -27,7 +27,7 @@ Order the findings by spread: instances added in the window first, then growth s
 
 For each of the top three spreading smells:
 
-1. Run the `correct` skill with the smell as the bad example. It usually lands at layer 2, a lint rule with a ratchet baseline, which blocks new instances without forcing a big cleanup today.
+1. Fix it the way the pstack `correct` skill does: read that skill and apply its fix order to the smell, proving the new check fails on a real instance. It usually lands at layer 2, a lint rule with a ratchet baseline, which blocks new instances without forcing a big cleanup today. Add the rule to the AGENTS.md rule table.
 2. For duplicated helpers or competing idioms, run the `paved-path` skill to pick the one blessed version and ban the rest.
 
 ## 4. File the cleanup

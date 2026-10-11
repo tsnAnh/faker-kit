@@ -41,7 +41,7 @@ Update entries that already exist instead of adding near-duplicates. Keep ids st
 
 ## 5. Promote the easy ones
 
-For every new entry whose promotion is `type` or `lint:*`, run the `correct` skill now, or list it as the next task if there are many. For `review` entries, make sure REVIEW.md's blocking or nit list covers them.
+For every new entry whose promotion is `type` or `lint:*`, fix it now the way the pstack `correct` skill does (read it and apply its fix order), or list it for `/correct` if there are many. For `review` entries, make sure REVIEW.md's blocking or nit list covers them.
 
 ## Report
 

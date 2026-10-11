@@ -40,7 +40,7 @@ The next time you catch an agent doing something you do not want repeated:
 /correct the agent keeps catching Exception and swallowing it
 ```
 
-It picks the strongest layer that can hold the rule (a type, a lint rule, an AGENTS.md line, a skill step, or a STYLE.md entry), proves the rule fails on a bad example and passes on a good one, and logs it in `.agents/corrections.tsv`. Details: [Correct an agent](../how-to/correct-an-agent.md).
+It finds the mistakes agents repeat, fixes each at the highest level that works (architecture, then types, a lint or CI check, a test, and docs last), proves each new check fails on a real past mistake, and keeps the rule table in AGENTS.md. Details: [Correct an agent](../how-to/correct-an-agent.md).
 
 ## What to learn next
 
