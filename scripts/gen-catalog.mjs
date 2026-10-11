@@ -193,12 +193,20 @@ function renderCoverage(catalog, skills) {
   return out.join("\n");
 }
 
+// faker-mode's "## Playbooks" section lists one playbook per `- **Title.** When.` line. Its file is
+// `playbooks/<title>.md`, the title in kebab case with hyphens kept and other punctuation dropped,
+// unless the line names it (`File: \`playbooks/x.md\``, or the older `Full steps: \`playbooks/x.md\``).
 export function playbookRoutes() {
   const text = fs.readFileSync(path.join(ROOT, FAKER_MODE, "SKILL.md"), "utf8");
+  const section = /^## Playbooks\n([\s\S]*?)(?=^## |(?![\s\S]))/m.exec(text);
   const routes = [];
-  for (const line of text.split("\n")) {
-    const match = /^- \*\*(.+?)\.\*\* (.*?)\s*(?:Full steps: )?`(playbooks\/[\w-]+\.md)`\.?\s*$/.exec(line);
-    if (match) routes.push({ name: match[1], when: match[2].trim(), file: match[3] });
+  for (const line of (section ? section[1] : "").split("\n")) {
+    const match = /^- \*\*(.+?)\.\*\*\s*(.*)$/.exec(line);
+    if (!match) continue;
+    const named = /\s*(?:File|Full steps): `(playbooks\/[\w-]+\.md)`\.?\s*$/.exec(match[2]);
+    const when = (named ? match[2].slice(0, named.index) : match[2]).trim();
+    const slug = match[1].toLowerCase().replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-");
+    routes.push({ name: match[1], when, file: named ? named[1] : `playbooks/${slug}.md` });
   }
   return routes;
 }

@@ -87,7 +87,7 @@ You get faster, slower, no measurable difference, or inconclusive, with the run 
 ## Stop correcting the same mistake
 
 ```text
-/correct agents keep adding new config flags without registering them in the schema
+/correct-repeats agents keep adding new config flags without registering them in the schema
 ```
 
 The fix lands in the repo as architecture, a type, a lint, or a test, so the next agent can't make the mistake.
@@ -95,7 +95,7 @@ The fix lands in the repo as architecture, a type, a lint, or a test, so the nex
 ## Ask how without starting the work
 
 ```text
-/poteto-help how do i get faker-mode to stay on every turn?
+/faker-help how do i get faker-mode to stay on every turn?
 ```
 
 You get an answer, a prompt to send, and a link to the source. Nothing runs until you send that prompt.
@@ -144,7 +144,7 @@ That's the whole prompt. [`/bro`](../../skills/bro/SKILL.md) restates the last m
 - **Parallel agents in one worktree.** They overwrite each other and the diff becomes archaeology. Run them as cloud agents, or say "own worktree per attempt".
 - **Looping before you trust the loop.** A loop that can't verify its own work only makes unchecked work faster. Get the verification skill working first.
 - **Trusting an unvetted number.** A warm cache or a skipped code path can fake a speedup. Run `/benchmark-checklist` before the number goes anywhere.
-- **Correcting the same mistake by hand.** A correction in chat helps one run. `/correct` fixes the repo so no later run repeats it.
+- **Correcting the same mistake by hand.** A correction in chat helps one run. `/correct-repeats` fixes the repo so no later run repeats it.
 - **Using `/arena` for coverage.** `/arena` repeats one design or code brief, then picks a base and grafts the best parts. `/swarm` partitions slices or declared race arms and aggregates one report.
 - **Accepting every review comment.** Bots and humans both file real catches and noise in one list. `/interrogate` sorts findings into act-on and dismissed buckets with reasons, and you can override either way.
 - **Treating `auto` as a model slug.** `auto` and `inherit-parent` mean "omit the model field so the subagent inherits the parent chat model." [Setup](./01-setup.md) covers the roles.

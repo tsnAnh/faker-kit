@@ -103,7 +103,7 @@ A few habits help:
 One prompt can carry a whole Project, from research through execution:
 
 ```text
-/faker-mode refactor this repo so its architecture is more agent friendly. use /correct and /architect on past commits and review comments to find the mistakes agents make most here. use /recall for context from past chats. answer open questions with prototypes instead of asking me. come back with a plan backed by real data. once i approve it, run it with autopilot-stack or autopilot-full, and ask me which.
+/faker-mode refactor this repo so its architecture is more agent friendly. use /correct-repeats and /architect on past commits and review comments to find the mistakes agents make most here. use /recall for context from past chats. answer open questions with prototypes instead of asking me. come back with a plan backed by real data. once i approve it, run it with autopilot-stack or autopilot-full, and ask me which.
 ```
 
 ## Let loops start themselves

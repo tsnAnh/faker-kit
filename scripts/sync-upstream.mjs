@@ -134,7 +134,7 @@ function loadRules() {
 function renamePath(upstreamPath, pathRenames) {
   return upstreamPath
     .split("/")
-    .map((segment) => pathRenames.reduce((acc, r) => acc.split(r.from).join(r.to), segment))
+    .map((segment) => pathRenames.reduce((acc, r) => (r.exact ? (acc === r.from ? r.to : acc) : acc.split(r.from).join(r.to)), segment))
     .join("/");
 }
 
