@@ -49,9 +49,9 @@ So that every teammate, whichever agent they use, gets the kit without setup:
 - Cloud sessions do not install the plugins these files enable. `setup-cloud-agents` vendors the kit into the repository for them.
 - `CODEOWNERS` and the branch-protection checklist in `templates/branch-protection.md`: the required check, resolved review conversations, and one human approval, so changes from anyone, including non-engineers, pass the same gates.
 
-## 7. Start the ledgers
+## 7. Start the records
 
-Create `.agents/corrections.tsv` with the header row from the `correct` skill. Run `trust-audit` and commit its first row to `.agents/trust-audit.tsv`. That row is the baseline the team improves on.
+Keep the template's `## Rules and what enforces them` table in AGENTS.md; `/correct` (pstack) fills it as mistakes get fixed. Run `trust-audit` and commit its first row to `.agents/trust-audit.tsv`. That row is the baseline the team improves on.
 
 ## 8. Verify and open the PR
 

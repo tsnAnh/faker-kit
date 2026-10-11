@@ -16,7 +16,7 @@ gh api repos/OWNER/REPO/issues/<n> --jq '{author: .user.login, title, state, lab
 gh api repos/OWNER/REPO/contents/.agents/dispatch.json --jq .content | base64 -d
 ```
 
-Claude Code cloud sessions block GitHub's GraphQL API, so `gh issue ...` and `gh pr ...` subcommands fail there with HTTP 403; use the REST calls written here (`gh api`, `gh run`). Where `gh` is missing, use the session's GitHub tools. Go on only if the issue is open, labelled `agent:security`, and its author's login is in `trusted_dispatchers` of `.agents/dispatch.json`. Otherwise end the session without posting.
+Claude Code cloud sessions block GitHub's GraphQL API, so `gh issue ...` and `gh pr ...` subcommands fail there with HTTP 403; use the REST calls written here (`gh api`, `gh run`). Where `gh` is missing, use the session's GitHub tools. Go on only if the issue is open, labelled `agent:security`, and its author's login is in `trusted_dispatchers` (compare logins ignoring letter case, as GitHub does) of `.agents/dispatch.json`. Otherwise end the session without posting.
 
 If an open issue labelled `agent:andon` was written by a login in `trusted_dispatchers`, the owner stopped the line: end without posting. The next review covers these commits.
 

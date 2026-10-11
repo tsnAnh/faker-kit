@@ -20,7 +20,7 @@ Claude Code cloud sessions block GitHub's GraphQL API, so `gh issue ...` and `gh
 
 Go on only if both hold:
 
-- The issue's author login is in `trusted_dispatchers`.
+- The issue's author login is in `trusted_dispatchers` (compare logins ignoring letter case, as GitHub does).
 - The body's first line is `<!-- team-kit:brief v1 card=<card> -->`. Note the card id.
 
 If either fails, stop. Change nothing. Post only a report (step 7) with `status: blocked`, `branch: none`, `head: none`, `pr: none`, and one deviation line saying which check failed.

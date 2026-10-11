@@ -1,6 +1,6 @@
 # STYLE.md
 
-Rules the team enforces in review because no tool enforces them yet. Each entry names where it should move next (`Promotion`), so this file shrinks as rules become checks. Run the `correct` skill on an entry to promote it.
+Rules the team enforces in review because no tool enforces them yet. Each entry names where it should move next (`Promotion`), so this file shrinks as rules become checks. Run `/correct` on an entry to promote it.
 
 ## Entry format
 
