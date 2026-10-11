@@ -166,6 +166,8 @@ There is no public callback URL, inbound listener, webhook secret, or Slack text
 
 ### 2. Each project
 
+The quickest way is your own coding agent: run `/setup-hermes-project` (or `$setup-hermes-project` in Codex) in Claude Code, Codex, or Pi on this machine. It asks a few questions, creates the routine, and runs every step below, stopping where you paste a token in your own terminal or merge a pull request. The bootstrap bot does the same from Hermes Desktop:
+
 Open the bootstrap bot in Hermes Desktop Bot Mode and say "set up project shop for acme/shop". It asks for the bot's name and the coding agent, then, with your approval at each step:
 
 1. `team-kit-admin add-project` creates the project bot and its four jobs, paused, and the eleven labels in the repository. Add `--tick-every 10m` or `--incidents-every 5m` when a project needs lower-latency polling than the defaults, `30m` for ticks and `10m` for incidents.
