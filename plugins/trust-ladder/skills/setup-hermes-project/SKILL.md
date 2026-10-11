@@ -88,7 +88,7 @@ The project bot starts each Claude Code session by firing this routine. Its save
   [--routine trig_...] [--tick-every 10m] [--incidents-every 5m] [--model <model>]
 ```
 
-It creates the bot's profile, its four jobs (paused), and the team-kit labels in the repository. Pass `--routine` for a `claude` repository. A later run without `--routine` keeps the one already set.
+It creates the bot's profile, its scheduled jobs (paused), and the team-kit labels in the repository. Pass `--routine` for a `claude` repository. A later run without `--routine` keeps the one already set.
 
 ## 5. The owner puts the tokens in place
 
