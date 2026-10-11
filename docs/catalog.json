@@ -123,6 +123,7 @@
     "trust-ladder/setup-cloud-agents": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-cloud-agents", "mentioned": [] },
     "trust-ladder/setup-routines": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-routines run the gardener and the verification-skill upkeep every night", "mentioned": [] },
     "trust-ladder/setup-dispatch": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-dispatch for this repo: backend claude, project shop", "mentioned": [] },
+    "trust-ladder/setup-hermes-project": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-hermes-project for acme/shop with Claude Code", "mentioned": [] },
     "trust-ladder/follow-brief": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill", "mentioned": [] },
     "trust-ladder/review-pr": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/review-pr Review https://github.com/OWNER/REPO/pull/7 at commit <sha> for the unit in OWNER/REPO#123. Sign the result with key <key>.", "mentioned": [] },
     "trust-ladder/verify-unit": { "layer": "scale", "audience": ["engineer", "lead"], "prompt": "/verify-unit Verify https://github.com/OWNER/REPO/pull/7 at commit <sha> against the brief in OWNER/REPO#123. Sign the verdict with key <key>.", "mentioned": [] },
