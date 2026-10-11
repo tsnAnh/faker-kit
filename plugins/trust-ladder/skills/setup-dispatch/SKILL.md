@@ -16,7 +16,7 @@ You need these values. The bootstrap bot's prompt gives them all. If you run thi
 
 | Value | What it is |
 |---|---|
-| `backend` | `claude` (Claude Code cloud, started with `claude --cloud`) or `codex` (Codex cloud, started with `codex cloud exec`) |
+| `backend` | `claude` (Claude Code cloud, started by firing the project's Claude Code routine) or `codex` (Codex cloud, started with `codex cloud exec`) |
 | `kit_ref` | The full 40-character kit commit the Hermes machine runs |
 | `trusted_dispatchers` | The GitHub logins that open unit issues: the project bot's login, and the owner's |
 | `project` | The project's slug |

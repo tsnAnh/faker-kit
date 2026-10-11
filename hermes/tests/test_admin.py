@@ -189,6 +189,7 @@ def test_a_project_has_one_repository(ready):
         (["--bot", "default", "--project", "crm", "--repo", "acme/crm"], "the owner's own Hermes profile"),
         (["--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm;id"], "is not OWNER/REPO"),
         (["--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm", "--tick-every", "0m"], "--tick-every must be"),
+        (["--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm", "--routine", "trig_../../x"], "--routine must be"),
     ],
 )
 def test_add_project_refuses_before_changing_anything(ready, args, why):
@@ -201,19 +202,51 @@ def test_add_project_refuses_before_changing_anything(ready, args, why):
     assert not (root / "profiles" / "sep-crm").exists()
 
 
-def test_setup_repo_starts_one_cloud_session_on_the_vendored_kit(ready, kit_source):
+def test_add_project_keeps_the_routine_and_status_shows_whether_its_token_is_set(ready):
     root, _ = ready
-    add_shop(ready)
-    vendored(root, kit_source[1])
-    code, out = admin(ready, "setup-repo", "--project", "shop", "--backend", "claude", profile="ong-xay")
+    code, out = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP,
+                      "--routine", "trig_01SHOProutine", profile="ong-xay")
     assert code == 0, out
-    assert out == {"project": "shop", "repo": "acme/shop", "backend": "claude", "kit_ref": kit_source[1], "session": "https://claude.ai/code/session_01BOOTstrap"}
-    home = root.parent
-    assert (home / ".fake-claude-cwd").read_text().strip() == str(root / "team-kit" / "checkouts" / "acme__shop" / "setup")
-    args = (home / ".fake-claude-args").read_text()
-    assert args == "--cloud"
-    assert (home / ".fake-claude-tty").read_text() == "True"
-    prompt = (home / ".fake-claude-prompt").read_text()
+    assert out["routine"] == "trig_01SHOProutine"
+    assert not any("claude.ai/code/routines" in step for step in out["next"])
+    add_shop(ready)  # a refresh without --routine keeps it
+    assert bots(root)["meo-beo"] == {"role": "project", "project": "shop", "repo": SHOP, "routine": "trig_01SHOProutine"}
+    status = lambda: next(b for b in admin(ready, "status", profile="ong-xay")[1]["bots"] if b["bot"] == "meo-beo")
+    assert (status()["routine"], status()["routine_token"]) == ("trig_01SHOProutine", False)
+    (root / "profiles" / "meo-beo" / ".env").write_text("TEAM_KIT_ROUTINE_TOKEN=sk-ant-oat01-shop\n")
+    assert status()["routine_token"] is True
+
+
+def test_add_project_without_a_routine_says_how_to_make_one(ready):
+    out = add_shop(ready)
+    assert out["routine"] is None
+    assert any("claude.ai/code/routines" in step and "--routine trig_" in step for step in out["next"])
+
+
+def test_setup_repo_fires_the_projects_routine_with_the_token_from_its_bot_profile(ready, kit_source, monkeypatch):
+    from team_kit_admin import Admin
+
+    root, env = ready
+    code, out = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP,
+                      "--routine", "trig_01SHOProutine", profile="ong-xay")
+    assert code == 0, out
+    (root / "profiles" / "meo-beo" / ".env").write_text('GH_TOKEN=x\nTEAM_KIT_ROUTINE_TOKEN="sk-ant-oat01-shop"\n')
+    vendored(root, kit_source[1])
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    fired = []
+
+    def post(url, headers, body, timeout):
+        fired.append((url, headers["Authorization"], json.loads(body)["text"]))
+        return 200, json.dumps({"claude_code_session_url": "https://claude.ai/code/cse_01BOOTstrap"}).encode()
+
+    setup = Admin(home=root / "team-kit")
+    setup.cloud.post = post
+    out = setup.setup_repo("shop", "claude", None)
+    assert out == {"project": "shop", "repo": "acme/shop", "backend": "claude", "kit_ref": kit_source[1], "session": "https://claude.ai/code/cse_01BOOTstrap"}
+    [(url, auth, prompt)] = fired
+    assert url == "https://api.anthropic.com/v1/claude_code/routines/trig_01SHOProutine/fire"
+    assert auth == "Bearer sk-ant-oat01-shop"
     assert prompt.startswith("Set up acme/shop for team-kit dispatch")
     assert f"vendored in this repository at .agents/team-kit/, at commit {kit_source[1]}" in prompt
     assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in prompt
@@ -229,7 +262,6 @@ def test_setup_repo_waits_for_the_vendored_kit(ready, kit_source, kit, why):
         vendored(root, kit)
     code, err = admin(ready, "setup-repo", "--project", "shop", "--backend", "claude", profile="ong-xay")
     assert code == 1 and why in err and "team-kit-admin vendor --project shop" in err
-    assert not (root.parent / ".fake-claude-args").exists()
 
 
 def test_setup_repo_refuses_codex_without_an_environment_and_unknown_projects(ready):

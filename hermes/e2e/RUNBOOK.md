@@ -11,7 +11,7 @@ This artifact proves the live Hermes dispatch loop on a scratch repository:
 
 ## Before You Run It
 
-1. **Merge PR #33 first.** Claude Code 2.1.289's `claude --cloud` requires a terminal, and PR #33 fixes how Hermes launches it. Without that fix the dispatch step cannot start a cloud session, so this e2e run needs it merged and this checkout updated to include it.
+1. **For a scratch repository whose backend is `claude`, create its routine first.** At claude.ai/code/routines, create a routine on the scratch repository with the prompt `team-kit-admin add-project` prints, no connectors, and a one-off run date far in the future; turn it on, add an API trigger, and generate its token. Put the token in a second variable the same way as below (`read -rs HERMES_E2E_ROUTINE_TOKEN && export HERMES_E2E_ROUTINE_TOKEN`) and pass `--routine trig_... --routine-token-env HERMES_E2E_ROUTINE_TOKEN`.
 2. **Create a token for the project bot, for the scratch repository only.** In GitHub, create a fine-grained personal access token whose repository access is "Only select repositories" and names just the scratch repository, with: Issues read and write; Contents, Pull requests, Checks, and Commit statuses read; Metadata read (added automatically). Prefer a separate bot account. Its login must be in `trusted_dispatchers` in the scratch repository's `.agents/dispatch.json`.
 3. **Put it in an environment variable, from your own shell,** and pass only the variable's *name* to the script:
 
@@ -58,6 +58,7 @@ python3 hermes/e2e/run_dispatch_e2e.py \
 Options:
 
 - `--token-env NAME` (required): the environment variable that holds the project bot's token. The script writes the token to the temporary profile's `.env` (mode 600), passes it to the bot's commands as `GH_TOKEN` in their environment only, replaces any token your shell already exports for `gh`, and never prints it or puts it in an argument, URL, or error message.
+- `--routine trig_...` and `--routine-token-env NAME`: the scratch repository's Claude Code routine and the variable that holds its token, for a `claude` backend. The token goes only to the temporary profile's `.env` as `TEAM_KIT_ROUTINE_TOKEN`; it is never printed or put in an argument.
 - `--trusted-author LOGIN`: add another login whose reports and verifier verdicts count.
 - `--timeout-minutes N`: overall wait for report, verifier, and ready notice. Default: `120`.
 - `--poll-seconds N`: poll cadence. Default: `60`.
@@ -103,7 +104,7 @@ The script prints one line per step: `observed` only when a command's output sho
 ## Troubleshooting
 
 - `kit commit ... differs from kit_ref`: run the normal Hermes vendoring flow for the scratch repo, merge that setup PR yourself, then rerun this e2e.
-- `dispatch did not launch immediately`: the cloud CLI is not authenticated or PR #33 is not in this checkout (`claude --cloud` needs a terminal), the repo does not trust the dispatching login, a limit is already full, or the andon cord is pulled.
+- `dispatch did not launch immediately`: the cloud CLI is not authenticated, the `claude` routine is missing, off, or has no token (`team-kit-admin status` shows `routine` and `routine_token`), the repo does not trust the dispatching login, a limit is already full, or the andon cord is pulled.
 - `unit gated`: read the issue linked in the notice. The script stops rather than launching fallback work.
 - `ready notice has no verifier verdict`: the scratch repo has verification disabled; set `verifier_backend` to `claude` or `codex`.
 - No `risk:*` label: inspect the pull request and `team-kit-gh tick` output; the e2e requires the real risk label before it passes.

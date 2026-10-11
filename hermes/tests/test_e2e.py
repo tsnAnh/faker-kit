@@ -244,6 +244,47 @@ def test_the_project_bot_gets_its_own_token_and_never_the_operators(live, tmp_pa
     assert "- meo-bot" in guard and "- owner" in guard
 
 
+ROUTINE_SECRET = "sk-ant-oat01-ROUTINE0123456789"
+ROUTINE = ["--routine", "trig_01SCRATCHroutine", "--routine-token-env", "E2E_ROUTINE_TOKEN"]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--routine", "trig_01SCRATCHroutine"],
+        ["--routine-token-env", "E2E_ROUTINE_TOKEN"],
+        ["--routine", "trig_../fire", "--routine-token-env", "E2E_ROUTINE_TOKEN"],
+        ["--routine", "trig_01SCRATCHroutine", "--routine-token-env", "GH_TOKEN"],
+        ["--routine", "trig_01SCRATCHroutine", "--routine-token-env", "E2E_BOT_TOKEN"],
+    ],
+)
+def test_a_routine_needs_its_own_token_variable(e2e, extra):
+    with pytest.raises(SystemExit):
+        e2e.parse_args(["--repo", "acme/scratch", "--confirm-scratch-repo", "acme/scratch", *TOKEN, *extra])
+
+
+def test_a_claude_scratch_repo_gets_its_routine_and_token_without_either_reaching_argv_or_output(live, tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("E2E_ROUTINE_TOKEN", ROUTINE_SECRET)
+    fake = FakeRunner(ticks=[[READY_NOTICE]], statuses=[DONE], labels=[("agent:verifying",)])
+    assert live(fake, "--keep-home", *ROUTINE) == 0
+    [(add, _)] = [(argv, env) for argv, env in fake.calls if Path(argv[0]).name == "team-kit-admin" and "add-project" in argv]
+    assert add[add.index("--routine") + 1] == "trig_01SCRATCHroutine"
+    env_file = next(tmp_path.glob("team-kit-hermes-e2e-*")) / ".hermes" / "profiles" / "hermes-e2e-project" / ".env"
+    assert env_file.read_text() == f"GH_TOKEN={SECRET}\nTEAM_KIT_ROUTINE_TOKEN={ROUTINE_SECRET}\n"
+    for argv, env in fake.calls:
+        assert ROUTINE_SECRET not in " ".join(argv)
+        assert env is None or "E2E_ROUTINE_TOKEN" not in env, "the variable that carried the routine token is not passed on"
+    captured = capsys.readouterr()
+    assert ROUTINE_SECRET not in captured.out + captured.err
+
+
+def test_it_refuses_to_run_without_the_routine_token_before_touching_anything(live, tmp_path, e2e):
+    fake = FakeRunner()
+    with pytest.raises(e2e.E2EError, match="E2E_ROUTINE_TOKEN"):
+        live(fake, *ROUTINE)
+    assert fake.calls == [] and list(tmp_path.glob("team-kit-hermes-e2e-*")) == []
+
+
 @pytest.mark.parametrize("value", [None, "", "two words", "line\nbreak"])
 def test_it_refuses_to_run_without_a_usable_token_before_touching_anything(live, monkeypatch, tmp_path, value, e2e):
     if value is None:

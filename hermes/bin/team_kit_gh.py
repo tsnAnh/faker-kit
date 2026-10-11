@@ -66,7 +66,7 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
         sys.path.insert(0, str(candidate))
 
 from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord, clean_reason, issue_body  # noqa: E402
-from team_kit_cloud import FINISHED, Cloud, CloudError  # noqa: E402
+from team_kit_cloud import FINISHED, ROUTINE_TOKEN_ENV, Cloud, CloudError, owned_routine  # noqa: E402
 from team_kit_incident_sources import (  # noqa: E402
     ExternalObservation,
     IncidentSourceError,
@@ -2103,7 +2103,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         me = policy.bot(bot or current_bot())
         if me.role != "project":
             raise Refused(f"{me.name} is a {me.role} bot; team-kit-gh is for project bots")
-        cloud = cloud or Cloud(run_gh=run)
+        cloud = cloud or Cloud(routines=owned_routine(me.routine, me.repo, os.environ.get(ROUTINE_TOKEN_ENV, "")))
         if args.command == "project":
             out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
         elif args.command == "teammate-proposals":

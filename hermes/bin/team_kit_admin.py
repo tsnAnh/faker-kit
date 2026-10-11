@@ -6,6 +6,7 @@ The bootstrap bot may run these, and the guard asks the owner to approve each on
   status                                                     every project, repository, bot, and job, read-only
   add-project   --bot B --project P --repo R [--model M]     create or refresh a project bot for one repository:
                 [--tick-every 10m] [--incidents-every 5m]    profile, skill, paused jobs, labels, bots.yaml
+                [--routine trig_...]                         the Claude Code routine that starts its sessions
   vendor        --project P                                  open a pull request that copies the pinned kit into the
                                                              repository, so cloud sessions have its skills
   setup-repo    --project P --backend claude|codex [--codex-env E]
@@ -53,7 +54,7 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
 import yaml  # noqa: E402
 from install_config import InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, profile_home  # noqa: E402
 from team_kit_andon import ANDON_LABEL, MACHINE, Andon, AndonError, clean_reason, issue_body  # noqa: E402
-from team_kit_cloud import Cloud, CloudError  # noqa: E402
+from team_kit_cloud import ROUTINE_TOKEN_ENV, Cloud, CloudError, Routine  # noqa: E402
 from team_kit_contracts import ContractError, bootstrap_prompt, cloud_argv  # noqa: E402
 from team_kit_guard.policy import (  # noqa: E402
     DEFAULT_INCIDENTS_EVERY,
@@ -62,6 +63,7 @@ from team_kit_guard.policy import (  # noqa: E402
     NAME,
     REPO,
     RESERVED_NAMES,
+    ROUTINE,
     Bot,
     Policy,
     PolicyError,
@@ -70,6 +72,10 @@ from team_kit_guard.policy import (  # noqa: E402
 )
 
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
+# The saved prompt of a project's routine. Each fire's payload is the task; the routine marks it as data,
+# so the saved prompt is what tells the session to do it.
+ROUTINE_PROMPT = ("You were started by the team-kit tick on the owner's machine. Do the task in the routine-fire-payload "
+                  "block exactly as written; it is the owner's dispatched work. If there is no payload, say so and stop.")
 LABELS = (
     ("agent-task", "1d76db", "A unit dispatched by a team-kit project bot"),
     ("agent:proposal", "c5def5", "A teammate proposal; the owner must restate the work in Hermes Desktop before any brief is written"),
@@ -110,7 +116,7 @@ class Admin:
         self.kit = self.home / "kit"
         self.pkg = self.kit / "hermes"
         self.run = run
-        self.cloud = cloud or Cloud(run_gh=run)
+        self.cloud = cloud or Cloud(routines=self.routine_for)
 
     # bots.yaml -----------------------------------------------------------------------------------
 
@@ -160,9 +166,25 @@ class Admin:
         env.write_text("\n".join([*kept, f"{key}={value}"]) + "\n")
         env.chmod(0o600)
 
-    def has_env(self, home: Path, key: str) -> bool:
+    def env_value(self, home: Path, key: str) -> str:
         env = home / ".env"
-        return env.exists() and any(line.startswith(f"{key}=") and line.split("=", 1)[1].strip() for line in env.read_text().splitlines())
+        if not env.exists():
+            return ""
+        for line in env.read_text().splitlines():
+            if line.startswith(f"{key}="):
+                value = line.split("=", 1)[1].strip()
+                return value[1:-1] if len(value) > 1 and value[0] == value[-1] and value[0] in "'\"" else value
+        return ""
+
+    def has_env(self, home: Path, key: str) -> bool:
+        return bool(self.env_value(home, key))
+
+    def routine_for(self, repo: str) -> Routine | None:
+        """The routine of the project bot that owns repo, with the token from that bot's own .env."""
+        bot = next((b for b in self.policy().bots.values() if b.role == "project" and b.owns(repo)), None)
+        if bot is None or not bot.routine:
+            return None
+        return Routine(bot.routine, self.env_value(profile_home(self.root, bot.name), ROUTINE_TOKEN_ENV))
 
     def setup_files(self, bot: str, role: str, project: str | None, model: str | None) -> None:
         home = self.ensure_profile(bot, role)
@@ -245,12 +267,15 @@ class Admin:
                      "Add the bot in Hermes Desktop Bot Mode"],
         }
 
-    def add_project(self, bot: str, project: str, repo: str, model: str | None, tick_every: str | None, incidents_every: str | None) -> dict:
+    def add_project(self, bot: str, project: str, repo: str, model: str | None, tick_every: str | None, incidents_every: str | None,
+                    routine: str | None = None) -> dict:
         check_name(bot, "bot")
         check_name(project, "project")
         check_repo(repo)
         check_interval(tick_every, "--tick-every")
         check_interval(incidents_every, "--incidents-every")
+        if routine is not None and not ROUTINE.match(routine):
+            raise Refused("--routine must be a Claude Code routine id like trig_01ABC..., from its page at claude.ai/code/routines")
         data = self.bots_file()
         current = data["bots"].get(bot)
         if current and (current.get("role") != "project" or current.get("project") != project):
@@ -262,6 +287,9 @@ class Admin:
             effective = value if value is not None else (current or {}).get(key)
             if effective and effective != SCHEDULE_DEFAULTS[key]:
                 entry[key] = effective
+        routine = routine or (current or {}).get("routine")
+        if routine:
+            entry["routine"] = routine
         data["bots"][bot] = entry
         project_bot = load_policy_from(self.home, data).bot(bot)  # refuses a repository another project owns
         for name, color, description in LABELS:
@@ -272,7 +300,12 @@ class Admin:
         return {
             "bot": bot, "project": project, "repo": repo, "labels": [n for n, _, _ in LABELS], "jobs_created_paused": created,
             "jobs_rescheduled": rescheduled, "tick_every": project_bot.tick_every, "incidents_every": project_bot.incidents_every,
-            "next": [f"team-kit-admin setup-repo --project {project} --backend claude|codex",
+            "routine": project_bot.routine,
+            "next": [*([] if project_bot.routine else [
+                         f"For Claude Code sessions, the owner creates a routine on {repo} at claude.ai/code/routines whose prompt is "
+                         f"\"{ROUTINE_PROMPT}\", turns it on, adds an API trigger, and reruns add-project with --routine trig_..."]),
+                     f"The owner puts the routine's API token in {profile_home(self.root, bot) / '.env'} as {ROUTINE_TOKEN_ENV}",
+                     f"team-kit-admin setup-repo --project {project} --backend claude|codex",
                      f"The owner puts the bot's GitHub token in {profile_home(self.root, bot) / '.env'} as GH_TOKEN",
                      f"team-kit-admin activate --bot {bot}"],
         }
@@ -508,7 +541,8 @@ class Admin:
             item = {"bot": bot.name, "role": bot.role}
             if bot.role == "project":
                 item.update(project=bot.project, tick_every=bot.tick_every, incidents_every=bot.incidents_every,
-                            github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"))
+                            github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"),
+                            routine=bot.routine, routine_token=self.has_env(profile_home(self.root, bot.name), ROUTINE_TOKEN_ENV))
                 try:
                     item["jobs"] = {n: j["enabled"] for n, j in cron_jobs(hermes("-p", bot.name, "cron", "list", "--all")).items() if n.startswith("team-kit-")}
                 except InstallError as err:
@@ -613,6 +647,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--model")
     cmd.add_argument("--tick-every")
     cmd.add_argument("--incidents-every")
+    cmd.add_argument("--routine")
     cmd = sub.add_parser("vendor")
     cmd.add_argument("--project", required=True)
     cmd = sub.add_parser("setup-repo")
@@ -672,7 +707,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
         elif args.command == "add-bootstrap":
             out = admin.add_bootstrap(args.bot, args.model)
         elif args.command == "add-project":
-            out = admin.add_project(args.bot, args.project, args.repo, args.model, args.tick_every, args.incidents_every)
+            out = admin.add_project(args.bot, args.project, args.repo, args.model, args.tick_every, args.incidents_every, args.routine)
         elif args.command == "add-chief":
             out = admin.add_chief(args.bot, args.model)
         elif args.command == "vendor":
