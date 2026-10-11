@@ -1,0 +1,38 @@
+{
+  "backend": "claude",
+  "kit_ref": "00900e48025fdd5a9376d01bb498b7d87913db9f",
+  "max_in_flight": 1,
+  "forbidden_paths": [
+    ".github/workflows/",
+    "infra/",
+    "*.lock",
+    "bun.lock",
+    "package-lock.json",
+    ".agents/team-kit/"
+  ],
+  "trusted_dispatchers": [
+    "tsnAnh"
+  ],
+  "review_backend": "claude",
+  "verifier_backend": "claude",
+  "accept_verifications": [
+    "live-ui-verified",
+    "unit-test-verified"
+  ],
+  "risk_paths_high": [
+    "hermes/",
+    "deploy/"
+  ],
+  "risk_paths_medium": [
+    "upstream/",
+    "plugins/trust-ladder/hooks/"
+  ],
+  "incidents": {
+    "main_checks": true,
+    "health": [],
+    "andon_on_red": false,
+    "triage_backend": "claude"
+  },
+  "security_backend": "claude",
+  "upstream_sync": true
+}
