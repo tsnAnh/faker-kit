@@ -43,4 +43,4 @@ Agents copy the code around them. A codebase with one clean pattern per concern 
 
 ## Measuring the climb
 
-`correct` appends one row per encoded correction to `.agents/corrections.tsv`. `trust-audit` appends one row per audit to `.agents/trust-audit.tsv`. Read both before raising the number of agents you run in parallel: the share of corrections landing in layers 1 and 2 should grow, and the same correction should stop coming back.
+`/correct` (pstack) keeps a table in AGENTS.md that pairs each rule with what enforces it, and a rule that nothing enforces counts as a repeat. `trust-audit` appends one row per audit to `.agents/trust-audit.tsv`. Read both before raising the number of agents you run in parallel: the share of rules a check enforces (layers 1 and 2) should grow, and no rule should be left to the doc alone.

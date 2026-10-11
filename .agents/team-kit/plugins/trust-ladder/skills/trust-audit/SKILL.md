@@ -23,7 +23,7 @@ Measure the environment, not the agents. Every score cites evidence you observed
 | 4. Skills and verification | No way for an agent to run the app | Manual run instructions only | A verification skill with a CLI that drives the real app | Verification skill plus a feature map maintained daily; it ran green in step 1 |
 | 5. Style guide | Rules live in reviewers' heads | STYLE.md exists | Entries have bad and good examples | Every entry names its `promotion:` layer, and promotions happen |
 
-Also read `.agents/corrections.tsv` if it exists. Count corrections per layer and how many repeat the same rule. A growing share in layers 1 and 2 means the team is climbing.
+Also read the rule table in AGENTS.md, the one `/correct` keeps: each rule and what enforces it. Count the rules by what enforces them (architecture or types, a lint or CI check, a test, or only the doc), and name the rules nothing enforces. A growing share enforced by a check means the team is climbing.
 
 ## 3. Check whether non-engineers can use it
 
