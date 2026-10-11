@@ -1,0 +1,57 @@
+# AGENTS.md
+
+<One sentence: what this repository is and who uses it.>
+
+## Commands
+
+Run `scripts/check.sh` before you say a change is done. It runs everything CI runs, and CI runs nothing else.
+
+| Task | Command |
+|---|---|
+| Install dependencies | `<command>` |
+| Run the app locally | `<command>` |
+| Run the tests | `<command>` |
+| Check everything | `scripts/check.sh` |
+| Prove a user-facing change | the `verify-<app>` skill, which drives the real app and captures evidence |
+
+## Layout
+
+- `<path>/`: <what lives there>.
+
+## Boundaries
+
+These dependency rules are enforced by `.agents/import-boundaries.json` and the build. They are listed here so you know why a check fails.
+
+- <Layer A> may import <layer B>, never the reverse.
+
+## Paved paths
+
+Each concern has one blessed way. The alternatives are deleted and banned by lint.
+
+| Concern | Use | Not |
+|---|---|---|
+| <Logging> | `<api>` | `<banned api>` |
+
+## Never
+
+- Never skip, disable, or weaken a check, test, or lint rule to get green. Fix the cause.
+- Never add a comment to justify a workaround. Fix the root cause, or open a task and link it.
+- Never say a change works without evidence from running it: test output, and for user-facing changes, screenshots or video from the verification skill.
+- Never hand-edit generated files: <list>.
+- Never commit secrets, tokens, or customer data, including in test fixtures and screenshots.
+
+## How to work here
+
+- Restate a bug report or request in your own words before changing code.
+- Keep each pull request to one concern. Put the evidence in its description.
+- Every user-facing text change updates every supported locale with a real translation.
+- When you are corrected, or you correct yourself, for something that could happen again, run the `correct` skill so the fix lands in a check, not in chat.
+
+## Review guidelines
+
+Codex code review reads this section. The Claude review routine reads it with REVIEW.md.
+
+- Treat the rules in REVIEW.md as the review checklist.
+- Treat every rule under Blocking in REVIEW.md as P1.
+- Do not comment on formatting or anything `scripts/check.sh` already enforces.
+- Mark each finding `[blocking]` or `[nit]`.

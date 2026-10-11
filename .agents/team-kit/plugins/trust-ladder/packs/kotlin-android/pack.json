@@ -1,0 +1,25 @@
+{
+  "name": "kotlin-android",
+  "description": "detekt with type resolution, ktlint, strict Android Lint, and Kotlin warnings as errors, each with a native baseline.",
+  "detect": { "files": ["settings.gradle.kts", "settings.gradle"], "contains": ["com.android.application", "com.android.library"] },
+  "tools": [
+    { "name": "detekt", "version": "1.23.8", "why": "Kotlin static analysis; the Gradle plugin gives it type resolution" },
+    { "name": "ktlint", "version": "1.5.0", "why": "formatting and import rules" },
+    { "name": "JDK", "version": "17", "why": "Gradle and detekt" }
+  ],
+  "merge": [
+    {
+      "from": "merge/build.gradle.kts",
+      "into": "each module's build.gradle.kts (or a convention plugin in build-logic)",
+      "how": "Apply the detekt plugin and settings, turn Kotlin warnings into errors, and point Android Lint at lint.xml with a baseline. A convention plugin applied to every module keeps modules from opting out."
+    }
+  ],
+  "check": [
+    "./gradlew detektMain detektTest",
+    "ktlint \"**/*.kt\" \"**/*.kts\" \"!**/build/**\"",
+    "./gradlew lint",
+    "./gradlew test"
+  ],
+  "baseline": "Run ./gradlew detektBaseline to write detekt-baseline.xml, run ./gradlew lint once so Android Lint writes lint-baseline.xml, and run ktlint --baseline=ktlint-baseline.xml. Commit all three; new code must pass without additions to them.",
+  "ci": "ci/github-actions.yml"
+}

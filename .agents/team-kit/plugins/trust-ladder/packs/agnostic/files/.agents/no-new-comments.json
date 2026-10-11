@@ -1,0 +1,5 @@
+{
+  "mode": "fail",
+  "allow": [],
+  "exclude": [".agents/rule-fixtures/**", "**/generated/**", "**/*.g.dart", "**/*.freezed.dart", "**/Generated/**"]
+}

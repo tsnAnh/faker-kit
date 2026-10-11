@@ -1,0 +1,22 @@
+{
+  "name": "kmp",
+  "description": "Kotlin Multiplatform on top of the kotlin-android pack: keeps platform APIs out of commonMain, requires explicit public API, and turns warnings into errors on every target.",
+  "detect": { "files": ["build.gradle.kts", "settings.gradle.kts"], "contains": ["kotlin(\"multiplatform\")", "org.jetbrains.kotlin.multiplatform"] },
+  "requires": ["kotlin-android"],
+  "tools": [
+    { "name": "detekt", "version": "1.23.8", "why": "commonMain import rules" }
+  ],
+  "merge": [
+    {
+      "from": "merge/build.gradle.kts",
+      "into": "each multiplatform module's build.gradle.kts (or a convention plugin)",
+      "how": "Enable explicitApi() and allWarningsAsErrors, and layer detekt-kmp.yml over detekt.yml with every source set listed so detekt sees commonMain."
+    }
+  ],
+  "check": [
+    "./gradlew detekt",
+    "./gradlew allTests"
+  ],
+  "baseline": "Same as the kotlin-android pack: ./gradlew detektBaseline, committed.",
+  "ci": "ci/github-actions.yml"
+}

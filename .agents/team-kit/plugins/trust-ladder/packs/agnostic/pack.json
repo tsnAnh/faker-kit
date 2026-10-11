@@ -1,0 +1,19 @@
+{
+  "name": "agnostic",
+  "description": "Checks for every repository: a single check entry point, a ratchet that stops patterns from spreading, import boundaries, proof that every encoded rule still fires, no new comments, and complete translations.",
+  "detect": { "always": true },
+  "tools": [
+    { "name": "node", "version": ">=18", "why": "runs scripts/agent-checks/*.mjs with no dependencies" },
+    { "name": "lefthook", "version": ">=1.6", "why": "optional pre-push hook", "optional": true }
+  ],
+  "check": [
+    "node scripts/agent-checks/ratchet.mjs check",
+    "node scripts/agent-checks/import-boundaries.mjs",
+    "node scripts/agent-checks/rule-fixtures.mjs"
+  ],
+  "optionalChecks": {
+    "no-new-comments": "node scripts/agent-checks/no-new-comments.mjs",
+    "locale-keys": "node scripts/agent-checks/locale-keys.mjs"
+  },
+  "baseline": "Add a rule to .agents/ratchet.json for any pattern you want to stop spreading, then run `node scripts/agent-checks/ratchet.mjs update` to record today's counts."
+}
