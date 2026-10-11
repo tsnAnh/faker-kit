@@ -49,3 +49,7 @@ python -m pytest hermes                  # Hermes guard, team-kit-gh, team-kit-a
 bash scripts/test-packs.sh               # lint packs fail on bad fixtures, pass on good
 claude plugin validate .                 # Claude Code marketplace schema
 ```
+
+## Dispatch
+
+`.agents/dispatch.json` and `.agents/dispatch.md` configure Hermes dispatch to cloud coding agents. `scripts/check.sh` is the single fast check (vendored kit, sync, validate, catalog, site, trust-ladder and hook tests); CI runs it as the `check` job. The slower checks above (orchestrate engine, Hermes pytest, lint packs, `claude plugin validate`) run in the other CI jobs, and a cloud session may lack their toolchains.
