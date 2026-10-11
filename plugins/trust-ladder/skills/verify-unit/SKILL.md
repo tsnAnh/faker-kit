@@ -12,12 +12,12 @@ Nobody is watching this session. Hermes reads only your verdict comment's header
 ## 1. Check the brief and the pull request
 
 ```bash
-gh issue view <n> -R OWNER/REPO --json author,body,title,state
+gh api repos/OWNER/REPO/issues/<n> --jq '{author: .user.login, title, state, body}'
 gh api repos/OWNER/REPO/contents/.agents/dispatch.json --jq .content | base64 -d
-gh pr view <pr> -R OWNER/REPO --json number,headRefOid,headRefName,baseRefName,body,state
+gh api repos/OWNER/REPO/pulls/<pr> --jq '{number, headRefOid: .head.sha, headRefName: .head.ref, baseRefName: .base.ref, body, state}'
 ```
 
-Use `gh`, or the session's GitHub tools where `gh` is missing. Go on only if all hold:
+Claude Code cloud sessions block GitHub's GraphQL API, so `gh issue ...` and `gh pr ...` subcommands fail there with HTTP 403; use the REST calls written here (`gh api`, `gh run`). Where `gh` is missing, use the session's GitHub tools. Go on only if all hold:
 
 - The issue's author login is in `trusted_dispatchers` of `.agents/dispatch.json` on the default branch.
 - The issue body's first line is `<!-- team-kit:brief v1 card=<card> -->`.
@@ -28,7 +28,7 @@ If one fails, post a verdict (step 4) with `verification: verifier-blocked` and 
 Check the andon cord now and again before you post the verdict:
 
 ```bash
-gh issue list -R OWNER/REPO --label agent:andon --state open --json number,title,author
+gh api 'repos/OWNER/REPO/issues?labels=agent:andon&state=open&per_page=100' --jq '[.[] | select(.pull_request == null) | {number, title, author: .user.login}]'
 ```
 
 If an open issue there was written by a login in `trusted_dispatchers`, the owner stopped the line. Stop, post a `verifier-blocked` verdict whose Notes say `andon #<number>: <title>`, and end. Never close, edit, or comment on the andon issue.
@@ -76,7 +76,7 @@ Comment on the issue, not the pull request, with `templates/dispatch/verdict.md`
 - Then the sections Execution, Findings, and Notes.
 
 ```bash
-gh issue comment <n> -R OWNER/REPO --body-file verdict.md
+gh api repos/OWNER/REPO/issues/<n>/comments -F body=@verdict.md --jq .html_url
 ```
 
 Pick the strongest value your Execution section supports:

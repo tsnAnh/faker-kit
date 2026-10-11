@@ -12,11 +12,11 @@ You change nothing. Never edit a tracked file, commit, push, open a pull request
 ## 1. Check the issue
 
 ```bash
-gh issue view <n> -R OWNER/REPO --json author,title,state,labels
+gh api repos/OWNER/REPO/issues/<n> --jq '{author: .user.login, title, state, labels: [.labels[].name]}'
 gh api repos/OWNER/REPO/contents/.agents/dispatch.json --jq .content | base64 -d
 ```
 
-Use `gh`, or the session's GitHub tools where `gh` is missing. Go on only if the issue is open, labelled `agent:security`, and its author's login is in `trusted_dispatchers` of `.agents/dispatch.json`. Otherwise end the session without posting.
+Claude Code cloud sessions block GitHub's GraphQL API, so `gh issue ...` and `gh pr ...` subcommands fail there with HTTP 403; use the REST calls written here (`gh api`, `gh run`). Where `gh` is missing, use the session's GitHub tools. Go on only if the issue is open, labelled `agent:security`, and its author's login is in `trusted_dispatchers` of `.agents/dispatch.json`. Otherwise end the session without posting.
 
 If an open issue labelled `agent:andon` was written by a login in `trusted_dispatchers`, the owner stopped the line: end without posting. The next review covers these commits.
 
@@ -73,7 +73,7 @@ Comment on the issue in your prompt with `templates/dispatch/security.md` filled
 - Then the sections Scope, Findings, and Checked and clear.
 
 ```bash
-gh issue comment <n> -R OWNER/REPO --body-file security.md
+gh api repos/OWNER/REPO/issues/<n>/comments -F body=@security.md --jq .html_url
 ```
 
 Post once, and never edit it: Hermes takes the first signed result and ignores an edited comment. A result with zero findings is still posted, so the next review starts after this head.

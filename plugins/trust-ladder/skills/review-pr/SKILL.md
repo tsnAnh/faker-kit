@@ -14,12 +14,12 @@ The key is a secret: never write it in a comment, a repository file, command out
 ## 1. Check the Unit and Pull Request
 
 ```bash
-gh issue view <issue> -R OWNER/REPO --json author,body,title,state
+gh api repos/OWNER/REPO/issues/<issue> --jq '{author: .user.login, title, state, body}'
 gh api repos/OWNER/REPO/contents/.agents/dispatch.json --jq .content | base64 -d
-gh pr view <pr> -R OWNER/REPO --json number,headRefOid,headRefName,baseRefName,body,state
+gh api repos/OWNER/REPO/pulls/<pr> --jq '{number, headRefOid: .head.sha, headRefName: .head.ref, baseRefName: .base.ref, body, state}'
 ```
 
-Use `gh`, or the session's GitHub tools where `gh` is missing. Go on only if all hold:
+Claude Code cloud sessions block GitHub's GraphQL API, so `gh issue ...` and `gh pr ...` subcommands fail there with HTTP 403; use the REST calls written here (`gh api`, `gh run`). Where `gh` is missing, use the session's GitHub tools. Go on only if all hold:
 
 - The issue's author login is in `trusted_dispatchers` of `.agents/dispatch.json` on the default branch.
 - The issue body's first line is `<!-- team-kit:brief v1 card=<card> -->`.
@@ -88,7 +88,7 @@ python3 -c 'import hmac,hashlib,sys; print(hmac.new(sys.argv[1].encode(), sys.ar
 Sign the counts and values you post. If you change the finding counts, sign again.
 
 ```bash
-gh issue comment <issue> -R OWNER/REPO --body-file review.md
+gh api repos/OWNER/REPO/issues/<issue>/comments -F body=@review.md --jq .html_url
 ```
 
 Post once and never edit it: Hermes takes the first signed result after the latest review launch and ignores edited comments. A result for any PR or head other than the one in your prompt does not count.
