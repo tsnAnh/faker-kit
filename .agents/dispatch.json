@@ -11,7 +11,7 @@
     ".agents/team-kit/"
   ],
   "trusted_dispatchers": [
-    "tsnanh"
+    "tsnAnh"
   ],
   "review_backend": "claude",
   "verifier_backend": "claude",
