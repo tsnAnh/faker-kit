@@ -21,6 +21,10 @@ VERIFICATIONS = ("live-ui-verified", "unit-test-verified", "type-check-only", "v
 DEFAULT_ACCEPTED = ("live-ui-verified", "unit-test-verified")
 VERDICT_FIELDS = ("verification", "pr", "head", "sig")
 VERIFIER_BACKENDS = ("claude", "codex", "none")
+PR_MARKER = re.compile(r"<!-- team-kit:pr v1 card=(?P<card>[A-Za-z0-9_-]+) issue=(?P<issue>[0-9]+) -->")
+REVIEW_LAUNCHED_MARKER = "<!-- team-kit:review-launched v1 -->"
+REVIEW_MARKER = "<!-- team-kit:review v1 -->"
+REVIEW_FIELDS = ("pr", "head", "findings", "sig")
 SECURITY_LAUNCHED_MARKER = "<!-- team-kit:security-launched v1 -->"
 SECURITY_MARKER = "<!-- team-kit:security v1 -->"
 SECURITY_FIELDS = ("range", "findings", "sig")
@@ -74,6 +78,17 @@ SECURITY_PROMPTS = {
               "Sign the result with key {key}. "
               "If the review-main-security skill is not available in this session, stop and say the team-kit skills did not load."),
 }
+# A pull request reviewer reads one unit PR head, changes nothing, never approves, and posts one
+# signed finding summary on the unit issue. High findings hold the unit back when its author reports done.
+REVIEW_PROMPTS = {
+    "claude": ("/review-pr Review {pr} at commit {head} for the unit in {repo}#{issue}, and post the result on {repo}#{issue}. "
+               "Sign the result with key {key}. "
+               "If the review-pr skill is not available in this session, comment on that issue with "
+               "`<!-- team-kit:review v1 -->` as the first line, say the team-kit skills did not load, and stop."),
+    "codex": ("$review-pr Review {pr} at commit {head} for the unit in {repo}#{issue}, and post the result on {repo}#{issue}. "
+              "Sign the result with key {key}. "
+              "If the review-pr skill is not available in this session, stop and say the team-kit skills did not load."),
+}
 # A triage session investigates one incident and changes nothing. It may run while the andon cord
 # is pulled: diagnosing the incident is what the stopped line waits for.
 TRIAGE_PROMPTS = {
@@ -89,12 +104,24 @@ BRANCH = re.compile(r"\A(?!.*\.\.)(?!/)(?!.*/\Z)[A-Za-z0-9_./-]{1,100}\Z")
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 ENV_ID = re.compile(r"\A[A-Za-z0-9_-]+\Z")
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
-DEPENDENCY = re.compile(r"(?<![A-Za-z0-9_.#/-])(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<issue>[0-9]+)\b")
+# A line starts with a reference (after an optional bullet) and may carry trailing text, as briefs
+# written before the stricter parser did: `- #3 (schema)`. Every further reference on the line counts too,
+# so `#3, #4` never drops #4 silently.
+DEPENDENCY = re.compile(r"\A(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<issue>[1-9][0-9]*)\b")
+DEPENDENCY_MORE = re.compile(r"(?<![A-Za-z0-9_.#/-])(?:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<issue>[1-9][0-9]*)\b")
+DEPENDENCY_BULLET = re.compile(r"\A[-*]\s+")
 NONE_WORDS = {"none", "none.", "-", "n/a"}
 
 
 class ContractError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class CloudCommand:
+    argv: tuple[str, ...]
+    prompt: str
+    sensitive: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -127,6 +154,18 @@ class SecurityResult:
     @property
     def serious(self) -> int:
         return self.counts["high"] + self.counts["medium"]
+
+
+@dataclass(frozen=True)
+class ReviewResult:
+    pr: str
+    head: str
+    counts: dict[str, int]
+    sig: str | None = None
+
+    @property
+    def high(self) -> int:
+        return self.counts["high"]
 
 
 @dataclass(frozen=True)
@@ -181,20 +220,27 @@ def parse_brief(text: str, standing_orders: str | None = None) -> Brief:
 def parse_depends(brief: Brief, repo: str) -> list[tuple[str, int]]:
     """The issues this unit waits for, from its Depends on section.
 
-    `#12` names an issue in this unit's repository, as does `OWNER/REPO#12` (team-kit-gh refuses any
-    other repository), and
-    "none" means no dependency. Anything else is an error, so a typo cannot drop a dependency.
+    `#12` names an issue in this unit's repository; `OWNER/REPO#12` names one explicitly.
+    One reference per line, with an optional leading `- ` and any trailing text (`- #3 (schema)`).
+    "none" means no dependency. A line that does not start with a reference is an error, so a typo
+    cannot drop a dependency.
     """
     text = brief.sections["Depends on"].strip()
     if text.lower() in NONE_WORDS:
         return []
     found: list[tuple[str, int]] = []
-    for match in DEPENDENCY.finditer(text):
-        ref = (match.group("repo") or repo, int(match.group("issue")))
-        if ref not in found:
-            found.append(ref)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for raw in lines:
+        line = DEPENDENCY_BULLET.sub("", raw).strip()
+        match = DEPENDENCY.match(line)
+        if not match:
+            raise ContractError('Depends on must be "none" or list one issue per line as #n or OWNER/REPO#n')
+        for hit in [match, *DEPENDENCY_MORE.finditer(line, match.end())]:
+            ref = (hit.group("repo") or repo, int(hit.group("issue")))
+            if ref not in found:
+                found.append(ref)
     if not found:
-        raise ContractError("Depends on must be \"none\" or list issues as #n")
+        raise ContractError('Depends on must be "none" or list one issue per line as #n or OWNER/REPO#n')
     return found
 
 
@@ -269,7 +315,7 @@ def verdict_signed(verdict: Verdict, key: str, head: str) -> bool:
     return hmac.compare_digest(verdict.sig.lower(), verdict_signature(key, verdict.verification, head.lower()))
 
 
-def verify_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key: str, env_id: str | None = None) -> list[str]:
+def verify_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key: str, env_id: str | None = None) -> CloudCommand:
     """The command that starts a verifier session for one commit of one unit's pull request."""
     if not SHA.match(head or ""):
         raise ContractError("the pull request's head must be a full 40-character commit")
@@ -282,7 +328,61 @@ def verify_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key
     if not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/[0-9]+", pr_url, re.I):
         raise ContractError(f"{pr_url!r} is not a pull request in {repo}")
     prompt = VERIFY_PROMPTS[backend].format(repo=repo, issue=int(issue), pr=pr_url, head=head, key=key)
-    return cloud_argv(backend, prompt, 1, env_id)
+    return cloud_argv(backend, prompt, 1, env_id, sensitive=(key,))
+
+
+def parse_review(text: str) -> ReviewResult:
+    """Read a pull request review result header: `pr:`, `head:`, `findings: N high, N medium, N low`, `sig:`."""
+    body = (text or "").lstrip()
+    if not body.startswith(REVIEW_MARKER):
+        raise ContractError("a review result must start with <!-- team-kit:review v1 -->")
+    fields: dict[str, str] = {}
+    for line in body[len(REVIEW_MARKER):].strip().splitlines():
+        match = re.match(r"^([a-z]+):\s*(\S.*?)\s*$", line)
+        if not match or match.group(1) not in REVIEW_FIELDS:
+            break
+        fields[match.group(1)] = match.group(2).strip("`")
+    pr = fields.get("pr", "")
+    if not re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+", pr, re.I):
+        raise ContractError("pr must be a GitHub pull request URL")
+    head = fields.get("head", "")
+    if not SHA.match(head):
+        raise ContractError("head must be a full 40-character commit")
+    counts = {}
+    for severity in SEVERITIES:
+        found = re.search(rf"(?:^|,)\s*([0-9]+)\s+{severity}\b", fields.get("findings", ""))
+        if not found:
+            raise ContractError("findings must read `N high, N medium, N low`")
+        counts[severity] = int(found.group(1))
+    return ReviewResult(pr=pr, head=head, counts=counts, sig=fields.get("sig"))
+
+
+def review_signature(key: str, counts: dict[str, int], pr_url: str, head: str) -> str:
+    """HMAC-SHA256 of `<high>|<medium>|<low>|<pr>|<head>` under the reviewer's key, as hex."""
+    message = "|".join(str(int(counts[s])) for s in SEVERITIES) + f"|{pr_url}|{head.lower()}"
+    return hmac.new(key.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+
+def review_signed(result: ReviewResult, key: str, pr_url: str, head: str) -> bool:
+    if not result.sig or result.pr != pr_url or result.head.lower() != head.lower():
+        return False
+    return hmac.compare_digest(result.sig.lower(), review_signature(key, result.counts, pr_url, head))
+
+
+def review_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key: str, env_id: str | None = None) -> CloudCommand:
+    """The command that starts one read-only pull request review for one unit PR head."""
+    if backend not in REVIEW_PROMPTS:
+        raise ContractError(f"review_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
+    if not REPO.match(repo):
+        raise ContractError(f"repo {repo!r} is not OWNER/REPO")
+    if not SHA.match(head or ""):
+        raise ContractError("the pull request's head must be a full 40-character commit")
+    if not re.fullmatch(r"[0-9a-f]{32,}", key or ""):
+        raise ContractError("the review key must be hex")
+    if not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/[0-9]+", pr_url, re.I):
+        raise ContractError(f"{pr_url!r} is not a pull request in {repo}")
+    prompt = REVIEW_PROMPTS[backend].format(repo=repo, issue=int(issue), pr=pr_url, head=head, key=key)
+    return cloud_argv(backend, prompt, 1, env_id, sensitive=(key,))
 
 
 def parse_security(text: str) -> SecurityResult:
@@ -322,7 +422,7 @@ def security_signed(result: SecurityResult, key: str, head: str) -> bool:
 
 
 def security_argv(backend: str, repo: str, issue: int, branch: str, base: str | None, head: str, key: str,
-                  env_id: str | None = None) -> list[str]:
+                  env_id: str | None = None) -> CloudCommand:
     """The command that starts one security review of the default branch from base to head."""
     if backend not in SECURITY_PROMPTS:
         raise ContractError(f"security_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
@@ -336,7 +436,7 @@ def security_argv(backend: str, repo: str, issue: int, branch: str, base: str | 
         raise ContractError("the reviewer key must be hex")
     span = f"the commits after {base} up to {head}" if base else f"the last {FIRST_REVIEW_COMMITS} commits up to {head}"
     prompt = SECURITY_PROMPTS[backend].format(span=span, branch=branch, repo=repo, issue=int(issue), key=key)
-    return cloud_argv(backend, prompt, 1, env_id)
+    return cloud_argv(backend, prompt, 1, env_id, sensitive=(key,))
 
 
 def parse_diagnosis(text: str) -> Diagnosis:
@@ -371,7 +471,7 @@ def diagnosis_signed(diagnosis: Diagnosis, key: str, issue: int) -> bool:
 
 
 def triage_argv(backend: str, repo: str, issue: int, what: str, branch: str, head: str, green: str | None, key: str,
-                env_id: str | None = None) -> list[str]:
+                env_id: str | None = None) -> CloudCommand:
     """The command that starts one read-only triage session for an incident."""
     if backend not in TRIAGE_PROMPTS:
         raise ContractError(f"triage_backend must be one of {', '.join(VERIFIER_BACKENDS)}")
@@ -387,7 +487,7 @@ def triage_argv(backend: str, repo: str, issue: int, what: str, branch: str, hea
         raise ContractError("the incident's summary must be plain text")
     prompt = TRIAGE_PROMPTS[backend].format(repo=repo, issue=int(issue), what=what, branch=branch, head=head,
                                             green=green or "unknown", key=key)
-    return cloud_argv(backend, prompt, 1, env_id)
+    return cloud_argv(backend, prompt, 1, env_id, sensitive=(key,))
 
 
 def report_status(text: str) -> str | None:
@@ -405,20 +505,22 @@ def launch_prompt(backend: str, repo: str, issue: int) -> str:
     return LAUNCH_PROMPTS[backend].format(repo=repo, issue=int(issue))
 
 
-def cloud_argv(backend: str, prompt: str, attempts: int = 1, env_id: str | None = None) -> list[str]:
-    """The argument list that starts one cloud coding agent. No shell is involved."""
+def cloud_argv(backend: str, prompt: str, attempts: int = 1, env_id: str | None = None,
+               sensitive: tuple[str, ...] = ()) -> CloudCommand:
+    """The command and private prompt payload that start one cloud coding agent. No shell is involved."""
     if backend == "claude":
-        return ["claude", "--cloud", prompt]
+        return CloudCommand(("claude", "--cloud"), prompt, sensitive)
     if backend != "codex":
         raise ContractError(f"backend must be one of {', '.join(BACKENDS)}")
     if not env_id or not ENV_ID.match(env_id):
         raise ContractError("codex needs the Codex cloud environment id (codex_env in .agents/dispatch.json)")
     if attempts not in UNIT_ATTEMPTS.values():
         raise ContractError("codex attempts must be 1, 2, or 3")
-    return ["codex", "cloud", "exec", "--env", env_id, "--attempts", str(attempts), prompt]
+    return CloudCommand(("codex", "cloud", "exec", "--env", env_id, "--attempts", str(attempts), "-"),
+                        prompt, sensitive)
 
 
-def launch_argv(backend: str, repo: str, issue: int, size: str, env_id: str | None = None) -> list[str]:
+def launch_argv(backend: str, repo: str, issue: int, size: str, env_id: str | None = None) -> CloudCommand:
     """The command that starts the coding agent for one unit. Its prompt starts with faker-mode."""
     if size not in UNIT_ATTEMPTS:
         raise ContractError(f"size must be one of {', '.join(UNIT_ATTEMPTS)}")

@@ -46,7 +46,7 @@ def test_installs_the_module_and_the_bootstrap_bot_pinned_to_the_commit(kit_sour
     assert not (root / "team-kit" / "webhook-secret").exists(), "nothing listens, so there is no secret"
     assert stat.S_IMODE((root / "team-kit").stat().st_mode) == 0o700
     assert yaml.safe_load((root / "team-kit" / "guard.yaml").read_text())["version"] == 2
-    for name in ("team-kit-gh", "team-kit-admin", "team-kit-chief"):
+    for name in ("team-kit-gh", "team-kit-admin", "team-kit-chief", "team-kit-slack"):
         wrapper = (root / "bin" / name).read_text()
         assert str(kit / "hermes" / "bin") in wrapper and "TEAM_KIT_HOME" in wrapper
     log = hermes_calls(root)
@@ -169,3 +169,16 @@ def test_no_usable_python_reports_actionable_error(kit_source, machine):
     done = install(kit_source, machine, "--no-gateway")
     assert done.returncode != 0 and "HERMES_PYTHON" in done.stderr and "PyYAML" in done.stderr
     assert not (root / "team-kit").exists()
+
+
+def test_a_team_kit_home_elsewhere_moves_bin_and_profiles_with_it_and_leaves_home_alone(kit_source, machine, tmp_path):
+    root, env = machine
+    elsewhere = tmp_path / "scratch" / ".hermes"
+    env = {**env, "TEAM_KIT_HOME": str(elsewhere / "team-kit"), "HERMES_HOME": str(elsewhere)}
+    src, sha = kit_source
+    done = subprocess.run(["bash", str(HERMES / "install.sh"), "--ref", sha, "--source", str(src), "--no-gateway", "--bootstrap-bot", "ong-xay"],
+                          env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert (elsewhere / "bin" / "team-kit-gh").exists()
+    assert (elsewhere / "team-kit" / "kit").is_dir()
+    assert not (root / "bin").exists() and not (root / "team-kit").exists(), "the real ~/.hermes is untouched"

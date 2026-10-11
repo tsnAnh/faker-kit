@@ -1,6 +1,6 @@
 # team-kit for Hermes
 
-This module runs team-kit dispatch on a [Hermes Agent](https://github.com/NousResearch/hermes-agent) machine: one bootstrap bot that sets projects up, one project bot per project that briefs cloud coding agents (Claude Code or Codex), one pull request per unit, until the owner merges, and an optional, read-only chief of staff that routes the owner's intent across projects. How to use it is in [Dispatch work with Hermes](../docs/how-to/dispatch-with-hermes.md).
+This module runs team-kit dispatch on a [Hermes Agent](https://github.com/NousResearch/hermes-agent) machine: one bootstrap bot that sets projects up, one project bot per project that briefs cloud coding agents (Claude Code or Codex), one pull request per unit, until the owner merges, and an optional chief of staff that routes the owner's intent across projects. The chief reads by default and has one approved write: a local proposal for a project bot. How to use it is in [Dispatch work with Hermes](../docs/how-to/dispatch-with-hermes.md).
 
 It lives outside `plugins/` on purpose. Nothing here loads in a coding agent: plugins are what coding agents load, and this is what the Hermes bots load. The coding agents keep using the `trust-ladder` skills `setup-dispatch` and `follow-brief`, and the brief templates in `plugins/trust-ladder/templates/dispatch/`.
 
@@ -8,7 +8,7 @@ It does one level of the kit's [Run many agents](../docs/how-to/run-many-agents.
 
 ## How it keeps track
 
-GitHub holds every unit's state, as labels on its issue: `agent-task` (queued), `agent:running`, `agent:verifying` (done and checks passed; a separate verifier session is checking the pull request), `agent:review` (verified, the owner merges), and `agent:needs-human` (a gate). A closed issue is done. An open issue labelled `agent:proposal` is only a teammate proposal: tick gives the owner its number, author, and link once (never its title), and only for a collaborator's proposal, and no brief is written until the owner restates the work in Hermes Desktop. An open issue labelled `agent:andon` is the andon cord: while it, or the machine's cord, is pulled, nothing new starts and cloud agents at work stop at their next push. Only `team-kit-gh andon clear` (a project) or `team-kit-admin andon clear` (the machine) clears it; closing the issue on GitHub does not. One open issue labelled `agent:security` collects the daily security reviews of the default branch, and an issue labelled `agent:incident` tracks each incident the `team-kit-incidents` job finds by polling the default branch's checks and the project's health URLs. A signed high-confidence incident diagnosis that names a suspect makes the notice propose a deterministic small unit, `revert <full sha>` (naming `git revert -m 1` for a merge commit), but only the owner replying `ok #<incident>` makes the project bot brief it. There is no Kanban board, no webhook, and no public address: each project bot's `team-kit-tick` job runs `team-kit-gh tick` every 30 minutes, which reads the labels and reports, launches what can start, and opens gates, all in code.
+GitHub holds every unit's state, as labels on its issue: `agent-task` (queued), `agent:running`, `agent:verifying` (done and checks passed; a separate verifier session is checking the pull request), `agent:review` (verified, the owner merges), and `agent:needs-human` (a gate). A closed issue is done. Each tick also publishes that project's unit states to `~/.hermes/team-kit/units/<bot>.json`, so another local project can wait on `OWNER/REPO#n` without reading that repository or token. An open issue labelled `agent:proposal` is only a teammate proposal: tick gives the owner its number, author, and link once (never its title), and only for a collaborator's proposal, and no brief is written until the owner restates the work in Hermes Desktop. An open issue labelled `agent:andon` is the andon cord: while it, or the machine's cord, is pulled, nothing new starts and cloud agents at work stop at their next push. Only `team-kit-gh andon clear` (a project) or `team-kit-admin andon clear` (the machine) clears it; closing the issue on GitHub does not. A signed review session can comment findings on each unit pull request head, one open issue labelled `agent:security` collects the daily security reviews of the default branch, and an issue labelled `agent:incident` tracks each incident the `team-kit-incidents` job finds by polling the default branch's checks, the project's health URLs, and optional Sentry, PagerDuty, Datadog, or Grafana alert sources. A signed high-confidence incident diagnosis that names a suspect makes the notice propose a deterministic small unit, `revert <full sha>` (naming `git revert -m 1` for a merge commit), but only the owner replying `ok #<incident>` makes the project bot brief it. There is no Kanban board, no webhook, and no public address: each project bot's `team-kit-tick` job runs `team-kit-gh tick` every 30 minutes by default, or the interval in `bots.yaml`, which reads the labels and reports, launches what can start, and opens gates, all in code. The optional Slack relay is outbound-only Socket Mode; it turns mentions into untrusted `team-kit notice:` proposals in Bot Chat and never dispatches work itself.
 
 ## Install
 
@@ -31,10 +31,12 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `install.sh` | Fetches the kit at a commit, writes the wrappers, refreshes every bot | — |
 | `bin/team_kit_admin.py` | `team-kit-admin`: the bootstrap bot's only command, and the installer's helper | `~/.hermes/bin/team-kit-admin` (a wrapper) |
 | `bin/team_kit_gh.py` | `team-kit-gh`: a project bot's only GitHub access, and what its jobs run | `~/.hermes/bin/team-kit-gh` (a wrapper) |
-| `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and changes nothing | `~/.hermes/bin/team-kit-chief` (a wrapper) |
+| `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and, with approval, hands one hashed draft to one project bot | `~/.hermes/bin/team-kit-chief` (a wrapper) |
+| `bin/team_kit_slack.py` | `team-kit-slack`: the optional outbound-only Slack Socket Mode relay | `~/.hermes/bin/team-kit-slack` (a wrapper) |
 | `lib/team_kit_contracts.py` | The brief, size, report, and launch markers, and the cloud command lines | read from the kit checkout |
 | `lib/team_kit_cloud.py` | Starts a `claude --cloud` or `codex cloud exec` session and waits for its id | read from the kit checkout |
 | `lib/team_kit_andon.py` | The andon cords: the local records, and the `agent:andon` issue body | read from the kit checkout |
+| `lib/team_kit_slack_relay.py` | Slack Socket Mode, Bot Chat delivery, service unit generation, and optional notice mirroring | read from the kit checkout |
 | `lib/team_kit_risk.py` | The risk score of a ready pull request and its suggested reviewers, from rules in code | read from the kit checkout |
 | `lib/install_config.py` | Reads Hermes config, writes it only through `hermes config set` | read from the kit checkout |
 | `plugin/team_kit_guard/` | The Hermes plugin that checks every tool call against `guard.yaml` and `bots.yaml` | each bot's `plugins/` |
@@ -50,12 +52,18 @@ Under `~/.hermes/team-kit/`:
 - `guard.yaml`, the policy. You edit it.
 - `bots.yaml`, each bot's role, and for a project bot its project and its one repository. Only `team-kit-admin` writes it.
 - `briefs/<bot>/`, the only place a project bot may write.
+- `drafts/<chief bot>/`, the only place the chief may write, and the only place `propose` reads from: plain `.md` files of at most 20,000 bytes, no symlinks.
+- `proposals/<bot>/`, chief-of-staff handoffs for a project bot. Proposal records expire after 7 days; `team-kit-gh chief-proposals` and `team-kit-gh tick` delete expired and corrupt records.
 - `andon/`, the pulled cords: `_machine.json` and one file per project bot.
 - `verify/<bot>/`, one private record per verifier: its commit and the key that signs its verdict.
+- `reviews/<bot>/`, one private record per unit pull request review: its pull request, head, and the key that signs its finding summary.
 - `incidents/<bot>.json`, each open incident, its triage session's key, and the last green commit.
 - `security/<bot>.json`, the last commit a security review covered, and the running review's range and key.
+- `etag/<bot>/`, that bot's cached GitHub REST responses and ETags, keyed by endpoint, so idle polling can send conditional requests. Bots never share an entry.
+- `slack/`, transient `team-kit-slack` Bot Chat notice files, deleted after delivery.
 - `checkouts/`, shallow clones `claude --cloud` starts from. Pruned after 3 days.
 - `in-flight/<bot>.json`, each project bot's count of running units, for `max_in_flight_total`.
+- `units/<bot>.json`, each project bot's recent unit issue states, every issue another bot wants (its `wants` list names the other-project issues its own queued briefs depend on), for cross-project Depends on refs. A dependency must be an `agent-task` unit; `dispatch` refuses a plain issue and tick gates a unit that names one.
 - `status/<bot>.json`, when the bot's last digest ran, for "Done since last".
 - `proposal-notices/<bot>.json`, the open proposal issue numbers already noticed to the owner (`seen`) and those whose author cannot write, checked once and then skipped (`ignored`). Entries for closed issues are dropped.
 
@@ -63,8 +71,10 @@ Under `~/.hermes/team-kit/`:
 
 - Merge pull requests, including each project's kit-vendoring pull request.
 - Put each bot's GitHub token in its profile's `.env`. No bot ever sees a token in chat.
+- If you enable Slack, put the Slack app-level and bot tokens in the configured bot profile's `.env` under the variable names in `guard.yaml`. Token values never go in `guard.yaml`, chat, argv, or service unit files.
 - Sign the coding agent in on the machine.
 - Approve each `team-kit-admin` command the bootstrap bot runs.
+- Confirm a chief proposal in the target project bot's Bot Chat before that bot briefs or dispatches it.
 
 ## Still to check in the first pilot
 
@@ -73,9 +83,20 @@ These depend on Hermes and the cloud CLIs, and the tests fake them:
 - that a profile's `.env` (`GH_TOKEN`) reaches its terminal and its scheduled jobs,
 - that a new profile's scheduled jobs run in the shared gateway without a restart,
 - the session line `claude --cloud` and `codex cloud exec` print, which `team_kit_cloud.py` waits for,
+- that `claude --cloud` (Claude Code 2.1.290 and later), run in its own session with a pseudo-terminal as its controlling terminal and on stdout and stderr, the prompt piped on stdin, no value for `--cloud`, and `CI` unset, starts a cloud session whose first message is the full `/faker-mode ...` prompt, **prints its `https://claude.ai/code/...` URL, and exits cleanly (status 0, no hang, no zombie) once the terminal is closed**. Confirm both on the first real run: the `.log` next to the checkout holds the URL, and `ps` shows no leftover `claude` process a minute later. The CLI's terminal-input check opens `/dev/tty` when stdin is a pipe, so without a controlling terminal it exits 1 with "No cloud session was created or opened: it would open in this terminal and need the keyboard". It refuses `--cloud` when stdout is not a terminal, and `claude -p --cloud` is interactive only. `--cloud [description|session_id|url]` takes a task as its value, which cannot be combined with piped stdin, so a bare `--cloud` with the task on stdin is the only form that keeps the prompt and signing keys out of argv; a `@file` argument is sent as literal text. Check with `claude --help` and a real launch after every Claude Code upgrade,
 - that a cloud session loads skills through the relative links `vendor_kit.py` writes in `.claude/skills/` and `.agents/skills/` (the launch prompt has the agent report "the team-kit skills did not load" if not),
 - that the ids `hermes cron list --all` prints are what `hermes cron resume` takes, and that `every 30m` is a valid schedule,
+- the `Schedule:` line `hermes cron list --all` prints: `cron_jobs` in `lib/install_config.py` compares it with `every 10m` to decide whether to run `hermes cron edit <id> --schedule`, so verify its format on real Hermes (a mismatch re-edits the job on every `add-project` or install, and a changed schedule would never be noticed if the line is absent),
+- that `team-kit-slack`'s Bot Chat delivery is the Bot Chat Desktop shows and the scheduled jobs' `bot-chat:<profile>` delivery uses. It runs `hermes -p <profile> chat --in ~ -c "Bot Chat" --create-if-missing -Q --query-file <file>`, the command Hermes's cron scheduler documents for that delivery (hermes-agent pull request #91487). Hermes offers no separate "deliver to bot-chat" command, and the tests only fake it, so this path is unconfirmed until a real Slack mention shows up in Desktop's Bot Chat,
 - the argument names of Hermes's `patch`, `read_file`, and `search_files` tools, which the guard checks (`path`, `mode`, `patch`), and the tool names in each role's allowlist (`ROLE_TOOLS` in `plugin/team_kit_guard/policy.py`).
+
+## Troubleshooting
+
+- **A Claude launch fails with "requires an interactive terminal" or "interactive only".** Something started `claude --cloud` without a pseudo-terminal, or with `-p`. `team_kit_cloud.py` always runs it on a pseudo-terminal that is the child's controlling terminal; look for another script calling `claude` directly.
+- **A Claude launch fails with "it would open in this terminal and need the keyboard".** The CLI could not read the keyboard: stdin is a pipe and `/dev/tty` did not open, or `CI` is set. `team_kit_cloud.py` makes the pseudo-terminal the controlling terminal and removes `CI`; check that Hermes did not replace `Cloud.popen` or wrap the launch.
+- **A cloud session's first message is a file path or `@...`.** The prompt was passed as the `--cloud` value or an argument. The prompt must go to stdin with `claude --cloud` alone; check `cloud_argv` in `lib/team_kit_contracts.py`.
+- **"exited 1 before starting a session" with an empty or odd last line.** Read `~/.hermes/team-kit/checkouts/<owner>__<repo>/<unit>.log`. It holds the terminal output with escape sequences removed and prompts and signing keys redacted. Run `claude --cloud` by hand from a terminal to see whether it needs a sign-in.
+- **"printed no session in 180s".** The CLI is waiting for input or a login. The same log shows what it printed; the process group is stopped.
 
 ## Upgrade from the webhook version
 

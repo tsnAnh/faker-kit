@@ -101,6 +101,64 @@ def test_a_second_project_gets_its_own_bot_and_jobs(ready):
     assert len(jobs(root, "sep-crm")) == 4 and len(jobs(root, "meo-beo")) == 4
 
 
+def test_add_project_can_set_custom_tick_and_incident_intervals(ready):
+    root, _ = ready
+    code, out = admin(
+        ready,
+        "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP,
+        "--tick-every", "10m", "--incidents-every", "5m",
+        profile="ong-xay",
+    )
+    assert code == 0, out
+    assert out["tick_every"] == "10m" and out["incidents_every"] == "5m"
+    assert bots(root)["meo-beo"] == {"role": "project", "project": "shop", "repo": SHOP, "tick_every": "10m", "incidents_every": "5m"}
+    created = {c[c.index("--name") + 1]: c for c in hermes_calls(root) if c[2:4] == ["cron", "create"]}
+    assert created["team-kit-tick"][4] == "every 10m"
+    assert created["team-kit-incidents"][4] == "every 5m"
+
+
+def test_add_project_reschedules_existing_tick_and_incident_jobs(ready):
+    root, _ = ready
+    add_shop(ready)
+    (root / "profiles" / "meo-beo" / ".env").write_text("GH_TOKEN=x\n")
+    admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay")
+    code, out = admin(
+        ready,
+        "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP,
+        "--tick-every", "10m", "--incidents-every", "5m",
+        profile="ong-xay",
+    )
+    assert code == 0, out
+    assert sorted(out["jobs_rescheduled"]) == ["team-kit-incidents", "team-kit-tick"]
+    calls = hermes_calls(root)
+    assert not [c for c in calls if c[2:4] in (["cron", "delete"], ["cron", "remove"])], "a reschedule never deletes a job"
+    assert sorted(c[4] for c in calls if c[2:4] == ["cron", "edit"]) == ["job-0", "job-3"]
+    by_name = {job["name"]: job for job in jobs(root, "meo-beo")}
+    assert len(by_name) == 4
+    assert by_name["team-kit-tick"]["schedule"] == "every 10m" and by_name["team-kit-tick"]["id"] == "job-0"
+    assert by_name["team-kit-incidents"]["schedule"] == "every 5m" and by_name["team-kit-incidents"]["id"] == "job-3"
+    assert by_name["team-kit-tick"]["enabled"] and by_name["team-kit-incidents"]["enabled"]
+
+
+def test_rescheduling_a_paused_job_keeps_it_paused_with_its_reason(ready):
+    root, _ = ready
+    add_shop(ready)
+    code, out = admin(
+        ready,
+        "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP, "--tick-every", "15m",
+        profile="ong-xay",
+    )
+    assert code == 0, out
+    assert out["jobs_rescheduled"] == ["team-kit-tick"]
+    tick = next(j for j in jobs(root, "meo-beo") if j["name"] == "team-kit-tick")
+    assert tick["schedule"] == "every 15m" and not tick["enabled"]
+    assert tick["paused_reason"] == "Awaiting the bot's GitHub login"
+    # Nothing changes when the schedule already matches.
+    before = len(hermes_calls(root))
+    admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP, "--tick-every", "15m", profile="ong-xay")
+    assert not [c for c in hermes_calls(root)[before:] if c[2:4] in (["cron", "edit"], ["cron", "create"], ["cron", "delete"])]
+
+
 def test_add_project_again_refreshes_the_bot_without_duplicating_jobs(ready):
     root, _ = ready
     add_shop(ready)
@@ -130,6 +188,7 @@ def test_a_project_has_one_repository(ready):
         (["--bot", "Sep Crm", "--project", "crm", "--repo", "acme/crm"], "must be lowercase letters"),
         (["--bot", "default", "--project", "crm", "--repo", "acme/crm"], "the owner's own Hermes profile"),
         (["--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm;id"], "is not OWNER/REPO"),
+        (["--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm", "--tick-every", "0m"], "--tick-every must be"),
     ],
 )
 def test_add_project_refuses_before_changing_anything(ready, args, why):
@@ -152,11 +211,14 @@ def test_setup_repo_starts_one_cloud_session_on_the_vendored_kit(ready, kit_sour
     home = root.parent
     assert (home / ".fake-claude-cwd").read_text().strip() == str(root / "team-kit" / "checkouts" / "acme__shop" / "setup")
     args = (home / ".fake-claude-args").read_text()
-    assert args.startswith("--cloud\nSet up acme/shop for team-kit dispatch")
-    assert f"vendored in this repository at .agents/team-kit/, at commit {kit_source[1]}" in args
-    assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in args
-    assert "clone" not in args.lower(), "the setup session never clones the kit, which may be private"
-    assert "trusted_dispatchers: codertocat, meo-beo-gh" in args
+    assert args == "--cloud"
+    assert (home / ".fake-claude-tty").read_text() == "True"
+    prompt = (home / ".fake-claude-prompt").read_text()
+    assert prompt.startswith("Set up acme/shop for team-kit dispatch")
+    assert f"vendored in this repository at .agents/team-kit/, at commit {kit_source[1]}" in prompt
+    assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in prompt
+    assert "clone" not in prompt.lower(), "the setup session never clones the kit, which may be private"
+    assert "trusted_dispatchers: codertocat, meo-beo-gh" in prompt
 
 
 @pytest.mark.parametrize(("kit", "why"), [(None, "has no vendored kit"), ("0" * 40, "has the kit at 000000000000")])
@@ -436,6 +498,8 @@ def test_add_chief_creates_a_read_only_bot_with_the_chief_skill_and_no_jobs(read
     assert sorted(p.name for p in (home / "skills").iterdir()) == ["chief"]
     assert (home / "SOUL.md").read_text().startswith("You are this machine's team-kit chief of staff.")
     assert (home / "plugins" / "team_kit_guard" / "plugin.yaml").exists()
+    drafts = root / "team-kit" / "drafts" / "chanh-van"
+    assert drafts.is_dir() and (drafts.stat().st_mode & 0o777) == 0o700, "the chief's drafts folder exists and is private"
     assert not any(c[:2] == ["-p", "chanh-van"] and c[2:4] == ["cron", "create"] for c in hermes_calls(root)), "the chief has no jobs"
     code, err = admin(ready, "add-chief", "--bot", "meo-beo", profile="ong-xay")
     assert code == 1 and "already a project bot" in err

@@ -26,7 +26,8 @@ It writes, under ~/.hermes:
   team-kit/bots.yaml       each bot's role, project, and repositories; only team-kit-admin writes it
   bin/team-kit-gh          a project bot's only GitHub command
   bin/team-kit-admin       the bootstrap bot's only command
-  bin/team-kit-chief       the chief of staff's only command; it only reads
+  bin/team-kit-chief       the chief of staff's only command; reads, and proposes with approval
+  bin/team-kit-slack       the outbound-only Slack Socket Mode relay command
   profiles/<bot>/          for each bot in bots.yaml: SOUL.md, config, the guard plugin, its skill
 USAGE
 }
@@ -52,8 +53,10 @@ done
 command -v hermes >/dev/null || die "hermes is not on PATH; install Hermes Agent first"
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-root=$HOME/.hermes
-kit_home=${TEAM_KIT_HOME:-$root/team-kit}
+# team-kit-admin puts bin/ and profiles/ beside the team-kit directory, so a TEAM_KIT_HOME
+# elsewhere (a throwaway test install) moves them too and never touches the real ~/.hermes.
+kit_home=${TEAM_KIT_HOME:-$HOME/.hermes/team-kit}
+root=$(dirname "$kit_home")
 kit=$kit_home/kit
 
 # A managed Hermes launcher may be a shell wrapper, not a venv shebang.
@@ -100,7 +103,7 @@ fi
 
 # The wrappers run the pinned kit's commands with the helper Python. %q quotes paths that
 # contain spaces or shell metacharacters.
-for name in gh admin chief; do
+for name in gh admin chief slack; do
   printf '#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%q\nexec %q %q "$@"\n' \
     "$kit_home" "$py" "$pkg/bin/team_kit_$name.py" > "$root/bin/team-kit-$name"
   chmod 755 "$root/bin/team-kit-$name"

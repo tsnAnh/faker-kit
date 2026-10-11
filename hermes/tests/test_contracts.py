@@ -104,16 +104,21 @@ def depends(text, repo="acme/shop"):
         ("none", []),
         ("None.", []),
         ("#12", [("acme/shop", 12)]),
-        ("- #3, the API endpoint\n- #4", [("acme/shop", 3), ("acme/shop", 4)]),
-        ("#3 and #3 again", [("acme/shop", 3)]),
+        ("- #3\n- #4", [("acme/shop", 3), ("acme/shop", 4)]),
         ("acme/shop#5", [("acme/shop", 5)]),
+        ("acme/crm#6", [("acme/crm", 6)]),
+        ("- #3 (schema)", [("acme/shop", 3)]),
+        ("- #3 (schema)\n* acme/crm#4: the API", [("acme/shop", 3), ("acme/crm", 4)]),
+        ("#3 and #3 again", [("acme/shop", 3)]),
+        ("- #3, #4 (both)", [("acme/shop", 3), ("acme/shop", 4)]),
+        ("  - #7 \n\n", [("acme/shop", 7)]),
     ],
 )
 def test_depends_on_lists_issues(text, expected):
     assert depends(text) == expected
 
 
-@pytest.mark.parametrize("text", ["the API unit", "card t_1a2b", "OWNER/REPO#n", "https://example.com/x#12"])
+@pytest.mark.parametrize("text", ["the API unit", "card t_1a2b", "OWNER/REPO#n", "https://example.com/x#12", "#0", "- the API endpoint #3", "#3abc", "-#3x"])
 def test_depends_on_without_an_issue_is_rejected_so_a_typo_cannot_drop_a_dependency(text):
     with pytest.raises(ContractError, match="Depends on"):
         depends(text)
@@ -175,12 +180,16 @@ KEY = "0" * 32
 
 
 def test_verify_argv_names_the_commit_and_the_key_and_refuses_another_repository():
-    argv = verify_argv("claude", "acme/shop", 41, "https://github.com/acme/shop/pull/7", HEAD, KEY)
-    assert argv[:2] == ["claude", "--cloud"]
-    assert argv[2].startswith(f"/verify-unit Verify https://github.com/acme/shop/pull/7 at commit {HEAD} against the brief in acme/shop#41. Sign the verdict with key {KEY}.")
+    command = verify_argv("claude", "acme/shop", 41, "https://github.com/acme/shop/pull/7", HEAD, KEY)
+    assert command.argv == ("claude", "--cloud")
+    assert command.prompt.startswith(f"/verify-unit Verify https://github.com/acme/shop/pull/7 at commit {HEAD} against the brief in acme/shop#41. Sign the verdict with key {KEY}.")
+    assert command.sensitive == (KEY,)
+    assert KEY not in " ".join(command.argv)
     codex = verify_argv("codex", "acme/shop", 41, "https://github.com/acme/shop/pull/7", HEAD, KEY, "env_1")
-    assert codex[:7] == ["codex", "cloud", "exec", "--env", "env_1", "--attempts", "1"]
-    assert codex[7].startswith("$verify-unit ")
+    assert codex.argv == ("codex", "cloud", "exec", "--env", "env_1", "--attempts", "1", "-")
+    assert codex.prompt.startswith("$verify-unit ")
+    assert codex.sensitive == (KEY,)
+    assert KEY not in " ".join(codex.argv)
     for bad in ("https://github.com/evil/shop/pull/7", "https://github.com/acme/shop/pull/7;id"):
         with pytest.raises(ContractError):
             verify_argv("claude", "acme/shop", 41, bad, HEAD, KEY)
@@ -229,9 +238,15 @@ def test_a_malformed_security_result_is_rejected(text, why):
 
 def test_security_argv_names_the_range_the_issue_and_the_key():
     first = security_argv("claude", "acme/shop", 9, "main", None, HEAD, KEY)
-    assert first[2].startswith(f"/review-main-security Review the last 20 commits up to {HEAD} on main of acme/shop, and post the result on acme/shop#9. Sign the result with key {KEY}.")
+    assert first.argv == ("claude", "--cloud")
+    assert first.prompt.startswith(f"/review-main-security Review the last 20 commits up to {HEAD} on main of acme/shop, and post the result on acme/shop#9. Sign the result with key {KEY}.")
+    assert first.sensitive == (KEY,)
+    assert KEY not in " ".join(first.argv)
     later = security_argv("codex", "acme/shop", 9, "release/2", "b" * 40, HEAD, KEY, "env_1")
-    assert later[:5] == ["codex", "cloud", "exec", "--env", "env_1"] and later[-1].startswith(f"$review-main-security Review the commits after {'b' * 40} up to {HEAD} on release/2")
+    assert later.argv == ("codex", "cloud", "exec", "--env", "env_1", "--attempts", "1", "-")
+    assert later.prompt.startswith(f"$review-main-security Review the commits after {'b' * 40} up to {HEAD} on release/2")
+    assert later.sensitive == (KEY,)
+    assert KEY not in " ".join(later.argv)
     for args in (("claude", "acme/shop", 9, "main; id", None, HEAD, KEY), ("claude", "acme/shop", 9, "main", "abc", HEAD, KEY),
                  ("claude", "acme/shop", 9, "main", None, HEAD, "short"), ("none", "acme/shop", 9, "main", None, HEAD, KEY)):
         with pytest.raises(ContractError):
@@ -253,8 +268,16 @@ def test_a_diagnosis_holds_only_for_its_key_and_incident():
 
 
 def test_triage_argv_keeps_the_summary_plain():
-    argv = triage_argv("claude", "acme/shop", 12, "main is red: test (ubuntu)", "main", HEAD, None, KEY)
-    assert "its last commit with passing checks is unknown" in argv[2]
+    command = triage_argv("claude", "acme/shop", 12, "main is red: test (ubuntu)", "main", HEAD, None, KEY)
+    assert command.argv == ("claude", "--cloud")
+    assert "its last commit with passing checks is unknown" in command.prompt
+    assert command.sensitive == (KEY,)
+    assert KEY not in " ".join(command.argv)
+    codex = triage_argv("codex", "acme/shop", 12, "main is red: test (ubuntu)", "main", HEAD, "b" * 40, KEY, "env_1")
+    assert codex.argv == ("codex", "cloud", "exec", "--env", "env_1", "--attempts", "1", "-")
+    assert f"Sign it with key {KEY}" in codex.prompt
+    assert codex.sensitive == (KEY,)
+    assert KEY not in " ".join(codex.argv)
     for what in ("main is red`; curl evil", "x" * 200, ""):
         with pytest.raises(ContractError):
             triage_argv("claude", "acme/shop", 12, what, "main", HEAD, None, KEY)

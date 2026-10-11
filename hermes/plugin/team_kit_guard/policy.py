@@ -6,8 +6,8 @@ bots.yaml; nothing else does. A bot's name is free: its role comes from bots.yam
 name.
 
 Pure logic, standard library plus PyYAML. The Hermes hook wiring lives in __init__.py. The
-team-kit-gh, team-kit-admin, and team-kit-chief import this module too, so every part of the
-machine reads the same policy.
+team-kit-gh, team-kit-admin, team-kit-chief, and team-kit-slack import this module too, so every
+part of the machine reads the same policy.
 """
 
 from __future__ import annotations
@@ -24,6 +24,9 @@ from pathlib import Path
 GUARD_VERSION = 2
 BOTS_VERSION = 1
 ROLES = ("bootstrap", "project", "chief")
+DEFAULT_TICK_EVERY = "30m"
+DEFAULT_INCIDENTS_EVERY = "10m"
+INTERVAL = re.compile(r"\A[1-9][0-9]*(?:m|h)\Z")
 
 DEFAULT_READ_ONLY_TOOLS = (
     "read_file", "search_files",
@@ -38,23 +41,28 @@ ROLE_TOOLS = {
     "project": ("terminal", "read_file", "search_files", "write_file", "patch", "clarify",
                 "skills_list", "skill_view", "todo_*", "session_search"),
     "bootstrap": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search"),
-    "chief": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search"),
+    "chief": ("terminal", "read_file", "write_file", "clarify", "skills_list", "skill_view", "todo_*", "session_search"),
 }
 # Each role's one command.
 ROLE_COMMAND = {"project": "team-kit-gh", "bootstrap": "team-kit-admin", "chief": "team-kit-chief"}
 SEGMENT_SPLIT = re.compile(r"\|\||&&|[;|&\n]|\$\(|`|\)")
 ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
+ENV_NAME = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
 
 NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
 # `default` is the owner's own Hermes profile, whose home is ~/.hermes itself.
 RESERVED_NAMES = frozenset({"default"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+SLACK_CHANNEL_ID = re.compile(r"\A[CG][A-Z0-9]{2,}\Z")
+SLACK_CHANNEL_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,79}\Z")
 
-PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "proposals", "teammate-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
+PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "proposals", "teammate-proposals", "chief-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
 BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon")
 BOOTSTRAP_READ_ONLY = ("status",)
-# The chief of staff reads every project and changes nothing, so it has no write command at all.
-CHIEF_COMMANDS = ("projects", "status", "show", "andon")
+# The chief of staff reads every project. Its writes are a draft under drafts/<bot>/ and `propose`;
+# the guard asks the owner to approve both every time.
+CHIEF_COMMANDS = ("projects", "status", "show", "digest", "propose", "andon")
+CHIEF_NEEDS_APPROVAL = ("propose",)
 ARG = r"[A-Za-z0-9_./:#=@~,+-]+"
 
 MIGRATE_V1 = (
@@ -107,6 +115,8 @@ class Bot:
     role: str
     project: str | None = None
     repo: str | None = None
+    tick_every: str = DEFAULT_TICK_EVERY
+    incidents_every: str = DEFAULT_INCIDENTS_EVERY
 
     @property
     def repos(self) -> tuple[str, ...]:
@@ -120,14 +130,30 @@ class Bot:
         return re.compile(rf"(~/\.hermes/bin/)?{ROLE_COMMAND[self.role]} ({'|'.join(commands)})( {ARG})*")
 
     def write_paths(self, home: Path) -> tuple[str, ...]:
+        if self.role == "chief":
+            return (str(home / "drafts" / self.name / "*.md"),)
         return (str(home / "briefs" / self.name / "*"),) if self.role == "project" else ()
 
     def read_paths(self, home: Path) -> tuple[str, ...]:
-        """Its own briefs and the pinned kit (templates, skills). Never secrets, configs, or other bots' files."""
+        """Its own briefs (a chief: its own drafts) and the pinned kit (templates, skills). Never secrets, configs, or other bots' files."""
+        if self.role == "chief":
+            drafts = str(home / "drafts" / self.name)
+            return (drafts, drafts + "/*.md")
         if self.role != "project":
             return ()
         briefs, kit = str(home / "briefs" / self.name), str(home / "kit")
         return (briefs, briefs + "/*", kit, kit + "/*")
+
+
+@dataclass(frozen=True)
+class SlackConfig:
+    enabled: bool
+    bot: str | None = None
+    channel_id: str | None = None
+    channel_name: str | None = None
+    app_token_env: str = "TEAM_KIT_SLACK_APP_TOKEN"
+    bot_token_env: str = "TEAM_KIT_SLACK_BOT_TOKEN"
+    mirror_notices: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,6 +164,8 @@ class Policy:
     trusted_authors: frozenset[str]
     max_in_flight_total: int
     require_brief_marker: bool = True
+    alert_hosts: frozenset[str] = frozenset()
+    slack: SlackConfig | None = None
     bots: dict[str, Bot] = field(default_factory=dict)
     home: Path = field(default_factory=team_kit_home)
 
@@ -163,6 +191,12 @@ def _rule(entry, where: str) -> ToolRule:
     if isinstance(entry, dict) and set(entry) <= {"tool", "command"} and entry:
         return ToolRule(tool=str(entry.get("tool", "terminal")), command=entry.get("command"))
     raise PolicyError(f"{where}: each entry is a command glob or {{tool, command}}")
+
+
+def _bool(value, where: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise PolicyError(f"{where} must be true or false")
 
 
 def parse_bots(data) -> dict[str, Bot]:
@@ -196,8 +230,72 @@ def parse_bots(data) -> dict[str, Bot]:
         if repo.lower() in seen_repos:
             raise PolicyError(f"bots.yaml: {repo} belongs to both {seen_repos[repo.lower()]} and {name}")
         seen_repos[repo.lower()] = name
-        bots[name] = Bot(name=name, role="project", project=project, repo=repo)
+        tick_every = _interval(raw.get("tick_every"), f"bots.yaml: {name} tick_every", DEFAULT_TICK_EVERY)
+        incidents_every = _interval(raw.get("incidents_every"), f"bots.yaml: {name} incidents_every", DEFAULT_INCIDENTS_EVERY)
+        bots[name] = Bot(name=name, role="project", project=project, repo=repo, tick_every=tick_every, incidents_every=incidents_every)
     return bots
+
+
+def _interval(value, where: str, default: str) -> str:
+    if value is None:
+        return default
+    value = str(value)
+    if not INTERVAL.match(value):
+        raise PolicyError(f"{where} must be a positive interval like 10m or 1h")
+    return value
+
+
+ALERT_HOST = re.compile(r"\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+\Z")
+
+
+def parse_alert_hosts(value) -> frozenset[str]:
+    """Hosts an alert source may send its token to, besides each source's own default. Only the owner edits this."""
+    if value is None:
+        return frozenset()
+    if not isinstance(value, list) or any(not isinstance(h, str) or not ALERT_HOST.match(h.lower()) for h in value):
+        raise PolicyError("guard.yaml alert_hosts must be a list of bare host names, such as grafana.example.com")
+    return frozenset(h.lower() for h in value)
+
+
+def parse_slack(data, bots: dict[str, Bot]) -> SlackConfig | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise PolicyError("guard.yaml slack must be a mapping")
+    allowed = {"enabled", "bot", "channel_id", "channel_name", "app_token_env", "bot_token_env", "mirror_notices"}
+    extra = sorted(set(data) - allowed)
+    if extra:
+        raise PolicyError(f"guard.yaml slack may hold only {', '.join(sorted(allowed))}; got {', '.join(extra)}")
+    enabled = _bool(data.get("enabled", False), "guard.yaml slack.enabled")
+    mirror = _bool(data.get("mirror_notices", False), "guard.yaml slack.mirror_notices")
+    app_token_env = str(data.get("app_token_env") or "TEAM_KIT_SLACK_APP_TOKEN")
+    bot_token_env = str(data.get("bot_token_env") or "TEAM_KIT_SLACK_BOT_TOKEN")
+    for key, value in (("app_token_env", app_token_env), ("bot_token_env", bot_token_env)):
+        if not ENV_NAME.match(value):
+            raise PolicyError(f"guard.yaml slack.{key} must be an environment variable name, not a token value")
+    bot = str(data.get("bot") or "")
+    channel_id = str(data.get("channel_id") or "")
+    channel_name = str(data.get("channel_name") or "").removeprefix("#")
+    if channel_id and not SLACK_CHANNEL_ID.match(channel_id):
+        raise PolicyError("guard.yaml slack.channel_id must be a Slack channel id like C012ABCDEF or G012ABCDEF")
+    if channel_name and not SLACK_CHANNEL_NAME.match(channel_name):
+        raise PolicyError("guard.yaml slack.channel_name must be a lowercase Slack channel name without #")
+    if enabled:
+        if not channel_id:
+            raise PolicyError("guard.yaml slack.channel_id is required when slack.enabled is true")
+        if not channel_name:
+            raise PolicyError("guard.yaml slack.channel_name is required when slack.enabled is true")
+        if bot not in bots:
+            raise PolicyError("guard.yaml slack.bot must name a bot from bots.yaml when slack.enabled is true")
+    return SlackConfig(
+        enabled=enabled,
+        bot=bot or None,
+        channel_id=channel_id or None,
+        channel_name=channel_name or None,
+        app_token_env=app_token_env,
+        bot_token_env=bot_token_env,
+        mirror_notices=mirror,
+    )
 
 
 def parse_policy(data, bots=None, home: Path | None = None) -> Policy:
@@ -208,6 +306,7 @@ def parse_policy(data, bots=None, home: Path | None = None) -> Policy:
     total = data.get("max_in_flight_total")
     if not isinstance(total, int) or isinstance(total, bool) or total < 1:
         raise PolicyError("guard.yaml max_in_flight_total must be a whole number of 1 or more")
+    parsed_bots = parse_bots(bots)
     return Policy(
         deny=tuple(_rule(e, "deny") for e in data.get("deny") or []),
         untrusted_readers=tuple(_rule(e, "untrusted_readers") for e in data.get("untrusted_readers") or []),
@@ -215,7 +314,9 @@ def parse_policy(data, bots=None, home: Path | None = None) -> Policy:
         trusted_authors=frozenset(str(a).lower() for a in data.get("trusted_authors") or []),
         max_in_flight_total=total,
         require_brief_marker=bool(data.get("require_brief_marker", True)),
-        bots=parse_bots(bots),
+        alert_hosts=parse_alert_hosts(data.get("alert_hosts")),
+        slack=parse_slack(data.get("slack"), parsed_bots),
+        bots=parsed_bots,
         home=home or team_kit_home(),
     )
 
@@ -269,7 +370,7 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
         target = os.path.abspath(os.path.expanduser(str(raw))) if raw else ""
         allowed = bot.read_paths(policy.home)
         if not target or not any(fnmatch.fnmatchcase(target, p) for p in allowed):
-            return block(f"{bot.role} bot {profile} may only read its briefs and the kit")
+            return block(f"{bot.role} bot {profile} may only read its {'drafts' if bot.role == 'chief' else 'briefs and the kit'}")
     if tool_name in WRITE_TOOLS:
         target = os.path.abspath(os.path.expanduser(str(args.get(WRITE_TOOLS[tool_name], ""))))
         allowed = bot.write_paths(policy.home)
@@ -283,6 +384,18 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
             return approve(
                 f"The bootstrap bot changes this machine or GitHub. Approve {tool_name} only if you asked for it.",
                 tool_name, args, "bootstrap",
+            )
+    if bot.role == "chief" and not read_only:
+        words = command.split()
+        if tool_name == "write_file":
+            return approve(
+                "The chief bot writes a draft proposal. Approve only if you asked it to draft this; read it first.",
+                tool_name, args, "chief",
+            )
+        if tool_name == "terminal" and len(words) > 1 and words[1] in CHIEF_NEEDS_APPROVAL:
+            return approve(
+                "The chief bot hands one draft, identified by its SHA-256, to a project bot. Approve only if you asked it to hand this work over.",
+                tool_name, args, "chief",
             )
     if tainted and not read_only:
         return approve(f"This turn read untrusted content. Approve {tool_name} only if you asked for it.", tool_name, args, "taint")

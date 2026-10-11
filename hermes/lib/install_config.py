@@ -103,15 +103,26 @@ def cron_jobs(text: str) -> dict[str, dict]:
     text = re.sub(r"\x1b\[[0-9;]*m", "", text)
     jobs: dict[str, dict] = {}
     current = None
+
+    def finish() -> None:
+        if current is not None and current.get("name"):
+            jobs[current["name"]] = {k: v for k, v in current.items() if k != "name"}
+
     for line in text.splitlines():
         head = re.match(r"^\s*(\S+)\s+\[(active|paused|enabled|disabled)\]", line)
         if head:
+            finish()
             current = {"id": head.group(1), "enabled": head.group(2) in ("active", "enabled")}
             continue
         name = re.match(r"^\s*Name:\s*(.*?)\s*$", line)
         if name and current is not None:
-            jobs[name.group(1)] = current
-            current = None
+            current["name"] = name.group(1)
+            continue
+        schedule = re.match(r"^\s*Schedule:\s*(.*?)\s*$", line)
+        if schedule and current is not None:
+            current["schedule"] = schedule.group(1)
+            continue
+    finish()
     return jobs
 
 

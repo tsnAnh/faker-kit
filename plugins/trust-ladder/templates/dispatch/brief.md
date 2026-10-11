@@ -30,7 +30,7 @@ Source: <link>
 No merge. No push to the default branch. No force-push. No rebase of others' branches. No edits outside Scope. No secrets in code, logs, or comments.
 
 ## Depends on
-<Each issue in this repository this unit waits for, one per line as `#n`, or "none". The unit launches only after each is closed by a merged pull request.>
+<Each issue this unit waits for, one per line: `#n` for this repository, `OWNER/REPO#n` for another project on this Hermes machine, or "none". The unit launches only after each is closed by a merged pull request.>
 
 ## Standing orders
 <`.agents/dispatch.md`, pasted verbatim.>
