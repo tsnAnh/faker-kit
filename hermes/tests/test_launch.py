@@ -318,8 +318,20 @@ def test_the_fake_claude_fails_on_a_pseudo_terminal_that_is_not_the_controlling_
     try:
         proc = subprocess.Popen([str(wrapper), "--cloud"], stdin=subprocess.PIPE, stdout=slave, stderr=slave, start_new_session=True)
         os.close(slave)
-        proc.communicate(b"/faker-mode x")
-        out = os.read(master, 65536).decode()
+        proc.stdin.write(b"/faker-mode x")
+        proc.stdin.close()
+        # Read while the child runs: macOS drops unread pty output once the last slave descriptor closes.
+        out = b""
+        while True:
+            try:
+                chunk = os.read(master, 65536)
+            except OSError:  # EIO once the slave side is gone (Linux)
+                break
+            if not chunk:
+                break
+            out += chunk
+        proc.wait(timeout=10)
+        out = out.decode()
     finally:
         os.close(master)
     assert proc.returncode == 1 and "need the keyboard" in out
@@ -335,7 +347,8 @@ def test_ci_is_not_passed_to_the_agent(tmp_path, monkeypatch):
 def test_the_child_survives_until_the_session_exists_is_reaped_and_leaks_no_descriptors(tmp_path):
     import os
 
-    before = len(os.listdir("/proc/self/fd"))
+    fd_dir = "/proc/self/fd" if os.path.isdir("/proc/self/fd") else "/dev/fd"
+    before = len(os.listdir(fd_dir))
     script = ("import time; time.sleep(0.5); print('Session: https://claude.ai/code/session_01ABCdef', flush=True); time.sleep(0.3)")
     procs = []
 
@@ -352,6 +365,6 @@ def test_the_child_survives_until_the_session_exists_is_reaped_and_leaks_no_desc
         time.sleep(0.05)
     assert procs[0].returncode == 0, "the drain thread reaps the child after it exits"
     deadline = time.time() + 5
-    while len(os.listdir("/proc/self/fd")) > before and time.time() < deadline:
+    while len(os.listdir(fd_dir)) > before and time.time() < deadline:
         time.sleep(0.05)
-    assert len(os.listdir("/proc/self/fd")) <= before
+    assert len(os.listdir(fd_dir)) <= before

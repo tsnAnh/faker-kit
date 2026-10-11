@@ -47,7 +47,7 @@ Schedule: `every 10m`
 Deliver: `bot-chat:{bot}`
 Skill: `dispatch`
 
-Polls the default branch's checks and the health URLs in `.agents/dispatch.json`, from this machine, outbound only. A failure opens an `agent:incident` issue, starts a triage session that changes nothing, and tells the owner; a pass closes it again.
+Polls the default branch's checks, the health URLs, and the external alert sources in `.agents/dispatch.json`, from this machine, outbound only. A failure opens an `agent:incident` issue, starts a triage session that changes nothing, and tells the owner; a pass closes it again.
 
 ```text
 Run `team-kit-gh incidents` in the terminal. Print its output exactly as it is, and nothing else.

@@ -144,7 +144,49 @@ None of these uses a model to decide. Each is code or configuration.
   }
   ```
 - **Pull the andon cord** when something is going wrong: tell a project bot "stop", or the bootstrap bot "stop everything". The bot runs `team-kit-gh andon raise <reason>` (or `team-kit-admin andon raise <reason>`), which opens an `agent:andon` issue that every agent at work checks before it pushes. You can open such an issue on GitHub yourself, too; the next tick adopts it. Agents that stop post a `blocked` report, so each becomes a gate. When it is fixed, ask the bot to clear the cord and to relaunch the gated units.
-- **Act on incidents.** Every 10 minutes by default, or on the interval set with `team-kit-admin add-project --incidents-every`, each project bot polls the default branch's checks and the health URLs in `.agents/dispatch.json`, outbound from your machine, so nothing needs a public address or a webhook. A failure opens an `agent:incident` issue and a [triage-incident](../../plugins/trust-ladder/skills/triage-incident/SKILL.md) session that changes nothing and posts a signed diagnosis there. You get a line when it opens, when the diagnosis arrives, and when it passes again. Only a signed, high-confidence diagnosis that names a suspect commit makes that line propose a fix: `revert <full 40-character sha>`, which also says `git revert -m 1` when the suspect is a merge commit. The line names its incident number; reply `ok #12` (with that number) in that project bot's chat to have it brief exactly that fix as a small unit. A bare `ok` works only while one proposal is pending; with more, the bot asks which incident you mean. Medium, low, or no-suspect diagnoses propose nothing, and a diagnosis never launches work by itself. You can always tell the bot a different fix in your own words. Set `incidents.andon_on_red` to stop the line while the branch is red.
+- **Act on incidents.** Every 10 minutes by default, or on the interval set with `team-kit-admin add-project --incidents-every`, each project bot polls the default branch's checks, the health URLs in `.agents/dispatch.json`, and optional external alert sources, outbound from your machine, so nothing needs a public address or a webhook. A failure opens an `agent:incident` issue and a [triage-incident](../../plugins/trust-ladder/skills/triage-incident/SKILL.md) session that changes nothing and posts a signed diagnosis there. You get a line when it opens, when the diagnosis arrives, and when it passes again. Only a signed, high-confidence diagnosis that names a suspect commit makes that line propose a fix: `revert <full 40-character sha>`, which also says `git revert -m 1` when the suspect is a merge commit. The line names its incident number; reply `ok #12` (with that number) in that project bot's chat to have it brief exactly that fix as a small unit. A bare `ok` works only while one proposal is pending; with more, the bot asks which incident you mean. Medium, low, or no-suspect diagnoses propose nothing, and a diagnosis never launches work by itself. You can always tell the bot a different fix in your own words. Set `incidents.andon_on_red` to stop the line while the branch is red.
+
+  `incidents.sources` can poll Sentry unresolved issues at or above a level, PagerDuty open incidents on one service, Datadog monitors in Alert, and Grafana firing alerts. The config stores only environment variable names; put the actual tokens in the project bot profile's `.env`. Each `token_env` (and Datadog's `app_key_env`) must start with `TEAM_KIT_ALERT_`, so a config change can never name the bot's GitHub token. A token goes only to a pinned host: `sentry.io`, `api.pagerduty.com`, or Datadog's own API hosts. Grafana, self-hosted Sentry, and any other host must be listed under `alert_hosts` in the machine's `guard.yaml`, which only you edit. Sentry's `min_level` defaults to `error`.
+
+  A source that cannot be read (an expired token, an HTTP error, an unset variable) tells you once and leaves its other checks running. Alert text from these sources never reaches the triage prompt: the prompt gets only the source and a count, and example titles sit in the incident issue under a block marked as untrusted data.
+
+  ```json
+  {
+    "incidents": {
+      "sources": [
+        {
+          "type": "sentry",
+          "name": "sentry-prod",
+          "organization": "acme",
+          "project": "api",
+          "environment": "production",
+          "min_level": "error",
+          "token_env": "TEAM_KIT_ALERT_SENTRY"
+        },
+        {
+          "type": "pagerduty",
+          "name": "pager-api",
+          "service_id": "P12345",
+          "token_env": "TEAM_KIT_ALERT_PAGERDUTY"
+        },
+        {
+          "type": "datadog",
+          "name": "dd-api",
+          "site": "datadoghq.com",
+          "monitor_tags": ["service:api"],
+          "token_env": "TEAM_KIT_ALERT_DATADOG_API",
+          "app_key_env": "TEAM_KIT_ALERT_DATADOG_APP"
+        },
+        {
+          "type": "grafana",
+          "name": "grafana-prod",
+          "url": "https://grafana.example.com",
+          "token_env": "TEAM_KIT_ALERT_GRAFANA"
+        }
+      ]
+    }
+  }
+  ```
 - **Act on security findings.** Each morning a cloud session reviews what merged on the default branch since the day before, with the [review-main-security](../../plugins/trust-ladder/skills/review-main-security/SKILL.md) skill, and posts a signed result on the project's `agent:security` issue. You get a line only for high or medium findings. To fix one, tell the project bot what to fix in your own words. Set `security_backend` to `none` in `.agents/dispatch.json` to turn the reviews off. A project created before these jobs existed needs `team-kit-admin activate --bot <bot>` once more to resume them.
 - **Close abandoned units as not planned.** If you drop a unit, close its issue with "Close as not planned", not "Close as completed": units that depend on it then gate instead of starting on code that never merged.
 
