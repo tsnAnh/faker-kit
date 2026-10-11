@@ -1915,7 +1915,7 @@ UPSTREAM_BRIEF = """<!-- team-kit:brief v1 card={card} -->
 Move this repository's vendored plugins from {upstream} at {pinned} to its new commit {head}, with `node scripts/sync-upstream.mjs --ref {head}`, in one pull request that passes every check in AGENTS.md.
 
 ## Scope
-May write: the vendored plugin directories the sync script writes, `upstream/`, and the generated `docs/reference/` pages.
+May write: the vendored plugin directories the sync script writes, `upstream/` (rules, including a rename in `upstream/renames.json` when a new upstream skill takes a name the kit already uses), `docs/catalog.json` entries for new upstream skills, the generators in `scripts/` when an upstream format change breaks them, and the generated `docs/reference/` pages.
 May not write: `plugins/trust-ladder/`, `hermes/`, any vendored file by hand, and everything in `forbidden_paths` of `.agents/dispatch.json`.
 Branch: one new branch for this unit. One pull request.
 
