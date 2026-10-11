@@ -53,3 +53,16 @@ Polls the default branch's checks, the health URLs, and the external alert sourc
 Run `team-kit-gh incidents` in the terminal. Print its output exactly as it is, and nothing else.
 If it refuses, print one line: "team-kit notice: incidents refused: " and the refusal.
 ```
+
+## team-kit-upstream
+
+Schedule: `0 9 * * 1`
+Deliver: `bot-chat:{bot}`
+Skill: `dispatch`
+
+Only for a repository whose `.agents/dispatch.json` sets `upstream_sync: true`, such as the kit itself. When the upstream repository named in `upstream/source.json` has moved past its pinned commit and no sync unit is open, it dispatches one unit from a fixed brief: a cloud agent runs `scripts/sync-upstream.mjs` and opens the pull request, which is verified and reviewed like any unit. Every other repository stays silent.
+
+```text
+Run `team-kit-gh upstream` in the terminal. Print its output exactly as it is, and nothing else.
+If it refuses, print one line: "team-kit notice: upstream refused: " and the refusal.
+```

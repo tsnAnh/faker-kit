@@ -90,7 +90,7 @@ LABELS = (
     ("risk:high", "b60205", "Hermes's risk score for this pull request, from rules in code: sensitive paths or a large change"),
     (ANDON_LABEL, "b60205", "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"),
 )
-JOBS = ("team-kit-tick", "team-kit-status", "team-kit-security", "team-kit-incidents")
+JOBS = ("team-kit-tick", "team-kit-status", "team-kit-security", "team-kit-incidents", "team-kit-upstream")
 SCHEDULE_DEFAULTS = {"tick_every": DEFAULT_TICK_EVERY, "incidents_every": DEFAULT_INCIDENTS_EVERY}
 SCHEDULE_FIELDS = {"team-kit-tick": "tick_every", "team-kit-incidents": "incidents_every"}
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"

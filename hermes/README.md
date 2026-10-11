@@ -42,7 +42,7 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `plugin/team_kit_guard/` | The Hermes plugin that checks every tool call against `guard.yaml` and `bots.yaml` | each bot's `plugins/` |
 | `profiles/bootstrap/`, `profiles/project/`, `profiles/chief/` | `SOUL.md` and the config merged into each bot's profile | each bot's profile |
 | `skills/bootstrap/`, `skills/dispatch/`, `skills/chief/` | The bots' skills | linked into each bot's `skills/` |
-| `cron/project-jobs.md` | `team-kit-tick`, `team-kit-status`, `team-kit-security`, and `team-kit-incidents`, created paused per project bot | each project bot's scheduled jobs |
+| `cron/project-jobs.md` | `team-kit-tick`, `team-kit-status`, `team-kit-security`, `team-kit-incidents`, and `team-kit-upstream`, created paused per project bot | each project bot's scheduled jobs |
 | `templates/guard.yaml` | The machine's policy, written once | `~/.hermes/team-kit/guard.yaml` |
 | `tests/` | `python -m pytest hermes` | — |
 
