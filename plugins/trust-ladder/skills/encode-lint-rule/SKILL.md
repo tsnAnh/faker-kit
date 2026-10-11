@@ -9,7 +9,7 @@ The rule's failure message is the instruction the next agent reads, at the momen
 
 ## 1. Start from the examples
 
-Take the bad and good examples from `correct` or `paved-path`. If you do not have them, write them first: the smallest code that shows the mistake and its fix.
+Take the real past mistake `/correct` found, or the examples from `paved-path`. If you do not have them, write them first: the smallest code that shows the mistake and its fix.
 
 ## 2. Pick the mechanism
 

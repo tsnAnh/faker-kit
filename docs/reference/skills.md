@@ -2,7 +2,7 @@
 
 # Skills
 
-Every skill in the kit: 106 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 105 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
@@ -139,8 +139,7 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 
 | Skill | Plugin | For | Try | What it does |
 |---|---|---|---|---|
-| [correct](../../plugins/trust-ladder/skills/correct/SKILL.md) | trust-ladder | Engineers | `/correct the agent keeps catching Exception and swallowing it` | Turn a correction you gave an agent into a mechanism so no agent repeats the mistake. |
-| [correct-repeats](../../plugins/pstack/skills/correct-repeats/SKILL.md) | pstack | Engineers, Leads | `/correct-repeats agents keep calling the database client directly instead of going through the repository layer` | Find the mistakes agents keep repeating in this repo and make each one impossible. |
+| [correct](../../plugins/pstack/skills/correct/SKILL.md) | pstack | Engineers, Leads | `/correct agents keep catching Exception and swallowing it` | Find the mistakes agents keep repeating in this repo and make each one impossible. |
 | [setup-team-kit](../../plugins/trust-ladder/skills/setup-team-kit/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-team-kit` | Prepare a repository so agents can work in it unattended and anyone on the team can use the kit. |
 | [trust-audit](../../plugins/trust-ladder/skills/trust-audit/SKILL.md) | trust-ladder | Engineers, Leads | `/trust-audit how many agents can this repo take?` | Score how far a repository can be trusted to agents, layer by layer (codebase, static analysis, rules and review bots, skills and verification, style guide), with evidence from running its commands. |
 | [check-agent-compatibility](../../plugins/agent-compatibility/skills/check-agent-compatibility/SKILL.md) | agent-compatibility | Engineers, Leads | `/check-agent-compatibility` | Run the full repository compatibility pass: scanner score, startup path, validation loop, and docs reliability. |

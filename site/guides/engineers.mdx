@@ -126,7 +126,7 @@ Don't just fix it in chat. Make it stick:
 | You want agents to follow your personal style | `/automate-me` or `/workflow-from-chats` |
 | AGENTS.md should keep learning from sessions | `/continual-learning` |
 
-`/correct` picks the strongest layer that can hold the rule, proves it fails on a bad example and passes on a good one, and logs it in `.agents/corrections.tsv`. Detail: [Correct an agent](/how-to/correct-an-agent) and [Capture lessons](/how-to/capture-lessons).
+`/correct` (from pstack) finds the mistakes agents repeat, fixes each at the highest level that works (architecture, then types, a lint or CI check, a test, and docs last), proves each new check fails on a real past mistake, and keeps the rule table in AGENTS.md. Detail: [Correct an agent](/how-to/correct-an-agent) and [Capture lessons](/how-to/capture-lessons).
 
 ## 8. Keep the codebase healthy
 

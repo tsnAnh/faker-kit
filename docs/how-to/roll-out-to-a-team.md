@@ -40,15 +40,15 @@ Suggest a first task for non-engineers that is small and visible, such as a copy
 
 - **Daily, automated**: the verification-skill and gardener routines ([Run many agents](run-many-agents.md#routines)).
 - **After every correction**: `/correct`, so the fix lands in a check, not a chat.
-- **Weekly**: the weekly review issue; the gardener's top three; a look at new rows in `.agents/corrections.tsv`.
+- **Weekly**: the weekly review issue; the gardener's top three; a look at new rows in the AGENTS.md rule table.
 - **Monthly**: `/trust-audit` and `/style-guide-from-reviews`. Decide whether to raise the number of agents you run at once.
 
 ## Numbers to watch
 
 | Number | Where | Healthy direction |
 |---|---|---|
-| Share of corrections in layers 1 and 2 | `.agents/corrections.tsv` | Up |
-| Same rule corrected twice | `.agents/corrections.tsv` | Zero |
+| Share of rules a check enforces | The AGENTS.md rule table | Up |
+| Rules nothing enforces | The AGENTS.md rule table | Zero |
 | Trust score per layer | `.agents/trust-audit.tsv` | Up, with the lowest layer rising |
 | Time for `scripts/check.sh` | `.agents/trust-audit.tsv` | Under 15 minutes |
 | Ratchet counts | `.agents/ratchet-baseline.json` | Down |

@@ -87,7 +87,7 @@ The default answer is `/faker-mode`, which runs most of the others when its step
 | Pick a model for each role and a reasoning budget | [`/setup-pstack`](../setup-pstack/SKILL.md) |
 | Turn their own working habits into a personal mode skill | [`/automate-me`](../automate-me/SKILL.md) |
 | Turn what a finished task taught into skill edits | [`/reflect`](../reflect/SKILL.md) |
-| Stop agents from repeating the same mistakes in this repo | [`/correct-repeats`](../correct-repeats/SKILL.md) |
+| Stop agents from repeating the same mistakes in this repo | [`/correct`](../correct/SKILL.md) |
 | Find their way around pstack | `/faker-help` |
 
 If a skill directory next to this one is missing from the table, read its frontmatter and route by its description. The `principle-*` directories are covered under principles below.

@@ -1,14 +1,14 @@
 # Correct an agent so it stays corrected
 
-When an agent does something you do not want repeated, fix the environment, not the agent. `/correct` turns the correction into a mechanism every future agent meets.
+When agents keep making the same mistake, fix the repository, not your next prompt. `/correct` is pstack's skill for this: it finds the mistakes agents repeat and makes each one impossible.
 
 ## When to run it
 
-- Right after you correct an agent in chat, if the mistake could happen again.
-- When a reviewer flags the same thing twice.
-- When someone says "don't do that again" or "can we encode this".
+- You have corrected agents for the same mistake more than once.
+- A reviewer, or a review bot, flags the same thing on two pull requests.
+- Someone says "don't do that again" or "can we encode this".
 
-A one-off misunderstanding of a single task does not need it. `/correct` asks whether the mistake recurs, and stops if it does not.
+Only a person starts it; an agent does not run it on its own. A one-off misunderstanding of a single task does not need it.
 
 ## Run it
 
@@ -16,22 +16,20 @@ A one-off misunderstanding of a single task does not need it. `/correct` asks wh
 /correct agents keep adding a new date helper instead of using DateFormatter
 ```
 
-Give it the evidence if you have it: a pull request, a review comment, or the chat.
+Run it with no argument and it finds the mistake classes from history on its own.
 
 It then:
 
-1. Writes a **bad example**, a **good example**, and the **rule** in one sentence.
-2. Tries each layer, strongest first, and takes the first that can hold the rule:
-   1. **Codebase:** make the bad code impossible to write (a type, one blessed API with the alternatives deleted, a boundary the build enforces). Uses `paved-path` when callers must move.
-   2. **Static analysis:** make it fail CI, with a message that says what to do instead. Uses `encode-lint-rule`.
-   3. **Rules and review bots:** a line in the right AGENTS.md, repeated under `## Review guidelines` so both review bots flag it.
-   4. **Skills:** a step in the skill that owns the procedure, often the verification skill.
-   5. **Style guide:** a STYLE.md entry naming the layer it should reach next.
-3. **Proves it:** the check fails on the bad example and passes on the good one. Both are committed under `.agents/rule-fixtures/` and registered in `.agents/rule-fixtures.json`, so `scripts/check.sh` keeps proving the rule fires; if someone later weakens it, CI fails. Existing violations are fixed, or recorded in a baseline that only goes down.
-4. **Logs it:** one row in `.agents/corrections.tsv`.
-5. Opens a small pull request titled `chore(agents): encode <rule>`.
+1. **Finds the mistake classes:** it reads recent commits, reverts, review comments, agent instruction files, and comments that explain workarounds, and groups the mistakes. A class counts once it has happened twice.
+2. **Fixes each class at the highest level that works:**
+   1. **Architecture:** one owner for each piece of state and one supported way to do each task; internals hidden so the wrong import fails; old ways an agent would copy deleted. Use `paved-path` when callers must move.
+   2. **Types**, so the bad state cannot be written. Where bad code still compiles, a **lint or CI check** whose error names what to use instead (`encode-lint-rule`). If the pattern is already common, it fails only when a change adds more.
+   3. **A test** of the behavior.
+   4. **Docs or agent rules last**, only for judgment calls: nothing fails when an agent skips them. Human review is not a level.
+3. **Proves it:** each new check fails on a real past mistake, and runs the same way locally and in CI. Exceptions go on the offending line with a reason, an expiry date, and a human's approval.
+4. **Keeps the rule table:** the `## Rules and what enforces them` table in AGENTS.md pairs each rule with what enforces it. A rule that is already there with nothing enforcing it is a repeat, and gets fixed at a higher level in the same change.
 
-It writes the rule once, at the strongest layer. A lint rule plus an AGENTS.md line saying the same thing is noise.
+It replies with each class, its evidence, the level it picked, and why a higher level did not work. Between runs, agents do their part: when corrected, they fix the mistake and add the rule to the table, as the AGENTS.md template tells them.
 
 ## Examples by stack
 
@@ -62,4 +60,4 @@ Add the rule to `.agents/ratchet.json`, then run `node scripts/agent-checks/ratc
 
 ## See the climb
 
-Every few weeks, read `.agents/corrections.tsv`. The share of rows in layers 1 and 2 should grow, and the same rule should not appear twice. If it does, the mechanism did not hold; run `/correct` again on the repeat.
+Every few weeks, read the rule table in AGENTS.md. The share of rules a check enforces (architecture, types, lint, CI, or a test) should grow, and no rule should be left to the doc alone. A rule that keeps coming back means the mechanism did not hold; run `/correct` again.
