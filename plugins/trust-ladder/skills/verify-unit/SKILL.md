@@ -19,7 +19,7 @@ gh api repos/OWNER/REPO/pulls/<pr> --jq '{number, headRefOid: .head.sha, headRef
 
 Claude Code cloud sessions block GitHub's GraphQL API, so `gh issue ...` and `gh pr ...` subcommands fail there with HTTP 403; use the REST calls written here (`gh api`, `gh run`). Where `gh` is missing, use the session's GitHub tools. Go on only if all hold:
 
-- The issue's author login is in `trusted_dispatchers` of `.agents/dispatch.json` on the default branch.
+- The issue's author login is in `trusted_dispatchers` (compare logins ignoring letter case, as GitHub does) of `.agents/dispatch.json` on the default branch.
 - The issue body's first line is `<!-- team-kit:brief v1 card=<card> -->`.
 - The pull request is open and its body contains `Closes #<n>`.
 

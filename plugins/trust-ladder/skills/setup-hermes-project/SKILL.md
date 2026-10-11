@@ -92,10 +92,10 @@ It creates the bot's profile, its scheduled jobs (paused), and the team-kit labe
 
 ## 5. The owner puts the tokens in place
 
-Ask the owner to run this in **their own terminal**, not through you. It prompts for each token without echoing it and writes it to the bot's `.env`, readable only by them:
+Ask the owner to run this in **their own terminal**, not through you. It works in bash and zsh, prompts for each token without echoing it, and writes it to the bot's `.env`, readable only by them:
 
 ```bash
-f=~/.hermes/profiles/<bot>/.env; for k in TEAM_KIT_ROUTINE_TOKEN GH_TOKEN; do read -rsp "$k: " v; echo; [ -n "$v" ] || continue; (umask 077; { grep -v "^$k=" "$f" 2>/dev/null; printf '%s=%s\n' "$k" "$v"; } > "$f.new" && mv "$f.new" "$f"); done; unset v
+f=~/.hermes/profiles/<bot>/.env; for k in TEAM_KIT_ROUTINE_TOKEN GH_TOKEN; do printf '%s: ' "$k"; stty -echo; IFS= read -r v; stty echo; echo; [ -n "$v" ] || continue; (umask 077; { grep -v "^$k=" "$f" 2>/dev/null; printf '%s=%s\n' "$k" "$v"; } > "$f.new" && mv "$f.new" "$f"); done; unset v
 ```
 
 - `TEAM_KIT_ROUTINE_TOKEN`: the routine's API token from step 3. For a `codex` repository, they press Enter to skip it.
