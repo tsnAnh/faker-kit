@@ -1,0 +1,6 @@
+name: fixture
+publish_to: none
+environment:
+  sdk: ^3.5.0
+dev_dependencies:
+  lints: ">=5.0.0 <7.0.0"

@@ -1,0 +1,1 @@
+../../.agents/team-kit/plugins/agent-compatibility/agents/startup-review.md
