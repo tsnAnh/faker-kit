@@ -505,7 +505,7 @@ def tick(gh, capsys, cloud=None):
     return lines(capsys)
 
 
-def proposal(team_kit_home, tmp_path, name="handoff.md", body="# Add export\n\nBuild it from the chief handoff.\n", bot="meo-beo", project="shop", at=NOW):
+def chief_proposal(team_kit_home, tmp_path, name="handoff.md", body="# Add export\n\nBuild it from the chief handoff.\n", bot="meo-beo", project="shop", at=NOW):
     source = team_kit_home / "drafts" / "chanh-van" / name
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(body)
@@ -625,7 +625,7 @@ def test_run_gh_returns_a_304_but_raises_on_any_other_failure(monkeypatch):
 
 
 def test_proposals_prints_active_chief_proposals_without_dispatching(team_kit_home, tmp_path, gh, capsys):
-    saved = proposal(team_kit_home, tmp_path)
+    saved = chief_proposal(team_kit_home, tmp_path)
     cloud = FakeCloud()
     assert run(gh, "chief-proposals", cloud=cloud) == 0
     found = lines(capsys)
@@ -636,28 +636,28 @@ def test_proposals_prints_active_chief_proposals_without_dispatching(team_kit_ho
 
 
 def test_tick_delivers_one_chief_proposal_notice_once(team_kit_home, tmp_path, gh, capsys):
-    saved = proposal(team_kit_home, tmp_path)
+    saved = chief_proposal(team_kit_home, tmp_path)
     [notice] = tick(gh, capsys)
     assert notice.startswith(f"team-kit notice: chief proposal {saved['id']} for shop from chanh-van: Add export.")
     assert "Ask me in this Bot Chat to brief it" in notice
-    record = json.loads(next((team_kit_home / "chief-proposals" / "meo-beo").glob("*.json")).read_text())
+    record = json.loads(next((team_kit_home / "proposals" / "meo-beo").glob("*.json")).read_text())
     assert record["notified_at"] == NOW
     assert tick(gh, capsys) == ["[SILENT]"]
 
 
 def test_expired_chief_proposals_are_pruned_deterministically(team_kit_home, tmp_path, gh, capsys):
-    old = proposal(team_kit_home, tmp_path, "old.md", "# Old\n", at=NOW - PROPOSAL_TTL_SECONDS - 1)
-    fresh = proposal(team_kit_home, tmp_path, "fresh.md", "# Fresh\n", at=NOW - PROPOSAL_TTL_SECONDS + 1)
+    old = chief_proposal(team_kit_home, tmp_path, "old.md", "# Old\n", at=NOW - PROPOSAL_TTL_SECONDS - 1)
+    fresh = chief_proposal(team_kit_home, tmp_path, "fresh.md", "# Fresh\n", at=NOW - PROPOSAL_TTL_SECONDS + 1)
     assert run(gh, "chief-proposals") == 0
     found = lines(capsys)
     assert old["id"] not in "\n".join(found)
     assert fresh["id"] in found[0]
-    files = sorted(p.name for p in (team_kit_home / "chief-proposals" / "meo-beo").glob("*.json"))
+    files = sorted(p.name for p in (team_kit_home / "proposals" / "meo-beo").glob("*.json"))
     assert files == [f"{fresh['id']}.json"]
 
 
 def corrupt_records(team_kit_home, saved):
-    folder = team_kit_home / "chief-proposals" / "meo-beo"
+    folder = team_kit_home / "proposals" / "meo-beo"
     good = json.loads((folder / f"{saved['id']}.json").read_text())
     bad = {
         "garbage": "{not json",
@@ -680,27 +680,27 @@ def corrupt_records(team_kit_home, saved):
 
 
 def test_corrupt_chief_proposals_are_pruned_and_never_shown(team_kit_home, tmp_path, gh, capsys):
-    saved = proposal(team_kit_home, tmp_path)
+    saved = chief_proposal(team_kit_home, tmp_path)
     names = corrupt_records(team_kit_home, saved)
     assert run(gh, "chief-proposals") == 0
     found = lines(capsys)
     assert found[0].startswith(f"team-kit notice: chief proposal {saved['id']} ")
     assert sum(1 for line in found if line.startswith("team-kit notice:")) == 1
-    left = sorted(p.name for p in (team_kit_home / "chief-proposals" / "meo-beo").iterdir())
+    left = sorted(p.name for p in (team_kit_home / "proposals" / "meo-beo").iterdir())
     assert left == [f"{saved['id']}.json"], (left, names)
 
 
 def test_tick_prunes_corrupt_and_expired_proposals_and_notices_only_the_good_one(team_kit_home, tmp_path, gh, capsys):
-    proposal(team_kit_home, tmp_path, "old.md", "# Old\n", at=NOW - PROPOSAL_TTL_SECONDS - 5)
-    saved = proposal(team_kit_home, tmp_path, "new.md", "# New\n")
+    chief_proposal(team_kit_home, tmp_path, "old.md", "# Old\n", at=NOW - PROPOSAL_TTL_SECONDS - 5)
+    saved = chief_proposal(team_kit_home, tmp_path, "new.md", "# New\n")
     corrupt_records(team_kit_home, saved)
     [notice] = tick(gh, capsys)
     assert f"chief proposal {saved['id']} " in notice
-    assert sorted(p.name for p in (team_kit_home / "chief-proposals" / "meo-beo").iterdir()) == [f"{saved['id']}.json"]
+    assert sorted(p.name for p in (team_kit_home / "proposals" / "meo-beo").iterdir()) == [f"{saved['id']}.json"]
 
 
 def test_a_notified_proposal_stays_valid_until_it_expires(team_kit_home, tmp_path, gh, capsys):
-    saved = proposal(team_kit_home, tmp_path)
+    saved = chief_proposal(team_kit_home, tmp_path)
     tick(gh, capsys)
     assert run(gh, "chief-proposals") == 0
     assert saved["id"] in lines(capsys)[0]
