@@ -21,7 +21,11 @@ commands_file=.agents/check-commands
 [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { usage; exit 0; }
 [ -f "$commands_file" ] || { printf 'check: %s is missing. Run the setup-lint-pack skill to create it.\n' "$commands_file" >&2; exit 2; }
 
-mapfile -t commands < <(grep -v -E '^\s*(#|$)' "$commands_file")
+# A while-read loop, not mapfile: macOS still ships bash 3.2.
+commands=()
+while IFS= read -r line; do
+  commands+=("$line")
+done < <(grep -v -E '^[[:space:]]*(#|$)' "$commands_file")
 if [ "${1:-}" = "--list" ]; then printf '%s\n' "${commands[@]}"; exit 0; fi
 
 failed=()

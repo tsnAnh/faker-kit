@@ -81,7 +81,7 @@ class Plan:
 
 
 def kit_commit(kit: Path, allow_dirty: bool = False) -> str:
-    def git(*args):
+    def git(*args):  # noqa: ANN002, ANN202
         done = subprocess.run(["git", "-C", str(kit), *args], capture_output=True, text=True)
         if done.returncode:
             raise VendorError(f"{kit} is not a git checkout of the kit")
@@ -169,7 +169,7 @@ def link_key(path: str) -> tuple[str, str]:
     return ("agents" if path.startswith(".claude/agents/") else "skills", path.rsplit("/", 1)[1])
 
 
-def choose_links(links: list[tuple[str, str]], own) -> tuple[list[tuple[str, str]], list[str]]:
+def choose_links(links: list[tuple[str, str]], own) -> tuple[list[tuple[str, str]], list[str]]:  # noqa: ANN001
     """Split the planned links into those to write and those to skip. own(path) says whether the
     repository has its own entry at path. A name the repository has its own entry for anywhere is
     linked nowhere, so Claude Code, Codex, and Pi all run the repository's skill."""
@@ -223,7 +223,7 @@ def apply(kit: Path, repo: Path, allow_dirty: bool = False) -> dict:
 
     def own(path: str) -> bool:
         where = repo / path
-        return not points_into_vendor(os.readlink(where)) if where.is_symlink() else where.exists()
+        return not points_into_vendor(os.readlink(where)) if where.is_symlink() else where.exists()  # noqa: PTH115
 
     linked, skipped = choose_links(p.links, own)
     planned = {path for path, _ in linked}
@@ -240,7 +240,7 @@ def apply(kit: Path, repo: Path, allow_dirty: bool = False) -> dict:
             continue
         for entry in folder.iterdir():
             rel = entry.relative_to(repo).as_posix()
-            if entry.is_symlink() and points_into_vendor(os.readlink(entry)) and rel not in planned:
+            if entry.is_symlink() and points_into_vendor(os.readlink(entry)) and rel not in planned:  # noqa: PTH115
                 entry.unlink()
                 removed.append(rel)
     (repo / MANIFEST).write_bytes(p.manifest(linked))
@@ -290,7 +290,7 @@ def check(repo: Path) -> list[str]:
                 problems.append(f"{VENDOR_DIR}/{rel} is not part of the vendored kit")
     for path, target in sorted((manifest.get("links") or {}).items()):
         where = repo / path
-        if not where.is_symlink() or os.readlink(where) != target:
+        if not where.is_symlink() or os.readlink(where) != target:  # noqa: PTH115
             problems.append(f"{path} should link to {target}")
         elif not where.exists():
             problems.append(f"{path} links to {target}, which does not exist")
