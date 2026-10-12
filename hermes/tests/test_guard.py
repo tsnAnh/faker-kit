@@ -495,6 +495,7 @@ def test_with_ask_owner_off_a_chief_proposal_notice_is_the_go_ahead():
     out = g.check_message(user_message=chief_notice(), session_id="s1", turn_id="t9")
     assert "team-kit-gh chief-proposals --id 20261012t080000z-handoff" in out["context"]
     assert "brief and dispatch it" in out["context"]
+    assert "load the dispatch skill again" in out["context"] and "`team-kit-gh project`" in out["context"]
 
 
 @pytest.mark.parametrize("case", ["owner asks", "inside untrusted", "policy unreadable"])
