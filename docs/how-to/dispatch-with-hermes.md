@@ -45,12 +45,12 @@ An open issue labelled `agent:proposal` is not a unit. It is a teammate proposal
 Each repository picks its coding agent once, in `.agents/dispatch.json` (`backend` is `claude` or `codex`). A launch does one of these. `N` is 1, 2, or 3 for a small, medium, or large unit.
 
 ```bash
-# claude: one HTTPS POST that fires the project's Claude Code routine, prompt in the JSON body
-POST https://api.anthropic.com/v1/claude_code/routines/<trig_id>/fire   {"text": "<prompt>"}
+claude --cloud <fixed first message>             # creates the session, on a terminal
+claude --cloud <session> -p                      # prompt on stdin
 codex cloud exec --env ENV_ID --attempts N -   # prompt on stdin
 ```
 
-The prompt always starts with `/faker-mode` or `$faker-mode`. The `faker-mode` skill cannot load itself, so the prompt has to run it as a command. Team-kit never puts prompt text in process arguments or URLs. That keeps prompt material, including one-use signing keys for verifier, PR review, security, and incident sessions, out of process listings. For `claude`, each project has one [routine](https://code.claude.com/docs/en/routines) on its repository with an API trigger. Its saved prompt tells the session to do the task in its fire payload, and the bot fires it with the routine's token, from `TEAM_KIT_ROUTINE_TOKEN` in the bot profile's `.env`, in a request header; the answer carries the session URL. No local process, clone, or terminal is involved, and the call goes out from your machine, so nothing needs a public address. A routine fires at most 30 times an hour. For `codex`, Hermes runs the command on a pseudo-terminal in an empty directory, strips the terminal escape sequences, and reads the task id from what it prints.
+The prompt always starts with `/faker-mode` or `$faker-mode`. The `faker-mode` skill cannot load itself, so the prompt has to run it as a command. Team-kit never puts prompt text in process arguments or URLs. That keeps prompt material, including one-use signing keys for verifier, PR review, security, and incident sessions, out of process listings. For `claude`, Hermes creates the session from the project's kept launch checkout, which you trust once, on a pseudo-terminal; its only argument is a fixed sentence saying the task comes next. It then sends the real prompt into that session on stdin with `claude --cloud <session> -p`. The sessions show up with your other Claude Code sessions, and the call goes out from your machine, so nothing needs a public address. For `codex`, Hermes runs the command on a pseudo-terminal in an empty directory, strips the terminal escape sequences, and reads the task id from what it prints.
 
 ### When work splits into several units
 
@@ -166,12 +166,13 @@ There is no public callback URL, inbound listener, webhook secret, or Slack text
 
 ### 2. Each project
 
-The quickest way is your own coding agent: run `/setup-hermes-project` (or `$setup-hermes-project` in Codex) in Claude Code, Codex, or Pi on this machine. It asks a few questions, creates the routine, and runs every step below, stopping where you paste a token in your own terminal or merge a pull request. The bootstrap bot does the same from Hermes Desktop:
+The quickest way is your own coding agent: run `/setup-hermes-project` (or `$setup-hermes-project` in Codex) in Claude Code, Codex, or Pi on this machine. It asks a few questions and runs every step below, stopping where you trust the launch checkout or paste a token in your own terminal, or merge a pull request. The bootstrap bot does the same from Hermes Desktop:
 
 Open the bootstrap bot in Hermes Desktop Bot Mode and say "set up project shop for acme/shop". It asks for the bot's name and the coding agent, then, with your approval at each step:
 
 1. `team-kit-admin add-project` creates the project bot and its five jobs, paused, and the eleven labels in the repository. Add `--tick-every 10m` or `--incidents-every 5m` when a project needs lower-latency polling than the defaults, `30m` for ticks and `10m` for incidents.
-   For a `claude` repository, you first create its routine at [claude.ai/code/routines](https://claude.ai/code/routines): the repository, the saved prompt `add-project` prints, no connectors, and a one-off run date far in the future so it only runs when fired. Turn it on, add an API trigger, and put its token in `~/.hermes/profiles/<project bot>/.env` as `TEAM_KIT_ROUTINE_TOKEN` yourself, never in chat. Then pass `--routine trig_...` to `add-project`.
+   It also clones the project's launch checkout and prints its path; for a `claude` repository, trust it once in your own terminal (`cd <path> && claude`, choose yes, then `/exit`). Run it with `CLAUDE_CONFIG_DIR` exported if your `claude` login uses one: the Hermes gateway does not inherit your shell, so it records that in the bot's `.env`.
+   Add `--claude-subscription` to run the project bot's own model on your Claude subscription through the Claude Code CLI logged in on this machine, with no API key; see the [Hermes README](../../hermes/README.md#run-bots-on-your-claude-subscription).
 2. `team-kit-admin vendor` opens a pull request that copies the kit, at the machine's commit, into the repository's `.agents/team-kit/` and links its skills into `.claude/skills/` and `.agents/skills/`. Cloud sessions start from a clone of the repository, and cannot install plugins or fetch a private kit, so this copy is where they get the kit's skills. The repository's own skills keep their place. You review and merge it.
 3. `team-kit-admin setup-repo` starts one cloud session. It runs faker-mode and the [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md) skill, scores the repository with `/trust-audit`, and opens one pull request: `.agents/dispatch.json` (with the `verification_skill`), `.agents/dispatch.md`, a Layout section in `AGENTS.md`, and any kit setup the repository lacks. You review and merge it.
 4. `team-kit-admin protect` makes the CI check that runs `scripts/check.sh` required on the default branch.

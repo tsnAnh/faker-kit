@@ -53,8 +53,6 @@ NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
 # `default` is the owner's own Hermes profile, whose home is ~/.hermes itself.
 RESERVED_NAMES = frozenset({"default"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
-# A Claude Code routine id; team_kit_cloud.ROUTINE_ID checks the same shape before a fire.
-ROUTINE = re.compile(r"\Atrig_[A-Za-z0-9]{8,64}\Z")
 SLACK_CHANNEL_ID = re.compile(r"\A[CG][A-Z0-9]{2,}\Z")
 SLACK_CHANNEL_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,79}\Z")
 
@@ -119,7 +117,6 @@ class Bot:
     repo: str | None = None
     tick_every: str = DEFAULT_TICK_EVERY
     incidents_every: str = DEFAULT_INCIDENTS_EVERY
-    routine: str | None = None
 
     @property
     def repos(self) -> tuple[str, ...]:
@@ -235,11 +232,7 @@ def parse_bots(data) -> dict[str, Bot]:
         seen_repos[repo.lower()] = name
         tick_every = _interval(raw.get("tick_every"), f"bots.yaml: {name} tick_every", DEFAULT_TICK_EVERY)
         incidents_every = _interval(raw.get("incidents_every"), f"bots.yaml: {name} incidents_every", DEFAULT_INCIDENTS_EVERY)
-        routine = raw.get("routine")
-        if routine is not None and not (isinstance(routine, str) and ROUTINE.match(routine)):
-            raise PolicyError(f"bots.yaml: {name} routine must be a Claude Code routine id like trig_01ABC..., got {routine!r}")
-        bots[name] = Bot(name=name, role="project", project=project, repo=repo, tick_every=tick_every, incidents_every=incidents_every,
-                         routine=routine)
+        bots[name] = Bot(name=name, role="project", project=project, repo=repo, tick_every=tick_every, incidents_every=incidents_every)
     return bots
 
 

@@ -40,6 +40,30 @@ elif args[:2] == ["config", "set"]:
         node = node.setdefault(part, {})
     node[parts[-1]] = value
     config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+elif args[:2] == ["config", "unset"]:
+    config_path = home / "config.yaml"
+    config = (yaml.safe_load(config_path.read_text()) if config_path.exists() else {}) or {}
+    node, parts = config, args[2].split(".")
+    for part in parts[:-1]:
+        node = node.get(part, {})
+    node.pop(parts[-1], None)
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+elif args[:2] == ["plugins", "install"]:
+    # Like Hermes, a catalog name installs the plugin under its own key, in this profile's plugins/.
+    if os.environ.get("FAKE_PLUGIN_INSTALL_FAIL"):
+        sys.exit(1)
+    key = {"claude-subscription-directsdk": "claude-subscription-directsdk-experimental"}.get(args[2], args[2])
+    (home / "plugins" / key).mkdir(parents=True, exist_ok=True)
+elif args[:2] == ["plugins", "enable"]:
+    if not (home / "plugins" / args[2]).is_dir():
+        print(f"No plugin named '{args[2]}'", file=sys.stderr)
+        sys.exit(1)
+    config_path = home / "config.yaml"
+    config = (yaml.safe_load(config_path.read_text()) if config_path.exists() else {}) or {}
+    enabled = config.setdefault("plugins", {}).setdefault("enabled", [])
+    if args[2] not in enabled:
+        enabled.append(args[2])
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
 elif args[:1] == ["cron"]:
     jobs_path = home / "jobs.json"
     jobs = json.loads(jobs_path.read_text()) if jobs_path.exists() else []

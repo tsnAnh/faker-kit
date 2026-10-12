@@ -1,9 +1,12 @@
 import json
+import stat
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 import yaml
-from conftest import fill_guard, gh_calls, hermes_calls, install
+from conftest import FAKE_CLAUDE, fill_guard, gh_calls, hermes_calls, install
 
 SHOP = "acme/shop"
 LABELS = ["agent-task", "agent:proposal", "agent:running", "agent:verifying", "agent:review", "agent:needs-human", "agent:security", "agent:incident", "risk:low", "risk:medium", "risk:high", "agent:andon"]
@@ -190,7 +193,6 @@ def test_a_project_has_one_repository(ready):
         (["--bot", "default", "--project", "crm", "--repo", "acme/crm"], "the owner's own Hermes profile"),
         (["--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm;id"], "is not OWNER/REPO"),
         (["--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm", "--tick-every", "0m"], "--tick-every must be"),
-        (["--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm", "--routine", "trig_../../x"], "--routine must be"),
     ],
 )
 def test_add_project_refuses_before_changing_anything(ready, args, why):
@@ -203,51 +205,37 @@ def test_add_project_refuses_before_changing_anything(ready, args, why):
     assert not (root / "profiles" / "sep-crm").exists()
 
 
-def test_add_project_keeps_the_routine_and_status_shows_whether_its_token_is_set(ready):
+def test_add_project_prepares_the_launch_checkout_and_keeps_the_cli_config_dir(ready):
     root, _ = ready
-    code, out = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP,
-                      "--routine", "trig_01SHOProutine", profile="ong-xay")
+    args = ("add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP)
+    code, out = admin(with_env(ready, CLAUDE_CONFIG_DIR="/owner/.claude"), *args, profile="ong-xay")
     assert code == 0, out
-    assert out["routine"] == "trig_01SHOProutine"
-    assert not any("claude.ai/code/routines" in step for step in out["next"])
-    add_shop(ready)  # a refresh without --routine keeps it
-    assert bots(root)["meo-beo"] == {"role": "project", "project": "shop", "repo": SHOP, "routine": "trig_01SHOProutine"}
-    status = lambda: next(b for b in admin(ready, "status", profile="ong-xay")[1]["bots"] if b["bot"] == "meo-beo")
-    assert (status()["routine"], status()["routine_token"]) == ("trig_01SHOProutine", False)
-    (root / "profiles" / "meo-beo" / ".env").write_text("TEAM_KIT_ROUTINE_TOKEN=sk-ant-oat01-shop\n")
-    assert status()["routine_token"] is True
+    checkout = root / "team-kit" / "checkouts" / "acme__shop" / "repo"
+    assert out["launch_checkout"] == str(checkout) and (checkout / ".git").is_dir()
+    assert out["next"][0] == f"For Claude Code sessions, the owner trusts the launch checkout once: cd {checkout} && claude, choose yes, then /exit"
+    env_file = root / "profiles" / "meo-beo" / ".env"
+    assert env_file.read_text() == "CLAUDE_CONFIG_DIR=/owner/.claude\n"
+    code, out = admin(with_env(ready), *args, profile="ong-xay")
+    assert code == 0, out
+    assert env_file.read_text() == "CLAUDE_CONFIG_DIR=/owner/.claude\n", "a shell without CLAUDE_CONFIG_DIR never removes it"
 
 
-def test_add_project_without_a_routine_says_how_to_make_one(ready):
-    out = add_shop(ready)
-    assert out["routine"] is None
-    assert any("claude.ai/code/routines" in step and "--routine trig_" in step for step in out["next"])
-
-
-def test_setup_repo_fires_the_projects_routine_with_the_token_from_its_bot_profile(ready, kit_source, monkeypatch):
-    from team_kit_admin import Admin
-
+def test_setup_repo_creates_the_session_from_the_launch_checkout_and_sends_the_prompt_on_stdin(ready, kit_source, tmp_path):
     root, env = ready
-    code, out = admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP,
-                      "--routine", "trig_01SHOProutine", profile="ong-xay")
-    assert code == 0, out
-    (root / "profiles" / "meo-beo" / ".env").write_text('GH_TOKEN=x\nTEAM_KIT_ROUTINE_TOKEN="sk-ant-oat01-shop"\n')
+    add_shop(ready)
     vendored(root, kit_source[1])
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    fired = []
-
-    def post(url, headers, body, timeout):
-        fired.append((url, headers["Authorization"], json.loads(body)["text"]))
-        return 200, json.dumps({"claude_code_session_url": "https://claude.ai/code/cse_01BOOTstrap"}).encode()
-
-    setup = Admin(home=root / "team-kit")
-    setup.cloud.post = post
-    out = setup.setup_repo("shop", "claude", None)
-    assert out == {"project": "shop", "repo": "acme/shop", "backend": "claude", "kit_ref": kit_source[1], "session": "https://claude.ai/code/cse_01BOOTstrap"}
-    [(url, auth, prompt)] = fired
-    assert url == "https://api.anthropic.com/v1/claude_code/routines/trig_01SHOProutine/fire"
-    assert auth == "Bearer sk-ant-oat01-shop"
+    cli = Path(env["PATH"].split(":")[0]) / "claude"
+    cli.write_text(f"#!{sys.executable}\n" + FAKE_CLAUDE)
+    cli.chmod(0o755)
+    calls = tmp_path / "claude-calls.jsonl"
+    code, out = admin(with_env(ready, FAKE_CLAUDE_LOG=str(calls)), "setup-repo", "--project", "shop", "--backend", "claude", profile="ong-xay")
+    assert code == 0, out
+    assert out == {"project": "shop", "repo": "acme/shop", "backend": "claude", "kit_ref": kit_source[1], "session": "https://claude.ai/code/session_01FAKEabc"}
+    create, send = [json.loads(line) for line in calls.read_text().splitlines()]
+    checkout = str(root / "team-kit" / "checkouts" / "acme__shop" / "repo")
+    assert create["cwd"] == checkout and create["argv"][0] == "--cloud" and "Set up" not in create["argv"][1]
+    assert send["argv"] == ["--cloud", "session_01FAKEabc", "-p"]
+    prompt = send["stdin"]
     assert prompt.startswith("Set up acme/shop for team-kit dispatch")
     assert f"vendored in this repository at .agents/team-kit/, at commit {kit_source[1]}" in prompt
     assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in prompt
@@ -536,3 +524,75 @@ def test_add_chief_creates_a_read_only_bot_with_the_chief_skill_and_no_jobs(read
     assert not any(c[:2] == ["-p", "chanh-van"] and c[2:4] == ["cron", "create"] for c in hermes_calls(root)), "the chief has no jobs"
     code, err = admin(ready, "add-chief", "--bot", "meo-beo", profile="ong-xay")
     assert code == 1 and "already a project bot" in err
+
+
+FAKE_CLAUDE_CLI = """import json, sys
+if sys.argv[1:] == ["--version"]:
+    print("{version} (Claude Code)")
+elif sys.argv[1:] == ["auth", "status"]:
+    print(json.dumps({{"loggedIn": {logged_in}, "authMethod": "claude.ai"}}))
+else:
+    sys.exit(2)
+"""
+PROVIDER = "claude-subscription-directsdk-experimental"
+
+
+def fake_claude(ready, version="2.1.296", logged_in=True):
+    _, env = ready
+    path = Path(env["PATH"].split(":")[0]) / "claude"
+    path.write_text(f"#!{sys.executable}\n" + FAKE_CLAUDE_CLI.format(version=version, logged_in=bool(logged_in)))
+    path.chmod(0o755)
+
+
+def with_env(ready, **extra):
+    root, env = ready
+    return root, {**{k: v for k, v in env.items() if k != "CLAUDE_CONFIG_DIR"}, **extra}
+
+
+def config(root, bot):
+    return yaml.safe_load((root / "profiles" / bot / "config.yaml").read_text())
+
+
+def test_claude_subscription_switches_the_bots_model_and_points_the_plugin_at_the_login(ready):
+    root, _ = ready
+    fake_claude(ready)
+    add_shop(ready)
+    home = root / "profiles" / "meo-beo"
+    current = config(root, "meo-beo")
+    current["model"] = {"default": "gpt-x", "provider": "openai-codex", "base_url": "https://example.invalid", "api_mode": "codex_responses"}
+    (home / "config.yaml").write_text(yaml.safe_dump(current))
+    (home / ".env").write_text("GH_TOKEN=keep\n")
+    args = ("add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP, "--claude-subscription")
+    code, out = admin(with_env(ready, CLAUDE_CONFIG_DIR="/owner/.claude"), *args, profile="ong-xay")
+    assert code == 0, out
+    after = config(root, "meo-beo")
+    assert after["model"] == {"default": "sonnet", "provider": PROVIDER}
+    assert set(after["plugins"]["enabled"]) >= {"team_kit_guard", PROVIDER}
+    assert (home / ".env").read_text() == "GH_TOKEN=keep\nCLAUDE_CONFIG_DIR=/owner/.claude\n"
+    assert stat.S_IMODE((home / ".env").stat().st_mode) == 0o600
+    enables = [c for c in hermes_calls(root) if c[2:4] == ["plugins", "enable"]]
+    assert enables and all("--no-allow-tool-override" in c for c in enables), "the plugin never replaces built-in tools"
+
+    installs = len([c for c in hermes_calls(root) if c[2:4] == ["plugins", "install"]])
+    code, out = admin(with_env(ready), *args, "--model", "opus", profile="ong-xay")
+    assert code == 0, out
+    assert len([c for c in hermes_calls(root) if c[2:4] == ["plugins", "install"]]) == installs, "an installed plugin is not installed again"
+    assert config(root, "meo-beo")["model"] == {"default": "opus", "provider": PROVIDER}
+    assert (home / ".env").read_text() == "GH_TOKEN=keep\nCLAUDE_CONFIG_DIR=/owner/.claude\n", "a shell without CLAUDE_CONFIG_DIR keeps it"
+
+
+@pytest.mark.parametrize(("cli", "why"), [
+    (None, "Claude Code is not installed"),
+    ({"version": "2.1.200"}, "2.1.284 or later is needed"),
+    ({"logged_in": False}, "Claude Code is not logged in here"),
+])
+def test_claude_subscription_refuses_before_changing_anything(ready, cli, why):
+    root, _ = ready
+    if cli is not None:
+        fake_claude(ready, **cli)
+    add_shop(ready)
+    before = (root / "team-kit" / "bots.yaml").read_text(), labels(root), config(root, "meo-beo"), len(hermes_calls(root))
+    code, err = admin(with_env(ready), "add-project", "--bot", "sep-crm", "--project", "crm", "--repo", "acme/crm", "--claude-subscription", profile="ong-xay")
+    assert code == 1 and why in err
+    assert ((root / "team-kit" / "bots.yaml").read_text(), labels(root), config(root, "meo-beo"), len(hermes_calls(root))) == before
+    assert not (root / "profiles" / "sep-crm").exists()

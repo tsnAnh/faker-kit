@@ -34,7 +34,7 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and, with approval, hands one hashed draft to one project bot | `~/.hermes/bin/team-kit-chief` (a wrapper) |
 | `bin/team_kit_slack.py` | `team-kit-slack`: the optional outbound-only Slack Socket Mode relay | `~/.hermes/bin/team-kit-slack` (a wrapper) |
 | `lib/team_kit_contracts.py` | The brief, size, report, and launch markers, and the cloud command lines | read from the kit checkout |
-| `lib/team_kit_cloud.py` | Starts a Claude Code session by firing the project's routine, or a `codex cloud exec` task, and returns its id | read from the kit checkout |
+| `lib/team_kit_cloud.py` | Starts a `claude --cloud` session (created with a fixed first message, then sent its prompt on stdin) or a `codex cloud exec` task, and returns its id | read from the kit checkout |
 | `lib/team_kit_andon.py` | The andon cords: the local records, and the `agent:andon` issue body | read from the kit checkout |
 | `lib/team_kit_slack_relay.py` | Slack Socket Mode, Bot Chat delivery, service unit generation, and optional notice mirroring | read from the kit checkout |
 | `lib/team_kit_risk.py` | The risk score of a ready pull request and its suggested reviewers, from rules in code | read from the kit checkout |
@@ -61,7 +61,7 @@ Under `~/.hermes/team-kit/`:
 - `security/<bot>.json`, the last commit a security review covered, and the running review's range and key.
 - `etag/<bot>/`, that bot's cached GitHub REST responses and ETags, keyed by endpoint, so idle polling can send conditional requests. Bots never share an entry.
 - `slack/`, transient `team-kit-slack` Bot Chat notice files, deleted after delivery.
-- `checkouts/`, the empty working directories `codex cloud exec` runs in, and their redacted logs. Pruned after 3 days.
+- `checkouts/<owner>__<repo>/repo`, the kept launch checkout every Claude Code session for that project starts from, which the owner trusts once; never pruned. Beside it, the empty working directories `codex cloud exec` runs in and each launch's redacted log, pruned after 3 days.
 - `in-flight/<bot>.json`, each project bot's count of running units, for `max_in_flight_total`.
 - `units/<bot>.json`, each project bot's recent unit issue states, every issue another bot wants (its `wants` list names the other-project issues its own queued briefs depend on), for cross-project Depends on refs. A dependency must be an `agent-task` unit; `dispatch` refuses a plain issue and tick gates a unit that names one.
 - `status/<bot>.json`, when the bot's last digest ran, for "Done since last".
@@ -83,7 +83,7 @@ These depend on Hermes and the cloud CLIs, and the tests fake them:
 - that a profile's `.env` (`GH_TOKEN`) reaches its terminal and its scheduled jobs,
 - that a new profile's scheduled jobs run in the shared gateway without a restart,
 - the task line `codex cloud exec` prints, which `team_kit_cloud.py` waits for,
-- the routines `/fire` API (research preview, beta header `experimental-cc-routine-2026-04-01`): a POST with the routine's bearer token and `{"text": prompt}` answers 200 with `claude_code_session_url`, a paused routine answers 400 `routine_paused`, and a fire is limited to 30 an hour per routine. Confirmed by hand on 2026-10-11: a fire started a session that did the task in its payload. The session receives the payload wrapped in `<routine-fire-payload>` and marked as data, so the routine's saved prompt must tell it to do that task; `team-kit-admin add-project` prints that prompt. Check the routines documentation when the beta header changes,
+- the `claude --cloud` contract (Claude Code 2.1.296): `claude --cloud <message>` creates a session only on a terminal on stdout, from a directory whose GitHub remote is the repository, and asks once per directory whether to trust it; `--cloud` cannot be combined with `-p` to create one; `claude --cloud <session> -p` reads the message on stdin, needs no terminal, prints `Sent to cloud session.`, and queues it into the session even before the sandbox starts. Confirmed by hand on 2026-10-12: a session created this way answered its fixed first message, then did the task it got on stdin. Check it with a real launch after every Claude Code upgrade,
 - that a cloud session loads skills through the relative links `vendor_kit.py` writes in `.claude/skills/` and `.agents/skills/` (the launch prompt has the agent report "the team-kit skills did not load" if not),
 - that the ids `hermes cron list --all` prints are what `hermes cron resume` takes, and that `every 30m` is a valid schedule,
 - the `Schedule:` line `hermes cron list --all` prints: `cron_jobs` in `lib/install_config.py` compares it with `every 10m` to decide whether to run `hermes cron edit <id> --schedule`, so verify its format on real Hermes (a mismatch re-edits the job on every `add-project` or install, and a changed schedule would never be noticed if the line is absent),
@@ -92,22 +92,25 @@ These depend on Hermes and the cloud CLIs, and the tests fake them:
 
 ## Troubleshooting
 
-- **A Claude launch fails with "has no Claude Code routine".** The project bot has no `routine:` in `bots.yaml`. Create the routine (see `team-kit-admin add-project`'s next steps), then rerun `add-project` with `--routine trig_...`.
-- **"no routine token".** Put the routine's API token in `~/.hermes/profiles/<project bot>/.env` as `TEAM_KIT_ROUTINE_TOKEN`. `team-kit-admin status` shows `routine_token: true` once it is there.
-- **"HTTP 400 routine_paused".** The routine is turned off. A routine has to be on for its API trigger to fire; give it a one-off run date far in the future (such as 2099) so it never runs on a schedule.
-- **"HTTP 401".** The token is wrong or was revoked. Generate a new one on the routine's page and replace it in the `.env`.
-- **"HTTP 429".** The routine reached its fire limit (30 an hour). The unit stays queued and the next tick tries again.
+- **"Claude Code asks whether to trust <path>".** The project's launch checkout is new, or its trust was reset. Run `cd <path> && claude`, choose yes, then `/exit`, and launch again.
+- **A Claude launch exits with "Not logged in" or "requires an interactive terminal".** The gateway runs `claude` without your shell. Check that the project bot's `.env` has `CLAUDE_CONFIG_DIR` pointing at the directory your `claude` login uses (rerun `team-kit-admin add-project` from a shell where it is exported), and that nothing replaced `Cloud.popen` or wrapped the launch.
+- **"<session> started but did not get its task, so it waits idle".** Creating the session worked, sending its prompt on stdin did not. The unit is freed and the next tick launches a new session; the idle one can be deleted at claude.ai/code.
 - **A Codex launch exits before starting a task.** Read `~/.hermes/team-kit/checkouts/<owner>__<repo>/<unit>.log`. It holds the terminal output with escape sequences removed and prompts and signing keys redacted. Run `codex cloud exec` by hand to see whether it needs a sign-in.
 - **"printed no session in 180s".** `codex cloud exec` is waiting for input or a login. The same log shows what it printed; the process group is stopped.
 
-## Upgrade to routine launches
+## Run bots on your Claude subscription
 
-Earlier versions started Claude Code sessions with `claude --cloud` on a pseudo-terminal. Claude Code 2.1.296 takes a cloud session's task only as an argument, which would put signing keys in process listings, and stops at a folder-trust prompt for each fresh clone, so Hermes now fires a routine instead. For each project whose `.agents/dispatch.json` uses `backend: claude` (or a `claude` verifier, review, security, or triage backend):
+`team-kit-admin add-project`, `add-chief`, and `add-bootstrap` (or `install.sh --bootstrap-bot NAME`) take `--claude-subscription`. It installs Hermes's [Claude Subscription DirectSDK](https://hermes-agent.nousresearch.com/docs/plugins/claude-subscription-directsdk) provider plugin into that bot's profile only, enables it without permission to replace built-in tools, and sets the bot's `model.provider` to `claude-subscription-directsdk-experimental` and `model.default` to `--model` or `sonnet`. Each turn then runs through the Claude Code CLI logged in on this machine and counts against your Claude subscription, with no API key.
 
-1. At [claude.ai/code/routines](https://claude.ai/code/routines), create a routine on that repository, with the prompt `team-kit-admin add-project` prints, no connectors, and a one-off run date far in the future. Turn it on.
-2. Edit it, add an API trigger, and generate its token. Put the token in `~/.hermes/profiles/<project bot>/.env` as `TEAM_KIT_ROUTINE_TOKEN`, never in chat.
-3. Ask the bootstrap bot to run `team-kit-admin add-project` for the project again with `--routine trig_...`.
-4. Delete `~/.hermes/team-kit/checkouts/<owner>__<repo>/` folders left by old Claude launches.
+It refuses before changing anything unless `claude` is 2.1.284 or later and `claude auth status` shows a login. Run it from your own shell: the Hermes gateway runs under launchd and does not inherit your shell, so a `CLAUDE_CONFIG_DIR` set there would leave the plugin logged out (HTTP 401). The command records that directory in the bot's `.env` as `CLAUDE_CONFIG_DIR`, a path and not a secret, which the plugin and the `claude --cloud` launcher both read; a later run from a shell without it keeps the line. Run the command again without the flag to leave the provider as it is; switch back with `hermes -p <bot> model`.
+
+## Upgrade from routine launches
+
+For a short while Hermes started Claude Code sessions by firing a Claude Code routine. It is back on `claude --cloud`, whose sessions show up with your other sessions. For each project that used a routine:
+
+1. Rerun `team-kit-admin add-project` for it from your own shell, with `CLAUDE_CONFIG_DIR` exported if your `claude` login uses one. It prints the `launch_checkout`; run `cd <launch_checkout> && claude` once, choose yes, then `/exit`.
+2. Delete `TEAM_KIT_ROUTINE_TOKEN` from the project bot's `.env` and `routine:` from its entry in `~/.hermes/team-kit/bots.yaml`; nothing reads them any more.
+3. Delete the routine at [claude.ai/code/routines](https://claude.ai/code/routines).
 
 ## Upgrade from the webhook version
 

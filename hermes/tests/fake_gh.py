@@ -30,7 +30,13 @@ if args[:2] == ["label", "create"]:
         labels[repo].append(args[2])
     save("labels.json", labels)
 elif args[:2] == ["repo", "clone"]:
-    subprocess.run(["git", "init", "-q", args[3]], check=True)
+    # Like gh, the clone has an origin remote and the default branch's history: here one empty commit
+    # in a per-repository origin that this fake creates on first use.
+    origin = Path(os.environ["HOME"]) / ".fake-gh" / "origins" / args[2].replace("/", "__")
+    if not (origin / ".git").exists():
+        subprocess.run(["git", "init", "-q", "-b", "main", str(origin)], check=True)
+        subprocess.run(["git", "-C", str(origin), "-c", "user.email=f@k.e", "-c", "user.name=fake", "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    subprocess.run(["git", "clone", "-q", str(origin), args[3]], check=True)
 elif args[:2] == ["issue", "list"]:
     print("[]")
 elif args[:2] == ["issue", "create"]:
