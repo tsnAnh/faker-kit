@@ -666,6 +666,32 @@ def test_exactly_a_hundred_units_take_one_page(team_kit_home, gh):
     assert len([c for c in gh.calls if c[0] == "api"]) == 1
 
 
+def test_commands_get_the_bots_claude_dir_from_its_profile(team_kit_home, gh, monkeypatch, capsys):
+    # Hermes hands a routed bot's commands no .env value it was not told to pass.
+    profile = team_kit_home.parent / "profiles" / "meo-beo"
+    profile.mkdir(parents=True, exist_ok=True)
+    (profile / ".env").write_text("# bot\nGH_TOKEN=bot-token\nCLAUDE_CONFIG_DIR='/owner/.claude'\n")
+    monkeypatch.setenv("GH_TOKEN", "machine-token")
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    seen = []
+
+    def recording(args, input=None):
+        seen.append((os.environ.get("GH_TOKEN"), os.environ.get("CLAUDE_CONFIG_DIR")))
+        return gh(args, input)
+
+    assert run(recording, "status") == 0
+    assert seen and set(seen) == {("machine-token", "/owner/.claude")}, "only the Claude config dir is filled in"
+
+
+def test_a_set_claude_dir_is_kept(team_kit_home, gh, monkeypatch):
+    profile = team_kit_home.parent / "profiles" / "meo-beo"
+    profile.mkdir(parents=True, exist_ok=True)
+    (profile / ".env").write_text("CLAUDE_CONFIG_DIR=/profile/.claude\n")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/shell/.claude")
+    assert run(gh, "project") == 0
+    assert os.environ["CLAUDE_CONFIG_DIR"] == "/shell/.claude"
+
+
 def test_run_gh_returns_a_304_but_raises_on_any_other_failure(monkeypatch):
     def fake(stdout, code, stderr=""):
         return lambda *a, **k: subprocess.CompletedProcess(a[0], code, stdout, stderr)
