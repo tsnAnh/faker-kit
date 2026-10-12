@@ -2967,3 +2967,61 @@ def test_auto_merge_settings_are_validated_before_anything_is_dispatched(team_ki
     assert dispatch(team_kit_home, gh) == 1
     assert "auto_merge" in capsys.readouterr().err
     assert gh.issues == {}
+
+
+def second_verifier_gh(kit, **config):
+    gh = FakeGh(kit, **{"second_verifier_backend": "claude", "risk_paths_medium": ["src/"], **config})
+    gh.pr_files[7] = [{"filename": "src/app.py", "additions": 3, "deletions": 1, "status": "modified"}]
+    return gh
+
+
+def test_a_medium_risk_unit_gets_a_second_adversarial_verifier_before_it_is_ready(team_kit_home, kit, capsys):
+    gh = second_verifier_gh(kit)
+    n = verifying_unit(gh, team_kit_home)
+    first_key = record(team_kit_home, n)["key"]
+    verdict(gh, n, team_kit_home, at=NOW)
+    cloud = FakeCloud()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"], "not ready yet: a second verifier is looking"
+    assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"}
+    [(backend, _, command, workdir)] = cloud.started
+    second = record(team_kit_home, n)
+    assert backend == "claude" and second["first"] == "live-ui-verified" and second["key"] != first_key
+    assert "second, adversarial verification of a medium or high risk change" in command.prompt
+    assert command.prompt.index("Try to break it") < command.prompt.index(f"Sign the verdict with key {second['key']}")
+    assert gh.comments[(REPO, n)][-1]["body"].endswith("focus: second, adversarial\n")
+    verdict(gh, n, team_kit_home, verification="unit-test-verified", at=NOW + 30)
+    [notice] = tick(gh, capsys)
+    assert notice.startswith(f"team-kit notice: #{n} is ready for you to merge (checks passed, verified: live-ui-verified, "
+                             "second verifier: unit-test-verified, risk medium")
+    assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
+
+
+def test_a_low_risk_unit_needs_no_second_verifier(team_kit_home, kit, capsys):
+    gh = second_verifier_gh(kit, risk_paths_medium=[])
+    n = verifying_unit(gh, team_kit_home)
+    verdict(gh, n, team_kit_home, at=NOW)
+    cloud = FakeCloud()
+    [notice] = tick(gh, capsys, cloud=cloud)
+    assert notice.startswith(f"team-kit notice: #{n} is ready for you to merge (checks passed, verified: live-ui-verified, risk low")
+    assert cloud.started == []
+
+
+def test_a_second_verifier_that_fails_the_change_gates_it_and_the_first_key_cannot_answer_for_it(team_kit_home, kit, capsys):
+    gh = second_verifier_gh(kit)
+    n = verifying_unit(gh, team_kit_home)
+    first_key = record(team_kit_home, n)["key"]
+    verdict(gh, n, team_kit_home, at=NOW)
+    tick(gh, capsys, cloud=FakeCloud())
+    verdict(gh, n, team_kit_home, key=first_key, at=NOW + 20)  # signed with the first verifier's key
+    assert tick(gh, capsys) == ["[SILENT]"], "only the second verifier's key counts now"
+    verdict(gh, n, team_kit_home, verification="verifier-blocked", at=NOW + 30)
+    [notice] = tick(gh, capsys)
+    assert "the verifier reported verifier-blocked" in notice and "needs you" in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+
+
+@pytest.mark.parametrize("bad", [{"second_verifier_backend": "gemini"}, {"second_verifier_backend": "codex"}])
+def test_a_bad_second_verifier_setting_is_refused_before_anything_is_dispatched(team_kit_home, kit, capsys, bad):
+    gh = FakeGh(kit, **bad)
+    assert dispatch(team_kit_home, gh) == 1
+    assert "second_verifier_backend" in capsys.readouterr().err
