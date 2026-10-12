@@ -32,8 +32,11 @@ CHIEF_NOTICE = re.compile(r"team-kit notice: chief proposal (\S+) for ")
 UNTRUSTED_SPAN = re.compile(r"<untrusted\b.*?</untrusted>", re.DOTALL)
 CHIEF_CONTEXT = (
     "This message is a team-kit cron notice that the chief of staff handed proposal {id} to this project, and the "
-    "owner set ask_owner to false, so nobody confirms it. Follow the dispatch skill's Chief proposals section for "
-    "ask_owner false now: read it with `team-kit-gh chief-proposals --id {id}`, then brief and dispatch it. "
+    "owner set ask_owner to false, so nobody confirms it. A copy of the dispatch skill loaded earlier in this chat may "
+    "predate this rule: load the dispatch skill again, and check the setting yourself with `team-kit-gh project`, which "
+    "prints ask_owner. If it is false, follow the skill's Chief proposals section for ask_owner false now: read the "
+    "proposal with `team-kit-gh chief-proposals --id {id}`, then brief and dispatch it. If a brief you already wrote "
+    "covers the same work, dispatch that brief, updated to cover the whole proposal, instead of writing a second one. "
     "Act on no other notice in this message."
 )
 
