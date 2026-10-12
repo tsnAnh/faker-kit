@@ -108,6 +108,7 @@ from team_kit_contracts import (  # noqa: E402
     VERIFICATIONS,
     VERIFIER_BACKENDS,
     VERIFY_LAUNCHED_MARKER,
+    SECOND_VERIFIER_FOCUS,
     ContractError,
     launch_argv,
     parse_brief,
@@ -552,6 +553,9 @@ class Gh:
         triage = incidents.get("triage_backend", config["backend"])
         if triage not in VERIFIER_BACKENDS or (triage == "codex" and not config.get("codex_env")):
             raise Refused(".agents/dispatch.json incidents.triage_backend must be claude, codex (with codex_env), or none")
+        second = config.get("second_verifier_backend", "none")
+        if second not in VERIFIER_BACKENDS or (second == "codex" and not config.get("codex_env")):
+            raise Refused(".agents/dispatch.json second_verifier_backend must be claude, codex (with codex_env), or none")
         if config.get("auto_merge", "none") not in AUTO_MERGE:
             raise Refused(f".agents/dispatch.json auto_merge must be one of {', '.join(AUTO_MERGE)}")
         if config.get("auto_merge_method", "merge") not in MERGE_METHODS:
@@ -1308,19 +1312,23 @@ class Gh:
     def drop_verify_record(self, number: int) -> None:
         self.verify_record_path(number).unlink(missing_ok=True)
 
-    def start_verifier(self, issue: dict, pr_url: str, head: str | None, backend: str, config: dict, cloud: Cloud, checks: str = "passed") -> str | None:
-        """Hand the unit's slot from its coding agent to a verifier session that did not write the change."""
+    def start_verifier(self, issue: dict, pr_url: str, head: str | None, backend: str, config: dict, cloud: Cloud, checks: str = "passed",
+                       first: str | None = None) -> str | None:
+        """Hand the unit's slot from its coding agent to a verifier session that did not write the change. With first (the
+        first verifier's verification), this is the second, adversarial verifier of a medium or high risk unit."""
         number = int(issue["number"])
         key = secrets.token_hex(16)
         try:
-            command = verify_argv(backend, self.repo, number, pr_url, head or "", key, config.get("codex_env"))
+            command = verify_argv(backend, self.repo, number, pr_url, head or "", key, config.get("codex_env"),
+                                  SECOND_VERIFIER_FOCUS if first else None)
         except ContractError as err:
             return self.gate(issue, f"the verifier could not start: {err}")
         path = self.verify_record_path(number)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f".{path.name}.{os.getpid()}")
         tmp.touch(mode=0o600)
-        tmp.write_text(json.dumps({"pr": pr_url, "head": head, "key": key, "backend": backend, "started": self.now(), "checks": checks}))
+        tmp.write_text(json.dumps({"pr": pr_url, "head": head, "key": key, "backend": backend, "started": self.now(), "checks": checks,
+                                   **({"first": first} if first else {})}))
         tmp.replace(path)
         owner, name = self.repo.split("/")
         workdir = self.policy.home / "checkouts" / f"{owner}__{name}" / f"{number}-verify"
@@ -1335,7 +1343,8 @@ class Gh:
             return self.gate(issue, f"the verifier could not start: {why}")
         try:
             self.run(["issue", "comment", str(number), "-R", self.repo, "--body",
-                      f"{VERIFY_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\npr: {pr_url}\nhead: {head}\n"])
+                      f"{VERIFY_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\npr: {pr_url}\nhead: {head}\n"
+                      + ("focus: second, adversarial\n" if first else "")])
         except Exception:  # noqa: BLE001 - the verifier is running and tick tracks it from its record
             pass
         return None
@@ -1395,14 +1404,27 @@ class Gh:
             return self.gate(issue, f"checks failed on {pr_url} during verification")
         if pr["checks"] == "pending":
             return None
+        config = self.dispatch_config()
+        second = config.get("second_verifier_backend", "none")
+        if not record.get("first") and second != "none":
+            try:
+                level = self.risk(int(pr_url.rsplit("/", 1)[1]), verdict.verification, pr["checks"]).level
+            except Exception:  # noqa: BLE001 - a risk that cannot be scored gets the second look
+                level = None
+            if level != "low":
+                self.drop_verify_record(number)
+                if cloud is None:
+                    return self.gate(issue, "the second verifier could not start: no cloud runner")
+                return self.start_verifier(issue, pr_url, record["head"], second, config, cloud, pr["checks"], first=verdict.verification)
         self.drop_verify_record(number)
         self.relabel(number, add=REVIEW_LABEL, remove=(VERIFYING_LABEL,))
         checks = "checks passed" if pr["checks"] == "passed" else "no checks ran"
+        verified = f"{record['first']}, second verifier: {verdict.verification}" if record.get("first") else verdict.verification
         risk, scored = self.mark_risk(pr_url, verdict.verification, pr["checks"])
         merged, why = self.auto_merge(number, pr_url, record["head"], scored, pr["checks"])
         if merged:
-            return f"{NOTICE} #{number} merged automatically (low risk, {checks}, verified: {verdict.verification}, review clean): {pr_url}"
-        return f"{NOTICE} #{number} is ready for you to merge ({checks}, verified: {verdict.verification}{risk}{why}): {pr_url}"
+            return f"{NOTICE} #{number} merged automatically (low risk, {checks}, verified: {verified}, review clean): {pr_url}"
+        return f"{NOTICE} #{number} is ready for you to merge ({checks}, verified: {verified}{risk}{why}): {pr_url}"
 
     def auto_merge(self, number: int, pr_url: str, head: str, risk: Risk | None, checks: str) -> tuple[bool, str]:
         """Merge a verified unit when the repository opted in and every condition holds. Returns whether it

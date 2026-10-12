@@ -315,8 +315,16 @@ def verdict_signed(verdict: Verdict, key: str, head: str) -> bool:
     return hmac.compare_digest(verdict.sig.lower(), verdict_signature(key, verdict.verification, head.lower()))
 
 
-def verify_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key: str, env_id: str | None = None) -> CloudCommand:
-    """The command that starts a verifier session for one commit of one unit's pull request."""
+# A medium or high risk unit gets a second verifier with this focus, after a first one passed it.
+SECOND_VERIFIER_FOCUS = ("This is a second, adversarial verification of a medium or high risk change that a first verifier already passed. "
+                         "Try to break it: edge cases, failure and error paths, security, and behavior outside the Acceptance lines that "
+                         "the change could regress. Fail the verdict for any defect you prove.")
+
+
+def verify_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key: str, env_id: str | None = None,
+                focus: str | None = None) -> CloudCommand:
+    """The command that starts a verifier session for one commit of one unit's pull request. focus, when given, is a
+    fixed sentence that steers this verifier's angle; it goes before the signing instruction."""
     if not SHA.match(head or ""):
         raise ContractError("the pull request's head must be a full 40-character commit")
     if not re.fullmatch(r"[0-9a-f]{32,}", key or ""):
@@ -328,6 +336,8 @@ def verify_argv(backend: str, repo: str, issue: int, pr_url: str, head: str, key
     if not re.fullmatch(rf"https://github\.com/{re.escape(repo)}/pull/[0-9]+", pr_url, re.I):
         raise ContractError(f"{pr_url!r} is not a pull request in {repo}")
     prompt = VERIFY_PROMPTS[backend].format(repo=repo, issue=int(issue), pr=pr_url, head=head, key=key)
+    if focus:
+        prompt = prompt.replace(" Sign the verdict with key", f" {focus} Sign the verdict with key", 1)
     return cloud_argv(backend, prompt, 1, env_id, sensitive=(key,))
 
 
