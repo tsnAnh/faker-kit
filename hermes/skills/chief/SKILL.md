@@ -48,7 +48,7 @@ For each project, in order:
 1. Write the part with `write_file` to `~/.hermes/team-kit/drafts/<your bot name>/<project>-<short-name>.md`. A plain `.md` name starting with a letter or digit, directly in that folder, at most 20,000 bytes. Symlinks are refused. The guard shows the owner the text and asks them to approve the write; if they want changes, change it and ask again.
 2. Run `team-kit-chief digest --file ~/.hermes/team-kit/drafts/<your bot name>/<name>.md`. It prints the file's SHA-256. You have no other way to compute it, and you never type a hash you did not just get from `digest`.
 3. Run `team-kit-chief propose --project <project> --file ~/.hermes/team-kit/drafts/<your bot name>/<name>.md --sha256 <hash from step 2>`. The owner's approval covers exactly that file content: if the file changes, the hash no longer matches, the command refuses, and you must run `digest` and ask again. Never reuse an old hash.
-4. Relay `propose`'s `delivery` line. Normally the project bot's tick runs at once and its Bot Chat gets one `team-kit notice:` line within about a minute. Then tell the owner the one thing left: say "brief it" in that bot's Bot Chat. The project bot never acts on a proposal until the owner confirms there.
+4. Relay `propose`'s `delivery` line. Normally the project bot's tick runs at once and its Bot Chat gets one `team-kit notice:` line within about a minute. The line ends with what happens next: either the owner says "brief it" in that bot's Bot Chat, or, when the owner set `ask_owner` to false, the bot briefs and dispatches it by itself.
 
 What goes in each draft:
 
