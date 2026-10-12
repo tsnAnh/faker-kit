@@ -1,10 +1,13 @@
+import contextvars
+import sys
 import time
+import types
 from pathlib import Path
 
 import pytest
 import yaml
 from conftest import BOTS, GUARD_TEMPLATE, SHOP, guard_text
-from team_kit_guard import Guard, register
+from team_kit_guard import Guard, current_profile, register
 from team_kit_guard.policy import MIGRATE_V1, PolicyError, load_policy, parse_policy
 
 SAMPLE = GUARD_TEMPLATE
@@ -76,6 +79,20 @@ def test_a_profile_missing_from_bots_yaml_gets_nothing(profile):
         verdict = guard(profile).pre_tool_call(**call)
         assert verdict["action"] == "block"
         assert "not a team-kit bot in bots.yaml" in verdict["message"]
+
+
+def test_a_gateway_turn_routed_to_a_bot_is_judged_as_that_bot(monkeypatch):
+    # Hermes names a routed turn's profile in a ContextVar (hermes_constants' HERMES_HOME override);
+    # the gateway process itself runs as "default".
+    routed = contextvars.ContextVar("routed", default=None)
+    profiles = types.ModuleType("hermes_cli.profiles")
+    profiles.current_profile_name = lambda default=None: routed.get() or default
+    monkeypatch.setitem(sys.modules, "hermes_cli", types.ModuleType("hermes_cli"))
+    monkeypatch.setitem(sys.modules, "hermes_cli.profiles", profiles)
+    g = Guard(load=sample_policy, profile=current_profile)
+    assert "not a team-kit bot" in g.pre_tool_call(**terminal("team-kit-gh project"))["message"]
+    routed.set("meo-beo")
+    assert g.pre_tool_call(**terminal("team-kit-gh project")) is None
 
 
 def test_fails_closed_when_guard_yaml_is_missing(tmp_path):
