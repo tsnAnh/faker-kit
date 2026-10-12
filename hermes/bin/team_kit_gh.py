@@ -223,16 +223,26 @@ def reason(err: Exception) -> str:
     return text[:200]
 
 
-def json_pages(text: str) -> list:
-    """gh api --paginate prints each page's array one after another; join them."""
-    decoder, at, items = json.JSONDecoder(), 0, []
-    while at < len(text):
-        if text[at].isspace():
-            at += 1
-            continue
-        page, at = decoder.raw_decode(text, at)
-        items.extend(page if isinstance(page, list) else [page])
-    return items
+def pull_fields(data: dict, repo: str) -> dict:
+    """A REST pull request under the field names the CLI's JSON used, so callers keep one shape."""
+    head, base = data.get("head") or {}, data.get("base") or {}
+    head_repo = head.get("repo") or {}
+    base_name = str((base.get("repo") or {}).get("full_name") or repo).lower()
+    merged = data.get("merged_at")
+    return {
+        "number": data.get("number"),
+        "url": data.get("html_url"),
+        "state": "MERGED" if merged else str(data.get("state") or "").upper(),
+        "mergedAt": merged,
+        "headRefOid": head.get("sha"),
+        "headRefName": head.get("ref"),
+        "isCrossRepository": not head_repo or str(head_repo.get("full_name") or "").lower() != base_name,
+        "headRepository": {"name": head_repo.get("name")} if head_repo else None,
+        "headRepositoryOwner": {"login": (head_repo.get("owner") or {}).get("login")} if head_repo else None,
+        "author": {"login": (data.get("user") or {}).get("login")},
+        "body": data.get("body") or "",
+        "labels": data.get("labels") or [],
+    }
 
 
 def labels_of(issue: dict) -> set[str]:
@@ -259,15 +269,6 @@ def checks_state(rollup) -> str:  # noqa: ANN001
     if not states:
         return "none"
     return "pending" if "pending" in states else "passed"
-
-
-def in_flight(run: Runner, repo: str) -> int:
-    """Units holding a slot: a coding agent or a verifier is running for each."""
-    numbers: set[int] = set()
-    for label in (RUNNING_LABEL, VERIFYING_LABEL):
-        issues = json.loads(run(["issue", "list", "-R", repo, "--label", label, "--state", "open", "--json", "number", "--limit", "200"]))
-        numbers.update(int(i["number"]) for i in issues)
-    return len(numbers)
 
 
 # Each project bot's GitHub login sees only its own repository, so a bot cannot count another
@@ -349,7 +350,8 @@ class InFlight:
             yield
 
     def count_own(self) -> dict[str, int]:
-        counts = {repo: in_flight(self.run, repo) for repo in self.bot.repos}
+        gh = Gh(self.policy, self.bot, self.run, self.now)
+        counts = {gh.repo: gh.in_flight()}
         self.write(counts)
         return counts
 
@@ -510,6 +512,21 @@ class Gh:
     def api_json(self, path: str, conditional: bool = True):  # noqa: ANN201
         return json.loads(self.api_body(path, conditional))
 
+    def api_pages(self, path: str, params: dict[str, str] | None = None, key: str | None = None) -> list:
+        """Every item of a collection, all pages, read through api_page. `key` names the list inside an object response."""
+        items: list = []
+        for page in range(1, ISSUE_PAGE_LIMIT + 1):
+            query = urllib.parse.urlencode({**(params or {}), "per_page": str(ISSUE_PAGE_SIZE), "page": str(page)})
+            body, more = self.api_page(f"{path}?{query}")
+            data = json.loads(body)
+            rows = data.get(key) if key and isinstance(data, dict) else data
+            if not isinstance(rows, list):
+                raise Refused(f"gh api returned no list for {path}")
+            items.extend(rows)
+            if not more or not rows:
+                return items
+        raise Refused(f"more than {ISSUE_PAGE_LIMIT * ISSUE_PAGE_SIZE} items at {path}")
+
     def file(self, path: str) -> str:
         if not REPO_PATH.match(path):
             raise Refused(f"{path!r} is not a plain path inside the repository")
@@ -612,22 +629,11 @@ class Gh:
     def issue(self, number: int, repo: str | None = None) -> dict:
         return self.api_json(f"repos/{repo or self.repo}/issues/{int(number)}")
 
-    def issue_list(self, label: str, state: str) -> list[dict]:
-        """Every issue with the label, all pages of it: GitHub returns at most 100 a page."""
-        issues: list[dict] = []
-        for page in range(1, ISSUE_PAGE_LIMIT + 1):
-            query = urllib.parse.urlencode({"state": state, "labels": label, "per_page": str(ISSUE_PAGE_SIZE), "page": str(page)})
-            body, more = self.api_page(f"repos/{self.repo}/issues?{query}")
-            items = json.loads(body)
-            if not isinstance(items, list):
-                raise Refused(f"gh api returned no issue list for {label}")
-            issues.extend(items)
-            if not more or not items:
-                break
-        else:
-            raise Refused(f"more than {ISSUE_PAGE_LIMIT * ISSUE_PAGE_SIZE} {label} issues in {self.repo}")
+    def issue_list(self, label: str, state: str, since: str | None = None) -> list[dict]:
+        """Every issue (never a pull request) with the label, all pages of it. `since` keeps issues updated at or after that time."""
+        params = {"state": state, "labels": label, **({"since": since} if since else {})}
         out = []
-        for issue in issues:
+        for issue in self.api_pages(f"repos/{self.repo}/issues", params):
             if "pull_request" in issue:
                 continue
             out.append({
@@ -642,20 +648,17 @@ class Gh:
             })
         return sorted(out, key=lambda i: int(i["number"]))
 
-    def units(self, state: str = "open", search: str | None = None) -> list[dict]:
-        if not search:
-            return self.issue_list(TASK_LABEL, state)
-        args = ["issue", "list", "-R", self.repo, "--label", TASK_LABEL, "--state", state,
-                "--json", "number,title,labels,createdAt,closedAt,stateReason", "--limit", "200"]
-        if search:
-            args += ["--search", search]
-        return sorted(json.loads(self.run(args)), key=lambda i: int(i["number"]))
+    def in_flight(self) -> int:
+        """Units holding a slot: a coding agent or a verifier is running for each. A unit with both labels counts once."""
+        return len({int(i["number"]) for label in (RUNNING_LABEL, VERIFYING_LABEL) for i in self.issue_list(label, "open")})
+
+    def units(self, state: str = "open", since: str | None = None) -> list[dict]:
+        return self.issue_list(TASK_LABEL, state, since)
 
     def proposal_candidates(self) -> list[dict]:
         """Every open issue labelled agent:proposal, all pages. An issue that is also an agent-task is a unit, not a proposal."""
-        pages = self.run(["api", "--paginate", f"repos/{self.repo}/issues?labels={PROPOSAL_LABEL.replace(':', '%3A')}&state=open&per_page=100"])
         found = []
-        for issue in json_pages(pages):
+        for issue in self.api_pages(f"repos/{self.repo}/issues", {"labels": PROPOSAL_LABEL, "state": "open"}):
             if not isinstance(issue, dict) or "pull_request" in issue or issue.get("state") != "open":
                 continue
             if TASK_LABEL in labels_of(issue) or PROPOSAL_LABEL not in labels_of(issue):
@@ -672,7 +675,7 @@ class Gh:
         if not LOGIN.match(login):
             return False
         try:
-            data = json.loads(self.run(["api", f"repos/{self.repo}/collaborators/{login}/permission"]))
+            data = self.api_json(f"repos/{self.repo}/collaborators/{login}/permission")
         except Refused:
             return None
         except ValueError:
@@ -797,7 +800,7 @@ class Gh:
         target.replace(path)
 
     def comments(self, issue: int) -> list[dict]:
-        return json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/issues/{issue}/comments"]))
+        return self.api_pages(f"repos/{self.repo}/issues/{int(issue)}/comments")
 
     def trusted(self, comment: dict) -> bool:
         return ((comment.get("user") or {}).get("login") or "").lower() in self.policy.trusted_authors
@@ -829,11 +832,26 @@ class Gh:
             "at": reports[-1].get("created_at"),
         }
 
+    def pull(self, number: int) -> dict:
+        """A pull request as the CLI's JSON named its fields, read from the REST pulls endpoint."""
+        data = self.api_json(f"repos/{self.repo}/pulls/{int(number)}")
+        if not isinstance(data, dict):
+            raise Refused(f"gh api returned no pull request for #{int(number)}")
+        return pull_fields(data, self.repo)
+
+    def check_rollup(self, head: str) -> list[dict]:
+        """The check runs and legacy commit statuses on a commit, in the shape checks_state reads."""
+        runs = self.api_pages(f"repos/{self.repo}/commits/{head}/check-runs", key="check_runs")
+        statuses = self.api_pages(f"repos/{self.repo}/commits/{head}/status", key="statuses")
+        return [{"status": r.get("status"), "conclusion": r.get("conclusion")} for r in runs if isinstance(r, dict)] \
+            + [{"state": s.get("state")} for s in statuses if isinstance(s, dict)]
+
     def pr_state(self, pr: int) -> dict:
-        data = json.loads(self.run(["pr", "view", str(pr), "-R", self.repo, "--json", "state,mergedAt,headRefOid,statusCheckRollup"]))
+        data = self.pull(pr)
         head = str(data.get("headRefOid") or "")
+        checks = checks_state(self.check_rollup(head)) if SHA.match(head) else "none"
         return {"pr": pr, "state": str(data.get("state", "")).lower(), "merged": bool(data.get("mergedAt")),
-                "head": head if SHA.match(head) else None, "checks": checks_state(data.get("statusCheckRollup"))}
+                "head": head if SHA.match(head) else None, "checks": checks}
 
     def unit_branch(self, comments: list[dict]) -> str | None:
         """The branch the unit's agent works on: from its latest trusted report, else its latest launch."""
@@ -860,7 +878,6 @@ class Gh:
         or be opened by a trusted login: anyone can paste the marker into a pull request, and a
         match starts a keyed reviewer. No search is used: its index lags and it stops at 20."""
         comments = comments if comments is not None else self.comments(number)
-        fields = "number,url,state,headRefOid,headRefName,isCrossRepository,headRepository,headRepositoryOwner,author,body"
         branch = self.unit_branch(comments)
         reports = [c for c in comments if (c.get("body") or "").lstrip().startswith(REPORT_MARKER) and self.trusted(c)]
         reported = None
@@ -872,10 +889,10 @@ class Gh:
         candidates: list[dict] = []
         found = re.fullmatch(rf"https://github\.com/{re.escape(self.repo)}/pull/([0-9]+)", reported or "", re.I)
         if found:
-            candidates = [json.loads(self.run(["pr", "view", found.group(1), "-R", self.repo, "--json", fields]))]
+            candidates = [self.pull(int(found.group(1)))]
         elif branch:
-            candidates = json.loads(self.run(["pr", "list", "-R", self.repo, "--head", branch, "--state", "open",
-                                              "--json", fields, "--limit", "100"]))
+            listed = self.api_pages(f"repos/{self.repo}/pulls", {"head": f"{self.repo.split('/')[0]}:{branch}", "state": "open"})
+            candidates = [pull_fields(item, self.repo) for item in listed if isinstance(item, dict)]
         trusted = set(self.policy.trusted_authors) | {str(d).lower() for d in self.dispatch_config().get("trusted_dispatchers") or []}
         accepted = []
         for pr in candidates:
@@ -898,15 +915,28 @@ class Gh:
         return sorted(accepted, key=lambda item: item["pr"])[0] if accepted else None  # type: ignore[arg-type, return-value]  # team-kit baseline
 
     def read(self, issue: int | None, pr: int | None) -> str:
-        kind, number = ("pr", pr) if pr else ("issue", issue)
-        return self.run([kind, "view", str(number), "-R", self.repo, "--comments"])
+        """An issue or pull request and its comments (and a pull request's reviews) as plain text."""
+        number = int(pr or issue or 0)
+        data = self.api_json(f"repos/{self.repo}/{'pulls' if pr else 'issues'}/{number}")
+        if not isinstance(data, dict):
+            raise Refused(f"gh api returned no {'pull request' if pr else 'issue'} for #{number}")
+        entries = self.comments(number) + (self.api_pages(f"repos/{self.repo}/pulls/{number}/reviews") if pr else [])
+
+        def login(item: dict) -> str:
+            return str((item.get("user") or {}).get("login") or "ghost")
+
+        lines = [f"title:\t{data.get('title') or ''}", f"state:\t{str(data.get('state') or '').upper()}", f"author:\t{login(data)}", "--",
+                 str(data.get("body") or "")]
+        for entry in sorted((e for e in entries if isinstance(e, dict)), key=lambda e: str(e.get("created_at") or e.get("submitted_at") or "")):
+            lines += ["--", f"{login(entry)} ({entry.get('created_at') or entry.get('submitted_at') or ''}):", str(entry.get("body") or "")]
+        return "\n".join(lines) + "\n"
 
     def commits_for_path(self, path: str, per_page: int = 10, since: str | None = None) -> list[dict]:
         params = {"path": path, "per_page": str(per_page)}
         if since:
             params["since"] = since
         query = urllib.parse.urlencode(params, safe="/:")
-        return json.loads(self.run(["api", f"repos/{self.repo}/commits?{query}"]))
+        return self.api_json(f"repos/{self.repo}/commits?{query}")
 
     def chief_proposals(self, only: str | None = None) -> list[str]:
         active = active_proposals(self.policy.home, self.bot.name, self.now())
@@ -1236,7 +1266,7 @@ class Gh:
 
     def risk(self, pr: int, verification: str | None, checks: str = "passed") -> Risk:
         config = self.dispatch_config()
-        files = json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/pulls/{int(pr)}/files?per_page=100"]))
+        files = self.api_pages(f"repos/{self.repo}/pulls/{int(pr)}/files")
         paths = [str(f.get("filename") or "") for f in files]
         candidates: list[str] = []
         codeowners_unowned: list[str] = []
@@ -1285,7 +1315,7 @@ class Gh:
         pr = int(pr_url.rsplit("/", 1)[1])
         try:
             found = self.risk(pr, verification, checks)
-            current = {label["name"] for label in json.loads(self.run(["pr", "view", str(pr), "-R", self.repo, "--json", "labels"])).get("labels") or []}
+            current = {label["name"] for label in self.pull(pr).get("labels") or []}
             args = ["pr", "edit", str(pr), "-R", self.repo, "--add-label", found.label]
             for stale in sorted(current & set(RISK_LABELS) - {found.label}):
                 args += ["--remove-label", stale]
@@ -1672,8 +1702,7 @@ class Security:
 
     def tracking_issue(self, branch: str) -> int:
         gh = self.gh
-        found = json.loads(gh.run(["issue", "list", "-R", gh.repo, "--label", SECURITY_LABEL, "--state", "open",
-                                   "--json", "number,author", "--limit", "20"]))
+        found = gh.issue_list(SECURITY_LABEL, "open")
         own = sorted(int(i["number"]) for i in found if str((i.get("author") or {}).get("login") or "").lower() in gh.policy.trusted_authors)
         if own:
             return own[0]
@@ -1696,9 +1725,8 @@ class Security:
         record = self.record()
         if record.get("running"):
             return {"state": "running", "range": f"{record['running'].get('base') or 'none'}..{record['running']['head']}"}
-        repo = json.loads(gh.run(["api", f"repos/{gh.repo}"]))
-        branch = str(repo.get("default_branch") or "")
-        head = str(json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{branch}"])).get("sha") or "")
+        branch = str(gh.api_json(f"repos/{gh.repo}").get("default_branch") or "")
+        head = str(gh.api_json(f"repos/{gh.repo}/commits/{branch}").get("sha") or "")
         if not SHA.match(head):
             raise Refused(f"cannot read the head of {branch}")
         base = record.get("reviewed")
@@ -1830,7 +1858,7 @@ class Incidents:
 
     def branch_head(self, branch: str) -> str:
         gh = self.gh
-        head = str(json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{branch}"])).get("sha") or "")
+        head = str(gh.api_json(f"repos/{gh.repo}/commits/{branch}").get("sha") or "")
         if not SHA.match(head):
             raise Refused(f"cannot read the head of {branch}")
         return head
@@ -1839,7 +1867,7 @@ class Incidents:
         """The default branch's head, whether its checks fail (None while any runs), and which failed."""
         gh = self.gh
         head = self.branch_head(branch)
-        runs = json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{head}/check-runs?per_page=100"])).get("check_runs") or []
+        runs = gh.api_pages(f"repos/{gh.repo}/commits/{head}/check-runs", key="check_runs")
         failed = sorted({str(r.get("name") or "check") for r in runs if str(r.get("conclusion") or "").upper() in FAILED_CHECKS})
         if failed:
             return head, True, ", ".join(failed)
@@ -1865,7 +1893,7 @@ class Incidents:
         gh = self.gh
         config = gh.dispatch_config()
         settings = config.get("incidents", {})
-        branch = str(json.loads(gh.run(["api", f"repos/{gh.repo}"])).get("default_branch") or "")
+        branch = str(gh.api_json(f"repos/{gh.repo}").get("default_branch") or "")
         notices: list[str] = []
         observed: list[tuple[str, str, bool | None, int]] = []  # key, title, failing, streak needed
         examples: dict[str, tuple[str, ...]] = {}  # third-party alert text, for the issue body only
@@ -2027,7 +2055,7 @@ class Incidents:
         if diagnosis.confidence != "high" or not diagnosis.suspect or not SHA.match(diagnosis.suspect):
             return None
         gh = self.gh
-        commit = json.loads(gh.run(["api", f"repos/{gh.repo}/commits/{diagnosis.suspect}"]))
+        commit = gh.api_json(f"repos/{gh.repo}/commits/{diagnosis.suspect}")
         if str(commit.get("sha") or "") != diagnosis.suspect or not isinstance(commit.get("parents"), list):
             raise Refused(f"GitHub returned no commit {diagnosis.suspect}")
         if len(commit["parents"]) > 1:
@@ -2267,7 +2295,7 @@ class Project:
                 waiting.append(f"{ref} (merge)")
             else:
                 flight.append(f"{ref} (queued)")
-        for issue in self.gh.units("closed", search=f"closed:>={since_iso}"):
+        for issue in self.gh.units("closed", since=since_iso):
             if (timestamp(issue.get("closedAt")) or 0) >= since and str(issue.get("stateReason") or "").upper() in ("", "COMPLETED"):
                 done.append(f"#{issue['number']} {issue['title']}")
         marker.parent.mkdir(parents=True, exist_ok=True)

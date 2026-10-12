@@ -2,11 +2,15 @@ import json
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
+import team_kit_admin
 import yaml
 from conftest import FAKE_CLAUDE, fill_guard, gh_calls, hermes_calls, install
+from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, InFlight
+from team_kit_guard.policy import load_policy
 
 SHOP = "acme/shop"
 LABELS = ["agent-task", "agent:proposal", "agent:running", "agent:verifying", "agent:review", "agent:needs-human", "agent:security", "agent:incident", "risk:low", "risk:medium", "risk:high", "agent:andon"]  # noqa: E501
@@ -613,3 +617,56 @@ def test_claude_subscription_refuses_before_changing_anything(ready, cli, why):
     assert code == 1 and why in err
     assert ((root / "team-kit" / "bots.yaml").read_text(), labels(root), config(root, "meo-beo"), len(hermes_calls(root))) == before
     assert not (root / "profiles" / "sep-crm").exists()
+
+
+def in_process(ready, monkeypatch, *argv, now=None, profile="ong-xay"):
+    """team-kit-admin's main in this process against the installed machine, so a test supplies the clock."""
+    root, env = ready
+    for key, value in {**env, "TEAM_KIT_HOME": str(root / "team-kit"), "HERMES_HOME": str(root / "profiles" / profile)}.items():
+        monkeypatch.setenv(key, value)
+    return team_kit_admin.main(list(argv), who=profile, **({} if now is None else {"now": now}))
+
+
+def test_andon_raise_stamps_the_cord_with_the_supplied_clock(ready, monkeypatch, capsys):
+    root, _ = ready
+    add_shop(ready)
+    assert in_process(ready, monkeypatch, "andon", "raise", "cloud", "bill", now=lambda: 1234.5) == 0
+    assert json.loads(capsys.readouterr().out)["stopped"] is True
+    assert json.loads((root / "team-kit" / "andon" / "_machine.json").read_text())["at"] == 1234.5
+
+
+def test_status_stamps_the_in_flight_count_with_the_supplied_clock(ready, monkeypatch, capsys):
+    root, _ = ready
+    add_shop(ready)
+    assert in_process(ready, monkeypatch, "status", now=lambda: 4242.0) == 0
+    capsys.readouterr()
+    assert json.loads((root / "team-kit" / "in-flight" / "meo-beo.json").read_text()) == {"at": 4242.0, "repos": {SHOP: 0}}
+
+
+def test_without_a_supplied_clock_both_stamps_are_wall_time(ready, monkeypatch, capsys):
+    root, _ = ready
+    add_shop(ready)
+    before = time.time()
+    assert in_process(ready, monkeypatch, "andon", "raise", "stop") == 0
+    assert in_process(ready, monkeypatch, "status") == 0
+    after = time.time()
+    capsys.readouterr()
+    cord = json.loads((root / "team-kit" / "andon" / "_machine.json").read_text())["at"]
+    counted = json.loads((root / "team-kit" / "in-flight" / "meo-beo.json").read_text())["at"]
+    assert before <= cord <= after and before <= counted <= after
+
+
+def test_an_admin_count_is_fresh_for_the_other_bots_until_a_day_after_the_supplied_clock(team_kit_home):
+    stamped = 1_800_000_000.0
+    team_kit_admin.write_in_flight(team_kit_home, "sep-crm", {"acme/crm": 2}, lambda: stamped)
+    assert json.loads((team_kit_home / "in-flight" / "sep-crm.json").read_text()) == {"at": stamped, "repos": {"acme/crm": 2}}
+    policy = load_policy()
+    assert InFlight(policy, policy.bot("meo-beo"), lambda *_: "", lambda: stamped + IN_FLIGHT_FRESH_SECONDS - 1).others() == 2
+    assert InFlight(policy, policy.bot("meo-beo"), lambda *_: "", lambda: stamped + IN_FLIGHT_FRESH_SECONDS + 1).others() == 0
+
+
+def test_write_in_flight_called_without_a_clock_stamps_wall_time(team_kit_home):
+    before = time.time()
+    team_kit_admin.write_in_flight(team_kit_home, "sep-crm", {"acme/crm": 1})
+    stamped = json.loads((team_kit_home / "in-flight" / "sep-crm.json").read_text())["at"]
+    assert before <= stamped <= time.time()

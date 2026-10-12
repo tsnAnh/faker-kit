@@ -120,7 +120,8 @@ def run_gh(args: list[str], input: str | None = None) -> str:
 
 
 class Admin:
-    def __init__(self, run: Runner = run_gh, cloud: Cloud | None = None, home: Path | None = None):  # noqa: ANN204
+    def __init__(self, run: Runner = run_gh, cloud: Cloud | None = None, home: Path | None = None, now: Callable[[], float] = time.time):  # noqa: ANN204
+        self.now = now
         self.home = home or team_kit_home()
         self.root = self.home.parent
         self.kit = self.home / "kit"
@@ -511,7 +512,7 @@ class Admin:
         if vendored != commit:
             found = f"has the kit at {vendored[:12]}" if vendored else "has no vendored kit"
             raise Refused(f"{repo} {default} {found}, not {commit[:12]}; run team-kit-admin vendor --project {project} and merge its pull request first")
-        cord = Andon(self.home).machine()
+        cord = Andon(self.home, self.now).machine()
         if cord:
             raise Refused(f"{cord.describe()}; clear it before starting a setup session")
         prompt = bootstrap_prompt(repo, project, backend, commit, sorted(policy.trusted_authors), codex_env)
@@ -550,18 +551,18 @@ class Admin:
     # andon -----------------------------------------------------------------------------------------
 
     def andon_show(self) -> dict:
-        andon, policy = Andon(self.home), self.policy()
+        andon, policy = Andon(self.home, self.now), self.policy()
         machine = andon.read(MACHINE)
         projects = {name: andon.project(name).reason for name, bot in sorted(policy.bots.items()) if bot.role == "project" and andon.project(name)}  # type: ignore[union-attr]  # team-kit baseline
         return {"machine": None if machine is None else {k: machine.get(k) for k in ("reason", "by", "issues")}, "projects": projects}
 
     def andon_raise(self, words: list[str], who: str | None) -> dict:
         why = clean_reason(words)
-        andon, policy = Andon(self.home), self.policy()
+        andon, policy = Andon(self.home, self.now), self.policy()
         if andon.machine():
             raise Refused(f"{andon.machine().describe()}; clear it before pulling it again")  # type: ignore[union-attr]  # team-kit baseline
         # Write the cord first: nothing new starts from here on, whatever GitHub does.
-        record = {"reason": why, "by": who or "the owner", "at": time.time(), "issues": {}}
+        record = {"reason": why, "by": who or "the owner", "at": self.now(), "issues": {}}
         andon.write(MACHINE, record)
         failed = {}
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
@@ -580,7 +581,7 @@ class Admin:
         return out
 
     def andon_clear(self) -> dict:
-        andon = Andon(self.home)
+        andon = Andon(self.home, self.now)
         record = andon.read(MACHINE)
         if record is None:
             raise Refused("the machine's andon cord is not pulled")
@@ -619,7 +620,7 @@ class Admin:
                 if isinstance(item["repo"].get("running"), int):  # type: ignore[attr-defined]  # team-kit baseline
                     # This login sees every project, so it refreshes each project bot's count for the
                     # machine-wide limit, even for a bot whose jobs are paused.
-                    write_in_flight(self.home, bot.name, {bot.repo: item["repo"]["running"]})  # type: ignore[dict-item, index]  # team-kit baseline
+                    write_in_flight(self.home, bot.name, {bot.repo: item["repo"]["running"]}, self.now)  # type: ignore[dict-item, index]  # team-kit baseline
             out["bots"].append(item)  # type: ignore[attr-defined]  # team-kit baseline
         return out
 
@@ -651,7 +652,7 @@ class Admin:
         return {"synced": done}
 
 
-def write_in_flight(home: Path, bot: str, counts: dict[str, int]) -> None:
+def write_in_flight(home: Path, bot: str, counts: dict[str, int], now: Callable[[], float] = time.time) -> None:
     """Under the same lock team-kit-gh launch holds, so this never overwrites a launch's count."""
     directory = home / "in-flight"
     directory.mkdir(parents=True, exist_ok=True)
@@ -659,7 +660,7 @@ def write_in_flight(home: Path, bot: str, counts: dict[str, int]) -> None:
         fcntl.flock(handle, fcntl.LOCK_EX)
         target = directory / f"{bot}.json"
         tmp = target.with_name(f".{target.name}.{os.getpid()}")
-        tmp.write_text(json.dumps({"at": time.time(), "repos": counts}))
+        tmp.write_text(json.dumps({"at": now(), "repos": counts}))
         tmp.replace(target)
 
 
@@ -764,9 +765,10 @@ def check_caller(admin: Admin, command: str, who: str | None) -> None:
         raise Refused(f"{command} runs only from hermes/install.sh")
 
 
-def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | None = None, who: str | None = ...) -> int:  # type: ignore[assignment]  # team-kit baseline
+def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | None = None, who: str | None = ...,  # type: ignore[assignment]  # team-kit baseline
+         now: Callable[[], float] = time.time) -> int:
     args = parser().parse_args(argv)
-    admin = Admin(run=run, cloud=cloud)
+    admin = Admin(run=run, cloud=cloud, now=now)
     who = caller() if who is ... else who  # type: ignore[redundant-expr]  # team-kit baseline
     try:
         check_caller(admin, args.command, who)

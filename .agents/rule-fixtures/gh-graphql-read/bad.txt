@@ -1,0 +1,14 @@
+# Every form the rule must catch. Each line group is one prohibited GraphQL-backed read.
+count = json.loads(run(["issue", "list", "-R", repo, "--label", label, "--json", "number"]))
+view = json.loads(self.run(['pr', 'view', str(pr), '-R', self.repo, '--json', 'labels']))
+spaced = self.run( [ "pr" ,
+                     "list" , "-R", self.repo ] )
+split = self.run([
+    "issue",
+    "view", str(number),
+])
+mixed = self.run(["issue", 'status'])
+prefixed = subprocess.run(["gh", "pr", "checks", str(pr)])
+spread = run([*base, "pr", "status"])
+shell = subprocess.run("gh issue list --label x", shell=True)
+shell_pr = os.system('gh   pr   view 7')
