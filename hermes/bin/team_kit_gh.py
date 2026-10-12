@@ -145,6 +145,10 @@ LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?\Z")
 RUNNING_LABEL = "agent:running"
 VERIFYING_LABEL = "agent:verifying"
 REVIEW_LABEL = "agent:review"
+# auto_merge in .agents/dispatch.json: "low" merges a unit whose risk is low and whose verifier, review, and
+# checks are all clean; anything else waits for the owner. "none", the default, leaves every merge to the owner.
+AUTO_MERGE = ("none", "low")
+MERGE_METHODS = ("merge", "squash", "rebase")
 HUMAN_LABEL = "agent:needs-human"
 SECURITY_LABEL = "agent:security"
 INCIDENT_LABEL = "agent:incident"
@@ -546,6 +550,10 @@ class Gh:
         triage = incidents.get("triage_backend", config["backend"])
         if triage not in VERIFIER_BACKENDS or (triage == "codex" and not config.get("codex_env")):
             raise Refused(".agents/dispatch.json incidents.triage_backend must be claude, codex (with codex_env), or none")
+        if config.get("auto_merge", "none") not in AUTO_MERGE:
+            raise Refused(f".agents/dispatch.json auto_merge must be one of {', '.join(AUTO_MERGE)}")
+        if config.get("auto_merge_method", "merge") not in MERGE_METHODS:
+            raise Refused(f".agents/dispatch.json auto_merge_method must be one of {', '.join(MERGE_METHODS)}")
         for key in ("risk_paths_high", "risk_paths_medium"):
             extra = config.get(key, [])
             if not isinstance(extra, list) or not all(isinstance(p, str) and p for p in extra):
@@ -1135,7 +1143,7 @@ class Gh:
         verifier = config.get("verifier_backend", config["backend"])
         if verifier == "none" or cloud is None:
             self.relabel(number, add=REVIEW_LABEL, remove=(RUNNING_LABEL,))
-            risk = self.mark_risk(report["pr"], None, pr["checks"])
+            risk, _ = self.mark_risk(report["pr"], None, pr["checks"])
             return f"{NOTICE} #{number} is ready for you to merge ({checks}, not independently verified{risk}): {report['pr']}"
         if self.cord():
             return None  # the unit keeps its slot; its verifier starts once the cord is cleared
@@ -1190,8 +1198,9 @@ class Gh:
         exclude = set(self.policy.trusted_authors) | {str(d).lower() for d in config.get("trusted_dispatchers") or []}
         return Risk(found.level, found.reasons, pick_reviewers(candidates, exclude))
 
-    def mark_risk(self, pr_url: str, verification: str | None, checks: str = "passed") -> str:
-        """Label the pull request with its risk and comment the reasons. Returns the notice's words for it."""
+    def mark_risk(self, pr_url: str, verification: str | None, checks: str = "passed") -> tuple[str, Risk | None]:
+        """Label the pull request with its risk and comment the reasons. Returns the notice's words for it, and the
+        risk, or None when it could not be scored."""
         pr = int(pr_url.rsplit("/", 1)[1])
         try:
             found = self.risk(pr, verification, checks)
@@ -1202,9 +1211,9 @@ class Gh:
             self.run(args)
             self.run(["pr", "comment", str(pr), "-R", self.repo, "--body", found.comment()])
         except Exception:  # noqa: BLE001 - a missing score never holds a unit back from the owner
-            return ""
+            return "", None
         reviewers = ", ".join(f"@{r}" for r in found.reviewers)
-        return f", {found.summary()}" + (f", suggested reviewers {reviewers}" if reviewers else "")
+        return f", {found.summary()}" + (f", suggested reviewers {reviewers}" if reviewers else ""), found
 
     # Verification -------------------------------------------------------------------------------
     # Each verifier launch is recorded under policy.home/verify/<bot>/<issue>.json: the commit it
@@ -1314,8 +1323,32 @@ class Gh:
         self.drop_verify_record(number)
         self.relabel(number, add=REVIEW_LABEL, remove=(VERIFYING_LABEL,))
         checks = "checks passed" if pr["checks"] == "passed" else "no checks ran"
-        risk = self.mark_risk(pr_url, verdict.verification, pr["checks"])
-        return f"{NOTICE} #{number} is ready for you to merge ({checks}, verified: {verdict.verification}{risk}): {pr_url}"
+        risk, scored = self.mark_risk(pr_url, verdict.verification, pr["checks"])
+        merged, why = self.auto_merge(number, pr_url, record["head"], scored, pr["checks"])
+        if merged:
+            return f"{NOTICE} #{number} merged automatically (low risk, {checks}, verified: {verdict.verification}, review clean): {pr_url}"
+        return f"{NOTICE} #{number} is ready for you to merge ({checks}, verified: {verdict.verification}{risk}{why}): {pr_url}"
+
+    def auto_merge(self, number: int, pr_url: str, head: str, risk: Risk | None, checks: str) -> tuple[bool, str]:
+        """Merge a verified unit when the repository opted in and every condition holds. Returns whether it
+        merged, and the notice's words for why not when an attempt failed. Any doubt leaves it to the owner."""
+        config = self.dispatch_config()
+        if config.get("auto_merge", "none") != "low":
+            return False, ""
+        if risk is None or risk.level != "low" or checks != "passed" or self.cord():
+            return False, ""
+        review = Review(self).record(number) or {}
+        counts = review.get("counts") or {}
+        if not (review.get("done") and review.get("pr") == pr_url and review.get("head") == head
+                and int(counts.get("high", 1)) == 0 and int(counts.get("medium", 1)) == 0):
+            return False, ""
+        method = config.get("auto_merge_method", "merge")
+        try:
+            # --match-head-commit makes GitHub refuse if the pull request moved since it was verified.
+            self.run(["pr", "merge", pr_url.rsplit("/", 1)[1], "-R", self.repo, f"--{method}", "--match-head-commit", head])
+        except Refused as err:
+            return False, f", auto-merge failed: {str(err)[:160]}"
+        return True, ""
 
     def verify(self, number: int, local_commit: str, cloud: Cloud) -> dict:
         """Start a new verifier on a unit's current pull request head, without redoing the coding work."""

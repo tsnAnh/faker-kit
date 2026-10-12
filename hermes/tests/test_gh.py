@@ -4,6 +4,7 @@ import hashlib
 import io
 import hashlib
 import json
+import re
 import os
 import subprocess
 import sys
@@ -44,6 +45,7 @@ class FakeGh:
         self.runs = {}
         self.permissions, self.fail_permissions = {}, False
         self.parents = {}  # commit sha -> its parents' shas, for repos/<repo>/commits/<sha>
+        self.merges, self.merge_error = [], None
 
     def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small", association="NONE", pull_request=False):
         self.next += 1
@@ -214,6 +216,20 @@ class FakeGh:
             return ""
         if args[:2] == ["pr", "comment"]:
             self.pr_comments.setdefault(int(args[2]), []).append(args[args.index("--body") + 1])
+            return ""
+        if args[:2] == ["pr", "merge"]:
+            # Like GitHub: --match-head-commit refuses a moved head, and a merge closes the issue its body Closes.
+            number, repo = int(args[2]), args[args.index("-R") + 1]
+            pull = self.prs[(repo, number)]
+            self.merges.append(args)
+            if self.merge_error:
+                raise Refused(self.merge_error)
+            if "--match-head-commit" in args and args[args.index("--match-head-commit") + 1] != pull["headRefOid"]:
+                raise Refused("gh pr merge failed: Head branch was modified. Review and try the merge again.")
+            pull["state"], pull["mergedAt"] = "MERGED", "2026-10-12T00:00:00Z"
+            closes = re.search(r"Closes #(\d+)", pull.get("body") or "")
+            if closes and (repo, int(closes.group(1))) in self.issues:
+                self.issues[(repo, int(closes.group(1)))]["state"] = "closed"
             return ""
         if args[:2] == ["issue", "view"] or args[:2] == ["pr", "view"]:
             return "body and comments"
@@ -2825,4 +2841,62 @@ def test_upstream_refuses_a_source_file_it_cannot_trust(team_kit_home, kit, caps
     gh = upstream_gh(kit, source=source)
     assert run(gh, "upstream") == 1
     assert "upstream/source.json" in capsys.readouterr().err
+    assert gh.issues == {}
+
+
+def verified_clean_unit(gh, team_kit_home, capsys, high=0, medium=0, review=True):
+    """A unit whose review (when asked) and verifier both answered through tick, ready for the last tick."""
+    n, cloud = reviewing_unit(gh, team_kit_home, capsys)
+    if review:
+        review_result(gh, n, team_kit_home, high=high, medium=medium)
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/7")
+    tick(gh, capsys, cloud=cloud)
+    assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"}
+    verdict(gh, n, team_kit_home, at=NOW)
+    return n
+
+
+def test_a_clean_low_risk_unit_merges_itself_when_the_repository_opts_in(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude", auto_merge="low")
+    n = verified_clean_unit(gh, team_kit_home, capsys)
+    assert tick(gh, capsys) == [f"team-kit notice: #{n} merged automatically (low risk, checks passed, verified: live-ui-verified, "
+                                f"review clean): https://github.com/{REPO}/pull/7"]
+    assert gh.merges == [["pr", "merge", "7", "-R", REPO, "--merge", "--match-head-commit", HEAD]]
+    assert gh.prs[(REPO, 7)]["state"] == "MERGED" and gh.issues[(REPO, n)]["state"] == "closed"
+
+
+@pytest.mark.parametrize(("config", "setup", "why"), [
+    ({}, None, "auto_merge is off by default"),
+    ({"auto_merge": "low"}, "medium-finding", "a medium review finding"),
+    ({"auto_merge": "low", "review_backend": "none"}, "no-review", "no review of this head"),
+    ({"auto_merge": "low", "risk_paths_high": ["src/"]}, None, "risk above low"),
+    ({"auto_merge": "low"}, "andon", "the andon cord is pulled"),
+])
+def test_a_unit_that_is_not_clean_and_low_risk_waits_for_the_owner(team_kit_home, kit, capsys, config, setup, why):
+    gh = FakeGh(kit, **{"review_backend": "claude", **config})
+    gh.pr_files[7] = [{"filename": "src/app.py", "additions": 3, "deletions": 1, "status": "modified"}]
+    n = verified_clean_unit(gh, team_kit_home, capsys, medium=1 if setup == "medium-finding" else 0, review=setup != "no-review")
+    if setup == "andon":
+        gh.add_issue(REPO, labels=("agent:andon",), body="stop", title="stop")
+    notices = tick(gh, capsys)
+    assert any(f"#{n} is ready for you to merge" in line for line in notices), why
+    assert gh.merges == [], why
+    assert gh.prs[(REPO, 7)]["state"] == "OPEN"
+
+
+def test_a_failed_auto_merge_leaves_the_unit_to_the_owner_with_the_reason(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, review_backend="claude", auto_merge="low")
+    n = verified_clean_unit(gh, team_kit_home, capsys)
+    gh.merge_error = "gh pr merge failed: Resource not accessible by personal access token (HTTP 403)"
+    [notice] = tick(gh, capsys)
+    assert notice.startswith(f"team-kit notice: #{n} is ready for you to merge (checks passed, verified: live-ui-verified")
+    assert "auto-merge failed: gh pr merge failed: Resource not accessible by personal access token (HTTP 403)" in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:review"} and gh.prs[(REPO, 7)]["state"] == "OPEN"
+
+
+@pytest.mark.parametrize("bad", [{"auto_merge": "high"}, {"auto_merge": "low", "auto_merge_method": "force"}])
+def test_auto_merge_settings_are_validated_before_anything_is_dispatched(team_kit_home, kit, capsys, bad):
+    gh = FakeGh(kit, **bad)
+    assert dispatch(team_kit_home, gh) == 1
+    assert "auto_merge" in capsys.readouterr().err
     assert gh.issues == {}
