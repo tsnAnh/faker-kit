@@ -67,8 +67,6 @@ class Refused(Exception):
 
 
 def run_gh(args: list[str], input: str | None = None) -> str:
-    if not os.environ.get("GH_TOKEN"):
-        raise Refused("no GitHub token for this bot: the owner puts it in the bot profile's .env as GH_TOKEN")
     done = subprocess.run(["gh", *args], capture_output=True, text=True, input=input)
     if done.returncode != 0:
         raise Refused(f"gh {args[0]} failed: {done.stderr.strip()[:300]}")

@@ -666,31 +666,21 @@ def test_exactly_a_hundred_units_take_one_page(team_kit_home, gh):
     assert len([c for c in gh.calls if c[0] == "api"]) == 1
 
 
-def test_run_gh_never_falls_back_to_the_machines_gh_login(monkeypatch):
-    monkeypatch.delenv("GH_TOKEN", raising=False)
-    called = []
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: called.append(a))
-    with pytest.raises(Refused, match="no GitHub token for this bot"):
-        run_gh(["api", "repos/acme/shop"])
-    assert called == []
-
-
-def test_commands_use_the_bots_own_token_and_claude_dir_from_its_profile(team_kit_home, gh, monkeypatch, capsys):
-    # Hermes hands a routed bot's commands neither GH_TOKEN nor an undeclared .env value.
+def test_commands_get_the_bots_claude_dir_from_its_profile(team_kit_home, gh, monkeypatch, capsys):
+    # Hermes hands a routed bot's commands no .env value it was not told to pass.
     profile = team_kit_home.parent / "profiles" / "meo-beo"
     profile.mkdir(parents=True, exist_ok=True)
     (profile / ".env").write_text("# bot\nGH_TOKEN=bot-token\nCLAUDE_CONFIG_DIR='/owner/.claude'\n")
-    monkeypatch.setenv("GH_TOKEN", "owner-token")
-    monkeypatch.setenv("GITHUB_TOKEN", "other-token")
+    monkeypatch.setenv("GH_TOKEN", "machine-token")
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     seen = []
 
     def recording(args, input=None):
-        seen.append((os.environ.get("GH_TOKEN"), os.environ.get("GITHUB_TOKEN"), os.environ.get("CLAUDE_CONFIG_DIR")))
+        seen.append((os.environ.get("GH_TOKEN"), os.environ.get("CLAUDE_CONFIG_DIR")))
         return gh(args, input)
 
     assert run(recording, "status") == 0
-    assert seen and set(seen) == {("bot-token", None, "/owner/.claude")}
+    assert seen and set(seen) == {("machine-token", "/owner/.claude")}, "only the Claude config dir is filled in"
 
 
 def test_a_set_claude_dir_is_kept(team_kit_home, gh, monkeypatch):
@@ -703,7 +693,6 @@ def test_a_set_claude_dir_is_kept(team_kit_home, gh, monkeypatch):
 
 
 def test_run_gh_returns_a_304_but_raises_on_any_other_failure(monkeypatch):
-    monkeypatch.setenv("GH_TOKEN", "bot-token")
     def fake(stdout, code, stderr=""):
         return lambda *a, **k: subprocess.CompletedProcess(a[0], code, stdout, stderr)
 
