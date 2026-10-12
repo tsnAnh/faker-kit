@@ -74,7 +74,7 @@ Ask the owner to do both in **their own terminal**, not through you.
    f=~/.hermes/profiles/<bot>/.env; k=GH_TOKEN; printf '%s: ' "$k"; stty -echo; IFS= read -r v; stty echo; echo; [ -n "$v" ] && (umask 077; { grep -v "^$k=" "$f" 2>/dev/null; printf '%s=%s\n' "$k" "$v"; } > "$f.new" && mv "$f.new" "$f"); unset v
    ```
 
-   Use a fine-grained GitHub token of the bot's login for this repository only, with Issues read and write, and Contents, Pull requests, Checks, and Commit statuses read.
+   Use a fine-grained GitHub token of the bot's login for this repository only, with Issues read and write, and Contents, Pull requests, Checks, and Commit statuses read. If the owner wants low-risk units to merge themselves (`auto_merge: "low"` in `.agents/dispatch.json`), Contents and Pull requests need write instead.
 
 Then run `team-kit-admin status` and check the bot shows `github_login: true`.
 
