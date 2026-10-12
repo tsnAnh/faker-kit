@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import fnmatch
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any  # noqa: TID251 - pull request files and commits arrive as untyped JSON from the GitHub API
 
 LEVELS = ("low", "medium", "high")
 RISK_LABELS = tuple(f"risk:{level}" for level in LEVELS)
@@ -90,7 +91,7 @@ def matches(path: str, pattern: str) -> bool:
     return fnmatch.fnmatchcase(path, pattern) or fnmatch.fnmatchcase(name, pattern)
 
 
-def first_hit(paths: list[str], patterns) -> list[str]:
+def first_hit(paths: list[str], patterns: Iterable[str]) -> list[str]:
     return sorted({p for p in paths for pattern in patterns if matches(p, pattern)})
 
 
@@ -98,13 +99,13 @@ def listed_paths(prefix: str, paths: list[str]) -> str:
     return prefix + ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
 
 
-def normalize_risk_overrides(value: Any) -> tuple[RiskOverride, ...]:
+def normalize_risk_overrides(value: Any) -> tuple[RiskOverride, ...]:  # noqa: ANN401
     if value in (None, []):
         return ()
     if isinstance(value, tuple) and all(isinstance(v, RiskOverride) for v in value):
         return value
     if not isinstance(value, list):
-        raise ValueError(".agents/dispatch.json risk_overrides must be a list of {level, paths, reason} rules")
+        raise ValueError(".agents/dispatch.json risk_overrides must be a list of {level, paths, reason} rules")  # noqa: TRY004
     overrides: list[RiskOverride] = []
     for index, raw in enumerate(value, 1):
         if isinstance(raw, RiskOverride):
@@ -125,8 +126,9 @@ def normalize_risk_overrides(value: Any) -> tuple[RiskOverride, ...]:
     return tuple(overrides)
 
 
-def score(files: list[dict], verification: str | None, high_paths=(), medium_paths=(), checks: str = "passed",
-          risk_overrides=(), recent_repair_paths=(), codeowners_unowned_paths=(), repair_history_unchecked: int = 0) -> Risk:
+def score(files: list[dict[str, Any]], verification: str | None, high_paths: Iterable[str] = (), medium_paths: Iterable[str] = (),
+          checks: str = "passed", risk_overrides: object = (), recent_repair_paths: Iterable[str] = (),
+          codeowners_unowned_paths: Iterable[str] = (), repair_history_unchecked: int = 0) -> Risk:
     """files: the pull request's files, each {filename, status, additions, deletions}.
     verification: the verifier's verdict, or None when nobody verified it. checks: passed or none.
     recent_repair_paths and codeowners_unowned_paths are exact file paths, never patterns.
@@ -189,7 +191,7 @@ def score(files: list[dict], verification: str | None, high_paths=(), medium_pat
     return Risk(LEVELS[level], tuple(reasons))
 
 
-def is_repair_commit(commit: dict) -> bool:
+def is_repair_commit(commit: dict[str, Any]) -> bool:
     message = str(((commit.get("commit") or {}).get("message")) or commit.get("message") or "")
     subject = message.lstrip().split("\n", 1)[0].strip()
     return bool(REPAIR_COMMIT.match(subject))

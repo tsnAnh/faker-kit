@@ -229,7 +229,7 @@ def test_propose_rejects_files_over_20_kb_and_empty_or_binary_ones(chief_home, c
 
 
 def test_propose_rejects_a_fifo(chief_home, capsys):
-    import os
+    import os  # noqa: PLC0415
 
     fifo = chief_home / "drafts" / "chanh-van" / "pipe.md"
     fifo.parent.mkdir(parents=True)

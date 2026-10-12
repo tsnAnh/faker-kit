@@ -50,16 +50,16 @@ def section(config: dict, *keys: str) -> dict:
     return config
 
 
-def leaves(config: dict, prefix=()):
+def leaves(config: dict, prefix=()):  # noqa: ANN001, ANN201
     for key, value in config.items():
-        path = prefix + (key,)
+        path = prefix + (key,)  # noqa: RUF005
         if isinstance(value, dict) and value:
             yield from leaves(value, path)
         else:
             yield path, value
 
 
-def value_at(config, keys):
+def value_at(config, keys):  # noqa: ANN001, ANN201
     for key in keys:
         if not isinstance(config, dict) or key not in config:
             return None
@@ -67,7 +67,7 @@ def value_at(config, keys):
     return config
 
 
-def config_set(root: Path, profile: str, keys, value) -> None:
+def config_set(root: Path, profile: str, keys, value) -> None:  # noqa: ANN001
     key = ".".join(keys)
     # Hermes preserves string scalars; JSON literals retain list/map/bool typing.
     literal = value if isinstance(value, str) else json.dumps(value)
@@ -105,8 +105,8 @@ def cron_jobs(text: str) -> dict[str, dict]:
     current = None
 
     def finish() -> None:
-        if current is not None and current.get("name"):
-            jobs[current["name"]] = {k: v for k, v in current.items() if k != "name"}
+        if current is not None and current.get("name"):  # type: ignore[unreachable]  # team-kit baseline
+            jobs[current["name"]] = {k: v for k, v in current.items() if k != "name"}  # type: ignore[unreachable]  # team-kit baseline
 
     for line in text.splitlines():
         head = re.match(r"^\s*(\S+)\s+\[(active|paused|enabled|disabled)\]", line)
@@ -132,10 +132,10 @@ def cron_spec(source: Path, bot: str) -> list[dict]:
     for block in re.split(r"^## ", source.read_text(), flags=re.M)[1:]:
         name = block.split("\n", 1)[0].strip()
 
-        def field(key):
-            match = re.search(rf"^{key}: `([^`]+)`", block, re.M)
+        def field(key):  # noqa: ANN001, ANN202
+            match = re.search(rf"^{key}: `([^`]+)`", block, re.M)  # noqa: B023
             if match is None:
-                raise InstallError(f"missing cron {key} field for {name}")
+                raise InstallError(f"missing cron {key} field for {name}")  # noqa: B023
             return match.group(1).replace("{bot}", bot)
 
         match = re.search(r"```text\n(.*?)```", block, re.S)

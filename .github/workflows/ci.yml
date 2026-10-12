@@ -17,6 +17,11 @@ jobs:
         with:
           node-version: 22
       - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python lint, type, and test tools
+        run: pip install ruff mypy types-PyYAML pytest pyyaml
       - name: Single check command
         run: scripts/check.sh
 

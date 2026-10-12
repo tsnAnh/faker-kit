@@ -23,9 +23,9 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 ANDON_LABEL = "agent:andon"
 ANDON_MARKER = "<!-- team-kit:andon v1 -->"
@@ -64,21 +64,21 @@ class Cord:
 
 
 class Andon:
-    def __init__(self, home: Path, now: Callable[[], float] = time.time):
+    def __init__(self, home: Path, now: Callable[[], float] = time.time):  # noqa: ANN204
         self.directory = home / "andon"
         self.now = now
 
     def path(self, name: str) -> Path:
         return self.directory / f"{name}.json"
 
-    def read(self, name: str) -> dict | None:
+    def read(self, name: str) -> dict[str, object] | None:
         try:
             data = json.loads(self.path(name).read_text())
         except (OSError, ValueError):
             return None
         return data if isinstance(data, dict) and data.get("reason") else None
 
-    def write(self, name: str, data: dict) -> None:
+    def write(self, name: str, data: dict[str, object]) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
         target = self.path(name)
         tmp = target.with_name(f".{target.name}.{os.getpid()}")
@@ -92,8 +92,8 @@ class Andon:
         data = self.read(name)
         if data is None:
             return None
-        issue = data.get("issue")
-        return Cord(scope, str(data["reason"]), str(data.get("by") or "the owner"), float(data.get("at") or 0),
+        issue, at = data.get("issue"), data.get("at")
+        return Cord(scope, str(data["reason"]), str(data.get("by") or "the owner"), float(at) if isinstance(at, (int, float)) else 0.0,
                     int(issue) if isinstance(issue, int) else None)
 
     def machine(self) -> Cord | None:

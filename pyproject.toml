@@ -1,0 +1,73 @@
+# Lint and type-check configuration for the kit's own Python: hermes/ and plugins/trust-ladder/.
+# Installed from the trust-ladder python lint pack, then fitted to this repository. scripts/check.sh runs
+# `ruff check` and `mypy`; legacy violations carry a `team-kit baseline` marker that .agents/ratchet.json
+# only lets go down.
+
+[tool.ruff]
+# The kit's code is written to long lines; 200 keeps the rule meaningful without rewrapping every file.
+line-length = 200
+extend-exclude = [
+  ".agents",
+  "site",
+  # Vendored from upstream (see upstream/source.json); never edited by hand, so never linted here.
+  "plugins/advisor",
+  "plugins/agent-compatibility",
+  "plugins/cli-for-agent",
+  "plugins/continual-learning",
+  "plugins/pstack",
+  "plugins/teaching",
+  "plugins/team-workflows",
+  "plugins/thermos",
+  # Fixtures that must fail the packs' own linters.
+  "plugins/trust-ladder/packs/*/fixtures",
+  "plugins/trust-ladder/packs/*/test",
+]
+
+[tool.ruff.lint]
+select = [
+  "E", "W", "F", "I", "B", "UP", "SIM", "RUF", "C4", "RET", "PTH",
+  "ANN", "BLE", "TRY", "ARG", "S", "PT",
+  "T20",
+  "ERA",
+  "PGH",
+  "TID",
+  "PLC0415",
+]
+# TRY003: messages name the failing value in place, which is how refusals reach the owner.
+# S101: asserts are fine in tests and in the few invariants code states.
+# S603, S607: the kit runs gh, git, hermes, claude, and codex as argument lists with no shell, by design.
+ignore = ["TRY003", "S101", "S603", "S607"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["ANN", "ARG", "S", "PT018", "T20"]
+"**/test_*.py" = ["ANN", "ARG", "S", "PT018", "T20"]
+# Command-line entry points print their JSON or notice lines to stdout.
+"hermes/bin/**" = ["T20"]
+"hermes/e2e/**" = ["T20"]
+"plugins/trust-ladder/**/scripts/**" = ["T20"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "Model the type. If a boundary really is untyped, parse it into a typed object there."
+
+[tool.mypy]
+files = ["hermes/lib", "hermes/bin", "hermes/plugin"]
+mypy_path = ["hermes/lib", "hermes/bin", "hermes/plugin"]
+explicit_package_bases = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool", "possibly-undefined"]
+
+# Modules held to strict typing. Move a module here once its baseline markers are gone.
+[[tool.mypy.overrides]]
+module = ["team_kit_contracts", "team_kit_risk", "team_kit_cloud", "team_kit_proposals", "team_kit_andon", "team_kit_incident_sources"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_any_generics = true
+warn_return_any = true
+strict_equality = true

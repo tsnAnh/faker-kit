@@ -45,8 +45,8 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 from urllib.parse import quote
 
 HERE = Path(__file__).resolve().parent
@@ -119,7 +119,7 @@ def run_gh(args: list[str], input: str | None = None) -> str:
 
 
 class Admin:
-    def __init__(self, run: Runner = run_gh, cloud: Cloud | None = None, home: Path | None = None):
+    def __init__(self, run: Runner = run_gh, cloud: Cloud | None = None, home: Path | None = None):  # noqa: ANN204
         self.home = home or team_kit_home()
         self.root = self.home.parent
         self.kit = self.home / "kit"
@@ -149,7 +149,7 @@ class Admin:
 
     # files from the pinned kit -----------------------------------------------------------------------
 
-    def ensure_profile(self, bot: str, role: str) -> Path:
+    def ensure_profile(self, bot: str, role: str) -> Path:  # noqa: ARG002
         home = profile_home(self.root, bot)
         if not home.is_dir():
             hermes("-p", "default", "profile", "create", bot)
@@ -181,7 +181,7 @@ class Admin:
     def has_env(self, home: Path, key: str) -> bool:
         return bool(self.env_value(home, key))
 
-    def setup_files(self, bot: str, role: str, project: str | None, model: str | None, claude_config_dir: str | None = None) -> None:
+    def setup_files(self, bot: str, role: str, project: str | None, model: str | None, claude_config_dir: str | None = None) -> None:  # noqa: ARG002
         """claude_config_dir, from claude_login(), switches the bot's model to the Claude subscription; None leaves the provider alone."""
         home = self.ensure_profile(bot, role)
         apply_profile(self.root, bot, self.pkg / "profiles" / role / "config.yaml")
@@ -314,11 +314,11 @@ class Admin:
         load_policy_from(self.home, data)
         self.setup_files(bot, "chief", None, model, claude_config_dir)
         self.write_bots(data)
-        repos = sorted(b.repo for b in self.policy().projects().values())
+        repos = sorted(b.repo for b in self.policy().projects().values())  # type: ignore[type-var]  # team-kit baseline
         return {
             "bot": bot, "role": "chief",
             "next": [f"The owner puts a read-only GitHub token in {profile_home(self.root, bot) / '.env'} as GH_TOKEN: "
-                     "Issues, Contents, and Metadata read on every project's repository" + (f" ({', '.join(repos)})" if repos else ""),
+                     "Issues, Contents, and Metadata read on every project's repository" + (f" ({', '.join(repos)})" if repos else ""),  # type: ignore[arg-type]  # team-kit baseline
                      "Add the bot in Hermes Desktop Bot Mode"],
         }
 
@@ -368,13 +368,13 @@ class Admin:
                      f"team-kit-admin activate --bot {bot}"],
         }
 
-    def project_bot(self, policy: Policy, project: str):
+    def project_bot(self, policy: Policy, project: str):  # noqa: ANN201
         bot = policy.projects().get(project)
         if bot is None:
             raise Refused(f"no project {project}; create it with add-project first")
         return bot
 
-    def api(self, path: str, method: str = "GET", body: dict | None = None):
+    def api(self, path: str, method: str = "GET", body: dict | None = None):  # noqa: ANN201
         args = ["api", "-X", method, path] if method != "GET" else ["api", path]
         if body is not None:
             args += ["--input", "-"]
@@ -389,17 +389,17 @@ class Admin:
         except (Refused, ValueError, KeyError, TypeError):
             return None
 
-    def vendor_module(self):
+    def vendor_module(self):  # noqa: ANN201
         """vendor_kit.py from the pinned kit, so the copy and its manifest match that commit."""
         path = self.kit / "plugins" / "trust-ladder" / "skills" / "setup-cloud-agents" / "scripts" / "vendor_kit.py"
         if not path.is_file():
             raise Refused(f"the kit at {path.parents[5]} has no vendor_kit.py; pin a newer kit commit")
         spec = importlib.util.spec_from_file_location("team_kit_vendor_kit", path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module  # dataclasses look their module up while the class is built
+        module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]  # team-kit baseline
+        sys.modules[spec.name] = module  # type: ignore[union-attr]  # team-kit baseline  # dataclasses look their module up while the class is built
         writes, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # leave the kit checkout clean
         try:
-            spec.loader.exec_module(module)
+            spec.loader.exec_module(module)  # type: ignore[union-attr]  # team-kit baseline
         finally:
             sys.dont_write_bytecode = writes
         return module
@@ -427,13 +427,13 @@ class Admin:
             if existing.get(link_dir, {}).get("mode") == "120000":
                 raise Refused(f"{link_dir} in {repo} is a symlink; make it a real folder first, so the kit's relative links resolve")
 
-        def link_target(entry) -> str:
+        def link_target(entry) -> str:  # noqa: ANN001
             blob = self.api(f"repos/{repo}/git/blobs/{entry['sha']}")
             return base64.b64decode(blob["content"]).decode()
 
         targets: dict[str, bool] = {}
 
-        def ours(entry) -> bool:
+        def ours(entry) -> bool:  # noqa: ANN001
             if entry.get("mode") != "120000":
                 return False
             if entry["sha"] not in targets:
@@ -541,14 +541,14 @@ class Admin:
     def andon_show(self) -> dict:
         andon, policy = Andon(self.home), self.policy()
         machine = andon.read(MACHINE)
-        projects = {name: andon.project(name).reason for name, bot in sorted(policy.bots.items()) if bot.role == "project" and andon.project(name)}
+        projects = {name: andon.project(name).reason for name, bot in sorted(policy.bots.items()) if bot.role == "project" and andon.project(name)}  # type: ignore[union-attr]  # team-kit baseline
         return {"machine": None if machine is None else {k: machine.get(k) for k in ("reason", "by", "issues")}, "projects": projects}
 
     def andon_raise(self, words: list[str], who: str | None) -> dict:
         why = clean_reason(words)
         andon, policy = Andon(self.home), self.policy()
         if andon.machine():
-            raise Refused(f"{andon.machine().describe()}; clear it before pulling it again")
+            raise Refused(f"{andon.machine().describe()}; clear it before pulling it again")  # type: ignore[union-attr]  # team-kit baseline
         # Write the cord first: nothing new starts from here on, whatever GitHub does.
         record = {"reason": why, "by": who or "the owner", "at": time.time(), "issues": {}}
         andon.write(MACHINE, record)
@@ -559,7 +559,7 @@ class Admin:
             try:
                 url = self.run(["issue", "create", "-R", bot.repo, "--title", f"Andon: {why}"[:120], "--label", ANDON_LABEL,
                                 "--body", issue_body("machine", why, "team-kit-admin andon clear")]).strip()
-                record["issues"][bot.repo] = int(url.rstrip("/").rsplit("/", 1)[-1])
+                record["issues"][bot.repo] = int(url.rstrip("/").rsplit("/", 1)[-1])  # type: ignore[index]  # team-kit baseline
             except Exception as err:  # noqa: BLE001 - the local cord still stops every launch there
                 failed[bot.repo] = str(err)[:200]
             andon.write(MACHINE, record)
@@ -574,7 +574,7 @@ class Admin:
         if record is None:
             raise Refused("the machine's andon cord is not pulled")
         closed, failed = [], {}
-        for repo, number in sorted((record.get("issues") or {}).items()):
+        for repo, number in sorted((record.get("issues") or {}).items()):  # type: ignore[attr-defined]  # team-kit baseline
             try:
                 self.run(["issue", "close", str(int(number)), "-R", repo, "--comment", "The owner cleared the machine's andon cord in Hermes. The line runs again."])
                 closed.append(f"{repo}#{number}")
@@ -598,18 +598,18 @@ class Admin:
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
             item = {"bot": bot.name, "role": bot.role}
             if bot.role == "project":
-                item.update(project=bot.project, tick_every=bot.tick_every, incidents_every=bot.incidents_every, security_every=bot.security_every,
+                item.update(project=bot.project, tick_every=bot.tick_every, incidents_every=bot.incidents_every, security_every=bot.security_every,  # type: ignore[call-overload]  # team-kit baseline
                             github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"))
                 try:
-                    item["jobs"] = {n: j["enabled"] for n, j in cron_jobs(hermes("-p", bot.name, "cron", "list", "--all")).items() if n.startswith("team-kit-")}
+                    item["jobs"] = {n: j["enabled"] for n, j in cron_jobs(hermes("-p", bot.name, "cron", "list", "--all")).items() if n.startswith("team-kit-")}  # type: ignore[assignment]  # team-kit baseline
                 except InstallError as err:
                     item["jobs"] = f"unreadable: {err}"
-                item["repo"] = self.repo_status(bot.repo)
-                if isinstance(item["repo"].get("running"), int):
+                item["repo"] = self.repo_status(bot.repo)  # type: ignore[arg-type, assignment]  # team-kit baseline
+                if isinstance(item["repo"].get("running"), int):  # type: ignore[attr-defined]  # team-kit baseline
                     # This login sees every project, so it refreshes each project bot's count for the
                     # machine-wide limit, even for a bot whose jobs are paused.
-                    write_in_flight(self.home, bot.name, {bot.repo: item["repo"]["running"]})
-            out["bots"].append(item)
+                    write_in_flight(self.home, bot.name, {bot.repo: item["repo"]["running"]})  # type: ignore[dict-item, index]  # team-kit baseline
+            out["bots"].append(item)  # type: ignore[attr-defined]  # team-kit baseline
         return out
 
     def repo_status(self, repo: str) -> dict:
@@ -644,7 +644,7 @@ def write_in_flight(home: Path, bot: str, counts: dict[str, int]) -> None:
     """Under the same lock team-kit-gh launch holds, so this never overwrites a launch's count."""
     directory = home / "in-flight"
     directory.mkdir(parents=True, exist_ok=True)
-    with open(directory / ".lock", "w") as handle:
+    with open(directory / ".lock", "w") as handle:  # noqa: PTH123
         fcntl.flock(handle, fcntl.LOCK_EX)
         target = directory / f"{bot}.json"
         tmp = target.with_name(f".{target.name}.{os.getpid()}")
@@ -654,9 +654,8 @@ def write_in_flight(home: Path, bot: str, counts: dict[str, int]) -> None:
 
 def load_policy_from(home: Path, bots: dict) -> Policy:
     """Validate a bots.yaml mapping against guard.yaml before anything is written."""
-    import yaml as _yaml
-
-    from team_kit_guard.policy import parse_policy
+    import yaml as _yaml  # noqa: PLC0415
+    from team_kit_guard.policy import parse_policy  # noqa: PLC0415
 
     try:
         guard = _yaml.safe_load((home / "guard.yaml").read_text())
@@ -754,10 +753,10 @@ def check_caller(admin: Admin, command: str, who: str | None) -> None:
         raise Refused(f"{command} runs only from hermes/install.sh")
 
 
-def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | None = None, who: str | None = ...) -> int:
+def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | None = None, who: str | None = ...) -> int:  # type: ignore[assignment]  # team-kit baseline
     args = parser().parse_args(argv)
     admin = Admin(run=run, cloud=cloud)
-    who = caller() if who is ... else who
+    who = caller() if who is ... else who  # type: ignore[redundant-expr]  # team-kit baseline
     try:
         check_caller(admin, args.command, who)
         if args.command == "status":
@@ -779,7 +778,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
             out = admin.protect(args.project, args.check)
         elif args.command == "andon":
             if args.action != "raise" and args.reason:
-                raise Refused(f"andon {args.action} takes no reason")
+                raise Refused(f"andon {args.action} takes no reason")  # noqa: TRY301
             out = admin.andon_raise(args.reason, who) if args.action == "raise" else admin.andon_clear() if args.action == "clear" else admin.andon_show()
         else:
             out = admin.activate(args.bot)

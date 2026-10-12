@@ -4,19 +4,19 @@ from team_kit_contracts import (
     BRIEF_SECTIONS,
     ContractError,
     bootstrap_prompt,
-    parse_brief,
-    parse_depends,
     diagnosis_signature,
     diagnosis_signed,
+    parse_brief,
+    parse_depends,
     parse_diagnosis,
     parse_report,
     parse_security,
-    security_argv,
-    security_signature,
-    security_signed,
     parse_size,
     parse_verdict,
     report_status,
+    security_argv,
+    security_signature,
+    security_signed,
     size_marker,
     triage_argv,
     verdict_signature,
@@ -152,7 +152,7 @@ def test_bootstrap_prompt_refuses_unsafe_or_missing_parts(args):
 
 
 def test_the_verdict_template_parses():
-    verdict = parse_verdict((TEMPLATES / "verdict.md").read_text().replace("<one of: live-ui-verified | unit-test-verified | type-check-only | verifier-blocked | verifier-failed>", "unit-test-verified"))
+    verdict = parse_verdict((TEMPLATES / "verdict.md").read_text().replace("<one of: live-ui-verified | unit-test-verified | type-check-only | verifier-blocked | verifier-failed>", "unit-test-verified"))  # noqa: E501
     assert verdict.verification == "unit-test-verified"
     assert verdict.sig is not None
 

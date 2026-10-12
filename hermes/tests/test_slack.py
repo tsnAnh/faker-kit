@@ -1,5 +1,4 @@
 import json
-import socket
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,7 +31,7 @@ def test_slack_config_names_environment_variables_not_tokens():
 
 
 def test_slack_config_requires_a_known_bot_and_channel_when_enabled():
-    with pytest.raises(PolicyError, match="slack.bot"):
+    with pytest.raises(PolicyError, match="slack.bot"):  # noqa: RUF043
         parse_policy(slack_guard(bot="stranger"), BOTS)
     with pytest.raises(PolicyError, match="channel_id"):
         parse_policy(slack_guard(channel_id="https://hooks.slack.com/services/x"), BOTS)
@@ -150,7 +149,7 @@ class FlakyTransport(FakeTransport):
         return item
 
 
-@pytest.mark.parametrize("error", [socket.timeout("timed out"), ConnectionResetError("reset"), SlackError("Socket Mode WebSocket closed")])
+@pytest.mark.parametrize("error", [TimeoutError("timed out"), ConnectionResetError("reset"), SlackError("Socket Mode WebSocket closed")])
 def test_a_dropped_connection_reconnects_with_backoff_and_keeps_relaying(team_kit_home, error):
     policy = enable_slack(team_kit_home)
     transport = FlakyTransport([
@@ -186,13 +185,13 @@ def test_hello_then_drop_does_not_reset_the_backoff_and_it_is_capped_with_jitter
     policy = enable_slack(team_kit_home)
     flapping = [[{"type": "hello"}, ConnectionResetError("reset")]] * 12 + [[app_mention("finally")]]
     sleeps = []
-    relay = SlackRelay(policy, transport=FlakyTransport(flapping), bot_chat=FakeBotChat(), sleep=sleeps.append, log=lambda l: None, rand=lambda: 1.0)
+    relay = SlackRelay(policy, transport=FlakyTransport(flapping), bot_chat=FakeBotChat(), sleep=sleeps.append, log=lambda l: None, rand=lambda: 1.0)  # noqa: E741
 
     assert relay.run(max_events=1) == 1
     assert sleeps == [1, 2, 4, 8, 16, 32, 64, 128, 256, 300, 300, 300]
 
     low = []
-    SlackRelay(policy, transport=FlakyTransport([[ConnectionResetError("r")], [app_mention("x")]]), bot_chat=FakeBotChat(), sleep=low.append, log=lambda l: None, rand=lambda: 0.0).run(max_events=1)
+    SlackRelay(policy, transport=FlakyTransport([[ConnectionResetError("r")], [app_mention("x")]]), bot_chat=FakeBotChat(), sleep=low.append, log=lambda l: None, rand=lambda: 0.0).run(max_events=1)  # noqa: E741
     assert low == [0.5]  # jitter spreads the delay between half and all of the backoff
 
 
@@ -202,7 +201,7 @@ def test_a_real_event_or_a_long_lived_connection_resets_the_backoff(team_kit_hom
     drop = ConnectionResetError("reset")
     transport = FlakyTransport([[drop], [drop], [{"type": "hello"}, drop], [{"type": "hello"}, drop], [app_mention("ok")]])
     sleeps = []
-    relay = SlackRelay(policy, transport=transport, bot_chat=FakeBotChat(), sleep=sleeps.append, log=lambda l: None, rand=lambda: 1.0, clock=lambda: next(ticks))
+    relay = SlackRelay(policy, transport=transport, bot_chat=FakeBotChat(), sleep=sleeps.append, log=lambda l: None, rand=lambda: 1.0, clock=lambda: next(ticks))  # noqa: E741
     assert relay.run(max_events=1) == 1
     assert sleeps == [1, 2, 4, 1]  # the connection that lasted 97 s reset it
 
@@ -210,11 +209,11 @@ def test_a_real_event_or_a_long_lived_connection_resets_the_backoff(team_kit_hom
 def test_a_slack_disconnect_request_reconnects_and_a_bounded_run_gives_up(team_kit_home):
     policy = enable_slack(team_kit_home)
     transport = FlakyTransport([[{"type": "hello"}, {"type": "disconnect", "reason": "refresh_requested"}], [app_mention("again")]])
-    assert SlackRelay(policy, transport=transport, bot_chat=FakeBotChat(), sleep=lambda s: None, log=lambda l: None).run(max_events=1) == 1
+    assert SlackRelay(policy, transport=transport, bot_chat=FakeBotChat(), sleep=lambda s: None, log=lambda l: None).run(max_events=1) == 1  # noqa: E741
 
     dead = FlakyTransport([[ConnectionResetError("reset")]] * 3)
     with pytest.raises(SlackError, match="gave up after 2 reconnects"):
-        SlackRelay(policy, transport=dead, bot_chat=FakeBotChat(), sleep=lambda s: None, log=lambda l: None).run(max_events=1, max_reconnects=2)
+        SlackRelay(policy, transport=dead, bot_chat=FakeBotChat(), sleep=lambda s: None, log=lambda l: None).run(max_events=1, max_reconnects=2)  # noqa: E741
 
 
 def test_slack_retries_of_one_mention_give_one_proposal(team_kit_home):

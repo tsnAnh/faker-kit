@@ -9,7 +9,7 @@ import yaml
 from conftest import FAKE_CLAUDE, fill_guard, gh_calls, hermes_calls, install
 
 SHOP = "acme/shop"
-LABELS = ["agent-task", "agent:proposal", "agent:running", "agent:verifying", "agent:review", "agent:needs-human", "agent:security", "agent:incident", "risk:low", "risk:medium", "risk:high", "agent:andon"]
+LABELS = ["agent-task", "agent:proposal", "agent:running", "agent:verifying", "agent:review", "agent:needs-human", "agent:security", "agent:incident", "risk:low", "risk:medium", "risk:high", "agent:andon"]  # noqa: E501
 
 
 @pytest.fixture
@@ -291,7 +291,7 @@ def test_vendor_commits_the_pinned_kit_through_the_api_and_opens_a_pull_request(
     assert commit == {"message": f"chore(agents): vendor team-kit {short}", "tree": "tree1", "parents": ["base0"]}
     [pull] = posted(root)["pulls"]
     assert (pull["head"], pull["base"]) == (f"team-kit/kit-{short}", "main")
-    assert all("git" != c["args"][0] for c in gh_calls(root)), "no git push: everything goes through the API"
+    assert all(c["args"][0] != "git" for c in gh_calls(root)), "no git push: everything goes through the API"
 
 
 def test_vendor_keeps_the_repositorys_own_skills_and_removes_stale_kit_files(ready, kit_source):
@@ -369,7 +369,7 @@ def test_vendor_refuses_before_writing_anything(ready, problem):
 
 
 def test_vendor_refuses_a_repository_too_large_to_list(ready):
-    root, env = ready
+    root, env = ready  # noqa: RUF059
     add_shop(ready)
     env["FAKE_TREE_TRUNCATED"] = "1"
     code, err = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
@@ -462,7 +462,7 @@ def issues(root):
 
 
 def test_the_machine_cord_opens_an_andon_issue_in_every_project_and_stops_setup(ready, kit_source):
-    root, env = ready
+    root, env = ready  # noqa: RUF059
     add_shop(ready)
     code, out = admin(ready, "andon", "raise", "cloud", "bill", "spike", profile="ong-xay")
     assert code == 0, out

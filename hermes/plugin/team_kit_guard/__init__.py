@@ -13,8 +13,8 @@ import concurrent.futures
 import logging
 import os
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from .policy import Policy, PolicyError, block, decide, load_policy, reader_source, wrap_untrusted
 
@@ -30,16 +30,16 @@ NOTICE_CONTEXT = (
 
 def current_profile() -> str:
     try:
-        from hermes_cli.profiles import current_profile_name
+        from hermes_cli.profiles import current_profile_name  # type: ignore[import-not-found]  # team-kit baseline  # noqa: PLC0415
 
         return current_profile_name("default") or "default"
-    except Exception:
+    except Exception:  # noqa: BLE001
         home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
         return home.name if home.parent.name == "profiles" else "default"
 
 
 class Guard:
-    def __init__(self, load: Callable[[], Policy], profile: Callable[[], str], timeout: float = DECISION_TIMEOUT_SECONDS):
+    def __init__(self, load: Callable[[], Policy], profile: Callable[[], str], timeout: float = DECISION_TIMEOUT_SECONDS):  # noqa: ANN204
         self._load = load
         self._profile = profile
         self._timeout = timeout
@@ -48,21 +48,21 @@ class Guard:
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="team-kit-guard")
 
     @staticmethod
-    def _turn(session_id, turn_id) -> tuple[str, str]:
+    def _turn(session_id, turn_id) -> tuple[str, str]:  # noqa: ANN001
         return (str(session_id or ""), str(turn_id or ""))
 
-    def is_tainted(self, session_id, turn_id) -> bool:
+    def is_tainted(self, session_id, turn_id) -> bool:  # noqa: ANN001
         with self._lock:
             return self._turn(session_id, turn_id) in self._tainted
 
-    def taint(self, session_id, turn_id) -> None:
+    def taint(self, session_id, turn_id) -> None:  # noqa: ANN001
         with self._lock:
             self._tainted.add(self._turn(session_id, turn_id))
 
-    def _bounded(self, fn, *args):
+    def _bounded(self, fn, *args):  # noqa: ANN001, ANN002, ANN202
         return self._pool.submit(fn, *args).result(timeout=self._timeout)
 
-    def pre_tool_call(self, tool_name="", args=None, session_id="", turn_id="", **_):
+    def pre_tool_call(self, tool_name="", args=None, session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
         try:
             tainted = self.is_tainted(session_id, turn_id)
             return self._bounded(lambda: decide(self._load(), self._profile(), tool_name, args or {}, tainted))
@@ -74,7 +74,7 @@ class Guard:
             logger.exception("team-kit guard failed")
             return block(f"policy check for {tool_name} failed ({type(err).__name__}); blocked")
 
-    def transform_tool_result(self, tool_name="", args=None, result=None, session_id="", turn_id="", **_):
+    def transform_tool_result(self, tool_name="", args=None, result=None, session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
         try:
             source = self._bounded(lambda: reader_source(self._load(), tool_name, args or {}))
         except Exception:
@@ -85,19 +85,19 @@ class Guard:
         self.taint(session_id, turn_id)
         return wrap_untrusted(source, result)
 
-    def check_message(self, user_message="", session_id="", turn_id="", **_):
+    def check_message(self, user_message="", session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
         """A cron notice delivered into Bot Chat arrives as a turn. It must not act like the owner."""
         if NOTICE_MARKER in str(user_message or ""):
             self.taint(session_id, turn_id)
             return {"context": NOTICE_CONTEXT}
         return None
 
-    def end_turn(self, session_id="", turn_id="", **_):
+    def end_turn(self, session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
         with self._lock:
             self._tainted.discard(self._turn(session_id, turn_id))
 
 
-def register(ctx) -> None:
+def register(ctx) -> None:  # noqa: ANN001
     guard = Guard(load=load_policy, profile=current_profile)
     ctx.register_hook("pre_tool_call", guard.pre_tool_call)
     ctx.register_hook("transform_tool_result", guard.transform_tool_result)

@@ -2,10 +2,9 @@ import base64
 import contextlib
 import hashlib
 import io
-import hashlib
 import json
-import re
 import os
+import re
 import subprocess
 import sys
 import time
@@ -14,10 +13,21 @@ import urllib.parse
 import pytest
 from conftest import HERMES, SHOP, TEMPLATES, fill_brief
 from team_kit_cloud import CloudError
-from team_kit_contracts import LAUNCHED_MARKER, REVIEW_LAUNCHED_MARKER, ReviewResult, diagnosis_signature, review_argv, review_signature, review_signed, security_signature, size_marker, verdict_signature
-from team_kit_incident_sources import IncidentSourceError
+from team_kit_contracts import (
+    LAUNCHED_MARKER,
+    REVIEW_LAUNCHED_MARKER,
+    ReviewResult,
+    diagnosis_signature,
+    review_argv,
+    review_signature,
+    review_signed,
+    security_signature,
+    size_marker,
+    verdict_signature,
+)
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, PROPOSAL_LABEL, REPORT_DEADLINE_SECONDS, UNIT_STATE_FRESH_SECONDS, Gh, Refused, checks_state, main, run_gh
 from team_kit_guard.policy import load_policy
+from team_kit_incident_sources import IncidentSourceError
 from team_kit_proposals import PROPOSAL_TTL_SECONDS, write_proposal
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
@@ -48,7 +58,7 @@ class FakeGh:
         self.repo_comments = []
         self.merges, self.merge_error = [], None
 
-    def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small", association="NONE", pull_request=False):
+    def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small", association="NONE", pull_request=False):  # noqa: E501
         self.next += 1
         body = body if body is not None else fill_brief(f"u{self.next}", standing=STANDING, depends=depends) + "\n" + size_marker(size) + "\n"
         self.issues[(repo, self.next)] = {"number": self.next, "title": title, "body": body, "labels": set(labels), "state": state,
@@ -1876,9 +1886,10 @@ def test_a_permission_check_that_fails_is_retried_not_recorded(team_kit_home, gh
 
 
 def test_incident_proposals_and_teammate_proposals_are_two_commands():
-    import argparse
-    from team_kit_gh import parser
-    from team_kit_guard.policy import PROJECT_COMMANDS
+    import argparse  # noqa: PLC0415
+
+    from team_kit_gh import parser  # noqa: PLC0415
+    from team_kit_guard.policy import PROJECT_COMMANDS  # noqa: PLC0415
     names = next(a for a in parser()._actions if isinstance(a, argparse._SubParsersAction)).choices
     assert "proposals" in names and "teammate-proposals" in names
     assert "proposals" in PROJECT_COMMANDS and "teammate-proposals" in PROJECT_COMMANDS
@@ -2206,7 +2217,7 @@ def test_a_security_review_covers_each_new_commit_once(team_kit_home, gh, capsys
     assert started["state"] == "started" and started["range"] == f"none..{gh.main_head}"
     tracking = gh.issues[(REPO, started["issue"])]
     assert tracking["labels"] == {"agent:security"} and tracking["title"] == "Security review: main"
-    [(backend, _, command, workdir)] = cloud.started
+    [(backend, _, command, workdir)] = cloud.started  # noqa: RUF059
     running = security_record(team_kit_home)["running"]
     assert command.prompt.startswith(f"/review-main-security Review the last 20 commits up to {gh.main_head} on main of {REPO}, "
                                      f"and post the result on {REPO}#{started['issue']}. Sign the result with key {running['key']}.")
@@ -2754,7 +2765,7 @@ def test_one_failing_source_does_not_stop_health_and_main_checks_and_is_said_onc
     first = poll_with_apis(gh, capsys, api, fetch=down)
     assert any("alert source pagerduty:pager-api could not be read" in line and "TEAM_KIT_ALERT_PAGERDUTY is unset" in line for line in first)
     assert any("main is red" in line for line in first), "the branch check still ran"
-    assert not any("token" in line and "tok" == line for line in first)
+    assert not any("token" in line and line == "tok" for line in first)
     second = poll_with_apis(gh, capsys, api, fetch=down, at=NOW + 300)
     assert not any("could not be read" in line for line in second), "a lasting source error is reported once"
     assert any("health check api returns HTTP 503" in line for line in second), "health still opens its incident"
@@ -2784,7 +2795,7 @@ def test_an_unreadable_source_keeps_its_open_incident_and_streak(team_kit_home, 
     assert recovered == ["[SILENT]"] and "source_problems" in state and not incidents(team_kit_home)["source_problems"]
 
 
-@pytest.mark.parametrize("source, message", [
+@pytest.mark.parametrize("source, message", [  # noqa: PT006
     ({"token_env": "GH_TOKEN"}, "GitHub credentials"),
     ({"token_env": "GITHUB_TOKEN"}, "GitHub credentials"),
     ({"token_env": "SENTRY_TOKEN"}, "TEAM_KIT_ALERT_"),
@@ -2826,7 +2837,7 @@ def test_upstream_dispatches_one_sync_unit_when_the_upstream_repository_moved(te
     gh, cloud = upstream_gh(kit), FakeCloud()
     assert run(gh, "upstream", cloud=cloud) == 0
     [notice] = lines(capsys)
-    [(repo, number)] = [key for key in gh.issues]
+    [(repo, number)] = [key for key in gh.issues]  # noqa: C416
     assert notice == f"team-kit notice: acme/plugins moved from dddddddddddd to eeeeeeeeeeee; sync unit #{number} started."
     issue = gh.issues[(repo, number)]
     assert repo == REPO and issue["labels"] == {"agent-task", "agent:running"}
@@ -2983,7 +2994,7 @@ def test_a_medium_risk_unit_gets_a_second_adversarial_verifier_before_it_is_read
     cloud = FakeCloud()
     assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"], "not ready yet: a second verifier is looking"
     assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"}
-    [(backend, _, command, workdir)] = cloud.started
+    [(backend, _, command, workdir)] = cloud.started  # noqa: RUF059
     second = record(team_kit_home, n)
     assert backend == "claude" and second["first"] == "live-ui-verified" and second["key"] != first_key
     assert "second, adversarial verification of a medium or high risk change" in command.prompt

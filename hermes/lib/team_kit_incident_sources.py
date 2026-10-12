@@ -6,10 +6,10 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable
-
+from email.message import Message
+from typing import IO, Any  # noqa: TID251 - alert APIs answer untyped JSON; each source parses it into ExternalObservation
 
 FetchJson = Callable[[str, Mapping[str, str]], Any]
 
@@ -58,22 +58,22 @@ class SourceFailure:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """A redirect would carry the token's header to another host, so a redirect is an error."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+    def redirect_request(self, req: urllib.request.Request, fp: IO[bytes], code: int, msg: str, headers: Message, newurl: str) -> None:  # noqa: ARG002
         return None
 
 
-def fetch_json(url: str, headers: Mapping[str, str]) -> Any:
-    request = urllib.request.Request(
+def fetch_json(url: str, headers: Mapping[str, str]) -> Any:  # noqa: ANN401
+    request = urllib.request.Request(  # noqa: S310
         url,
         method="GET",
         headers={"Accept": "application/json", "User-Agent": "team-kit-incidents", **dict(headers)},
     )
     try:
-        with urllib.request.build_opener(_NoRedirect).open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:  # noqa: S310 - URLs are validated: https, pinned host.
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
             body = response.read(2_000_000)
     except urllib.error.HTTPError as err:
         raise IncidentSourceError(f"{_url_for_error(url)} returned HTTP {err.code}") from None
-    except Exception:
+    except Exception:  # noqa: BLE001
         raise IncidentSourceError(f"{_url_for_error(url)} did not answer") from None
     try:
         return json.loads(body.decode())
@@ -81,7 +81,7 @@ def fetch_json(url: str, headers: Mapping[str, str]) -> Any:
         raise IncidentSourceError(f"{_url_for_error(url)} returned invalid JSON") from None
 
 
-def validate_sources(value: Any, alert_hosts: Collection[str] = ()) -> list[dict[str, Any]]:
+def validate_sources(value: Any, alert_hosts: Collection[str] = ()) -> list[dict[str, Any]]:  # noqa: ANN401
     """alert_hosts is the machine's guard.yaml list; only the owner edits it."""
     if value is None:
         return []
@@ -114,7 +114,7 @@ def validate_sources(value: Any, alert_hosts: Collection[str] = ()) -> list[dict
     return normalized
 
 
-def poll_sources(value: Any, fetch: FetchJson = fetch_json, env: Mapping[str, str] | None = None,
+def poll_sources(value: Any, fetch: FetchJson = fetch_json, env: Mapping[str, str] | None = None,  # noqa: ANN401
                  alert_hosts: Collection[str] = ()) -> list[ExternalObservation | SourceFailure]:
     """One result per source. A source that fails is a SourceFailure; it never stops the others."""
     results: list[ExternalObservation | SourceFailure] = []
@@ -371,7 +371,7 @@ def _observation(kind: str, source: Mapping[str, Any], what: str, items: list[di
     return ExternalObservation(key, f"{key}: {what}", bool(items), tuple(examples))
 
 
-def _one_line(value: Any) -> str:
+def _one_line(value: Any) -> str:  # noqa: ANN401
     return " ".join(str(value).split())[:120]
 
 
@@ -398,23 +398,28 @@ def _datadog_title(monitor: dict[str, Any]) -> str | None:
     return str(monitor.get("name") or monitor.get("id") or "") or None
 
 
-def _grafana_alerts(payload: Any) -> list[Any]:
+def _grafana_alerts(payload: Any) -> list[Any]:  # noqa: ANN401
     if isinstance(payload, dict):
-        if isinstance(payload.get("data"), dict) and isinstance(payload["data"].get("alerts"), list):
-            return payload["data"]["alerts"]
+        data = payload.get("data")
+        if isinstance(data, dict) and isinstance(data.get("alerts"), list):
+            return list(data["alerts"])
         if isinstance(payload.get("alerts"), list):
-            return payload["alerts"]
+            return list(payload["alerts"])
     if isinstance(payload, list):
         return payload
     raise IncidentSourceError("grafana source returned an unexpected response")
 
 
+def _mapping(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _grafana_firing(alert: dict[str, Any]) -> bool:
-    status = alert.get("status") if isinstance(alert.get("status"), dict) else {}
+    status = _mapping(alert.get("status"))
     return str(alert.get("state") or status.get("state") or "").lower() in {"firing", "active"}
 
 
 def _grafana_title(alert: dict[str, Any]) -> str | None:
-    labels = alert.get("labels") if isinstance(alert.get("labels"), dict) else {}
-    annotations = alert.get("annotations") if isinstance(alert.get("annotations"), dict) else {}
+    labels = _mapping(alert.get("labels"))
+    annotations = _mapping(alert.get("annotations"))
     return str(labels.get("alertname") or annotations.get("summary") or annotations.get("title") or alert.get("fingerprint") or "") or None

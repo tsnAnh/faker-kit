@@ -1,0 +1,44 @@
+{
+  "python-noqa": {
+    "total": 228,
+    "perFile": {
+      "hermes/bin/team_kit_admin.py": 21,
+      "hermes/bin/team_kit_chief.py": 8,
+      "hermes/bin/team_kit_gh.py": 84,
+      "hermes/bin/team_kit_slack.py": 4,
+      "hermes/e2e/run_dispatch_e2e.py": 4,
+      "hermes/lib/install_config.py": 7,
+      "hermes/lib/team_kit_andon.py": 1,
+      "hermes/lib/team_kit_cloud.py": 5,
+      "hermes/lib/team_kit_incident_sources.py": 10,
+      "hermes/lib/team_kit_proposals.py": 4,
+      "hermes/lib/team_kit_risk.py": 3,
+      "hermes/lib/team_kit_slack_relay.py": 8,
+      "hermes/plugin/team_kit_guard/__init__.py": 12,
+      "hermes/plugin/team_kit_guard/policy.py": 17,
+      "hermes/tests/conftest.py": 3,
+      "hermes/tests/fake_hermes.py": 1,
+      "hermes/tests/test_admin.py": 3,
+      "hermes/tests/test_chief.py": 1,
+      "hermes/tests/test_contracts.py": 1,
+      "hermes/tests/test_gh.py": 11,
+      "hermes/tests/test_launch.py": 5,
+      "hermes/tests/test_risk.py": 1,
+      "hermes/tests/test_slack.py": 6,
+      "hermes/tests/test_vendor.py": 3,
+      "plugins/trust-ladder/skills/setup-cloud-agents/scripts/vendor_kit.py": 5
+    }
+  },
+  "python-type-baseline": {
+    "total": 58,
+    "perFile": {
+      "hermes/bin/team_kit_admin.py": 17,
+      "hermes/bin/team_kit_chief.py": 2,
+      "hermes/bin/team_kit_gh.py": 24,
+      "hermes/lib/install_config.py": 2,
+      "hermes/lib/team_kit_slack_relay.py": 10,
+      "hermes/plugin/team_kit_guard/__init__.py": 1,
+      "hermes/plugin/team_kit_guard/policy.py": 2
+    }
+  }
+}

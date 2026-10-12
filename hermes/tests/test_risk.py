@@ -108,7 +108,7 @@ def test_risk_overrides_add_repository_rules_and_are_validated():
     risk = score(files(("apps/mobile/paywall.swift", "modified", 4, 1)), "unit-test-verified", risk_overrides=overrides)
     assert risk.level == "medium"
     assert risk.reasons == ("mobile release surface: apps/mobile/paywall.swift",)
-    with pytest.raises(ValueError, match="risk_overrides\\[1\\].level"):
+    with pytest.raises(ValueError, match="risk_overrides\\[1\\].level"):  # noqa: RUF043
         normalize_risk_overrides([{"level": "urgent", "paths": ["apps/mobile/"]}])
 
 
