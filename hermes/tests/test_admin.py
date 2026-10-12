@@ -563,6 +563,7 @@ def test_claude_subscription_switches_the_bots_model_and_points_the_plugin_at_th
     current["model"] = {"default": "gpt-x", "provider": "openai-codex", "base_url": "https://example.invalid", "api_mode": "codex_responses"}
     (home / "config.yaml").write_text(yaml.safe_dump(current))
     (home / ".env").write_text("GH_TOKEN=keep\n")
+    (root / ".env").write_text("OWNER_KEY=keep\n")
     args = ("add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP, "--claude-subscription")
     code, out = admin(with_env(ready, CLAUDE_CONFIG_DIR="/owner/.claude"), *args, profile="ong-xay")
     assert code == 0, out
@@ -571,6 +572,9 @@ def test_claude_subscription_switches_the_bots_model_and_points_the_plugin_at_th
     assert set(after["plugins"]["enabled"]) >= {"team_kit_guard", PROVIDER}
     assert (home / ".env").read_text() == "GH_TOKEN=keep\nCLAUDE_CONFIG_DIR=/owner/.claude\n"
     assert stat.S_IMODE((home / ".env").stat().st_mode) == 0o600
+    # The gateway that runs the bot's jobs reads the root .env, not the profile's.
+    assert (root / ".env").read_text() == "OWNER_KEY=keep\nCLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR=/owner/.claude\n"
+    assert stat.S_IMODE((root / ".env").stat().st_mode) == 0o600
     enables = [c for c in hermes_calls(root) if c[2:4] == ["plugins", "enable"]]
     assert enables and all("--no-allow-tool-override" in c for c in enables), "the plugin never replaces built-in tools"
 
@@ -580,6 +584,7 @@ def test_claude_subscription_switches_the_bots_model_and_points_the_plugin_at_th
     assert len([c for c in hermes_calls(root) if c[2:4] == ["plugins", "install"]]) == installs, "an installed plugin is not installed again"
     assert config(root, "meo-beo")["model"] == {"default": "opus", "provider": PROVIDER}
     assert (home / ".env").read_text() == "GH_TOKEN=keep\nCLAUDE_CONFIG_DIR=/owner/.claude\n", "a shell without CLAUDE_CONFIG_DIR keeps it"
+    assert "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR=/owner/.claude" in (root / ".env").read_text()
 
 
 @pytest.mark.parametrize(("cli", "why"), [

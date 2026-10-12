@@ -41,8 +41,9 @@ ignore = ["TRY003", "S101", "S603", "S607"]
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["ANN", "ARG", "S", "PT018", "T20"]
 "**/test_*.py" = ["ANN", "ARG", "S", "PT018", "T20"]
-# Command-line entry points print their JSON or notice lines to stdout.
-"hermes/bin/**" = ["T20"]
+# Command-line entry points print their JSON or notice lines to stdout, and put lib/ and plugin/
+# on sys.path before importing from them.
+"hermes/bin/**" = ["T20", "E402"]
 "hermes/e2e/**" = ["T20"]
 "plugins/trust-ladder/**/scripts/**" = ["T20"]
 

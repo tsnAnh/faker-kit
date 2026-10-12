@@ -99,6 +99,11 @@ elif args[:1] == ["cron"]:
     elif args[1] == "delete":
         jobs = [job for job in jobs if job["id"] != args[2]]
         jobs_path.write_text(json.dumps(jobs))
+    elif args[1] == "run":
+        # Like Hermes, run only queues the job for the scheduler's next pass; an unknown id fails.
+        if not any(j["id"] == args[2] for j in jobs):
+            print("no such job", file=sys.stderr)
+            sys.exit(1)
     elif args[1] == "resume":
         job = next((j for j in jobs if j["id"] == args[2]), None)
         if job is None:

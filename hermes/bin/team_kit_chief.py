@@ -6,7 +6,8 @@
   show          --project P --path F        a file from a project's default branch, such as AGENTS.md
   digest        --file F                    the SHA-256 of a draft in this bot's drafts folder
   propose       --project P --file F --sha256 H
-                                            copy one draft into that project bot's inbox; H must be F's digest now
+                                            copy one draft into that project bot's inbox; H must be F's digest now,
+                                            then start that bot's team-kit-tick so the notice arrives in about a minute
   andon                                     the machine's and every project's andon cord
 
 The chief of staff routes the owner's intent: it says which project bot gets which part, and
@@ -39,9 +40,10 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from team_kit_andon import Andon  # noqa: E402
-from team_kit_guard.policy import Bot, Policy, PolicyError, load_policy  # noqa: E402
-from team_kit_proposals import ProposalError, file_digest, write_proposal  # noqa: E402
+from install_config import cron_jobs
+from team_kit_andon import Andon
+from team_kit_guard.policy import Bot, Policy, PolicyError, load_policy
+from team_kit_proposals import ProposalError, file_digest, write_proposal
 
 REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
@@ -52,6 +54,11 @@ MAX_FILE = 60_000
 STATES = (("agent:running", "running"), ("agent:verifying", "verifying"), ("agent:needs-human", "gate"), ("agent:review", "merge"))
 
 Runner = Callable[..., str]
+Waker = Callable[[str], bool]
+TICK_JOB = "team-kit-tick"
+WAKE_TIMEOUT_SECONDS = 30
+# All the detached tick inherits: no token, no session, and no HERMES_HOME of the chief.
+WAKE_ENV = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR")
 
 
 class Refused(Exception):
@@ -63,6 +70,25 @@ def run_gh(args: list[str], input: str | None = None) -> str:
     if done.returncode != 0:
         raise Refused(f"gh {args[0]} failed: {done.stderr.strip()[:300]}")
     return done.stdout
+
+
+def wake_tick(bot: str) -> bool:
+    """Start the bot's tick now, detached. False when its tick is missing or paused, or Hermes cannot start.
+
+    `hermes cron run` runs the job inline, a model turn that can take minutes, so the chief does not wait
+    for it. The run gets no secret from the chief: Hermes loads the target profile's own .env.
+    """
+    try:
+        listed = subprocess.run(["hermes", "-p", bot, "cron", "list", "--all"], capture_output=True, text=True, timeout=WAKE_TIMEOUT_SECONDS)
+        job = cron_jobs(listed.stdout).get(TICK_JOB) if listed.returncode == 0 else None
+        if not job or not job["enabled"]:
+            return False
+        env = {k: v for k, v in os.environ.items() if k in WAKE_ENV}
+        subprocess.Popen(["hermes", "-p", bot, "cron", "run", job["id"]], env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return True
 
 
 def current_bot() -> str:
@@ -80,8 +106,8 @@ def timestamp(value: str | None) -> float | None:
 
 
 class Chief:
-    def __init__(self, policy: Policy, run: Runner, now: Callable[[], float] = time.time):  # noqa: ANN204
-        self.policy, self.run, self.now = policy, run, now
+    def __init__(self, policy: Policy, run: Runner, now: Callable[[], float] = time.time, wake: Waker = wake_tick):  # noqa: ANN204
+        self.policy, self.run, self.now, self.wake = policy, run, now, wake
         self.andon = Andon(policy.home, now)
 
     def project_bots(self) -> list[Bot]:
@@ -163,9 +189,15 @@ class Chief:
     def propose(self, slug: str, path: str, sha256: str, from_bot: str) -> dict:
         bot = self.project(slug)
         try:
-            return write_proposal(self.policy.home, bot.name, slug, bot.repo or "", path, from_bot, self.now(), sha256)
+            out = write_proposal(self.policy.home, bot.name, slug, bot.repo or "", path, from_bot, self.now(), sha256)
         except ProposalError as err:
             raise Refused(str(err)) from None
+        if self.wake(bot.name):
+            out["delivery"] = f"{bot.name}'s {TICK_JOB} started now; the notice reaches its Bot Chat within about a minute"
+        else:
+            out["delivery"] = (f"{bot.name}'s {TICK_JOB} could not be started now (paused or missing); the notice arrives at its next tick. "
+                               f"If the bot is not active yet: team-kit-admin activate --bot {bot.name}")
+        return out
 
     def digest(self, path: str, from_bot: str) -> dict:
         try:
@@ -196,14 +228,15 @@ def parser() -> argparse.ArgumentParser:
     return top
 
 
-def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = None, now: Callable[[], float] = time.time) -> int:
+def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = None, now: Callable[[], float] = time.time,
+         wake: Waker = wake_tick) -> int:
     args = parser().parse_args(argv)
     try:
         policy = load_policy()
         me = policy.bot(bot or current_bot())
         if me.role != "chief":
             raise Refused(f"{me.name} is a {me.role} bot; team-kit-chief is for the chief of staff")  # noqa: TRY301
-        chief = Chief(policy, run, now)
+        chief = Chief(policy, run, now, wake)
         if args.command == "status":
             print("\n".join(chief.status()))
             return 0
