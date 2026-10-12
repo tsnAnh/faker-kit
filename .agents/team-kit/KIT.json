@@ -504,7 +504,7 @@
   "plugins/trust-ladder/templates/routines/weekly-review.md": "9180d5f01a5f6139e56db31cfc4040e426e13b27b2bc05bfd5cc9bad453c6089",
   "vendor_kit.py": "5c1b99b8924e874183a8a8448e67b6f4b6f5b943a88f54982ca13a33a64408e9"
  },
- "kit_ref": "f30fc731d9dd63020bb7322fb6b5bb796b1f599e",
+ "kit_ref": "690e8e698db94e1e0b5e656900c16c4c5c87ecd8",
  "links": {
   ".agents/skills/advisor": "../../.agents/team-kit/plugins/advisor/skills/advisor",
   ".agents/skills/architect": "../../.agents/team-kit/plugins/pstack/skills/architect",
