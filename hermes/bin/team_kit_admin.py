@@ -6,6 +6,7 @@ The bootstrap bot may run these, and the guard asks the owner to approve each on
   status                                                     every project, repository, bot, and job, read-only
   add-project   --bot B --project P --repo R [--model M]     create or refresh a project bot for one repository:
                 [--tick-every 10m] [--incidents-every 5m]    profile, skill, paused jobs, labels, bots.yaml
+                [--security-every 15m]                       how soon a push to the default branch is security-reviewed
                 [--claude-subscription]                      run the bot's own model on the owner's Claude
                                                              subscription, through the Claude Code CLI
   vendor        --project P                                  open a pull request that copies the pinned kit into the
@@ -60,6 +61,7 @@ from team_kit_cloud import CLAUDE_CHECKOUT, Cloud, CloudError  # noqa: E402
 from team_kit_contracts import ContractError, bootstrap_prompt, cloud_argv  # noqa: E402
 from team_kit_guard.policy import (  # noqa: E402
     DEFAULT_INCIDENTS_EVERY,
+    DEFAULT_SECURITY_EVERY,
     DEFAULT_TICK_EVERY,
     INTERVAL,
     NAME,
@@ -90,7 +92,7 @@ LABELS = (
     ("agent:verifying", "5319e7", "A separate verifier session is checking this unit's pull request"),
     ("agent:review", "0e8a16", "Verified and the checks passed; the owner merges"),
     ("agent:needs-human", "d93f0b", "A dispatched unit needs the owner"),
-    ("agent:security", "0052cc", "The tracking issue where Hermes's daily security reviews of the default branch post their results"),
+    ("agent:security", "0052cc", "The tracking issue where Hermes's security reviews of each push to the default branch post their results"),
     ("agent:incident", "e11d21", "An incident Hermes opened from polling: the default branch is red, or a health check fails"),
     ("risk:low", "c2e0c6", "Hermes's risk score for this pull request, from rules in code: small change in ordinary paths"),
     ("risk:medium", "fbca04", "Hermes's risk score for this pull request, from rules in code: read it with care"),
@@ -98,8 +100,8 @@ LABELS = (
     (ANDON_LABEL, "b60205", "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"),
 )
 JOBS = ("team-kit-tick", "team-kit-status", "team-kit-security", "team-kit-incidents", "team-kit-upstream")
-SCHEDULE_DEFAULTS = {"tick_every": DEFAULT_TICK_EVERY, "incidents_every": DEFAULT_INCIDENTS_EVERY}
-SCHEDULE_FIELDS = {"team-kit-tick": "tick_every", "team-kit-incidents": "incidents_every"}
+SCHEDULE_DEFAULTS = {"tick_every": DEFAULT_TICK_EVERY, "incidents_every": DEFAULT_INCIDENTS_EVERY, "security_every": DEFAULT_SECURITY_EVERY}
+SCHEDULE_FIELDS = {"team-kit-tick": "tick_every", "team-kit-incidents": "incidents_every", "team-kit-security": "security_every"}
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
 
 Runner = Callable[..., str]
@@ -321,12 +323,13 @@ class Admin:
         }
 
     def add_project(self, bot: str, project: str, repo: str, model: str | None, tick_every: str | None, incidents_every: str | None,
-                    claude_subscription: bool = False) -> dict:
+                    claude_subscription: bool = False, security_every: str | None = None) -> dict:
         check_name(bot, "bot")
         check_name(project, "project")
         check_repo(repo)
         check_interval(tick_every, "--tick-every")
         check_interval(incidents_every, "--incidents-every")
+        check_interval(security_every, "--security-every")
         claude_config_dir = self.claude_login() if claude_subscription else None  # refuse before anything changes
         data = self.bots_file()
         current = data["bots"].get(bot)
@@ -335,7 +338,7 @@ class Admin:
         if current and str(current.get("repo", "")).lower() != repo.lower():
             raise Refused(f"project {project} is {current.get('repo')}; a project has one repository, so start another project for {repo}")
         entry = {"role": "project", "project": project, "repo": current.get("repo") if current else repo}
-        for key, value in (("tick_every", tick_every), ("incidents_every", incidents_every)):
+        for key, value in (("tick_every", tick_every), ("incidents_every", incidents_every), ("security_every", security_every)):
             effective = value if value is not None else (current or {}).get(key)
             if effective and effective != SCHEDULE_DEFAULTS[key]:
                 entry[key] = effective
@@ -357,6 +360,7 @@ class Admin:
         return {
             "bot": bot, "project": project, "repo": repo, "labels": [n for n, _, _ in LABELS], "jobs_created_paused": created,
             "jobs_rescheduled": rescheduled, "tick_every": project_bot.tick_every, "incidents_every": project_bot.incidents_every,
+            "security_every": project_bot.security_every,
             "launch_checkout": str(checkout),
             "next": [f"For Claude Code sessions, the owner trusts the launch checkout once: cd {checkout} && claude, choose yes, then /exit",
                      f"team-kit-admin setup-repo --project {project} --backend claude|codex",
@@ -594,7 +598,7 @@ class Admin:
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
             item = {"bot": bot.name, "role": bot.role}
             if bot.role == "project":
-                item.update(project=bot.project, tick_every=bot.tick_every, incidents_every=bot.incidents_every,
+                item.update(project=bot.project, tick_every=bot.tick_every, incidents_every=bot.incidents_every, security_every=bot.security_every,
                             github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"))
                 try:
                     item["jobs"] = {n: j["enabled"] for n, j in cron_jobs(hermes("-p", bot.name, "cron", "list", "--all")).items() if n.startswith("team-kit-")}
@@ -701,6 +705,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--model")
     cmd.add_argument("--tick-every")
     cmd.add_argument("--incidents-every")
+    cmd.add_argument("--security-every")
     cmd.add_argument("--claude-subscription", action="store_true")
     cmd = sub.add_parser("vendor")
     cmd.add_argument("--project", required=True)
@@ -763,7 +768,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
             out = admin.add_bootstrap(args.bot, args.model, args.claude_subscription)
         elif args.command == "add-project":
             out = admin.add_project(args.bot, args.project, args.repo, args.model, args.tick_every, args.incidents_every,
-                                    args.claude_subscription)
+                                    args.claude_subscription, security_every=args.security_every)
         elif args.command == "add-chief":
             out = admin.add_chief(args.bot, args.model, args.claude_subscription)
         elif args.command == "vendor":

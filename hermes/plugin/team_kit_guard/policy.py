@@ -26,6 +26,8 @@ BOTS_VERSION = 1
 ROLES = ("bootstrap", "project", "chief")
 DEFAULT_TICK_EVERY = "30m"
 DEFAULT_INCIDENTS_EVERY = "10m"
+# The security review runs only when the default branch moved, so a short interval reviews each push soon after it lands.
+DEFAULT_SECURITY_EVERY = "15m"
 INTERVAL = re.compile(r"\A[1-9][0-9]*(?:m|h)\Z")
 
 DEFAULT_READ_ONLY_TOOLS = (
@@ -117,6 +119,7 @@ class Bot:
     repo: str | None = None
     tick_every: str = DEFAULT_TICK_EVERY
     incidents_every: str = DEFAULT_INCIDENTS_EVERY
+    security_every: str = DEFAULT_SECURITY_EVERY
 
     @property
     def repos(self) -> tuple[str, ...]:
@@ -232,7 +235,9 @@ def parse_bots(data) -> dict[str, Bot]:
         seen_repos[repo.lower()] = name
         tick_every = _interval(raw.get("tick_every"), f"bots.yaml: {name} tick_every", DEFAULT_TICK_EVERY)
         incidents_every = _interval(raw.get("incidents_every"), f"bots.yaml: {name} incidents_every", DEFAULT_INCIDENTS_EVERY)
-        bots[name] = Bot(name=name, role="project", project=project, repo=repo, tick_every=tick_every, incidents_every=incidents_every)
+        security_every = _interval(raw.get("security_every"), f"bots.yaml: {name} security_every", DEFAULT_SECURITY_EVERY)
+        bots[name] = Bot(name=name, role="project", project=project, repo=repo, tick_every=tick_every, incidents_every=incidents_every,
+                         security_every=security_every)
     return bots
 
 
