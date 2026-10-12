@@ -184,9 +184,16 @@ def test_wake_tick_queues_the_bots_tick_through_the_hermes_cli(tmp_path, monkeyp
     executable(bin_dir / "hermes", f"#!{sys.executable}\n" + (Path(__file__).resolve().parent / "fake_hermes.py").read_text())
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(root / "profiles" / "chanh-van"))
+    monkeypatch.setenv("GH_TOKEN", "chief-token")
     assert wake_tick("meo-beo") is woken
-    runs = [c for c in hermes_calls(root) if c[2:4] == ["cron", "run"]]
+    deadline = time.monotonic() + 10
+    runs = []
+    while time.monotonic() < deadline:
+        runs = [c for c in hermes_calls(root) if c[2:4] == ["cron", "run"]]
+        if runs or not woken:
+            break
+        time.sleep(0.05)
     assert runs == ([["-p", "meo-beo", "cron", "run", "job-1"]] if woken else [])
 
 

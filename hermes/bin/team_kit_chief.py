@@ -7,7 +7,7 @@
   digest        --file F                    the SHA-256 of a draft in this bot's drafts folder
   propose       --project P --file F --sha256 H
                                             copy one draft into that project bot's inbox; H must be F's digest now,
-                                            then wake that bot's team-kit-tick so the notice arrives in about a minute
+                                            then start that bot's team-kit-tick so the notice arrives in about a minute
   andon                                     the machine's and every project's andon cord
 
 The chief of staff routes the owner's intent: it says which project bot gets which part, and
@@ -57,6 +57,8 @@ Runner = Callable[..., str]
 Waker = Callable[[str], bool]
 TICK_JOB = "team-kit-tick"
 WAKE_TIMEOUT_SECONDS = 30
+# All the detached tick inherits: no token, no session, and no HERMES_HOME of the chief.
+WAKE_ENV = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR")
 
 
 class Refused(Exception):
@@ -71,16 +73,22 @@ def run_gh(args: list[str], input: str | None = None) -> str:
 
 
 def wake_tick(bot: str) -> bool:
-    """Ask Hermes to run the bot's tick on the scheduler's next pass. False when its tick is missing or paused."""
+    """Start the bot's tick now, detached. False when its tick is missing or paused, or Hermes cannot start.
+
+    `hermes cron run` runs the job inline, a model turn that can take minutes, so the chief does not wait
+    for it. The run gets no secret from the chief: Hermes loads the target profile's own .env.
+    """
     try:
         listed = subprocess.run(["hermes", "-p", bot, "cron", "list", "--all"], capture_output=True, text=True, timeout=WAKE_TIMEOUT_SECONDS)
         job = cron_jobs(listed.stdout).get(TICK_JOB) if listed.returncode == 0 else None
         if not job or not job["enabled"]:
             return False
-        ran = subprocess.run(["hermes", "-p", bot, "cron", "run", job["id"]], capture_output=True, text=True, timeout=WAKE_TIMEOUT_SECONDS)
+        env = {k: v for k, v in os.environ.items() if k in WAKE_ENV}
+        subprocess.Popen(["hermes", "-p", bot, "cron", "run", job["id"]], env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return ran.returncode == 0
+    return True
 
 
 def current_bot() -> str:
@@ -185,7 +193,7 @@ class Chief:
         except ProposalError as err:
             raise Refused(str(err)) from None
         if self.wake(bot.name):
-            out["delivery"] = f"{bot.name}'s {TICK_JOB} runs now; the notice reaches its Bot Chat within about a minute"
+            out["delivery"] = f"{bot.name}'s {TICK_JOB} started now; the notice reaches its Bot Chat within about a minute"
         else:
             out["delivery"] = (f"{bot.name}'s {TICK_JOB} could not be started now (paused or missing); the notice arrives at its next tick. "
                                f"If the bot is not active yet: team-kit-admin activate --bot {bot.name}")
