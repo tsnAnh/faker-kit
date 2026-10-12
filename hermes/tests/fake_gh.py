@@ -110,7 +110,8 @@ elif args[0] == "api":
 
     def pull_row(number, pull):
         head = pull["head"] if isinstance(pull["head"], dict) else {"ref": pull["head"]}
-        return {"number": number, "title": pull.get("title", ""), "html_url": f"https://github.com/{repo}/pull/{number}", "state": pull.get("state", "open"),
+        return {**pull, "number": number, "title": pull.get("title", ""), "html_url": pull.get("html_url", f"https://github.com/{repo}/pull/{number}"),
+                "state": pull.get("state", "open"),
                 "merged_at": pull.get("merged_at"), "body": pull.get("body", ""), "user": {"login": pull.get("author", "verify-bot")}, "labels": pull.get("labels", []),
                 "head": {"sha": head.get("sha", "a" * 40), "ref": head["ref"],
                          "repo": {"full_name": repo, "name": repo.split("/")[1], "owner": {"login": repo.split("/")[0]}}},
