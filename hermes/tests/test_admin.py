@@ -84,8 +84,8 @@ def test_add_project_creates_the_project_bot_its_labels_and_paused_jobs(ready):
     assert not (home / ".env").exists(), "team-kit writes no .env; the owner puts the token there"
 
     created = {c[4]: c for c in hermes_calls(root) if c[2:4] == ["cron", "create"]}
-    assert sorted(created) == ["0 7 * * *", "0 9 * * 1", "0 9,13,17 * * *", "every 10m", "every 30m"]
-    assert created["0 7 * * *"][5].startswith("Run `team-kit-gh security` in the terminal.")
+    assert sorted(created) == ["0 9 * * 1", "0 9,13,17 * * *", "every 10m", "every 15m", "every 30m"]
+    assert created["every 15m"][5].startswith("Run `team-kit-gh security` in the terminal.")
     assert created["0 9 * * 1"][5].startswith("Run `team-kit-gh upstream` in the terminal.")
     tick = created["every 30m"]
     assert tick[:2] == ["-p", "meo-beo"]
@@ -110,15 +110,16 @@ def test_add_project_can_set_custom_tick_and_incident_intervals(ready):
     code, out = admin(
         ready,
         "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP,
-        "--tick-every", "10m", "--incidents-every", "5m",
+        "--tick-every", "10m", "--incidents-every", "5m", "--security-every", "1h",
         profile="ong-xay",
     )
     assert code == 0, out
-    assert out["tick_every"] == "10m" and out["incidents_every"] == "5m"
-    assert bots(root)["meo-beo"] == {"role": "project", "project": "shop", "repo": SHOP, "tick_every": "10m", "incidents_every": "5m"}
+    assert (out["tick_every"], out["incidents_every"], out["security_every"]) == ("10m", "5m", "1h")
+    assert bots(root)["meo-beo"] == {"role": "project", "project": "shop", "repo": SHOP, "tick_every": "10m", "incidents_every": "5m", "security_every": "1h"}
     created = {c[c.index("--name") + 1]: c for c in hermes_calls(root) if c[2:4] == ["cron", "create"]}
     assert created["team-kit-tick"][4] == "every 10m"
     assert created["team-kit-incidents"][4] == "every 5m"
+    assert created["team-kit-security"][4] == "every 1h"
 
 
 def test_add_project_reschedules_existing_tick_and_incident_jobs(ready):
