@@ -31,25 +31,67 @@ To take a newer upstream: `node scripts/sync-upstream.mjs --ref <sha>`. Fix any 
 - `description` says what the skill does and when to use it, in under 1024 characters.
 - Write for an agent reading the file cold. Say which tool does what in Claude Code, Codex, and Pi only where they differ, using the vocabulary in `plugins/trust-ladder/references/compat.md`.
 - Never reuse a vendored skill's name. Pi keeps only the first skill with a given name.
+- If a vendored skill already covers the capability, use it (wrap it if the team needs more) instead of writing a second trust-ladder skill.
 - Add every new skill to `docs/catalog.json` (layer, audience, an example prompt), then run `node scripts/gen-catalog.mjs`. `validate.mjs` fails on a skill without an entry.
 
 ## Checks
 
-Run these before you commit. CI runs the same ones.
+`scripts/check.sh` is the one command, locally and in CI's `check` job. It runs every line of `.agents/check-commands`: the vendored kit, the upstream sync, validate, the generated docs and site, the ratchet, import boundaries, ruff, mypy, the trust-ladder and hook tests, and the Hermes tests, in about three minutes. It needs `node`, `bun`, `python3`, and `pip install ruff mypy types-PyYAML pytest pyyaml`.
+
+CI also runs what needs other toolchains, which a cloud session may lack:
 
 ```bash
-node scripts/sync-upstream.mjs --check   # vendored plugins match upstream + rules
-node scripts/validate.mjs                # manifests, frontmatter, links, catalog
-node scripts/gen-catalog.mjs --check     # generated docs are current
-node scripts/gen-site.mjs                # docs site pages, links, and navigation resolve
-bun test plugins/trust-ladder            # trust-ladder scripts and the Pi extension
 (cd plugins/trust-ladder/skills/orchestrate/scripts && bun install && bun test)   # orchestrate engine and runtimes
-bun test upstream/agent-hooks            # upstream hooks run in Claude Code and Codex
-python -m pytest hermes                  # Hermes guard, team-kit-gh, team-kit-admin, install
 bash scripts/test-packs.sh               # lint packs fail on bad fixtures, pass on good
 claude plugin validate .                 # Claude Code marketplace schema
 ```
 
+`check.sh` proves the code passes; the `verify-team-kit` skill proves a user gets the behavior. Run both before reporting a change done.
+
+## Hermes invariants
+
+- `team-kit-gh tick` and every scheduled job decide in code. No model chooses what launches or gates.
+- Integrations poll or connect outbound. A public endpoint is allowed only if it verifies the sender's signature on every request, and it never runs a model-chosen action.
+- Secrets never go in the repo, logs, argv, or URLs.
+- Cloud agent results stay HMAC-signed.
+
+## Paved paths
+
+One way for each concern. Use it; do not add a second.
+
+- **GitHub reads in `team-kit-gh`:** `Gh.api_page` / `Gh.api_json` (conditional ETag requests). Never shell out to a GraphQL-backed `gh issue`/`gh pr` subcommand in code a cloud session runs; use `gh api` REST calls.
+- **Starting a cloud agent:** `team_kit_cloud.Cloud.start`. Prompts go on stdin or as a follow-up message, never in argv.
+- **Writing a state file:** write a sibling temp file, then `replace` it, with mode 600 for anything holding a key.
+- **Time:** take `now` as a parameter (`self.now`), so tests control it; never call `time.time()` inside a decision.
+- **A secret the owner provides:** the owner puts it in the bot profile's `.env` from their own terminal. Code reads it from the environment and redacts it from every log and error.
+
+## Review guidelines
+
+Codex code review reads this section. The Claude review routine reads it with REVIEW.md.
+
+- Treat the rules in REVIEW.md as the review checklist, and every rule under Blocking in REVIEW.md as P1.
+- Do not comment on anything `scripts/check.sh` enforces: formatting, import order, lint findings, types, generated docs.
+- Hermes invariants above are blocking: a model choosing a launch, a secret reaching argv, a log, or a URL, or an unsigned cloud result.
+
+## Rules and what enforces them
+
+`/correct` keeps this table. Drop a rule once its mistake can no longer happen.
+
+| Rule | Enforced by |
+|---|---|
+| Vendored plugins match upstream plus the rules | `sync-upstream.mjs --check` in `check.sh` |
+| Manifests, frontmatter, links, and catalog entries are valid | `validate.mjs` in `check.sh` |
+| Generated docs and site pages are current | `gen-catalog.mjs --check`, `gen-site.mjs` in `check.sh` |
+| The python lint pack's rules hold for the kit's Python | `ruff check` in `check.sh` |
+| The six shared `hermes/lib` modules stay fully typed | `mypy` (strict overrides in `pyproject.toml`) in `check.sh` |
+| Legacy lint and type suppressions only go down | `.agents/ratchet.json` in `check.sh` |
+| `hermes/lib` never imports a command; the guard imports nothing from `lib/` or `bin/` | `.agents/import-boundaries.json` in `check.sh` |
+| Prompts and signing keys never reach argv or logs | tests in `hermes/tests/test_launch.py` and `test_e2e.py` |
+| Cloud results count only with their HMAC signature | tests in `hermes/tests/test_gh.py` |
+| Launch, gate, verify, and merge decisions are made in code | the architecture of `team-kit-gh` (the bot's only tool), and review |
+| Prefer a vendored skill to a second trust-ladder skill | review (REVIEW.md) |
+| Cloud skills use `gh api` REST, not GraphQL-backed subcommands | review (REVIEW.md) |
+
 ## Dispatch
 
-`.agents/dispatch.json` and `.agents/dispatch.md` configure Hermes dispatch to cloud coding agents. `scripts/check.sh` is the single fast check (vendored kit, sync, validate, catalog, site, trust-ladder and hook tests); CI runs it as the `check` job. The slower checks above (orchestrate engine, Hermes pytest, lint packs, `claude plugin validate`) run in the other CI jobs, and a cloud session may lack their toolchains.
+`.agents/dispatch.json` and `.agents/dispatch.md` configure Hermes dispatch to cloud coding agents. Units prove their work with `scripts/check.sh` and the `verify-team-kit` skill (the `verification_skill`).

@@ -1,0 +1,35 @@
+# REVIEW.md
+
+What reviewers check that no tool can. Human reviewers, the Claude review routine, and Codex code review all use this file. Anything `scripts/check.sh` enforces is out of scope here.
+
+## Blocking
+
+Mark these `[blocking]`. Each one names what to do instead.
+
+1. **Unproven behavior change.** A change to what an owner or agent sees or does has no evidence from running it. Ask for the `verify-team-kit` transcript of the feature it touches, or for a test that fails without the change.
+2. **A model makes a decision in Hermes.** Code that lets a model's output choose what launches, gates, verifies, or merges, in `tick` or a scheduled job. Ask for the decision to move into `team-kit-gh`'s code.
+3. **A secret reaches argv, a log, a URL, or the repo.** A token, signing key, or prompt holding a key passed as a process argument, printed, logged, put in an error message, or committed. Ask for stdin, a header, or the bot profile's `.env`, and redaction.
+4. **An unsigned or unchecked result counts.** A verdict, review, security result, or diagnosis that Hermes acts on without its HMAC signature, or an edited comment that counts. Ask for the signed path.
+5. **The guard or a boundary gets weaker.** A change to `hermes/plugin/team_kit_guard` that allows more, a new tool in a role's allowlist, or a new inbound endpoint without signature verification. Ask why, and for a test that the old refusal still holds.
+6. **A hand edit to a vendored file.** Anything under a vendored plugin changed outside `upstream/*.json` rules. Ask for a rule in `upstream/`.
+7. **A second way to do something.** A new pattern for a concern AGENTS.md lists under Paved paths. Ask for the paved path.
+8. **A workaround instead of a fix.** A retry, sleep, broad `except`, or special case that hides a failure whose cause is not understood. Ask for the root cause.
+9. **Tests that prove nothing.** A test that would still pass if the code under test returned a default, or that asserts on internals instead of what a caller observes. The `test-audit` skill's authoring gate is the standard.
+10. **A rule that should be a check.** The same review comment has appeared before. Ask for a lint rule, type, or test through `/correct` instead of repeating it.
+
+## Nits
+
+Mark these `[nit]`. They never block a merge.
+
+- Naming that makes a reader stop.
+- A simpler equivalent exists in the same file.
+- Prose in a skill or doc that an agent reading it cold would misread.
+
+## Style
+
+Entries in STYLE.md are review rules too. Cite the entry id, for example `[nit] S2: say what the owner does next`.
+
+## Out of scope
+
+- Formatting, import order, lint findings, types, and generated docs: `scripts/check.sh` enforces them.
+- Rewrites unrelated to the change.
