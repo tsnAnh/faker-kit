@@ -135,6 +135,8 @@ SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
 REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
+PR_TRIGGER = re.compile(r"\A@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\Z")
+PR_URL_NUMBER = re.compile(r"/pull/(\d+)(?:[#?]|\Z)")
 UPSTREAM_SOURCE = "upstream/source.json"
 UPSTREAM_CARD = "upstream-sync"
 UPSTREAM_URL = re.compile(r"\Ahttps://github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?\Z")
@@ -145,6 +147,10 @@ LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?\Z")
 RUNNING_LABEL = "agent:running"
 VERIFYING_LABEL = "agent:verifying"
 REVIEW_LABEL = "agent:review"
+# auto_merge in .agents/dispatch.json: "low" merges a unit whose risk is low and whose verifier, review, and
+# checks are all clean; anything else waits for the owner. "none", the default, leaves every merge to the owner.
+AUTO_MERGE = ("none", "low")
+MERGE_METHODS = ("merge", "squash", "rebase")
 HUMAN_LABEL = "agent:needs-human"
 SECURITY_LABEL = "agent:security"
 INCIDENT_LABEL = "agent:incident"
@@ -546,6 +552,10 @@ class Gh:
         triage = incidents.get("triage_backend", config["backend"])
         if triage not in VERIFIER_BACKENDS or (triage == "codex" and not config.get("codex_env")):
             raise Refused(".agents/dispatch.json incidents.triage_backend must be claude, codex (with codex_env), or none")
+        if config.get("auto_merge", "none") not in AUTO_MERGE:
+            raise Refused(f".agents/dispatch.json auto_merge must be one of {', '.join(AUTO_MERGE)}")
+        if config.get("auto_merge_method", "merge") not in MERGE_METHODS:
+            raise Refused(f".agents/dispatch.json auto_merge_method must be one of {', '.join(MERGE_METHODS)}")
         for key in ("risk_paths_high", "risk_paths_medium"):
             extra = config.get(key, [])
             if not isinstance(extra, list) or not all(isinstance(p, str) and p for p in extra):
@@ -705,6 +715,79 @@ class Gh:
                 target.write_text(json.dumps({"seen": sorted(kept_seen), "ignored": sorted(kept_ignored)}))
                 target.replace(path)
         return [f"{NOTICE} proposal #{i['number']} from {i['author']}. {i['url']}" for i in fresh]
+
+    def pr_comment_trigger(self, config: dict) -> str:
+        """The mention that turns a pull request comment into a request for this bot: `@<bot name>` unless
+        `pr_comment_trigger` in .agents/dispatch.json names another."""
+        trigger = str(config.get("pr_comment_trigger") or f"@{self.bot.name}")
+        if not PR_TRIGGER.match(trigger):
+            raise Refused(".agents/dispatch.json pr_comment_trigger must be an @mention of letters, digits, and hyphens")
+        return trigger
+
+    def pr_comment_notices(self) -> list[str]:
+        """One notice per new pull request comment from a collaborator that mentions this bot: the pull request,
+        the author, and a link. Never the comment's text, which anyone could word as a notice; the owner reads it
+        and restates the work in Hermes Desktop. Polled, so it needs no webhook.
+
+        The record keeps a `since` time and the comments already handled at it. The first run starts at now, so
+        old comments never arrive at once. A comment whose author could not be checked holds `since` there and is
+        tried again next tick."""
+        try:
+            config = self.dispatch_config()
+        except Refused:
+            return []  # a broken dispatch.json is reported where tick reads it for units
+        trigger = self.pr_comment_trigger(config)
+        mention = re.compile(rf"(?<![A-Za-z0-9_-]){re.escape(trigger)}(?![A-Za-z0-9_-])", re.I)
+        directory = self.policy.home / "pr-comment-notices"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{self.bot.name}.json"
+        with open(directory / ".lock", "w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                record = json.loads(path.read_text())
+                since, handled = str(record["since"]), {int(i) for i in record.get("handled", [])}
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                self.write_record(path, {"since": dt.datetime.fromtimestamp(self.now(), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "handled": []})
+                return []
+            found = []
+            for endpoint in ("issues/comments", "pulls/comments"):
+                for page in range(1, ISSUE_PAGE_LIMIT + 1):
+                    query = urllib.parse.urlencode({"since": since, "per_page": str(ISSUE_PAGE_SIZE), "page": str(page)})
+                    body, more = self.api_page(f"repos/{self.repo}/{endpoint}?{query}")  # conditional: an idle repository costs nothing
+                    items = json.loads(body)
+                    found += [c for c in items if isinstance(c, dict)] if isinstance(items, list) else []
+                    if not more or not items:
+                        break
+            notices, next_since, next_handled, held, seen_now = [], since, set(handled), None, set()
+            for comment in sorted(found, key=lambda c: (str(c.get("updated_at") or ""), int(c.get("id") or 0))):
+                cid, updated = int(comment.get("id") or 0), str(comment.get("updated_at") or "")
+                pull = PR_URL_NUMBER.search(str(comment.get("html_url") or ""))
+                if cid in handled or not pull or not mention.search(str(comment.get("body") or "")):
+                    verdict = False
+                else:
+                    verdict = self.collaborator(comment)
+                if verdict is None:
+                    held = updated if held is None else min(held, updated)
+                    continue
+                seen_now.add(cid)
+                if verdict:
+                    login = str((comment.get("user") or {}).get("login") or "")
+                    notices.append(f"{NOTICE} PR #{pull.group(1)} comment from {login} mentions {trigger}. {comment.get('html_url')}")
+                if updated > next_since:
+                    next_since, next_handled = updated, set()
+                if updated == next_since:
+                    next_handled.add(cid)
+            if held is not None and held <= next_since:
+                # Wait at the unchecked comment; everything handled this round stays handled.
+                next_since, next_handled = held, handled | seen_now
+            self.write_record(path, {"since": next_since, "handled": sorted(next_handled)})
+        return notices
+
+    @staticmethod
+    def write_record(path: Path, data: dict) -> None:
+        target = path.with_name(f".{path.name}.{os.getpid()}")
+        target.write_text(json.dumps(data))
+        target.replace(path)
 
     def comments(self, issue: int) -> list[dict]:
         return json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/issues/{issue}/comments"]))
@@ -1135,7 +1218,7 @@ class Gh:
         verifier = config.get("verifier_backend", config["backend"])
         if verifier == "none" or cloud is None:
             self.relabel(number, add=REVIEW_LABEL, remove=(RUNNING_LABEL,))
-            risk = self.mark_risk(report["pr"], None, pr["checks"])
+            risk, _ = self.mark_risk(report["pr"], None, pr["checks"])
             return f"{NOTICE} #{number} is ready for you to merge ({checks}, not independently verified{risk}): {report['pr']}"
         if self.cord():
             return None  # the unit keeps its slot; its verifier starts once the cord is cleared
@@ -1190,8 +1273,9 @@ class Gh:
         exclude = set(self.policy.trusted_authors) | {str(d).lower() for d in config.get("trusted_dispatchers") or []}
         return Risk(found.level, found.reasons, pick_reviewers(candidates, exclude))
 
-    def mark_risk(self, pr_url: str, verification: str | None, checks: str = "passed") -> str:
-        """Label the pull request with its risk and comment the reasons. Returns the notice's words for it."""
+    def mark_risk(self, pr_url: str, verification: str | None, checks: str = "passed") -> tuple[str, Risk | None]:
+        """Label the pull request with its risk and comment the reasons. Returns the notice's words for it, and the
+        risk, or None when it could not be scored."""
         pr = int(pr_url.rsplit("/", 1)[1])
         try:
             found = self.risk(pr, verification, checks)
@@ -1202,9 +1286,9 @@ class Gh:
             self.run(args)
             self.run(["pr", "comment", str(pr), "-R", self.repo, "--body", found.comment()])
         except Exception:  # noqa: BLE001 - a missing score never holds a unit back from the owner
-            return ""
+            return "", None
         reviewers = ", ".join(f"@{r}" for r in found.reviewers)
-        return f", {found.summary()}" + (f", suggested reviewers {reviewers}" if reviewers else "")
+        return f", {found.summary()}" + (f", suggested reviewers {reviewers}" if reviewers else ""), found
 
     # Verification -------------------------------------------------------------------------------
     # Each verifier launch is recorded under policy.home/verify/<bot>/<issue>.json: the commit it
@@ -1314,8 +1398,32 @@ class Gh:
         self.drop_verify_record(number)
         self.relabel(number, add=REVIEW_LABEL, remove=(VERIFYING_LABEL,))
         checks = "checks passed" if pr["checks"] == "passed" else "no checks ran"
-        risk = self.mark_risk(pr_url, verdict.verification, pr["checks"])
-        return f"{NOTICE} #{number} is ready for you to merge ({checks}, verified: {verdict.verification}{risk}): {pr_url}"
+        risk, scored = self.mark_risk(pr_url, verdict.verification, pr["checks"])
+        merged, why = self.auto_merge(number, pr_url, record["head"], scored, pr["checks"])
+        if merged:
+            return f"{NOTICE} #{number} merged automatically (low risk, {checks}, verified: {verdict.verification}, review clean): {pr_url}"
+        return f"{NOTICE} #{number} is ready for you to merge ({checks}, verified: {verdict.verification}{risk}{why}): {pr_url}"
+
+    def auto_merge(self, number: int, pr_url: str, head: str, risk: Risk | None, checks: str) -> tuple[bool, str]:
+        """Merge a verified unit when the repository opted in and every condition holds. Returns whether it
+        merged, and the notice's words for why not when an attempt failed. Any doubt leaves it to the owner."""
+        config = self.dispatch_config()
+        if config.get("auto_merge", "none") != "low":
+            return False, ""
+        if risk is None or risk.level != "low" or checks != "passed" or self.cord():
+            return False, ""
+        review = Review(self).record(number) or {}
+        counts = review.get("counts") or {}
+        if not (review.get("done") and review.get("pr") == pr_url and review.get("head") == head
+                and int(counts.get("high", 1)) == 0 and int(counts.get("medium", 1)) == 0):
+            return False, ""
+        method = config.get("auto_merge_method", "merge")
+        try:
+            # --match-head-commit makes GitHub refuse if the pull request moved since it was verified.
+            self.run(["pr", "merge", pr_url.rsplit("/", 1)[1], "-R", self.repo, f"--{method}", "--match-head-commit", head])
+        except Refused as err:
+            return False, f", auto-merge failed: {str(err)[:160]}"
+        return True, ""
 
     def verify(self, number: int, local_commit: str, cloud: Cloud) -> dict:
         """Start a new verifier on a unit's current pull request head, without redoing the coding work."""
@@ -2017,6 +2125,10 @@ class Project:
             notices.extend(gh.proposal_notices())
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
             problems["teammate-proposals"] = reason(err)
+        try:
+            notices.extend(gh.pr_comment_notices())
+        except Exception as err:  # noqa: BLE001 - reported once, retried next tick
+            problems["pr-comments"] = reason(err)
         try:
             units = gh.units()
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
