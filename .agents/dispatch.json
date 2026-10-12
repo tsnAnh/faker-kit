@@ -35,5 +35,7 @@
   },
   "security_backend": "claude",
   "upstream_sync": true,
-  "auto_merge": "low"
+  "auto_merge": "low",
+  "verification_skill": "verify-team-kit",
+  "second_verifier_backend": "claude"
 }
