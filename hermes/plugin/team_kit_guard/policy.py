@@ -167,6 +167,7 @@ class Policy:
     trusted_authors: frozenset[str]
     max_in_flight_total: int
     require_brief_marker: bool = True
+    ask_owner: bool = True
     alert_hosts: frozenset[str] = frozenset()
     slack: SlackConfig | None = None
     bots: dict[str, Bot] = field(default_factory=dict)
@@ -311,6 +312,9 @@ def parse_policy(data, bots=None, home: Path | None = None) -> Policy:  # noqa: 
     total = data.get("max_in_flight_total")
     if not isinstance(total, int) or isinstance(total, bool) or total < 1:
         raise PolicyError("guard.yaml max_in_flight_total must be a whole number of 1 or more")
+    ask_owner = data.get("ask_owner", True)
+    if not isinstance(ask_owner, bool):
+        raise PolicyError("guard.yaml ask_owner must be true or false")
     parsed_bots = parse_bots(bots)
     return Policy(
         deny=tuple(_rule(e, "deny") for e in data.get("deny") or []),
@@ -319,6 +323,7 @@ def parse_policy(data, bots=None, home: Path | None = None) -> Policy:  # noqa: 
         trusted_authors=frozenset(str(a).lower() for a in data.get("trusted_authors") or []),
         max_in_flight_total=total,
         require_brief_marker=bool(data.get("require_brief_marker", True)),
+        ask_owner=ask_owner,
         alert_hosts=parse_alert_hosts(data.get("alert_hosts")),
         slack=parse_slack(data.get("slack"), parsed_bots),
         bots=parsed_bots,
@@ -354,7 +359,8 @@ def approve(message: str, tool_name: str, args: dict, kind: str) -> dict:
 
 
 def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bool) -> dict | None:
-    """The pre_tool_call verdict. Order: deny, bot role allowlists, bootstrap approval, taint."""
+    """The pre_tool_call verdict. Order: deny, bot role allowlists, then, unless ask_owner is off, bootstrap and chief
+    approval and taint. Turning ask_owner off removes only the questions; every block above still applies."""
     for rule in policy.deny:
         if rule.matches(tool_name, args):
             return block(f"{tool_name} matches deny rule `{rule.label()}`")
@@ -383,6 +389,8 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
             where = ", ".join(allowed) if allowed else "nowhere"
             return block(f"{bot.role} bot {profile} may only write {where}")
     read_only = tool_name in policy.read_only_tools
+    if not policy.ask_owner:
+        return None
     if bot.role == "bootstrap" and not read_only:
         words = command.split()
         if not (tool_name == "terminal" and len(words) > 1 and words[1] in BOOTSTRAP_READ_ONLY):

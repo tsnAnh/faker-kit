@@ -206,6 +206,17 @@ def test_add_project_refuses_before_changing_anything(ready, args, why):
     assert not (root / "profiles" / "sep-crm").exists()
 
 
+@pytest.mark.parametrize(("ask_owner", "mode"), [(True, "manual"), (False, "off")])
+def test_hermes_approvals_follow_the_guards_ask_owner(ready, ask_owner, mode):
+    root, _ = ready
+    guard = root / "team-kit" / "guard.yaml"
+    text = guard.read_text()
+    assert "\nask_owner: true\n" in text, "the template asks by default"
+    guard.write_text(text.replace("\nask_owner: true\n", f"\nask_owner: {str(ask_owner).lower()}\n"))
+    add_shop(ready)
+    assert yaml.safe_load((root / "profiles" / "meo-beo" / "config.yaml").read_text())["approvals"]["mode"] == mode
+
+
 def test_add_project_prepares_the_launch_checkout_and_keeps_the_cli_config_dir(ready):
     root, _ = ready
     args = ("add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP)

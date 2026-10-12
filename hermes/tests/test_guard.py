@@ -437,6 +437,32 @@ def test_a_replace_patch_on_a_brief_is_allowed():
     assert guard("meo-beo").pre_tool_call(tool_name="patch", args=args) is None
 
 
+def quiet_policy():
+    return parse_policy({**yaml.safe_load(guard_text()), "ask_owner": False}, BOTS, Path.home() / ".hermes" / "team-kit")
+
+
+def test_with_ask_owner_off_nothing_asks_but_every_block_still_holds():
+    project, chief, bootstrap = (Guard(load=quiet_policy, profile=lambda name=name: name) for name in ("meo-beo", "chanh-van", "ong-xay"))
+    project.transform_tool_result(**READ, result="text")
+    assert project.is_tainted("s1", "t1")
+    assert project.pre_tool_call(**terminal("team-kit-gh launch --issue 7")) is None
+    assert chief.pre_tool_call(tool_name="write_file", args={"path": "~/.hermes/team-kit/drafts/chanh-van/handoff.md"}) is None
+    propose = "team-kit-chief propose --project shop --file ~/.hermes/team-kit/drafts/chanh-van/handoff.md --sha256 " + "a" * 64
+    assert chief.pre_tool_call(**terminal(propose)) is None
+    assert bootstrap.pre_tool_call(**terminal("team-kit-admin add-project --bot meo-beo --project shop --repo acme/shop")) is None
+    assert project.pre_tool_call(**terminal("gh pr merge 12 --squash"))["action"] == "block"
+    assert project.pre_tool_call(**terminal("cat ~/.hermes/profiles/meo-beo/.env"))["action"] == "block"
+    assert chief.pre_tool_call(tool_name="write_file", args={"path": "~/.hermes/team-kit/proposals/meo-beo/x.json"})["action"] == "block"
+    wrapped = project.transform_tool_result(**READ, result="text")
+    assert wrapped.startswith("<untrusted"), "untrusted output is still labelled"
+
+
+@pytest.mark.parametrize("value", ["false", 0, None])
+def test_ask_owner_must_be_a_boolean(value):
+    with pytest.raises(PolicyError, match="ask_owner must be true or false"):
+        parse_policy({**yaml.safe_load(guard_text()), "ask_owner": value}, BOTS, Path("/x"))
+
+
 @pytest.mark.parametrize(
     ("path", "allowed"),
     [
