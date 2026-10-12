@@ -156,7 +156,15 @@ def test_propose_wakes_only_the_target_bots_tick_so_the_notice_arrives_now(chief
     waker = Waker()
     assert propose(FakeGh(), draft(chief_home), wake=waker) == 0
     assert waker.bots == ["meo-beo"]
-    assert "within about a minute" in json.loads(capsys.readouterr().out)["delivery"]
+    delivery = json.loads(capsys.readouterr().out)["delivery"]
+    assert "within about a minute" in delivery and 'the owner says "brief it"' in delivery
+
+
+def test_with_ask_owner_off_propose_says_the_bot_dispatches_by_itself(chief_home, capsys):
+    guard = chief_home / "guard.yaml"
+    guard.write_text(guard.read_text().replace("\nask_owner: true\n", "\nask_owner: false\n"))
+    assert propose(FakeGh(), draft(chief_home)) == 0
+    assert "meo-beo briefs and dispatches it by itself" in json.loads(capsys.readouterr().out)["delivery"]
 
 
 def test_propose_still_hands_over_when_the_tick_cannot_be_woken(chief_home, capsys):

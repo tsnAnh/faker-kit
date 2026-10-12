@@ -353,7 +353,7 @@ def cross_repo_issue_reads(gh):
 
 def test_project_prints_the_bots_project_and_its_one_repository(team_kit_home, gh, capsys):
     assert run(gh, "project") == 0
-    assert out(capsys) == {"bot": "meo-beo", "project": "shop", "repo": REPO}
+    assert out(capsys) == {"bot": "meo-beo", "project": "shop", "repo": REPO, "ask_owner": True}
 
 
 def test_the_bot_comes_from_hermes_home(team_kit_home, gh, monkeypatch, capsys):
@@ -692,6 +692,17 @@ def test_proposals_prints_active_chief_proposals_without_dispatching(team_kit_ho
     assert found[1:] == ["# Add export", "", "Build it from the chief handoff."]
     assert gh.calls == []
     assert cloud.started == []
+
+
+def test_chief_proposals_id_shows_only_the_proposal_a_notice_names(team_kit_home, tmp_path, gh, capsys):
+    first = chief_proposal(team_kit_home, tmp_path, name="one.md", body="# First\n")
+    second = chief_proposal(team_kit_home, tmp_path, name="two.md", body="# Second\n", at=NOW + 1)
+    assert run(gh, "chief-proposals", "--id", second["id"]) == 0
+    found = lines(capsys)
+    assert found[0].startswith(f"team-kit notice: chief proposal {second['id']} ") and found[1:] == ["# Second"]
+    assert run(gh, "chief-proposals", "--id", "nope") == 0
+    assert lines(capsys) == ["[SILENT]"]
+    assert first["id"] != second["id"]
 
 
 def test_tick_delivers_one_chief_proposal_notice_once(team_kit_home, tmp_path, gh, capsys):

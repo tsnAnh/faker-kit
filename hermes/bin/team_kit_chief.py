@@ -192,10 +192,12 @@ class Chief:
             out = write_proposal(self.policy.home, bot.name, slug, bot.repo or "", path, from_bot, self.now(), sha256)
         except ProposalError as err:
             raise Refused(str(err)) from None
+        then = (f"{bot.name} briefs and dispatches it by itself (ask_owner is false)" if not self.policy.ask_owner
+                else f"the owner says \"brief it\" in {bot.name}'s Bot Chat")
         if self.wake(bot.name):
-            out["delivery"] = f"{bot.name}'s {TICK_JOB} started now; the notice reaches its Bot Chat within about a minute"
+            out["delivery"] = f"{bot.name}'s {TICK_JOB} started now; the notice reaches its Bot Chat within about a minute; then {then}"
         else:
-            out["delivery"] = (f"{bot.name}'s {TICK_JOB} could not be started now (paused or missing); the notice arrives at its next tick. "
+            out["delivery"] = (f"{bot.name}'s {TICK_JOB} could not be started now (paused or missing); the notice arrives at its next tick; then {then}. "
                                f"If the bot is not active yet: team-kit-admin activate --bot {bot.name}")
         return out
 

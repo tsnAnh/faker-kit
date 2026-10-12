@@ -15,7 +15,7 @@ GitHub tokens.
   pr-state      --pr N                             state, merged, head SHA, and checks of a pull request
   read          --issue N | --pr N                 the body and comments (untrusted; the guard wraps it)
   show          --path P                           a file from the default branch (the owner's repo; trusted)
-  chief-proposals                                  chief proposals waiting for this project bot
+  chief-proposals [--id ID]                        chief proposals waiting for this project bot, or only ID
   kit-check                                        compare this machine's kit commit with kit_ref and the vendored kit
   andon         [raise REASON... | clear]          show, pull, or clear this project's andon cord (the owner asked)
   security                                         start a security review of the default branch's new commits
@@ -907,8 +907,9 @@ class Gh:
         query = urllib.parse.urlencode(params, safe="/:")
         return json.loads(self.run(["api", f"repos/{self.repo}/commits?{query}"]))
 
-    def chief_proposals(self) -> list[str]:
-        return format_listing(active_proposals(self.policy.home, self.bot.name, self.now()))
+    def chief_proposals(self, only: str | None = None) -> list[str]:
+        active = active_proposals(self.policy.home, self.bot.name, self.now())
+        return format_listing([p for p in active if only is None or p.id == only])
 
     # andon --------------------------------------------------------------------------------------
 
@@ -2293,8 +2294,10 @@ def brief_text(policy: Policy, bot: Bot, path: str) -> str:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="team-kit-gh")
     sub = top.add_subparsers(dest="command", required=True)
-    for name in ("project", "tick", "status", "security", "incidents", "upstream", "proposals", "teammate-proposals", "chief-proposals"):
+    for name in ("project", "tick", "status", "security", "incidents", "upstream", "proposals", "teammate-proposals"):
         sub.add_parser(name)
+    cmd = sub.add_parser("chief-proposals")
+    cmd.add_argument("--id", help="only the proposal a notice names")
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
     cmd.add_argument("reason", nargs="*")
@@ -2328,11 +2331,11 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
             raise Refused(f"{me.name} is a {me.role} bot; team-kit-gh is for project bots")  # noqa: TRY301
         cloud = cloud or Cloud(run_gh=run)
         if args.command == "project":
-            out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
+            out: object = {"bot": me.name, "project": me.project, "repo": me.repo, "ask_owner": policy.ask_owner}
         elif args.command == "teammate-proposals":
             out = Gh(policy, me, run, now).proposals()
         elif args.command == "chief-proposals":
-            print("\n".join(Gh(policy, me, run, now).chief_proposals()))
+            print("\n".join(Gh(policy, me, run, now).chief_proposals(args.id)))
             return 0
         elif args.command == "incidents":
             gh = Gh(policy, me, run, now)
