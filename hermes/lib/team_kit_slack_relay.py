@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import team_kit_env
 from team_kit_guard.policy import Policy, SlackConfig
 
 NOTICE = "team-kit notice:"
@@ -34,7 +35,6 @@ class SlackError(Exception):
 
 
 MAX_SLACK_TEXT = 1_200
-ENV_LINE = re.compile(r"\A([A-Za-z_][A-Za-z0-9_]*)=(.*)\Z")
 NOTICE_IN_TEXT = re.compile(r"team-kit\s+notice\s*:", re.IGNORECASE)
 SEEN_LIMIT = 2_000
 # What a dropped Socket Mode connection raises: our own refusals, and socket timeouts, resets, and closes.
@@ -46,25 +46,10 @@ def profile_home(root: Path, profile: str) -> Path:
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
-    env: dict[str, str] = {}
     try:
-        lines = path.read_text().splitlines()
-    except FileNotFoundError:
-        return env
-    except OSError as err:
-        raise SlackError(f"cannot read profile environment file: {path}") from err
-    for line in lines:
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        match = ENV_LINE.match(line)
-        if not match:
-            continue
-        key, value = match.groups()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            value = value[1:-1]
-        env[key] = value
-    return env
+        return team_kit_env.parse_env_file(path)
+    except team_kit_env.EnvFileError as err:
+        raise SlackError(str(err)) from err
 
 
 def profile_env(policy: Policy, bot: str, base: Mapping[str, str] | None = None) -> dict[str, str]:

@@ -109,6 +109,7 @@ from team_kit_contracts import (
     verdict_signed,
     verify_argv,
 )
+from team_kit_env import EnvFileError, use_bot_env
 from team_kit_guard.policy import NAME, REPO, Bot, Policy, PolicyError, load_policy
 from team_kit_incident_sources import (
     ExternalObservation,
@@ -195,6 +196,8 @@ class Waiting(Refused):
 
 
 def run_gh(args: list[str], input: str | None = None) -> str:
+    if not os.environ.get("GH_TOKEN"):
+        raise Refused("no GitHub token for this bot: the owner puts it in the bot profile's .env as GH_TOKEN")
     done = subprocess.run(["gh", *args], capture_output=True, text=True, input=input)
     if done.returncode != 0:
         if args[:1] == ["api"] and "--include" in args:
@@ -2319,6 +2322,13 @@ def parser() -> argparse.ArgumentParser:
     return top
 
 
+def bot_env(policy: Policy, me: Bot) -> None:
+    try:
+        use_bot_env(policy.home.parent / "profiles" / me.name)
+    except EnvFileError as err:
+        raise Refused(str(err)) from None
+
+
 def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = None, cloud: Cloud | None = None,
          commit: Callable[[Policy], str] = kit_commit, now: Callable[[], float] = time.time,
          fetch: Callable[[str], int | None] = fetch_status,
@@ -2329,6 +2339,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         me = policy.bot(bot or current_bot())
         if me.role != "project":
             raise Refused(f"{me.name} is a {me.role} bot; team-kit-gh is for project bots")  # noqa: TRY301
+        bot_env(policy, me)
         cloud = cloud or Cloud(run_gh=run)
         if args.command == "project":
             out: object = {"bot": me.name, "project": me.project, "repo": me.repo, "ask_owner": policy.ask_owner}

@@ -42,6 +42,7 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
 
 from install_config import cron_jobs
 from team_kit_andon import Andon
+from team_kit_env import EnvFileError, use_bot_env
 from team_kit_guard.policy import Bot, Policy, PolicyError, load_policy
 from team_kit_proposals import ProposalError, file_digest, write_proposal
 
@@ -66,6 +67,8 @@ class Refused(Exception):
 
 
 def run_gh(args: list[str], input: str | None = None) -> str:
+    if not os.environ.get("GH_TOKEN"):
+        raise Refused("no GitHub token for this bot: the owner puts it in the bot profile's .env as GH_TOKEN")
     done = subprocess.run(["gh", *args], capture_output=True, text=True, input=input)
     if done.returncode != 0:
         raise Refused(f"gh {args[0]} failed: {done.stderr.strip()[:300]}")
@@ -230,6 +233,13 @@ def parser() -> argparse.ArgumentParser:
     return top
 
 
+def bot_env(policy: Policy, me: Bot) -> None:
+    try:
+        use_bot_env(policy.home.parent / "profiles" / me.name)
+    except EnvFileError as err:
+        raise Refused(str(err)) from None
+
+
 def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = None, now: Callable[[], float] = time.time,
          wake: Waker = wake_tick) -> int:
     args = parser().parse_args(argv)
@@ -238,6 +248,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         me = policy.bot(bot or current_bot())
         if me.role != "chief":
             raise Refused(f"{me.name} is a {me.role} bot; team-kit-chief is for the chief of staff")  # noqa: TRY301
+        bot_env(policy, me)
         chief = Chief(policy, run, now, wake)
         if args.command == "status":
             print("\n".join(chief.status()))
