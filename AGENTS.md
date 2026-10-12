@@ -96,3 +96,10 @@ Codex code review reads this section. The Claude review routine reads it with RE
 ## Dispatch
 
 `.agents/dispatch.json` and `.agents/dispatch.md` configure Hermes dispatch to cloud coding agents. Units prove their work with `scripts/check.sh` and the `verify-team-kit` skill (the `verification_skill`).
+
+## Learned User Preferences
+
+## Learned Workspace Facts
+
+- The Hermes desktop app runs Bot Chat in its own backend process (a child of Hermes.app), separate from the launchd `ai.hermes.gateway` service; after reinstalling the kit, quit and reopen the app (restarting the gateway is not enough) for guard or plugin changes to take effect.
+- One Hermes process serves several profiles and names the routed profile in a ContextVar (the `hermes_constants` HERMES_HOME override); plugin code that hops threads must use `contextvars.copy_context().run`, or the profile reads as `default`.
