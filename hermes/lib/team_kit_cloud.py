@@ -1,18 +1,21 @@
 """Start one cloud coding agent and return the session it created.
 
-A Claude Code agent starts by firing the project's routine: one HTTPS POST to the routine's `/fire`
-endpoint with its bearer token in a header and the prompt in the JSON body. The routine's saved prompt
-tells the session to do the task in its fire payload; the routine names the repository, environment,
-and model. The answer carries the session URL. No local process, clone, or terminal is involved, and
-the prompt (which may hold a signing key) and the token never reach argv, a URL, or a log.
+A Claude Code session is started in two steps, so no prompt text ever reaches a process argument.
+`claude --cloud "<first message>"` creates the session; its argument is a fixed sentence telling the
+session that its task comes next. The CLI creates a session only on a terminal, from a directory whose
+GitHub remote is the repository, and asks once per directory whether to trust it. So every launch runs
+from one kept checkout per repository, which the owner trusts once, on a pseudo-terminal acquired as the
+child's controlling terminal (TIOCSCTTY), with `CI` removed from its environment. Then
+`claude --cloud <session> -p` sends the real prompt, signing keys included, on stdin; that form needs no
+terminal and queues the message into the session.
 
 `codex cloud exec` names its environment, which is bound to a repository, so it runs from an empty
-directory. Its prompt is written to its stdin (`codex cloud exec -`), never to argv. It runs in its own
-session with a pseudo-terminal acquired as its controlling terminal (TIOCSCTTY) on stdout and stderr, and
-`CI` is removed from its environment. The terminal output has its escape sequences stripped and is read
-for the task URL. A redacted snapshot up to the task URL or startup error is written to a log next to the
-working directory. No shell is involved. After the task is known the output keeps being drained and the
-child is reaped in a background thread, so it may keep running after this returns.
+directory with its prompt on stdin (`codex cloud exec -`), on the same kind of pseudo-terminal.
+
+The terminal output has its escape sequences stripped and is read for the session URL. A redacted snapshot
+up to the session URL or startup error is written to a log next to the working directory. No shell is
+involved. After the session is known the output keeps being drained and the child is reaped in a background
+thread, so it may keep running after this returns.
 """
 
 from __future__ import annotations
@@ -20,7 +23,6 @@ from __future__ import annotations
 import os
 import re
 import fcntl
-import json
 import select
 import shutil
 import signal
@@ -28,8 +30,6 @@ import subprocess
 import termios
 import threading
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -57,28 +57,19 @@ STATUS_TIMEOUT_SECONDS = 30
 FINISHED = frozenset({"ready", "applied", "error"})
 REDACTED_PROMPT = "[redacted prompt]"
 REDACTED_KEY = "[redacted signing key]"
-# A routine is fired at its own endpoint with its own token. The beta header is the documented
-# version of this research-preview API; a newer one ships under a new date.
-ROUTINE_TOKEN_ENV = "TEAM_KIT_ROUTINE_TOKEN"
-ROUTINE_ID = re.compile(r"\Atrig_[A-Za-z0-9]{8,64}\Z")
-ROUTINE_FIRE_URL = "https://api.anthropic.com/v1/claude_code/routines/{routine}/fire"
-ROUTINE_BETA = "experimental-cc-routine-2026-04-01"
-ROUTINE_FIRE_TIMEOUT_SECONDS = 30
-CLAUDE_SESSION_URL = re.compile(r"\Ahttps://claude\.ai/code/[A-Za-z0-9_-]+\Z")
-API_REASON = re.compile(r"\A[a-z0-9_]{1,64}\Z")
-FIRE_HINTS = {
-    401: "the routine token is wrong or was revoked; generate a new one on the routine's page",
-    403: "the routine token cannot fire this routine",
-    404: "no such routine; check routine: in bots.yaml",
-    429: "the routine's fire limit is reached (30 an hour); try again later",
-}
-REASON_HINTS = {
-    "routine_paused": "the routine is paused; turn it on at claude.ai/code/routines",
-}
+# Claude Code launches from one kept checkout per repository, never pruned, which the owner trusts once.
+CLAUDE_CHECKOUT = "repo"
+CLAUDE_FIRST_MESSAGE = ("Your task arrives as the next message in this session. "
+                        "Until it does, change nothing and reply only: waiting for the task.")
+CLAUDE_SENT = "Sent to cloud session"
+CLAUDE_SESSION_ID = re.compile(r"\A(?:session|cse)_[A-Za-z0-9]+\Z")
+# The CLI's trust question; the terminal cleanup can drop the spaces between its words.
+TRUST_QUESTION = re.compile(r"trust\s*this\s*folder", re.I)
+SEND_TIMEOUT_SECONDS = 120
+GIT_TIMEOUT_SECONDS = 120
 
 Runner = Callable[..., str]
 StatusRunner = Callable[[list[str]], str]
-Poster = Callable[[str, dict[str, str], bytes, float], tuple[int, bytes]]
 
 
 def run_codex_status(argv: list[str]) -> str:
@@ -89,78 +80,6 @@ def run_codex_status(argv: list[str]) -> str:
 
 class CloudError(Exception):
     pass
-
-
-@dataclass(frozen=True)
-class Routine:
-    """A Claude Code routine whose saved prompt does the task in its fire payload, and the token that fires it."""
-    id: str
-    token: str = field(repr=False)
-
-
-def owned_routine(routine_id: str | None, owner_repo: str | None, token: str) -> Callable[[str], Routine | None]:
-    """The routine resolver for one project: its routine starts sessions for its own repository and no other."""
-    def resolve(repo: str) -> Routine | None:
-        if routine_id and owner_repo and repo.lower() == owner_repo.lower():
-            return Routine(routine_id, token)
-        return None
-    return resolve
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """A redirect would carry the bearer token to another URL, so none is followed."""
-
-    def redirect_request(self, *args, **kwargs):
-        return None
-
-
-_OPENER = urllib.request.build_opener(_NoRedirect)
-
-
-def post_json(url: str, headers: dict[str, str], body: bytes, timeout: float) -> tuple[int, bytes]:
-    """POST body to url and return the status and at most 64 KiB of the answer. Network errors raise OSError."""
-    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    try:
-        with _OPENER.open(request, timeout=timeout) as response:
-            return response.status, response.read(65536)
-    except urllib.error.HTTPError as err:
-        return err.code, err.read(65536)
-
-
-def fire_routine(routine: Routine, text: str, post: Poster = post_json,
-                 timeout: float = ROUTINE_FIRE_TIMEOUT_SECONDS) -> str:
-    """Fire routine with text as its payload and return the session URL. Never retries: a fire that timed
-    out may still have started a session, and a second one would do the work twice."""
-    if not ROUTINE_ID.match(routine.id or ""):
-        raise CloudError("the routine id must look like trig_ followed by letters and digits")
-    if not routine.token:
-        raise CloudError(f"no routine token: put it in the project bot profile's .env as {ROUTINE_TOKEN_ENV}")
-    headers = {
-        "Authorization": f"Bearer {routine.token}",
-        "anthropic-beta": ROUTINE_BETA,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-    }
-    try:
-        status, raw = post(ROUTINE_FIRE_URL.format(routine=routine.id), headers, json.dumps({"text": text}).encode(), timeout)
-    except (OSError, ValueError) as err:  # URLError, timeouts, and TLS failures; their text may quote the request
-        raise CloudError(f"firing routine {routine.id} did not reach the API ({type(err).__name__}); try again later") from None
-    try:
-        answer = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        answer = None
-    if status != 200:
-        # Only the API's reason code is kept: its message is free text this module does not need to repeat.
-        error = answer.get("error") if isinstance(answer, dict) else None
-        reason = error.get("reason") if isinstance(error, dict) else None
-        reason = reason if isinstance(reason, str) and API_REASON.match(reason) else None
-        hint = REASON_HINTS.get(reason or "") or FIRE_HINTS.get(status)
-        raise CloudError(f"routine {routine.id} refused the fire: HTTP {status}{' ' + reason if reason else ''}"
-                         f"{'; ' + hint if hint else ''}")
-    url = answer.get("claude_code_session_url") if isinstance(answer, dict) else None
-    if not isinstance(url, str) or not CLAUDE_SESSION_URL.match(url):
-        raise CloudError(f"routine {routine.id} answered the fire without a session URL")
-    return url
 
 
 def clean_terminal_text(raw: bytes) -> str:
@@ -223,15 +142,13 @@ def _drain(fd: int, proc=None) -> None:
 
 @dataclass
 class Cloud:
+    run_gh: Runner
     popen: Callable = subprocess.Popen
     wait_seconds: float = 180.0
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     now: Callable[[], float] = field(default=time.time)
     run_status: StatusRunner = run_codex_status
-    # The routine that starts Claude Code sessions for a repository, or None when it has none.
-    routines: Callable[[str], Routine | None] = field(default=lambda repo: None)
-    post: Poster = post_json
 
     def task_status(self, backend: str, session: str) -> str:
         """pending, ready, applied, or error for a Codex cloud task; unknown for anything else.
@@ -251,43 +168,60 @@ class Cloud:
         return label.group(1).lower() if label else "unknown"
 
     def start(self, backend: str, repo: str, command: CloudCommand, workdir: Path) -> str:
-        """Start command for repo. Returns the session URL or id. A Claude Code session is a routine fire;
-        a Codex task runs with workdir as its directory."""
-        if backend == "claude":
-            routine = self.routines(repo)
-            if routine is None:
-                raise CloudError(f"{repo} has no Claude Code routine: add routine: trig_... to its project bot in bots.yaml "
-                                 f"(team-kit-admin add-project --routine) and {ROUTINE_TOKEN_ENV} to that bot profile's .env")
-            return fire_routine(routine, command.prompt, self.post)
+        """Start command for repo and return the session URL or id. A Codex task runs in workdir, emptied first;
+        a Claude Code session launches from the repository's kept checkout beside it, and workdir names its log."""
         workdir.parent.mkdir(parents=True, exist_ok=True)
         self._prune(workdir.parent)
+        log = workdir.with_name(workdir.name + ".log")
+        if backend == "claude":
+            checkout = self.claude_checkout(repo, workdir.parent / CLAUDE_CHECKOUT)
+            session = self._launch([command.argv[0], "--cloud", CLAUDE_FIRST_MESSAGE], checkout, None, log, command)
+            self._send(command, session, checkout)
+            return session
         if workdir.exists():
             shutil.rmtree(workdir)
         workdir.mkdir()
-        argv = list(command.argv)
-        log = workdir.with_name(workdir.name + ".log")
+        return self._launch(list(command.argv), workdir, command.prompt.encode(), log, command)
+
+    def claude_checkout(self, repo: str, path: Path) -> Path:
+        """The kept checkout Claude Code launches from: cloned once, then moved to the default branch's tip."""
+        if not (path / ".git").exists():
+            shutil.rmtree(path, ignore_errors=True)
+            self.run_gh(["repo", "clone", repo, str(path), "--", "--depth", "1", "--quiet"])
+            return path
+        for args in (["fetch", "--quiet", "--depth", "1", "origin", "HEAD"], ["reset", "--quiet", "--hard", "FETCH_HEAD"]):
+            try:
+                done = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_SECONDS)
+            except (OSError, subprocess.TimeoutExpired):
+                raise CloudError(f"git {args[0]} did not finish in {path}") from None
+            if done.returncode:
+                raise CloudError(f"git {args[0]} failed in {path}: {done.stderr.strip()[:200]}")
+        return path
+
+    def _launch(self, argv: list[str], cwd: Path, stdin: bytes | None, log: Path, command: CloudCommand) -> str:
+        """Run argv on a pseudo-terminal in cwd until it prints a session, and return it."""
         log.write_text("", encoding="utf-8")
+        # This side keeps its own copy of the terminal open until the session is read: macOS drops unread
+        # output once every copy is closed, so a child that prints and exits at once would lose its line.
         master, slave = os.openpty()
         keep_master = False
         try:
-            try:
-                proc = self.popen(
-                    argv,
-                    cwd=str(workdir),
-                    stdin=subprocess.PIPE,
-                    stdout=slave,
-                    stderr=slave,
-                    env=_child_env(),
-                    start_new_session=True,
-                    preexec_fn=_acquire_terminal,
-                )
-            finally:
-                os.close(slave)
-            try:
-                proc.stdin.write(command.prompt.encode())
-                proc.stdin.close()
-            except (BrokenPipeError, OSError):
-                pass
+            proc = self.popen(
+                argv,
+                cwd=str(cwd),
+                stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                stdout=slave,
+                stderr=slave,
+                env=_child_env(),
+                start_new_session=True,
+                preexec_fn=_acquire_terminal,
+            )
+            if stdin is not None:
+                try:
+                    proc.stdin.write(stdin)
+                    proc.stdin.close()
+                except (BrokenPipeError, OSError):
+                    pass
             raw = b""
             deadline = self.clock() + self.wait_seconds
             while True:
@@ -297,8 +231,14 @@ class Cloud:
                 if found:
                     self._write_log(log, text, command)
                     keep_master = True
+                    os.close(slave)
+                    slave = -1
                     threading.Thread(target=_drain, args=(master, proc), daemon=True).start()
                     return found.group(0)
+                if TRUST_QUESTION.search(text):
+                    self._stop(proc)
+                    self._write_log(log, text, command)
+                    raise CloudError(f"Claude Code asks whether to trust {cwd}; trust it once: cd {cwd} && claude, choose yes, then /exit")
                 code = proc.poll()
                 if code is not None:
                     raw += _read_available(master, 0.05)
@@ -311,34 +251,60 @@ class Cloud:
                     last = next((line for line in reversed(safe_text.splitlines()) if line.strip()), "no output")
                     raise CloudError(f"{argv[0]} exited {code} before starting a session: {last[:200]}")
                 if self.clock() >= deadline:
-                    try:
-                        os.killpg(proc.pid, signal.SIGTERM)
-                    except (OSError, AttributeError):
-                        proc.kill()
-                    _reap(proc, 5)
+                    self._stop(proc)
                     raw += _read_available(master, 0.05)
                     self._write_log(log, clean_terminal_text(raw), command)
                     raise CloudError(f"{argv[0]} printed no session in {int(self.wait_seconds)}s; see {log}")
                 self.sleep(1.0)
         finally:
-            if not keep_master:
+            for fd in ([slave] if slave >= 0 else []) + ([] if keep_master else [master]):
                 try:
-                    os.close(master)
+                    os.close(fd)
                 except OSError:
                     pass
 
+    def _send(self, command: CloudCommand, session: str, cwd: Path) -> None:
+        """Queue the prompt into the new session on stdin. No terminal is needed, and no argument carries it."""
+        session_id = session.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0]
+        if not CLAUDE_SESSION_ID.match(session_id):
+            raise CloudError(f"{session} is not a Claude Code session the CLI can message")
+        try:
+            done = subprocess.run([command.argv[0], "--cloud", session_id, "-p"], cwd=str(cwd), input=command.prompt,
+                                  capture_output=True, text=True, env=_child_env(), timeout=SEND_TIMEOUT_SECONDS)
+            out = done.stdout + done.stderr
+        except (OSError, subprocess.TimeoutExpired) as err:
+            done, out = None, type(err).__name__
+        if done is None or done.returncode or CLAUDE_SENT not in out:
+            last = next((line for line in reversed(self._redact(out, command).splitlines()) if line.strip()), "no output")
+            raise CloudError(f"{session} started but did not get its task, so it waits idle: {last[:200]}")
+
     @staticmethod
-    def _write_log(log: Path, text: str, command: CloudCommand) -> str:
+    def _stop(proc) -> None:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except (OSError, AttributeError):
+            proc.kill()
+        _reap(proc, 5)
+
+    @staticmethod
+    def _redact(text: str, command: CloudCommand) -> str:
         safe_text = text.replace(command.prompt, REDACTED_PROMPT) if command.prompt else text
         for secret in command.sensitive:
             if secret:
                 safe_text = safe_text.replace(secret, REDACTED_KEY)
+        return safe_text
+
+    @classmethod
+    def _write_log(cls, log: Path, text: str, command: CloudCommand) -> str:
+        safe_text = cls._redact(text, command)
         log.write_text(safe_text, encoding="utf-8", errors="replace")
         return safe_text
 
     def _prune(self, parent: Path) -> None:
         cutoff = self.now() - KEEP_SECONDS
         for entry in parent.iterdir():
+            if entry.name == CLAUDE_CHECKOUT:
+                continue
             try:
                 if entry.stat().st_mtime < cutoff:
                     shutil.rmtree(entry) if entry.is_dir() else entry.unlink()

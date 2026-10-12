@@ -351,7 +351,7 @@ def test_dispatch_opens_the_issue_and_launches_the_unit(team_kit_home, gh, capsy
     assert issue["body"].rstrip().endswith(size_marker("large"))
     [(backend, repo, command, workdir)] = cloud.started
     assert (backend, repo) == ("claude", REPO)
-    assert command.argv == ()
+    assert command.argv == ("claude", "--cloud")
     assert command.prompt.startswith(f"/faker-mode Work the brief in {REPO}#41 using the follow-brief skill. If the follow-brief skill is not available")
     assert workdir == team_kit_home / "checkouts" / "acme__shop" / "41"
     launched = gh.comments[(REPO, 41)][-1]["body"]
@@ -938,7 +938,7 @@ def test_tick_starts_one_pr_review_for_a_new_unit_pr_head(team_kit_home, kit, ca
     n, cloud = reviewing_unit(gh, team_kit_home, capsys)
     [(backend, _, command, workdir)] = cloud.started
     saved = review_record(team_kit_home, n)
-    assert backend == "claude" and command.argv == ()
+    assert backend == "claude" and command.argv == ("claude", "--cloud")
     assert command.prompt.startswith(f"/review-pr Review https://github.com/{REPO}/pull/7 at commit {HEAD} for the unit in {REPO}#{n},")
     assert saved["key"] in command.prompt
     assert saved["key"] not in " ".join(command.argv)
@@ -1297,7 +1297,7 @@ def test_a_done_unit_with_passing_checks_goes_to_a_verifier_then_to_review(team_
     assert gh.labels(REPO, n) == {"agent-task", "agent:verifying"}
     [(backend, _, command, workdir)] = cloud.started
     saved = record(team_kit_home, n)
-    assert backend == "claude" and command.argv == ()
+    assert backend == "claude" and command.argv == ("claude", "--cloud")
     assert command.prompt.startswith(f"/verify-unit Verify https://github.com/{REPO}/pull/7 at commit {HEAD} against the brief in {REPO}#{n}. Sign the verdict with key {saved['key']}.")
     assert saved["key"] not in " ".join(command.argv)
     assert command.sensitive == (saved["key"],), "the cloud log redacts the verifier's key"

@@ -131,8 +131,6 @@ def bots(**entries):
         (bots(x={"role": "project", "project": "p", "repo": "a/b"}, y={"role": "project", "project": "q", "repo": "A/B"}), "belongs to both"),
         (bots(x={"role": "project", "project": "p", "repo": "a/b;id"}), "needs repo: OWNER/REPO"),
         (bots(x={"role": "project", "project": "p"}), "needs repo: OWNER/REPO"),
-        (bots(x={"role": "project", "project": "p", "repo": "a/b", "routine": "trig_x/../fire"}), "routine must be a Claude Code routine id"),
-        (bots(x={"role": "project", "project": "p", "repo": "a/b", "routine": 12345678}), "routine must be a Claude Code routine id"),
         (bots(x={"role": "project", "project": "p", "repos": ["a/b", "a/c"]}), "a project has one repository"),
         (bots(x={"role": "project", "project": "p", "repo": "a/b", "home": "a/b"}), "a project has one repository"),
     ],

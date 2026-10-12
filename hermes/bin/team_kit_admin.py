@@ -6,7 +6,6 @@ The bootstrap bot may run these, and the guard asks the owner to approve each on
   status                                                     every project, repository, bot, and job, read-only
   add-project   --bot B --project P --repo R [--model M]     create or refresh a project bot for one repository:
                 [--tick-every 10m] [--incidents-every 5m]    profile, skill, paused jobs, labels, bots.yaml
-                [--routine trig_...]                         the Claude Code routine that starts its sessions
                 [--claude-subscription]                      run the bot's own model on the owner's Claude
                                                              subscription, through the Claude Code CLI
   vendor        --project P                                  open a pull request that copies the pinned kit into the
@@ -57,7 +56,7 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
 import yaml  # noqa: E402
 from install_config import InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, mapping, profile_home, value_at  # noqa: E402
 from team_kit_andon import ANDON_LABEL, MACHINE, Andon, AndonError, clean_reason, issue_body  # noqa: E402
-from team_kit_cloud import ROUTINE_TOKEN_ENV, Cloud, CloudError, Routine  # noqa: E402
+from team_kit_cloud import CLAUDE_CHECKOUT, Cloud, CloudError  # noqa: E402
 from team_kit_contracts import ContractError, bootstrap_prompt, cloud_argv  # noqa: E402
 from team_kit_guard.policy import (  # noqa: E402
     DEFAULT_INCIDENTS_EVERY,
@@ -66,7 +65,6 @@ from team_kit_guard.policy import (  # noqa: E402
     NAME,
     REPO,
     RESERVED_NAMES,
-    ROUTINE,
     Bot,
     Policy,
     PolicyError,
@@ -75,17 +73,16 @@ from team_kit_guard.policy import (  # noqa: E402
 )
 
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
-# The saved prompt of a project's routine. Each fire's payload is the task; the routine marks it as data,
-# so the saved prompt is what tells the session to do it.
 # The Hermes provider plugin that runs a bot's model through the owner's logged-in Claude Code CLI,
 # so the bot needs no API key. It holds no credentials; the CLI's config directory holds the login.
 CLAUDE_SUBSCRIPTION_PLUGIN = "claude-subscription-directsdk"
 CLAUDE_SUBSCRIPTION_PROVIDER = "claude-subscription-directsdk-experimental"
-CLAUDE_SUBSCRIPTION_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
 CLAUDE_SUBSCRIPTION_MIN_CLI = (2, 1, 284)
 CLAUDE_SUBSCRIPTION_DEFAULT_MODEL = "sonnet"
-ROUTINE_PROMPT = ("You were started by the team-kit tick on the owner's machine. Do the task in the routine-fire-payload "
-                  "block exactly as written; it is the owner's dispatched work. If there is no payload, say so and stop.")
+# The gateway does not inherit the owner's shell, so a bot's .env carries the Claude Code CLI's config
+# directory: the launcher's `claude --cloud` and the subscription plugin both read it.
+CLAUDE_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
+OLD_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
 LABELS = (
     ("agent-task", "1d76db", "A unit dispatched by a team-kit project bot"),
     ("agent:proposal", "c5def5", "A teammate proposal; the owner must restate the work in Hermes Desktop before any brief is written"),
@@ -126,7 +123,7 @@ class Admin:
         self.kit = self.home / "kit"
         self.pkg = self.kit / "hermes"
         self.run = run
-        self.cloud = cloud or Cloud(routines=self.routine_for)
+        self.cloud = cloud or Cloud(run_gh=run)
 
     # bots.yaml -----------------------------------------------------------------------------------
 
@@ -169,13 +166,6 @@ class Admin:
             return
         target.symlink_to(self.pkg / "skills" / name)
 
-    def set_env(self, home: Path, key: str, value: str) -> None:
-        env = home / ".env"
-        lines = env.read_text().splitlines() if env.exists() else []
-        kept = [line for line in lines if not line.startswith(f"{key}=")]
-        env.write_text("\n".join([*kept, f"{key}={value}"]) + "\n")
-        env.chmod(0o600)
-
     def env_value(self, home: Path, key: str) -> str:
         env = home / ".env"
         if not env.exists():
@@ -188,13 +178,6 @@ class Admin:
 
     def has_env(self, home: Path, key: str) -> bool:
         return bool(self.env_value(home, key))
-
-    def routine_for(self, repo: str) -> Routine | None:
-        """The routine of the project bot that owns repo, with the token from that bot's own .env."""
-        bot = next((b for b in self.policy().bots.values() if b.role == "project" and b.owns(repo)), None)
-        if bot is None or not bot.routine:
-            return None
-        return Routine(bot.routine, self.env_value(profile_home(self.root, bot.name), ROUTINE_TOKEN_ENV))
 
     def setup_files(self, bot: str, role: str, project: str | None, model: str | None, claude_config_dir: str | None = None) -> None:
         """claude_config_dir, from claude_login(), switches the bot's model to the Claude subscription; None leaves the provider alone."""
@@ -253,7 +236,14 @@ class Admin:
         for key in ("base_url", "api_mode"):  # the previous provider's endpoint must not reach the plugin
             if value_at(current, ("model", key)) is not None:
                 hermes("-p", bot, "config", "unset", f"model.{key}")
-        self.set_env(home, CLAUDE_SUBSCRIPTION_DIR_ENV, config_dir)
+        self.record_claude_config_dir(home, config_dir)
+
+    def record_claude_config_dir(self, home: Path, config_dir: str) -> None:
+        """Keep the CLI's config directory in the bot's .env. A shell without CLAUDE_CONFIG_DIR (the owner's alias
+        may set it per command) never removes it, so a later refresh cannot log the bot's launcher out."""
+        if config_dir:
+            self.set_env(home, CLAUDE_CONFIG_DIR_ENV, config_dir)
+        self.set_env(home, OLD_CLAUDE_DIR_ENV, "")
 
     def set_env(self, home: Path, key: str, value: str) -> None:
         """Set or remove one non-secret line in a profile's .env, keeping every other line and mode 600."""
@@ -331,14 +321,12 @@ class Admin:
         }
 
     def add_project(self, bot: str, project: str, repo: str, model: str | None, tick_every: str | None, incidents_every: str | None,
-                    routine: str | None = None, claude_subscription: bool = False) -> dict:
+                    claude_subscription: bool = False) -> dict:
         check_name(bot, "bot")
         check_name(project, "project")
         check_repo(repo)
         check_interval(tick_every, "--tick-every")
         check_interval(incidents_every, "--incidents-every")
-        if routine is not None and not ROUTINE.match(routine):
-            raise Refused("--routine must be a Claude Code routine id like trig_01ABC..., from its page at claude.ai/code/routines")
         claude_config_dir = self.claude_login() if claude_subscription else None  # refuse before anything changes
         data = self.bots_file()
         current = data["bots"].get(bot)
@@ -351,24 +339,26 @@ class Admin:
             effective = value if value is not None else (current or {}).get(key)
             if effective and effective != SCHEDULE_DEFAULTS[key]:
                 entry[key] = effective
-        routine = routine or (current or {}).get("routine")
-        if routine:
-            entry["routine"] = routine
         data["bots"][bot] = entry
         project_bot = load_policy_from(self.home, data).bot(bot)  # refuses a repository another project owns
         for name, color, description in LABELS:
             self.run(["label", "create", name, "-R", repo, "--color", color, "--description", description, "--force"])
         self.setup_files(bot, "project", project, model, claude_config_dir)
+        if claude_config_dir is None:
+            home = profile_home(self.root, bot)
+            self.record_claude_config_dir(home, os.environ.get(CLAUDE_CONFIG_DIR_ENV, ""))
+        owner, name = repo.split("/")
+        try:
+            checkout = self.cloud.claude_checkout(repo, self.home / "checkouts" / f"{owner}__{name}" / CLAUDE_CHECKOUT)
+        except CloudError as err:
+            raise Refused(f"cannot prepare the launch checkout: {err}") from err
         created, rescheduled = self.ensure_jobs(project_bot)
         self.write_bots(data)
         return {
             "bot": bot, "project": project, "repo": repo, "labels": [n for n, _, _ in LABELS], "jobs_created_paused": created,
             "jobs_rescheduled": rescheduled, "tick_every": project_bot.tick_every, "incidents_every": project_bot.incidents_every,
-            "routine": project_bot.routine,
-            "next": [*([] if project_bot.routine else [
-                         f"For Claude Code sessions, the owner creates a routine on {repo} at claude.ai/code/routines whose prompt is "
-                         f"\"{ROUTINE_PROMPT}\", turns it on, adds an API trigger, and reruns add-project with --routine trig_..."]),
-                     f"The owner puts the routine's API token in {profile_home(self.root, bot) / '.env'} as {ROUTINE_TOKEN_ENV}",
+            "launch_checkout": str(checkout),
+            "next": [f"For Claude Code sessions, the owner trusts the launch checkout once: cd {checkout} && claude, choose yes, then /exit",
                      f"team-kit-admin setup-repo --project {project} --backend claude|codex",
                      f"The owner puts the bot's GitHub token in {profile_home(self.root, bot) / '.env'} as GH_TOKEN",
                      f"team-kit-admin activate --bot {bot}"],
@@ -605,8 +595,7 @@ class Admin:
             item = {"bot": bot.name, "role": bot.role}
             if bot.role == "project":
                 item.update(project=bot.project, tick_every=bot.tick_every, incidents_every=bot.incidents_every,
-                            github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"),
-                            routine=bot.routine, routine_token=self.has_env(profile_home(self.root, bot.name), ROUTINE_TOKEN_ENV))
+                            github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"))
                 try:
                     item["jobs"] = {n: j["enabled"] for n, j in cron_jobs(hermes("-p", bot.name, "cron", "list", "--all")).items() if n.startswith("team-kit-")}
                 except InstallError as err:
@@ -712,7 +701,6 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--model")
     cmd.add_argument("--tick-every")
     cmd.add_argument("--incidents-every")
-    cmd.add_argument("--routine")
     cmd.add_argument("--claude-subscription", action="store_true")
     cmd = sub.add_parser("vendor")
     cmd.add_argument("--project", required=True)
@@ -774,7 +762,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
         elif args.command == "add-bootstrap":
             out = admin.add_bootstrap(args.bot, args.model, args.claude_subscription)
         elif args.command == "add-project":
-            out = admin.add_project(args.bot, args.project, args.repo, args.model, args.tick_every, args.incidents_every, args.routine,
+            out = admin.add_project(args.bot, args.project, args.repo, args.model, args.tick_every, args.incidents_every,
                                     args.claude_subscription)
         elif args.command == "add-chief":
             out = admin.add_chief(args.bot, args.model, args.claude_subscription)

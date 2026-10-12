@@ -76,6 +76,36 @@ def executable(path, text):
     path.chmod(0o755)
 
 
+# Mirrors the real CLI: `--cloud "<message>"` creates a session only with a terminal on stdout, and
+# `--cloud <session> -p` reads the message on stdin, needs no terminal, and prints "Sent to cloud session.".
+FAKE_CLAUDE = """import json, os, sys, time
+args = sys.argv[1:]
+def record(**entry):
+    with open(os.environ["FAKE_CLAUDE_LOG"], "a") as out:
+        out.write(json.dumps(entry) + "\\n")
+if len(args) == 3 and args[0] == "--cloud" and args[2] == "-p":
+    record(kind="send", argv=args, stdin=sys.stdin.read(), cwd=os.getcwd())
+    if os.environ.get("FAKE_CLAUDE_SEND_FAIL"):
+        print("Error: session " + args[1] + " is not running")
+        sys.exit(1)
+    print("Sent to cloud session.")
+    print("Session ID: " + args[1])
+elif len(args) == 2 and args[0] == "--cloud":
+    if not os.isatty(1):
+        print("Error: --cloud requires an interactive terminal.")
+        sys.exit(1)
+    record(kind="create", argv=args, cwd=os.getcwd())
+    if os.environ.get("FAKE_CLAUDE_TRUST"):
+        print("Do you trust the files in this folder?\\n No, exit\\n Yes, I trust this folder", flush=True)
+        time.sleep(30)
+    print("Created cloud session: Task", flush=True)
+    print("View: https://claude.ai/code/session_01FAKEabc?from=cli&m=0", flush=True)
+else:
+    record(kind="other", argv=args)
+    sys.exit(2)
+"""
+
+
 @pytest.fixture(scope="session")
 def kit_source(tmp_path_factory):
     import shutil

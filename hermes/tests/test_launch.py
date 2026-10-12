@@ -1,17 +1,15 @@
 import json
+import os
 import re
 import subprocess
 import sys
-import threading
 import time
-import urllib.error
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from dataclasses import replace
 from hashlib import sha256
 
 import pytest
-from conftest import HERMES, KIT
-from team_kit_cloud import Cloud, CloudError, owned_routine, post_json
+from conftest import FAKE_CLAUDE, HERMES, KIT
+from team_kit_cloud import Cloud, CloudError
 from team_kit_contracts import CloudCommand, LAUNCH_PROMPTS, ContractError, cloud_argv, launch_argv, verify_argv
 
 PREFIXES = ("/faker-mode ", "$faker-mode ")
@@ -31,7 +29,7 @@ CODEX = ("$faker-mode Work the brief in acme/shop#123 using the follow-brief ski
 @pytest.mark.parametrize(
     ("backend", "size", "expected_argv", "prompt"),
     [
-        ("claude", "large", (), CLAUDE),
+        ("claude", "large", ("claude", "--cloud"), CLAUDE),
         ("codex", "small", ("codex", "cloud", "exec", "--env", "env_7", "--attempts", "1", "-"), CODEX),
         ("codex", "medium", ("codex", "cloud", "exec", "--env", "env_7", "--attempts", "2", "-"), CODEX),
         ("codex", "large", ("codex", "cloud", "exec", "--env", "env_7", "--attempts", "3", "-"), CODEX),
@@ -53,7 +51,7 @@ def status_cloud(output, calls=None, error=None):
             raise error
         return output
 
-    return Cloud(run_status=run_status)
+    return Cloud(run_gh=no_clone, run_status=run_status)
 
 
 @pytest.mark.parametrize(
@@ -156,9 +154,13 @@ def command(argv, prompt="prompt", sensitive=()):
     return CloudCommand(tuple(argv), prompt, tuple(sensitive))
 
 
-def cloud(wait=200.0):
+def no_clone(args, input=None):
+    raise AssertionError(f"unexpected gh call {args}")
+
+
+def cloud(wait=200.0, run_gh=no_clone, now=time.time):
     clock = Clock()
-    return Cloud(wait_seconds=wait, sleep=clock.sleep, clock=clock)
+    return Cloud(run_gh=run_gh, wait_seconds=wait, sleep=clock.sleep, clock=clock, now=now)
 
 
 def test_codex_starts_in_an_empty_directory(tmp_path):
@@ -267,116 +269,83 @@ def test_the_child_survives_until_the_session_exists_is_reaped_and_leaks_no_desc
     assert len(os.listdir(fd_dir)) <= before
 
 
-TOKEN = "sk-ant-oat01-routine-token"
-SESSION_URL = "https://claude.ai/code/cse_01XYZabc"
+def git(*args, cwd=None):
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
-class RoutineApi:
-    """Answers a fire as the routines API does: a status and a body. Records every request it gets."""
+@pytest.fixture
+def claude_cli(tmp_path, monkeypatch):
+    """A fake claude on disk, an origin repository, and a gh that clones it; returns (cli, calls, origin, clones)."""
+    cli = tmp_path / "bin" / "claude"
+    cli.parent.mkdir()
+    cli.write_text(f"#!{sys.executable}\n" + FAKE_CLAUDE)
+    cli.chmod(0o755)
+    calls = tmp_path / "claude-calls.jsonl"
+    monkeypatch.setenv("FAKE_CLAUDE_LOG", str(calls))
+    origin = tmp_path / "origin"
+    git("init", "-q", "-b", "main", str(origin))
+    git("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "one", cwd=origin)
+    clones = []
 
-    def __init__(self, status=200, body=None, error=None):
-        self.status, self.error, self.requests = status, error, []
-        self.body = body if body is not None else {"type": "routine_fire", "claude_code_session_id": "cse_01XYZabc",
-                                                    "claude_code_session_url": SESSION_URL}
+    def run_gh(args, input=None):
+        assert args[:3] == ["repo", "clone", "acme/shop"]
+        clones.append(args)
+        git("clone", "-q", str(origin), args[3])
+        return ""
 
-    def __call__(self, url, headers, body, timeout):
-        self.requests.append((url, headers, json.loads(body), timeout))
-        if self.error:
-            raise self.error
-        return self.status, self.body if isinstance(self.body, bytes) else json.dumps(self.body).encode()
+    return cli, calls, origin, run_gh, clones
 
 
-def routine_cloud(api, routine_id="trig_01ABCDEFGH", repo="acme/shop", token=TOKEN):
-    return Cloud(routines=owned_routine(routine_id, repo, token), post=api)
+def claude_calls(calls):
+    return [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
 
 
-def test_a_claude_session_is_one_routine_fire_with_the_prompt_only_in_the_body(tmp_path):
+def test_a_claude_session_is_created_with_a_fixed_message_then_gets_its_prompt_on_stdin(tmp_path, claude_cli):
+    cli, calls, _, run_gh, _ = claude_cli
     key = "0123456789abcdef" * 2
     private = verify_argv("claude", "acme/shop", 7, "https://github.com/acme/shop/pull/7", "a" * 40, key)
-    api = RoutineApi()
-    assert routine_cloud(api).start("claude", "acme/shop", private, tmp_path / "w") == SESSION_URL
-    [(url, headers, body, timeout)] = api.requests
-    assert url == "https://api.anthropic.com/v1/claude_code/routines/trig_01ABCDEFGH/fire"
-    assert headers == {"Authorization": f"Bearer {TOKEN}", "anthropic-beta": "experimental-cc-routine-2026-04-01",
-                       "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
-    assert body == {"text": private.prompt} and key in private.prompt and key not in url
-    assert 0 < timeout <= 60
-    assert private.argv == () and not (tmp_path / "w").exists(), "nothing runs or clones locally"
+    workdir = tmp_path / "checkouts" / "acme__shop" / "7-verify"
+    session = cloud(run_gh=run_gh).start("claude", "acme/shop", replace(private, argv=(str(cli), "--cloud")), workdir)
+    assert session == "https://claude.ai/code/session_01FAKEabc"
+    create, send = claude_calls(calls)
+    checkout = str(workdir.parent / "repo")
+    assert create == {"kind": "create", "cwd": checkout, "argv": ["--cloud", "Your task arrives as the next message in this session. "
+                                                                    "Until it does, change nothing and reply only: waiting for the task."]}
+    assert send == {"kind": "send", "argv": ["--cloud", "session_01FAKEabc", "-p"], "stdin": private.prompt, "cwd": checkout}
+    assert key in private.prompt and not any(key in arg for call in (create, send) for arg in call["argv"])
+    assert key not in (workdir.parent / "7-verify.log").read_text()
 
 
-def test_the_routine_fires_for_its_own_repository_in_any_letter_case():
-    api = RoutineApi()
-    assert routine_cloud(api, repo="Acme/Shop").start("claude", "acme/shop", CloudCommand((), "p"), KIT) == SESSION_URL
+def test_the_launch_checkout_is_cloned_once_kept_through_pruning_and_moved_to_the_default_branch_tip(tmp_path, claude_cli):
+    cli, _, origin, run_gh, clones = claude_cli
+    parent = tmp_path / "checkouts" / "acme__shop"
+    command_ = command([str(cli), "--cloud"], "/faker-mode Work the brief")
+    cloud(run_gh=run_gh).start("claude", "acme/shop", command_, parent / "1")
+    git("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "two", cwd=origin)
+    later = cloud(run_gh=run_gh, now=lambda: time.time() + 10 * 24 * 3600)  # everything else in parent is past KEEP_SECONDS
+    later.start("claude", "acme/shop", command_, parent / "2")
+    assert len(clones) == 1
+    assert git("rev-parse", "HEAD", cwd=parent / "repo") == git("rev-parse", "HEAD", cwd=origin)
+    assert not (parent / "1.log").exists(), "old logs are still pruned"
 
 
-@pytest.mark.parametrize(
-    ("api", "why"),
-    [
-        (RoutineApi(401, {"error": {"type": "authentication_error", "message": f"bad token {TOKEN}"}}),
-         "HTTP 401; the routine token is wrong or was revoked"),
-        (RoutineApi(400, {"error": {"reason": "routine_paused", "message": "Routine is paused."}}),
-         "HTTP 400 routine_paused; the routine is paused"),
-        (RoutineApi(429, {"error": {"reason": "rate_limited"}}), "HTTP 429 rate_limited; the routine's fire limit is reached"),
-        (RoutineApi(400, {"error": {"reason": "Not A Code; secret prompt"}}), "refused the fire: HTTP 400\n"),
-        (RoutineApi(502, b"<html>bad gateway</html>"), "refused the fire: HTTP 502\n"),
-        (RoutineApi(200, {"type": "routine_fire"}), "answered the fire without a session URL"),
-        (RoutineApi(200, {"claude_code_session_url": "https://evil.example/code/x"}), "answered the fire without a session URL"),
-        (RoutineApi(error=urllib.error.URLError(f"proxy said {TOKEN}")), "did not reach the API (URLError)"),
-        (RoutineApi(error=TimeoutError()), "did not reach the API (TimeoutError)"),
-    ],
-)
-def test_a_refused_or_failed_fire_is_one_attempt_and_an_error_without_the_token_or_prompt(api, why):
+def test_a_trust_question_stops_the_launch_with_how_to_answer_it_and_sends_nothing(tmp_path, claude_cli, monkeypatch):
+    cli, calls, _, run_gh, _ = claude_cli
+    monkeypatch.setenv("FAKE_CLAUDE_TRUST", "1")
+    workdir = tmp_path / "checkouts" / "acme__shop" / "3"
     with pytest.raises(CloudError) as raised:
-        routine_cloud(api).start("claude", "acme/shop", CloudCommand((), "secret prompt with key 00ff"), KIT)
-    error = str(raised.value) + "\n"
-    assert why in error
-    assert TOKEN not in error and "secret prompt" not in error
-    assert len(api.requests) == 1, "a fire is never retried: one that timed out may have started a session"
+        cloud(run_gh=run_gh).start("claude", "acme/shop", command([str(cli), "--cloud"], "secret prompt"), workdir)
+    assert f"trust it once: cd {workdir.parent / 'repo'} && claude" in str(raised.value)
+    assert [c["kind"] for c in claude_calls(calls)] == ["create"]
 
 
-@pytest.mark.parametrize(
-    ("routine_id", "owner", "token", "why"),
-    [
-        ("trig_01ABCDEFGH", "acme/other", TOKEN, "acme/shop has no Claude Code routine"),
-        ("trig_01ABCDEFGH", "acme/shop", "", "no routine token"),
-        ("trig_../../x", "acme/shop", TOKEN, "routine id must look like"),
-    ],
-)
-def test_no_fire_without_this_repositorys_routine_and_token(routine_id, owner, token, why):
-    api = RoutineApi()
-    with pytest.raises(CloudError, match=why):
-        routine_cloud(api, routine_id, owner, token).start("claude", "acme/shop", CloudCommand((), "p"), KIT)
-    assert api.requests == []
-
-
-def test_post_json_never_follows_a_redirect_that_would_carry_the_token(monkeypatch):
-    for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
-        monkeypatch.delenv(name, raising=False)
-    hits = []
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            self._answer()
-
-        def do_GET(self):
-            self._answer()
-
-        def _answer(self):
-            hits.append((self.command, self.path, self.headers.get("Authorization")))
-            self.send_response(302)
-            self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/elsewhere")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-
-        def log_message(self, *args):
-            pass
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        status, _ = post_json(f"http://127.0.0.1:{server.server_port}/fire", {"Authorization": "Bearer t"}, b"{}", 5)
-    finally:
-        server.shutdown()
-        server.server_close()
-    assert status == 302
-    assert hits == [("POST", "/fire", "Bearer t")]
+def test_a_session_that_did_not_get_its_task_is_an_error_without_the_prompt_or_key(tmp_path, claude_cli, monkeypatch):
+    cli, _, _, run_gh, _ = claude_cli
+    monkeypatch.setenv("FAKE_CLAUDE_SEND_FAIL", "1")
+    key = "fedcba9876543210" * 2
+    with pytest.raises(CloudError) as raised:
+        cloud(run_gh=run_gh).start("claude", "acme/shop", command([str(cli), "--cloud"], f"secret prompt with key {key}", [key]),
+                                   tmp_path / "checkouts" / "acme__shop" / "4")
+    error = str(raised.value)
+    assert error.startswith("https://claude.ai/code/session_01FAKEabc started but did not get its task")
+    assert key not in error and "secret prompt" not in error

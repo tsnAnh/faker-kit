@@ -12,7 +12,7 @@ If the shell does not find `team-kit-admin`, run it as `~/.hermes/bin/team-kit-a
 | Command | Does |
 |---|---|
 | `team-kit-admin status` | Every bot, project, repository, label, and job on this machine. Read-only |
-| `team-kit-admin add-project --bot B --project P --repo R [--model M] [--tick-every 10m] [--incidents-every 5m] [--routine trig_...] [--claude-subscription]` | Creates or refreshes project bot B for repository R: profile, guard, `dispatch` skill, paused jobs, schedules, and the eleven labels |
+| `team-kit-admin add-project --bot B --project P --repo R [--model M] [--tick-every 10m] [--incidents-every 5m] [--claude-subscription]` | Creates or refreshes project bot B for repository R: profile, guard, `dispatch` skill, paused jobs, schedules, and the eleven labels |
 | `team-kit-admin vendor --project P` | Opens a pull request that copies the pinned kit into the repository's `.agents/team-kit/`, so cloud sessions there have its skills |
 | `team-kit-admin setup-repo --project P --backend claude\|codex [--codex-env E]` | Starts one cloud session that opens the project's setup pull request |
 | `team-kit-admin protect --project P --check NAME [--check NAME ...]` | Requires those checks on the project's default branch, admins included |
@@ -38,7 +38,7 @@ Ask with `clarify`, one question at a time, only what you do not know yet:
 1. **The repository**, as `OWNER/REPO`. If the owner's product is split across several repositories (an API, a web app, a mobile app), say that a project is one repository and suggest combining them into one first, each app in its own folder, so one agent can carry a feature through all of them. Otherwise each repository becomes its own project.
 2. **The project's slug.** Lowercase letters, digits, `-` and `_`, such as `shop`.
 3. **The bot's name.** Any name the owner likes, in the same characters, such as `meo-beo`, except `default`. It is the Hermes profile name. The owner can give it any display title in Bot Mode.
-4. **The coding agent**: `claude` (Claude Code cloud) or `codex` (Codex cloud). For `codex`, the repository's Codex cloud environment id. For `claude`, the id (`trig_...`) of the repository's Claude Code routine. If there is none yet, give the owner the routine steps from `add-project`'s next steps: they create it at claude.ai/code/routines with the printed prompt, turn it on, add an API trigger, and put its token in the project bot's `.env` as `TEAM_KIT_ROUTINE_TOKEN` themselves. You never see the token.
+4. **The coding agent**: `claude` (Claude Code cloud) or `codex` (Codex cloud). For `codex`, the repository's Codex cloud environment id. For `claude`, tell the owner that after `add-project` they trust its `launch_checkout` once in their own terminal: `cd <launch_checkout> && claude`, choose yes, then `/exit`.
 5. **The project bot's GitHub login**, the account whose token the owner will give it in step 7. It opens the unit issues, so it must be in `trusted_authors` in `~/.hermes/team-kit/guard.yaml` before step 5, which writes those logins into the repository's `trusted_dispatchers`. If `status` does not list it, ask the owner to add it and run `status` again.
 6. **The model** for the project bot, if the owner wants a particular one.
 7. **The polling cadence**, only if the owner wants lower or higher latency than the defaults: tick every `30m`, incidents every `10m`.
@@ -48,10 +48,10 @@ Then restate the whole plan in a short list and ask the owner to confirm before 
 ## 3. Create the project bot
 
 ```text
-team-kit-admin add-project --bot <bot> --project <project> --repo <OWNER/REPO> [--model <model>] [--tick-every <interval>] [--incidents-every <interval>] [--routine <trig_...>] [--claude-subscription]
+team-kit-admin add-project --bot <bot> --project <project> --repo <OWNER/REPO> [--model <model>] [--tick-every <interval>] [--incidents-every <interval>] [--claude-subscription]
 ```
 
-Intervals are positive minutes or hours, such as `10m` or `1h`. It prints the labels it created, the jobs it created paused or rescheduled, the routine, and next steps. Without `--routine`, a refresh keeps the routine already in `bots.yaml`.
+Intervals are positive minutes or hours, such as `10m` or `1h`. It prints the labels it created, the jobs it created paused or rescheduled, the `launch_checkout` Claude Code sessions start from, and next steps.
 
 ## 4. Vendor the kit
 

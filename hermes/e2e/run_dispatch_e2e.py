@@ -19,7 +19,6 @@ from typing import Callable, Iterable
 
 
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
-ROUTINE = re.compile(r"\Atrig_[A-Za-z0-9]{8,64}\Z")
 NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,62}\Z")
 LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\Z")
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
@@ -46,8 +45,6 @@ class Config:
     size: str
     token_env: str
     owner_login: str | None
-    routine: str | None
-    routine_token_env: str | None
     trusted_authors: tuple[str, ...]
     timeout_seconds: int
     poll_seconds: int
@@ -64,8 +61,6 @@ class Paths:
     team_home: Path
     token_env: str = ""
     project_token: str = field(default="", repr=False)
-    routine_token_env: str = ""
-    routine_token: str = field(default="", repr=False)
 
     @property
     def team_kit_admin(self) -> Path:
@@ -146,10 +141,6 @@ def parser() -> argparse.ArgumentParser:
     top.add_argument("--size", choices=("small", "medium", "large"), default="small")
     top.add_argument("--token-env", required=True, metavar="NAME",
                      help="name of the environment variable holding the project bot's own fine-grained token for the scratch repository (the token is never given on the command line)")
-    top.add_argument("--routine", metavar="trig_...",
-                     help="the scratch repository's Claude Code routine, for a repository whose backend is claude")
-    top.add_argument("--routine-token-env", metavar="NAME",
-                     help="the environment variable that holds that routine's API token; required with --routine")
     top.add_argument("--owner-login", help="GitHub login to put in the temporary guard; defaults to gh api user")
     top.add_argument("--trusted-author", action="append", default=[], help="extra GitHub login whose reports count")
     top.add_argument("--timeout-minutes", type=int, default=120)
@@ -175,13 +166,6 @@ def parse_args(argv: list[str] | None = None) -> Config:
         p.error("--token-env must be an environment variable name such as HERMES_E2E_TOKEN")
     if args.token_env in GH_TOKEN_VARS:
         p.error(f"--token-env must not be {args.token_env}: that is the variable your own gh login uses, and the project bot must not inherit it")
-    if bool(args.routine) != bool(args.routine_token_env):
-        p.error("--routine and --routine-token-env go together")
-    if args.routine and not ROUTINE.match(args.routine):
-        p.error("--routine must be a Claude Code routine id like trig_01ABC...")
-    if args.routine_token_env and (not ENV_NAME.match(args.routine_token_env) or args.routine_token_env in GH_TOKEN_VARS
-                                   or args.routine_token_env == args.token_env):
-        p.error("--routine-token-env must be its own environment variable name, not a GitHub token variable or --token-env")
     if args.timeout_minutes < 1:
         p.error("--timeout-minutes must be positive")
     if args.poll_seconds < 1:
@@ -199,8 +183,6 @@ def parse_args(argv: list[str] | None = None) -> Config:
         size=args.size,
         token_env=args.token_env,
         owner_login=args.owner_login,
-        routine=args.routine,
-        routine_token_env=args.routine_token_env,
         trusted_authors=tuple(args.trusted_author),
         timeout_seconds=args.timeout_minutes * 60,
         poll_seconds=args.poll_seconds,
@@ -223,8 +205,6 @@ def env_for(paths: Paths, bot: str | None = None, *, token: bool = False) -> dic
     """
     env = os.environ.copy()
     env.pop(paths.token_env, None)
-    if paths.routine_token_env:
-        env.pop(paths.routine_token_env, None)
     env["TEAM_KIT_HOME"] = str(paths.team_home)
     env["PATH"] = f"{paths.hermes_root / 'bin'}:{env.get('PATH', '')}"
     env["NO_COLOR"] = "1"
@@ -240,40 +220,25 @@ def project_env(paths: Paths, config: Config) -> dict[str, str]:
     return env_for(paths, config.project_bot, token=True)
 
 
-def read_secret(name: str, how: str) -> str:
-    value = os.environ.get(name, "")
+def read_token(config: Config) -> str:
+    value = os.environ.get(config.token_env, "")
     if not value:
-        raise E2EError(f"{name} is not set. {how}, put it in that variable, and run again.")
+        raise E2EError(f"{config.token_env} is not set. Create a fine-grained token for the scratch repository only (see RUNBOOK.md), put it in that variable, and run again.")
     if re.search(r"\s", value):
-        raise E2EError(f"{name} must hold one token with no spaces or line breaks")
+        raise E2EError(f"{config.token_env} must hold one token with no spaces or line breaks")
     return value
 
 
-def read_token(config: Config) -> str:
-    return read_secret(config.token_env, "Create a fine-grained token for the scratch repository only (see RUNBOOK.md)")
-
-
-def read_routine_token(config: Config) -> str:
-    if not config.routine_token_env:
-        return ""
-    return read_secret(config.routine_token_env, "Generate the routine's API token on its page at claude.ai/code/routines")
-
-
 def write_bot_token(paths: Paths, config: Config) -> None:
-    """Write the bot's tokens to its temporary profile's .env, mode 600: GH_TOKEN, and the routine token when
-    there is one. The values are never printed."""
+    """Write the bot's token to its temporary profile's .env, mode 600. The value is never printed."""
     home = paths.hermes_root / "profiles" / config.project_bot
     if not home.is_dir():
         raise E2EError(f"project bot profile {config.project_bot} was not created")
     env_file = home / ".env"
-    written = {"GH_TOKEN": paths.project_token}
-    if paths.routine_token:
-        written["TEAM_KIT_ROUTINE_TOKEN"] = paths.routine_token
-    kept = [line for line in (env_file.read_text().splitlines() if env_file.exists() else [])
-            if line.split("=", 1)[0] not in written]
+    kept = [line for line in (env_file.read_text().splitlines() if env_file.exists() else []) if not line.startswith("GH_TOKEN=")]
     fd = os.open(env_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as out:
-        out.write("\n".join([*kept, *(f"{key}={value}" for key, value in written.items())]) + "\n")
+        out.write("\n".join([*kept, f"GH_TOKEN={paths.project_token}"]) + "\n")
     env_file.chmod(0o600)
 
 
@@ -355,7 +320,6 @@ def add_project(runner: CommandRunner, config: Config, paths: Paths) -> None:
             config.project,
             "--repo",
             config.repo,
-            *(["--routine", config.routine] if config.routine else []),
         ],
         env=env_for(paths, config.bootstrap_bot),
         timeout=300,
@@ -592,19 +556,15 @@ def run_live(
     clock: Callable[[], float] = time.monotonic,
 ) -> int:
     token = read_token(config)  # refuse before anything is created
-    routine_token = read_routine_token(config)
     hide = getattr(runner, "hide", None)
     if hide:
         hide(token)
-        if routine_token:
-            hide(routine_token)
     root = repo_root()
     commit = git_commit(runner, root)
     owner = config.owner_login or gh_login(runner)
     run_root = Path(tempfile.mkdtemp(prefix="team-kit-hermes-e2e-", dir=str(config.temp_parent) if config.temp_parent else None))
     hermes_root = run_root / ".hermes"
-    paths = Paths(root=root, run_root=run_root, hermes_root=hermes_root, team_home=hermes_root / "team-kit", token_env=config.token_env, project_token=token,
-                  routine_token_env=config.routine_token_env or "", routine_token=routine_token)
+    paths = Paths(root=root, run_root=run_root, hermes_root=hermes_root, team_home=hermes_root / "team-kit", token_env=config.token_env, project_token=token)
     obs = Observations(config.timeout_seconds)
     failed = True
     try:
@@ -660,8 +620,6 @@ def print_plan(config: Config) -> None:
     print(f"- bootstrap bot: {config.bootstrap_bot}")
     print(f"- project bot: {config.project_bot}")
     print(f"- project bot token: read from ${config.token_env} when the live run starts; written to the temporary profile's .env, never printed")
-    if config.routine:
-        print(f"- routine: {config.routine}; its token read from ${config.routine_token_env} when the live run starts, written to the same .env, never printed")
     print("- live run will install into a temporary TEAM_KIT_HOME and Hermes home (HOME is not changed), add the project, dispatch one README unit, wait for verification, raise and clear andon, then stop before merge")
 
 

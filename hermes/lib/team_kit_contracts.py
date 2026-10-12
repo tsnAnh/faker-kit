@@ -508,10 +508,10 @@ def launch_prompt(backend: str, repo: str, issue: int) -> str:
 def cloud_argv(backend: str, prompt: str, attempts: int = 1, env_id: str | None = None,
                sensitive: tuple[str, ...] = ()) -> CloudCommand:
     """The command and private prompt payload that start one cloud coding agent. No shell is involved.
-    A Claude Code session is a fire of the project's routine, so it has no local command: argv is empty
-    and the prompt is the fire's payload."""
+    For Claude Code, argv names the CLI; team_kit_cloud creates the session with a fixed first message and
+    sends the prompt on stdin, so it never becomes an argument."""
     if backend == "claude":
-        return CloudCommand((), prompt, sensitive)
+        return CloudCommand(("claude", "--cloud"), prompt, sensitive)
     if backend != "codex":
         raise ContractError(f"backend must be one of {', '.join(BACKENDS)}")
     if not env_id or not ENV_ID.match(env_id):
