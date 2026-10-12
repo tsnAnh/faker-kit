@@ -20,9 +20,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
 
 from team_kit_guard.policy import Policy, SlackConfig
 
@@ -150,7 +150,7 @@ class SlackApi:
 
 
 class WebSocket:
-    def __init__(self, url: str, timeout: float = 60.0):
+    def __init__(self, url: str, timeout: float = 60.0):  # noqa: ANN204
         self.url, self.timeout = url, timeout
         self.sock: socket.socket | ssl.SSLSocket | None = None
 
@@ -184,13 +184,13 @@ class WebSocket:
             if ":" in line:
                 k, v = line.split(":", 1)
                 headers[k.strip().lower()] = v.strip()
-        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()  # noqa: S324
         if headers.get("sec-websocket-accept") != accept:
             raise SlackError("Socket Mode WebSocket upgrade returned the wrong accept key")
 
     def close(self) -> None:
         if self.sock is not None:
-            try:
+            try:  # noqa: SIM105
                 self._send_frame(0x8, b"")
             except OSError:
                 pass
@@ -252,14 +252,14 @@ class WebSocket:
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
         self._sock().sendall(header + mask + masked)
 
-    def _sock(self):
+    def _sock(self):  # noqa: ANN202
         if self.sock is None:
             raise SlackError("Socket Mode WebSocket is not connected")
         return self.sock
 
 
 class SocketModeTransport:
-    def __init__(self, app_token: str, api: SlackApi | None = None):
+    def __init__(self, app_token: str, api: SlackApi | None = None):  # noqa: ANN204
         self.app_token = app_token
         self.api = api or SlackApi()
         self.ws: WebSocket | None = None
@@ -296,7 +296,7 @@ class BotChat:
     command. hermes/README.md lists it among the things to check in the first pilot, because the tests fake Hermes.
     """
 
-    def __init__(self, root: Path | None = None, runner=subprocess.run):
+    def __init__(self, root: Path | None = None, runner=subprocess.run):  # noqa: ANN001, ANN204
         self.root = root or Path.home() / ".hermes"
         self.runner = runner
 
@@ -358,7 +358,7 @@ def notice_from_payload(config: SlackConfig, payload: dict) -> str | None:
 
 
 def stderr_log(line: str) -> None:
-    print(f"team-kit-slack: {line}", file=sys.stderr, flush=True)
+    print(f"team-kit-slack: {line}", file=sys.stderr, flush=True)  # noqa: T201
 
 
 def event_keys(payload: dict) -> list[str]:
@@ -383,7 +383,7 @@ class SlackRelay:
     stable_after: float = 60.0
     clock: object = time.monotonic
     rand: object = random.random
-    seen: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
+    seen: OrderedDict[str, None] = field(default_factory=OrderedDict)
 
     def __post_init__(self) -> None:
         self.config = slack_config(self.policy)
@@ -413,7 +413,7 @@ class SlackRelay:
         """
         envelope = payload.get("envelope_id")
         if envelope:
-            self.transport.ack(str(envelope))
+            self.transport.ack(str(envelope))  # type: ignore[attr-defined]  # team-kit baseline
         if payload.get("type") != "events_api":
             return False
         keys = event_keys(payload)
@@ -421,7 +421,7 @@ class SlackRelay:
             return False
         notice = notice_from_payload(self.config, payload)
         if notice:
-            self.bot_chat.deliver(self.config.bot, notice)
+            self.bot_chat.deliver(self.config.bot, notice)  # type: ignore[attr-defined]  # team-kit baseline
         self._remember(keys)
         return bool(notice)
 
@@ -437,11 +437,11 @@ class SlackRelay:
         count, reconnects, backoff = 0, 0, 1.0
         while max_events is None or count < max_events:
             why = "connection closed"
-            started = self.clock()
+            started = self.clock()  # type: ignore[operator]  # team-kit baseline
             try:
-                self.transport.connect()
+                self.transport.connect()  # type: ignore[attr-defined]  # team-kit baseline
                 while max_events is None or count < max_events:
-                    payload = self.transport.receive()
+                    payload = self.transport.receive()  # type: ignore[attr-defined]  # team-kit baseline
                     if payload is None:
                         break
                     if payload.get("type") == "events_api":
@@ -454,17 +454,17 @@ class SlackRelay:
             except RECONNECT_ERRORS as err:
                 why = f"connection error {type(err).__name__}"
             finally:
-                self.transport.close()
+                self.transport.close()  # type: ignore[attr-defined]  # team-kit baseline
             if max_events is not None and count >= max_events:
                 break
             if max_reconnects is not None and reconnects >= max_reconnects:
                 raise SlackError(f"relay gave up after {reconnects} reconnects: {why}")
-            if self.clock() - started >= self.stable_after:
+            if self.clock() - started >= self.stable_after:  # type: ignore[operator]  # team-kit baseline
                 backoff = 1.0
-            delay = min(backoff, self.max_backoff) * (0.5 + self.rand() / 2)
+            delay = min(backoff, self.max_backoff) * (0.5 + self.rand() / 2)  # type: ignore[operator]  # team-kit baseline
             reconnects += 1
-            self.log(f"{why}; reconnecting in {delay:.1f}s")
-            self.sleep(delay)
+            self.log(f"{why}; reconnecting in {delay:.1f}s")  # type: ignore[operator]  # team-kit baseline
+            self.sleep(delay)  # type: ignore[operator]  # team-kit baseline
             backoff = min(backoff * 2, self.max_backoff)
         return count
 

@@ -1,0 +1,19 @@
+{
+  "rules": [
+    {
+      "id": "hermes-lib-below-commands",
+      "from": ["hermes/lib/**"],
+      "forbid": ["team_kit_gh", "team_kit_admin", "team_kit_chief", "team_kit_slack"],
+      "allow": [],
+      "message": "hermes/lib/ holds the shared modules the commands in hermes/bin/ use. Move what both need into lib/ instead of importing a command."
+    },
+    {
+      "id": "hermes-guard-stands-alone",
+      "from": ["hermes/plugin/**"],
+      "forbid": ["team_kit_andon", "team_kit_cloud", "team_kit_contracts", "team_kit_incident_sources", "team_kit_proposals",
+                 "team_kit_risk", "team_kit_slack_relay", "install_config", "team_kit_gh", "team_kit_admin", "team_kit_chief", "team_kit_slack"],
+      "allow": [],
+      "message": "The guard plugin runs inside every bot's Hermes process and decides each tool call. It depends on nothing in hermes/lib/ or hermes/bin/, so a bug there cannot weaken it."
+    }
+  ]
+}

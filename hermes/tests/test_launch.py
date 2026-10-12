@@ -10,7 +10,7 @@ from hashlib import sha256
 import pytest
 from conftest import FAKE_CLAUDE, HERMES, KIT
 from team_kit_cloud import Cloud, CloudError
-from team_kit_contracts import CloudCommand, LAUNCH_PROMPTS, ContractError, cloud_argv, launch_argv, verify_argv
+from team_kit_contracts import LAUNCH_PROMPTS, CloudCommand, ContractError, cloud_argv, launch_argv, verify_argv
 
 PREFIXES = ("/faker-mode ", "$faker-mode ")
 
@@ -100,7 +100,7 @@ def test_task_status_is_unknown_when_the_cli_cannot_be_run(error):
 
 
 def test_a_claude_session_without_the_kit_posts_a_report_tick_can_read():
-    from team_kit_contracts import parse_report
+    from team_kit_contracts import parse_report  # noqa: PLC0415
 
     prompt = launch_argv("claude", "acme/shop", 1, "small").prompt
     comment = "<!-- team-kit:report v1 -->\nstatus: blocked\nThe team-kit skills did not load."
@@ -244,10 +244,9 @@ def test_ci_is_not_passed_to_the_agent(tmp_path, monkeypatch):
 
 
 def test_the_child_survives_until_the_session_exists_is_reaped_and_leaks_no_descriptors(tmp_path):
-    import os
 
-    fd_dir = "/proc/self/fd" if os.path.isdir("/proc/self/fd") else "/dev/fd"
-    before = len(os.listdir(fd_dir))
+    fd_dir = "/proc/self/fd" if os.path.isdir("/proc/self/fd") else "/dev/fd"  # noqa: PTH112
+    before = len(os.listdir(fd_dir))  # noqa: PTH208
     script = ("import time; time.sleep(0.5); print('task_e1b2c3d4e5', flush=True); time.sleep(0.3)")
     procs = []
 
@@ -264,9 +263,9 @@ def test_the_child_survives_until_the_session_exists_is_reaped_and_leaks_no_desc
         time.sleep(0.05)
     assert procs[0].returncode == 0, "the drain thread reaps the child after it exits"
     deadline = time.time() + 5
-    while len(os.listdir(fd_dir)) > before and time.time() < deadline:
+    while len(os.listdir(fd_dir)) > before and time.time() < deadline:  # noqa: PTH208
         time.sleep(0.05)
-    assert len(os.listdir(fd_dir)) <= before
+    assert len(os.listdir(fd_dir)) <= before  # noqa: PTH208
 
 
 def git(*args, cwd=None):

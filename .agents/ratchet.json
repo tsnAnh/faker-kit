@@ -1,0 +1,16 @@
+{
+  "rules": [
+    {
+      "id": "python-noqa",
+      "pattern": "# noqa",
+      "files": ["hermes/*.py", "plugins/trust-ladder/*.py"],
+      "message": "Fix the ruff finding instead of silencing it. The existing markers are the baseline of legacy code and only go down."
+    },
+    {
+      "id": "python-type-baseline",
+      "pattern": "team-kit baseline",
+      "files": ["hermes/*.py", "plugins/trust-ladder/*.py"],
+      "message": "Fix the mypy error instead of ignoring it. Each `# type: ignore[...]  # team-kit baseline` is legacy code waiting for a type; remove it when you touch that line."
+    }
+  ]
+}

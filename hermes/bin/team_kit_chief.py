@@ -31,8 +31,8 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 HERE = Path(__file__).resolve().parent
 for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
@@ -80,7 +80,7 @@ def timestamp(value: str | None) -> float | None:
 
 
 class Chief:
-    def __init__(self, policy: Policy, run: Runner, now: Callable[[], float] = time.time):
+    def __init__(self, policy: Policy, run: Runner, now: Callable[[], float] = time.time):  # noqa: ANN204
         self.policy, self.run, self.now = policy, run, now
         self.andon = Andon(policy.home, now)
 
@@ -124,10 +124,10 @@ class Chief:
 
     def project_line(self, bot: Bot) -> str:
         try:
-            open_units, closed = self.units(bot.repo, "open"), self.units(bot.repo, "closed")
+            open_units, closed = self.units(bot.repo, "open"), self.units(bot.repo, "closed")  # type: ignore[arg-type]  # team-kit baseline
         except Refused as err:
             return f"{bot.project} ({bot.name}, {bot.repo}): unreadable: {err}"
-        flight, waiting, done = [], [], []
+        flight, waiting, done = [], [], []  # type: ignore[var-annotated]  # team-kit baseline
         for issue in open_units:
             labels = {label["name"] for label in issue.get("labels") or []}
             state = next((name for label, name in STATES if label in labels), "queued")
@@ -169,7 +169,7 @@ class Chief:
 
     def digest(self, path: str, from_bot: str) -> dict:
         try:
-            return {"file": os.path.basename(path), "sha256": file_digest(self.policy.home, from_bot, path)}
+            return {"file": os.path.basename(path), "sha256": file_digest(self.policy.home, from_bot, path)}  # noqa: PTH119
         except ProposalError as err:
             raise Refused(str(err)) from None
 
@@ -202,7 +202,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         policy = load_policy()
         me = policy.bot(bot or current_bot())
         if me.role != "chief":
-            raise Refused(f"{me.name} is a {me.role} bot; team-kit-chief is for the chief of staff")
+            raise Refused(f"{me.name} is a {me.role} bot; team-kit-chief is for the chief of staff")  # noqa: TRY301
         chief = Chief(policy, run, now)
         if args.command == "status":
             print("\n".join(chief.status()))

@@ -75,7 +75,7 @@ elif args[:1] == ["cron"]:
             print(f"    Name:      {job['name']}")
             print(f"    Schedule:  {job.get('schedule', '')}")
     elif args[1] == "create":
-        if "--paused" not in args:
+        if "--paused" not in args:  # noqa: SIM108
             # Deliberately model the unsafe legacy default as active.
             enabled = True
         else:

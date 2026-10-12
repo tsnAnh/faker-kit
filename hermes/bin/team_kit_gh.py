@@ -59,8 +59,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Callable, Mapping
 
 HERE = Path(__file__).resolve().parent
 for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
@@ -69,13 +69,57 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
 
 from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord, clean_reason, issue_body  # noqa: E402
 from team_kit_cloud import FINISHED, Cloud, CloudError  # noqa: E402
+from team_kit_contracts import (  # noqa: E402
+    BRANCH,
+    BRIEF_MARKER,
+    DEFAULT_ACCEPTED,
+    DIAGNOSIS_MARKER,
+    INCIDENT_MARKER,
+    LAUNCHED_MARKER,
+    PR_MARKER,
+    REPORT_MARKER,
+    REVIEW_LAUNCHED_MARKER,
+    REVIEW_MARKER,
+    SECOND_VERIFIER_FOCUS,
+    SECURITY_LAUNCHED_MARKER,
+    SECURITY_MARKER,
+    TRIAGE_LAUNCHED_MARKER,
+    UNIT_ATTEMPTS,
+    VERDICT_MARKER,
+    VERIFICATIONS,
+    VERIFIER_BACKENDS,
+    VERIFY_LAUNCHED_MARKER,
+    ContractError,
+    diagnosis_signed,
+    launch_argv,
+    parse_brief,
+    parse_depends,
+    parse_diagnosis,
+    parse_report,
+    parse_review,
+    parse_security,
+    parse_size,
+    parse_verdict,
+    review_argv,
+    review_signed,
+    security_argv,
+    security_signed,
+    size_marker,
+    triage_argv,
+    verdict_signed,
+    verify_argv,
+)
+from team_kit_guard.policy import NAME, REPO, Bot, Policy, PolicyError, load_policy  # noqa: E402
 from team_kit_incident_sources import (  # noqa: E402
     ExternalObservation,
     IncidentSourceError,
-    fetch_json as fetch_incident_json,
     poll_sources,
     validate_sources,
 )
+from team_kit_incident_sources import (  # noqa: E402
+    fetch_json as fetch_incident_json,
+)
+from team_kit_proposals import active_proposals, format_listing, format_notice, mark_notified, next_unnotified  # noqa: E402
 from team_kit_risk import (  # noqa: E402
     CODEOWNERS_PATHS,
     REPAIR_HISTORY_FILES,
@@ -89,48 +133,6 @@ from team_kit_risk import (  # noqa: E402
     score,
     unowned_paths,
 )
-from team_kit_contracts import (  # noqa: E402
-    BRIEF_MARKER,
-    DEFAULT_ACCEPTED,
-    LAUNCHED_MARKER,
-    DIAGNOSIS_MARKER,
-    INCIDENT_MARKER,
-    BRANCH,
-    PR_MARKER,
-    REVIEW_LAUNCHED_MARKER,
-    REVIEW_MARKER,
-    REPORT_MARKER,
-    TRIAGE_LAUNCHED_MARKER,
-    SECURITY_LAUNCHED_MARKER,
-    SECURITY_MARKER,
-    UNIT_ATTEMPTS,
-    VERDICT_MARKER,
-    VERIFICATIONS,
-    VERIFIER_BACKENDS,
-    VERIFY_LAUNCHED_MARKER,
-    SECOND_VERIFIER_FOCUS,
-    ContractError,
-    launch_argv,
-    parse_brief,
-    parse_depends,
-    diagnosis_signed,
-    parse_diagnosis,
-    parse_review,
-    parse_report,
-    parse_security,
-    parse_size,
-    review_argv,
-    review_signed,
-    security_argv,
-    security_signed,
-    parse_verdict,
-    size_marker,
-    triage_argv,
-    verdict_signed,
-    verify_argv,
-)
-from team_kit_guard.policy import NAME, REPO, Bot, Policy, PolicyError, load_policy  # noqa: E402
-from team_kit_proposals import active_proposals, format_listing, format_notice, mark_notified, next_unnotified  # noqa: E402
 
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
@@ -187,7 +189,7 @@ class Unfit(Refused):
 class Waiting(Refused):
     """A refusal that only means "not yet": dependencies or a limit. The unit stays queued."""
 
-    def __init__(self, message: str, scope: str):
+    def __init__(self, message: str, scope: str):  # noqa: ANN204
         super().__init__(message)
         self.scope = scope  # "unit", "repo", or "machine"
 
@@ -243,7 +245,7 @@ def timestamp(value: str | None) -> float | None:
         return None
 
 
-def checks_state(rollup) -> str:
+def checks_state(rollup) -> str:  # noqa: ANN001
     """`passed`, `failed`, `pending`, or `none`, from a pull request's statusCheckRollup."""
     states = []
     for item in rollup or []:
@@ -297,7 +299,7 @@ def included_response(text: str) -> tuple[int, dict[str, str], str]:
 class EtagCache:
     """Each bot's own cached GitHub responses, under home/etag/<bot>/, so bots never share a cache entry."""
 
-    def __init__(self, home: Path, bot: str):
+    def __init__(self, home: Path, bot: str):  # noqa: ANN204
         if not NAME.match(bot):
             raise Refused(f"bot {bot!r} is not a profile name")
         self.directory = home / "etag" / bot
@@ -326,7 +328,7 @@ class EtagCache:
 def has_next_page(link: str | None) -> bool:
     """Whether a GitHub Link header names a next page. Only its presence counts: the next page's URL
     is built from our own path, never fetched from the header."""
-    return bool(link) and any(re.search(r'rel="?next"?', part) for part in link.split(","))
+    return bool(link) and any(re.search(r'rel="?next"?', part) for part in link.split(","))  # type: ignore[union-attr]  # team-kit baseline
 
 
 ISSUE_PAGE_SIZE = 100  # GitHub's maximum per_page
@@ -334,14 +336,14 @@ ISSUE_PAGE_LIMIT = 50  # 5000 issues; past that something is wrong, so refuse in
 
 
 class InFlight:
-    def __init__(self, policy: Policy, bot: Bot, run: Runner, now: Callable[[], float] = time.time):
+    def __init__(self, policy: Policy, bot: Bot, run: Runner, now: Callable[[], float] = time.time):  # noqa: ANN204
         self.policy, self.bot, self.run, self.now = policy, bot, run, now
         self.directory = policy.home / "in-flight"
 
     @contextlib.contextmanager
-    def lock(self):
+    def lock(self):  # noqa: ANN201
         self.directory.mkdir(parents=True, exist_ok=True)
-        with open(self.directory / ".lock", "w") as handle:
+        with open(self.directory / ".lock", "w") as handle:  # noqa: PTH123
             fcntl.flock(handle, fcntl.LOCK_EX)
             yield
 
@@ -374,11 +376,11 @@ class InFlight:
 class UnitStates:
     """Machine-local unit states published by each project bot for cross-project dependencies."""
 
-    def __init__(self, policy: Policy, bot: Bot, now: Callable[[], float] = time.time):
+    def __init__(self, policy: Policy, bot: Bot, now: Callable[[], float] = time.time):  # noqa: ANN204
         self.policy, self.bot, self.now = policy, bot, now
         self.directory = policy.home / "units"
 
-    def publish(self, open_units: list[dict], closed_units: list[dict], wanted: list[dict] = (), wants: list[tuple[str, int]] = ()) -> None:
+    def publish(self, open_units: list[dict], closed_units: list[dict], wanted: list[dict] = (), wants: list[tuple[str, int]] = ()) -> None:  # type: ignore[assignment]  # team-kit baseline
         """Write this bot's units file: the recent units, every issue another bot wants whatever its age
         (`wanted`, issues of this repository as the API returns them), and `wants`, the other-project
         issues this bot's queued briefs depend on, so their bots publish those."""
@@ -444,7 +446,7 @@ class UnitStates:
             units = data["units"]
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return "waiting", f"{repo}#{number} state is unknown; {owner.name} has not published unit states yet"
-        if published_repo.lower() != owner.repo.lower():
+        if published_repo.lower() != owner.repo.lower():  # type: ignore[union-attr]  # team-kit baseline
             return "waiting", f"{repo}#{number} state is unknown; {owner.name}'s published unit states name {published_repo}"
         if self.now() - at > UNIT_STATE_FRESH_SECONDS:
             return "waiting", f"{repo}#{number} state is stale; {owner.name} last published unit states more than 24 hours ago"
@@ -467,7 +469,7 @@ class UnitStates:
 class Gh:
     """The bot's project: its one repository."""
 
-    def __init__(self, policy: Policy, bot: Bot, run: Runner, now: Callable[[], float] = time.time):
+    def __init__(self, policy: Policy, bot: Bot, run: Runner, now: Callable[[], float] = time.time):  # noqa: ANN204
         if bot.role != "project" or not bot.repo:
             raise Refused(f"{bot.name} is a {bot.role} bot; team-kit-gh is for project bots")
         self.policy, self.bot, self.run, self.now = policy, bot, run, now
@@ -504,7 +506,7 @@ class Gh:
             return self.run(["api", path])
         return self.api_page(path)[0]
 
-    def api_json(self, path: str, conditional: bool = True):
+    def api_json(self, path: str, conditional: bool = True):  # noqa: ANN201
         return json.loads(self.api_body(path, conditional))
 
     def file(self, path: str) -> str:
@@ -588,7 +590,7 @@ class Gh:
             raise Refused(f"the vendored kit {str(vendored)[:12]} differs from kit_ref {pinned[:12]}; ask the bootstrap bot to run team-kit-admin vendor")
         return {"kit": local_commit, "kit_ref": pinned, "vendored": vendored}
 
-    def depends(self, brief) -> list[tuple[str, int]]:
+    def depends(self, brief) -> list[tuple[str, int]]:  # noqa: ANN001
         refs = parse_depends(brief, self.repo)
         out, unknown = [], []
         for repo, number in refs:
@@ -599,7 +601,7 @@ class Gh:
                 if owner is None:
                     unknown.append(f"{repo}#{number}")
                     continue
-                ref = (owner.repo, number)
+                ref = (owner.repo, number)  # type: ignore[assignment]  # team-kit baseline
             if ref not in out:
                 out.append(ref)
         if unknown:
@@ -694,7 +696,7 @@ class Gh:
         directory = self.policy.home / "proposal-notices"
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{self.bot.name}.json"
-        with open(directory / ".lock", "w") as handle:
+        with open(directory / ".lock", "w") as handle:  # noqa: PTH123
             fcntl.flock(handle, fcntl.LOCK_EX)
             try:
                 record = json.loads(path.read_text())
@@ -745,13 +747,13 @@ class Gh:
         directory = self.policy.home / "pr-comment-notices"
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{self.bot.name}.json"
-        with open(directory / ".lock", "w") as handle:
+        with open(directory / ".lock", "w") as handle:  # noqa: PTH123
             fcntl.flock(handle, fcntl.LOCK_EX)
             try:
                 record = json.loads(path.read_text())
                 since, handled = str(record["since"]), {int(i) for i in record.get("handled", [])}
             except (OSError, ValueError, TypeError, KeyError, AttributeError):
-                self.write_record(path, {"since": dt.datetime.fromtimestamp(self.now(), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "handled": []})
+                self.write_record(path, {"since": dt.datetime.fromtimestamp(self.now(), dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "handled": []})
                 return []
             found = []
             for endpoint in ("issues/comments", "pulls/comments"):
@@ -766,24 +768,24 @@ class Gh:
             for comment in sorted(found, key=lambda c: (str(c.get("updated_at") or ""), int(c.get("id") or 0))):
                 cid, updated = int(comment.get("id") or 0), str(comment.get("updated_at") or "")
                 pull = PR_URL_NUMBER.search(str(comment.get("html_url") or ""))
-                if cid in handled or not pull or not mention.search(str(comment.get("body") or "")):
+                if cid in handled or not pull or not mention.search(str(comment.get("body") or "")):  # noqa: SIM108
                     verdict = False
                 else:
-                    verdict = self.collaborator(comment)
+                    verdict = self.collaborator(comment)  # type: ignore[assignment]  # team-kit baseline
                 if verdict is None:
-                    held = updated if held is None else min(held, updated)
+                    held = updated if held is None else min(held, updated)  # type: ignore[unreachable]  # team-kit baseline
                     continue
                 seen_now.add(cid)
                 if verdict:
                     login = str((comment.get("user") or {}).get("login") or "")
-                    notices.append(f"{NOTICE} PR #{pull.group(1)} comment from {login} mentions {trigger}. {comment.get('html_url')}")
+                    notices.append(f"{NOTICE} PR #{pull.group(1)} comment from {login} mentions {trigger}. {comment.get('html_url')}")  # type: ignore[union-attr]  # team-kit baseline
                 if updated > next_since:
                     next_since, next_handled = updated, set()
                 if updated == next_since:
                     next_handled.add(cid)
-            if held is not None and held <= next_since:
+            if held is not None and held <= next_since:  # type: ignore[unreachable]  # team-kit baseline
                 # Wait at the unchecked comment; everything handled this round stays handled.
-                next_since, next_handled = held, handled | seen_now
+                next_since, next_handled = held, handled | seen_now  # type: ignore[unreachable]  # team-kit baseline
             self.write_record(path, {"since": next_since, "handled": sorted(next_handled)})
         return notices
 
@@ -892,7 +894,7 @@ class Gh:
             if str(pr.get("headRefName") or "") != branch and author not in trusted:
                 continue
             accepted.append({"pr": int(pr["number"]), "url": url, "head": head})
-        return sorted(accepted, key=lambda item: item["pr"])[0] if accepted else None
+        return sorted(accepted, key=lambda item: item["pr"])[0] if accepted else None  # type: ignore[arg-type, return-value]  # team-kit baseline
 
     def read(self, issue: int | None, pr: int | None) -> str:
         kind, number = ("pr", pr) if pr else ("issue", issue)
@@ -939,7 +941,7 @@ class Gh:
                 self.andon.write(self.bot.name, {"reason": why, "by": by, "at": self.now(), "issue": int(first["number"]), "source": "github"})
                 notices.append(f"{NOTICE} andon pulled on #{first['number']} by {by}: {why}. Nothing new starts here until you ask me to clear it.")
             elif record is not None and record.get("issue") and not record.get("issue_gone_noted") \
-                    and int(record["issue"]) not in {int(i["number"]) for i in own}:
+                    and int(record["issue"]) not in {int(i["number"]) for i in own}:  # type: ignore[call-overload]  # team-kit baseline
                 self.andon.write(self.bot.name, {**record, "issue_gone_noted": True})
                 notices.append(f"{NOTICE} andon issue #{record['issue']} is no longer open, but the line stays stopped "
                                "until you ask me to clear it (team-kit-gh andon clear).")
@@ -951,7 +953,7 @@ class Gh:
         """The cord that stops this project, read once per command."""
         if self._cord is None:
             self.sync_andon()
-        return self._cord[0]
+        return self._cord[0]  # type: ignore[index]  # team-kit baseline
 
     def andon_show(self) -> dict:
         cord = self.cord()
@@ -962,7 +964,7 @@ class Gh:
     def andon_raise(self, words: list[str], source: str = "hermes", incident: int | None = None) -> dict:
         why = clean_reason(words)
         if self.andon.project(self.bot.name):
-            raise Refused(f"{self.andon.project(self.bot.name).describe()}; clear it before pulling it again")
+            raise Refused(f"{self.andon.project(self.bot.name).describe()}; clear it before pulling it again")  # type: ignore[union-attr]  # team-kit baseline
         out: dict = {"stopped": True, "reason": why, "issue": None}
         try:
             url = self.run(["issue", "create", "-R", self.repo, "--title", f"Andon: {why}"[:120], "--label", ANDON_LABEL,
@@ -983,7 +985,7 @@ class Gh:
             issues = [i for i in self.andon_issues() if not str(i.get("body") or "").lstrip().startswith(MACHINE_MARKER)]
         except Exception as err:  # noqa: BLE001
             raise Refused(f"cannot read the andon issues ({reason(err)}); try again") from None
-        numbers = sorted({int(i["number"]) for i in issues} | ({int(record["issue"])} if record and record.get("issue") else set()))
+        numbers = sorted({int(i["number"]) for i in issues} | ({int(record["issue"])} if record and record.get("issue") else set()))  # type: ignore[call-overload]  # team-kit baseline
         if record is None and not numbers:
             raise Refused("this project's andon cord is not pulled")
         closed = []
@@ -991,13 +993,13 @@ class Gh:
             try:
                 self.run(["issue", "close", str(number), "-R", self.repo, "--comment", "The owner cleared the andon cord in Hermes. The line runs again."])
                 closed.append(number)
-            except Exception:  # noqa: BLE001 - already closed, or gone
+            except Exception:  # noqa: BLE001, S110
                 pass
         self.andon.drop(self.bot.name)
         self._cord = None
         out: dict = {"stopped": False, "closed": closed}
         if self.andon.machine():
-            out = {**out, "stopped": True, "still": self.andon.machine().describe() + "; the bootstrap bot clears it"}
+            out = {**out, "stopped": True, "still": self.andon.machine().describe() + "; the bootstrap bot clears it"}  # type: ignore[union-attr]  # team-kit baseline
         return out
 
     # writing ------------------------------------------------------------------------------------
@@ -1081,11 +1083,11 @@ class Gh:
             # Any failure, a missing `claude` binary included, must free the unit again.
             self.relabel(number, remove=(RUNNING_LABEL,))
             counter.write(counts)
-            reason = str(err) if isinstance(err, (CloudError, Refused)) else type(err).__name__ + (f": {err.filename}" if getattr(err, "filename", None) else "")
+            reason = str(err) if isinstance(err, (CloudError, Refused)) else type(err).__name__ + (f": {err.filename}" if getattr(err, "filename", None) else "")  # type: ignore[attr-defined]  # team-kit baseline
             raise Refused(f"launch failed: {reason}") from err
-        try:
+        try:  # noqa: SIM105
             self.run(["issue", "comment", str(number), "-R", self.repo, "--body", f"{LAUNCHED_MARKER}\nsession: {session}\nbackend: {config['backend']}\nbranch: dispatch/{brief.card}\n"])
-        except Exception:  # noqa: BLE001 - the agent is running; a missing comment must not undo that
+        except Exception:  # noqa: BLE001, S110
             pass
         return {"issue": number, "unit": brief.card, "backend": config["backend"], "session": session}
 
@@ -1116,9 +1118,7 @@ class Gh:
                     dropped.append(f"{repo}#{number}")
                 continue
             state, detail = unit_states.dependency(repo, number)
-            if state == "waiting":
-                waiting.append(detail)
-            elif state == "unknown":
+            if state == "waiting" or state == "unknown":
                 waiting.append(detail)
             elif state == "dropped":
                 dropped.append(detail)
@@ -1246,7 +1246,7 @@ class Gh:
             candidates = owners_for(paths, rules)
             codeowners_unowned = unowned_paths(paths, rules)
             break
-        since = dt.datetime.fromtimestamp(self.now(), dt.timezone.utc) - dt.timedelta(days=RECENT_REPAIR_DAYS)
+        since = dt.datetime.fromtimestamp(self.now(), dt.UTC) - dt.timedelta(days=RECENT_REPAIR_DAYS)
         recent_repairs: list[str] = []
         # Files with history, most-changed first; only the first REPAIR_HISTORY_FILES are looked up.
         with_history = sorted((f for f in files if str(f.get("filename") or "") and f.get("status") != "added"),
@@ -1258,7 +1258,7 @@ class Gh:
                 commits = self.commits_for_path(path, per_page=30, since=since.strftime("%Y-%m-%dT%H:%M:%SZ"))
             except (Refused, ValueError):
                 continue
-            if any(isinstance(c, dict) and is_repair_commit(c) for c in commits):
+            if any(isinstance(c, dict) and is_repair_commit(c) for c in commits):  # type: ignore[redundant-expr]  # team-kit baseline
                 recent_repairs.append(path)
         found = score(files, verification, tuple(config.get("risk_paths_high", [])), tuple(config.get("risk_paths_medium", [])), checks,
                       normalize_risk_overrides(config.get("risk_overrides", [])), tuple(recent_repairs), tuple(codeowners_unowned),
@@ -1273,7 +1273,7 @@ class Gh:
                     commits = self.commits_for_path(str(f["filename"]), per_page=10)
                 except (Refused, ValueError):
                     continue
-                candidates += [str((c.get("author") or {}).get("login") or "") for c in commits if isinstance(c, dict)]
+                candidates += [str((c.get("author") or {}).get("login") or "") for c in commits if isinstance(c, dict)]  # type: ignore[redundant-expr]  # team-kit baseline
         exclude = set(self.policy.trusted_authors) | {str(d).lower() for d in config.get("trusted_dispatchers") or []}
         return Risk(found.level, found.reasons, pick_reviewers(candidates, exclude))
 
@@ -1341,11 +1341,11 @@ class Gh:
             issue = {**issue, "labels": [{"name": VERIFYING_LABEL}]}
             why = str(err) if isinstance(err, (CloudError, Refused)) else type(err).__name__
             return self.gate(issue, f"the verifier could not start: {why}")
-        try:
+        try:  # noqa: SIM105
             self.run(["issue", "comment", str(number), "-R", self.repo, "--body",
                       f"{VERIFY_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\npr: {pr_url}\nhead: {head}\n"
                       + ("focus: second, adversarial\n" if first else "")])
-        except Exception:  # noqa: BLE001 - the verifier is running and tick tracks it from its record
+        except Exception:  # noqa: BLE001, S110
             pass
         return None
 
@@ -1355,7 +1355,7 @@ class Gh:
         record = self.verify_record(number)
         if record is None:
             return self.gate(issue, f"this machine has no record of its verifier; run `team-kit-gh verify --issue {number}` to start one")
-        def find(comments: list[dict]):
+        def find(comments: list[dict]):  # noqa: ANN202
             # Only comments after the latest launch of either kind can answer this verifier.
             starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith((LAUNCHED_MARKER, VERIFY_LAUNCHED_MARKER)) and self.trusted(c)]
             for comment in comments[(starts[-1] + 1) if starts else 0:]:
@@ -1494,17 +1494,17 @@ class Review:
     comments from untrusted users do not count.
     """
 
-    def __init__(self, gh: Gh):
+    def __init__(self, gh: Gh):  # noqa: ANN204
         self.gh = gh
 
     def path(self, number: int) -> Path:
         return self.gh.policy.home / "reviews" / self.gh.bot.name / f"{int(number)}.json"
 
     @contextlib.contextmanager
-    def lock(self, number: int):
+    def lock(self, number: int):  # noqa: ANN201
         path = self.path(number)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path.with_suffix(".lock"), "w") as handle:
+        with open(path.with_suffix(".lock"), "w") as handle:  # noqa: PTH123
             fcntl.flock(handle, fcntl.LOCK_EX)
             yield
 
@@ -1604,10 +1604,10 @@ class Review:
             current = self.record(number) or {}
             if current.get("key") == key and current.get("pr") == pr_url and current.get("head") == head:
                 self.write(number, {**current, "session": session})
-        try:
+        try:  # noqa: SIM105
             self.gh.run(["issue", "comment", str(number), "-R", self.gh.repo, "--body",
                          f"{REVIEW_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\npr: {pr_url}\nhead: {head}\n"])
-        except Exception:  # noqa: BLE001 - the review runs and tick tracks it from its record
+        except Exception:  # noqa: BLE001, S110
             pass
         return "wait", None
 
@@ -1622,7 +1622,7 @@ class Review:
                 start = i
         return start
 
-    def accept(self, number: int, record: dict):
+    def accept(self, number: int, record: dict):  # noqa: ANN201
         comments = self.gh.comments(number)
         start = self.current_launch_index(comments, record)
         if start is None:
@@ -1650,7 +1650,7 @@ class Security:
     tracking issue labelled agent:security, and every review posts its result there.
     """
 
-    def __init__(self, gh: Gh):
+    def __init__(self, gh: Gh):  # noqa: ANN204
         self.gh = gh
         self.path = gh.policy.home / "security" / f"{gh.bot.name}.json"
 
@@ -1712,10 +1712,10 @@ class Security:
         except Exception as err:  # noqa: BLE001 - tried again tomorrow
             raise Refused(f"the security review could not start: {reason(err)}") from None
         self.write({**record, "running": {"issue": issue, "base": base, "head": head, "key": key, "started": gh.now(), "session": session, "backend": backend}})
-        try:
+        try:  # noqa: SIM105
             gh.run(["issue", "comment", str(issue), "-R", gh.repo, "--body",
                     f"{SECURITY_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\nrange: {base or 'none'}..{head}\n"])
-        except Exception:  # noqa: BLE001 - the review runs; tick tracks it from the record
+        except Exception:  # noqa: BLE001, S110
             pass
         return {"state": "started", "issue": issue, "range": f"{base or 'none'}..{head}", "session": session}
 
@@ -1767,7 +1767,7 @@ class Security:
 
 def fetch_status(url: str) -> int | None:
     """The HTTP status of a GET, or None when nothing answered. Outbound only: nothing listens here."""
-    request = urllib.request.Request(url, method="GET", headers={"User-Agent": "team-kit-incidents"})
+    request = urllib.request.Request(url, method="GET", headers={"User-Agent": "team-kit-incidents"})  # noqa: S310
     try:
         with urllib.request.urlopen(request, timeout=HEALTH_TIMEOUT_SECONDS) as response:  # noqa: S310 - https only, checked
             return int(response.status)
@@ -1802,7 +1802,7 @@ class Incidents:
     The state lives in policy.home/incidents/<bot>.json.
     """
 
-    def __init__(self, gh: Gh, fetch: Callable[[str], int | None] = fetch_status,
+    def __init__(self, gh: Gh, fetch: Callable[[str], int | None] = fetch_status,  # noqa: ANN204
                  fetch_api: Callable[[str, dict[str, str]], object] = fetch_incident_json,
                  env: Mapping[str, str] | None = None):
         self.gh, self.fetch, self.fetch_api, self.env = gh, fetch, fetch_api, env or os.environ
@@ -1845,7 +1845,7 @@ class Incidents:
             return head, None, ""
         return head, False, ""
 
-    def run(self, local_commit: str, cloud: Cloud) -> list[str]:
+    def run(self, local_commit: str, cloud: Cloud) -> list[str]:  # noqa: ARG002
         """One poll. A lasting problem (GitHub down, a broken dispatch.json) is said once, not every poll."""
         data = self.state()
         try:
@@ -1880,7 +1880,7 @@ class Incidents:
             what = f"health check {check['name']} " + ("does not answer" if status is None else f"returns HTTP {status}")
             observed.append((f"health:{check['name']}", what, failing, HEALTH_STREAK))
         problems = data.setdefault("source_problems", {})
-        for source in poll_sources(settings.get("sources", []), self.fetch_api, self.env, gh.policy.alert_hosts):
+        for source in poll_sources(settings.get("sources", []), self.fetch_api, self.env, gh.policy.alert_hosts):  # type: ignore[arg-type]  # team-kit baseline
             if isinstance(source, ExternalObservation):
                 observed.append((source.key, source.title, source.failing, HEALTH_STREAK))
                 examples[source.key] = source.examples
@@ -1945,9 +1945,9 @@ class Incidents:
                 notices.append(f"{NOTICE} incident #{number}: the triage session could not start: {reason(err)}")
             else:
                 incident["triage"] = {"key": key_hex, "started": gh.now(), "session": session, "backend": backend}
-                try:
+                try:  # noqa: SIM105
                     gh.run(["issue", "comment", str(number), "-R", gh.repo, "--body", f"{TRIAGE_LAUNCHED_MARKER}\nsession: {session}\nbackend: {backend}\n"])
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001, S110
                     pass
         return notices
 
@@ -1955,9 +1955,9 @@ class Incidents:
         gh = self.gh
         incident = data["open"].pop(key)
         minutes = max(1, int((gh.now() - float(incident.get("since", gh.now()))) // 60))
-        try:
+        try:  # noqa: SIM105
             gh.run(["issue", "close", str(incident["issue"]), "-R", gh.repo, "--comment", f"{why.capitalize()}; closed by Hermes after {minutes} minutes."])
-        except Exception:  # noqa: BLE001 - closed by hand already
+        except Exception:  # noqa: BLE001, S110
             pass
         verb = "resolved" if why == "passing again" else f"closed ({why})"
         notice = f"{NOTICE} incident #{incident['issue']} {verb} after {minutes} minutes: {incident['title']}."
@@ -1973,7 +1973,7 @@ class Incidents:
         if not triage or triage.get("done"):
             return None
         number = int(incident["issue"])
-        def find():
+        def find():  # noqa: ANN202
             comments = gh.comments(number)
             starts = [i for i, c in enumerate(comments) if (c.get("body") or "").startswith(TRIAGE_LAUNCHED_MARKER) and gh.trusted(c)]
             for comment in comments[(starts[-1] + 1) if starts else 0:]:
@@ -2017,7 +2017,7 @@ class Incidents:
             return f"{NOTICE} incident #{number}: the triage session posted no signed diagnosis in a day. Its session: {triage.get('session')}"
         return None
 
-    def proposed_fix(self, diagnosis) -> str | None:
+    def proposed_fix(self, diagnosis) -> str | None:  # noqa: ANN001
         """`revert <full sha>`, naming `git revert -m 1` when the suspect is a merge commit, for a high-confidence suspect only.
 
         The parent count comes from the GitHub API, so the text is decided in code, never by a model.
@@ -2075,7 +2075,7 @@ none
 
 ## Standing orders
 {standing}
-"""
+"""  # noqa: E501
 
 
 class Upstream:
@@ -2087,7 +2087,7 @@ class Upstream:
     request, which is verified and reviewed like any unit; the owner merges it. Nothing here asks a model.
     """
 
-    def __init__(self, gh: Gh):
+    def __init__(self, gh: Gh):  # noqa: ANN204
         self.gh = gh
 
     def check(self, local_commit: str, cloud: Cloud) -> list[str]:
@@ -2115,10 +2115,10 @@ class Upstream:
             card = BRIEF_MARKER.match(unit.get("body") or "")
             if card and card.group("card").startswith(UPSTREAM_CARD):
                 return [SILENT]
-        card = f"{UPSTREAM_CARD}-{head[:12]}"
+        card = f"{UPSTREAM_CARD}-{head[:12]}"  # type: ignore[assignment]  # team-kit baseline
         standing = self.gh.file(".agents/dispatch.md").strip()
         text = UPSTREAM_BRIEF.format(card=card, upstream=upstream, pinned=pinned, head=head, standing=standing)
-        out = self.gh.dispatch(card, "medium", text, local_commit, cloud)
+        out = self.gh.dispatch(card, "medium", text, local_commit, cloud)  # type: ignore[arg-type]  # team-kit baseline
         state = "started" if out.get("state") == "running" else f"queued ({out.get('why')})"
         return [f"{NOTICE} {upstream} moved from {pinned[:12]} to {head[:12]}; sync unit #{out['issue']} {state}."]
 
@@ -2126,7 +2126,7 @@ class Upstream:
 class Project:
     """tick and status for the bot's project."""
 
-    def __init__(self, policy: Policy, bot: Bot, run: Runner, now: Callable[[], float] = time.time):
+    def __init__(self, policy: Policy, bot: Bot, run: Runner, now: Callable[[], float] = time.time):  # noqa: ANN204
         self.policy, self.bot, self.run, self.now = policy, bot, run, now
         self.gh = Gh(policy, bot, run, now)
 
@@ -2201,10 +2201,10 @@ class Project:
             problems["security"] = reason(err)
         try:
             # Refresh this bot's count for the other bots, whatever launched or did not.
-            labels = [labels_of(issue) for issue in (units or [])]
-            no_launchable = units is not None and not any(not (l & {RUNNING_LABEL, VERIFYING_LABEL, REVIEW_LABEL, HUMAN_LABEL}) for l in labels)
+            labels = [labels_of(issue) for issue in (units or [])]  # type: ignore[assignment]  # team-kit baseline
+            no_launchable = units is not None and not any(not (l & {RUNNING_LABEL, VERIFYING_LABEL, REVIEW_LABEL, HUMAN_LABEL}) for l in labels)  # type: ignore[operator, redundant-expr]  # team-kit baseline  # noqa: E741
             if no_launchable:
-                InFlight(self.policy, self.bot, self.run, self.now).write({gh.repo: sum(1 for l in labels if l & {RUNNING_LABEL, VERIFYING_LABEL})})
+                InFlight(self.policy, self.bot, self.run, self.now).write({gh.repo: sum(1 for l in labels if l & {RUNNING_LABEL, VERIFYING_LABEL})})  # type: ignore[misc, operator]  # team-kit baseline  # noqa: E741
             else:
                 InFlight(self.policy, self.bot, self.run, self.now).count_own()
         except Exception as err:  # noqa: BLE001
@@ -2219,7 +2219,7 @@ class Project:
         for issue in queued:
             try:
                 refs = gh.depends(parse_brief(gh.issue(int(issue["number"])).get("body") or ""))
-            except Exception:  # noqa: BLE001 - launching the unit gates it with the reason
+            except Exception:  # noqa: BLE001, S112
                 continue
             wants.extend(ref for ref in refs if not self.bot.owns(ref[0]))
         wanted, failed = [], []
@@ -2249,7 +2249,7 @@ class Project:
             since = float(json.loads(marker.read_text())["at"])
         except (OSError, ValueError, KeyError, TypeError):
             since = self.now() - 24 * 3600
-        since_iso = dt.datetime.fromtimestamp(since, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        since_iso = dt.datetime.fromtimestamp(since, dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         flight, waiting, done = [], [], []
         for issue in self.gh.units():
             labels, ref = labels_of(issue), f"#{issue['number']} {issue['title']}"
@@ -2275,13 +2275,13 @@ class Project:
         if not (flight or waiting or done):
             return stopped or [SILENT]
         line = lambda name, items: f"{NOTICE} {name}: {len(items)}. " + ("; ".join(items) if items else "none") + "."  # noqa: E731
-        return stopped + [line("In flight", flight), line("Waiting on you", waiting), line("Done since last", done)]
+        return stopped + [line("In flight", flight), line("Waiting on you", waiting), line("Done since last", done)]  # noqa: RUF005
 
 
 def brief_text(policy: Policy, bot: Bot, path: str) -> str:
     """A brief is read only from the bot's own briefs directory, so no other file can become an issue body."""
     briefs = (policy.home / "briefs" / bot.name).resolve()
-    target = Path(os.path.expanduser(path)).resolve()
+    target = Path(os.path.expanduser(path)).resolve()  # noqa: PTH111
     if target.parent != briefs or target.suffix != ".md":
         raise Refused(f"--brief-file must be a .md file in {briefs}")
     try:
@@ -2325,7 +2325,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         policy = load_policy()
         me = policy.bot(bot or current_bot())
         if me.role != "project":
-            raise Refused(f"{me.name} is a {me.role} bot; team-kit-gh is for project bots")
+            raise Refused(f"{me.name} is a {me.role} bot; team-kit-gh is for project bots")  # noqa: TRY301
         cloud = cloud or Cloud(run_gh=run)
         if args.command == "project":
             out: object = {"bot": me.name, "project": me.project, "repo": me.repo}
@@ -2349,7 +2349,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         elif args.command == "andon":
             gh = Gh(policy, me, run, now)
             if args.action != "raise" and args.reason:
-                raise Refused(f"andon {args.action} takes no reason")
+                raise Refused(f"andon {args.action} takes no reason")  # noqa: TRY301
             out = gh.andon_raise(args.reason) if args.action == "raise" else gh.andon_clear() if args.action == "clear" else gh.andon_show()
         elif args.command in ("tick", "status"):
             project = Project(policy, me, run, now)
@@ -2368,7 +2368,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
                 out = {k: v for k, v in gh.report_status(args.issue).items() if k != "at"}
             elif args.command == "read":
                 if not (args.issue or args.pr):
-                    raise Refused("read needs --issue or --pr")
+                    raise Refused("read needs --issue or --pr")  # noqa: TRY301
                 print(gh.read(args.issue, args.pr))
                 return 0
             elif args.command == "show":

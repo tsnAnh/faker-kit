@@ -108,7 +108,7 @@ else:
 
 @pytest.fixture(scope="session")
 def kit_source(tmp_path_factory):
-    import shutil
+    import shutil  # noqa: PLC0415
 
     src = tmp_path_factory.mktemp("kit")
     ignore = shutil.ignore_patterns("__pycache__", ".pytest_cache", "node_modules")
@@ -136,7 +136,7 @@ def machine(tmp_path):
 
 def install(kit_source, machine, *extra):
     src, sha = kit_source
-    root, env = machine
+    root, env = machine  # noqa: RUF059
     return subprocess.run(["bash", str(HERMES / "install.sh"), "--ref", sha, "--source", str(src), *extra], env=env, capture_output=True, text=True)
 
 

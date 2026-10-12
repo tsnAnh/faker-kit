@@ -29,7 +29,7 @@ class ProposalError(ValueError):
 @dataclass(frozen=True)
 class Proposal:
     path: Path
-    data: dict
+    data: dict[str, object]
 
     @property
     def id(self) -> str:
@@ -45,7 +45,8 @@ class Proposal:
 
     @property
     def expires_at(self) -> float:
-        return float(self.data["expires_at"])
+        expires = self.data["expires_at"]
+        return float(expires) if isinstance(expires, (int, float, str)) else 0.0
 
 
 def proposals_dir(home: Path, bot: str) -> Path:
@@ -68,15 +69,15 @@ def drafts_dir(home: Path, bot: str) -> Path:
 def _source(home: Path, from_bot: str, path: str) -> tuple[str, str, str]:
     """(name, text, sha256) of one draft, read once so the hash and the stored body are the same bytes."""
     directory = drafts_dir(home, from_bot)
-    target = os.path.abspath(os.path.expanduser(path))
-    if os.path.dirname(target) != os.path.abspath(directory):
+    target = os.path.abspath(os.path.expanduser(path))  # noqa: PTH100, PTH111
+    if os.path.dirname(target) != os.path.abspath(directory):  # noqa: PTH100, PTH120
         raise ProposalError(f"--file must be a file directly in {directory}")
-    name = os.path.basename(target)
+    name = os.path.basename(target)  # noqa: PTH119
     if not SOURCE_NAME.match(name):
         raise ProposalError("--file must name a plain .md file whose basename starts with a letter or digit")
     try:
         if directory.is_symlink() or directory.parent.is_symlink():
-            raise ProposalError(f"{directory} must not be a symlink")
+            raise ProposalError(f"{directory} must not be a symlink")  # noqa: TRY301
         fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
     except ProposalError:
         raise
@@ -107,7 +108,7 @@ def file_digest(home: Path, from_bot: str, path: str) -> str:
     return _source(home, from_bot, path)[2]
 
 
-def write_proposal(home: Path, bot: str, project: str, repo: str, source_file: str, from_bot: str, now: float, sha256: str) -> dict:
+def write_proposal(home: Path, bot: str, project: str, repo: str, source_file: str, from_bot: str, now: float, sha256: str) -> dict[str, object]:
     if not SHA256.match(sha256 or ""):
         raise ProposalError("--sha256 must be the 64 lowercase hex characters of the file's SHA-256 (team-kit-chief digest --file F)")
     name, body, actual = _source(home, from_bot, source_file)

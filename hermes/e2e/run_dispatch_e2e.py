@@ -7,16 +7,15 @@ import argparse
 import json
 import os
 import re
-import shutil
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable
-
 
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,62}\Z")
@@ -72,7 +71,7 @@ class Paths:
 
 
 class CommandRunner:
-    def __init__(self, echo: bool = True):
+    def __init__(self, echo: bool = True):  # noqa: ANN204
         self.echo = echo
         self.secrets: list[str] = []
 
@@ -382,7 +381,7 @@ none
 
 ## Standing orders
 {standing_orders.strip()}
-"""
+"""  # noqa: E501
     target = paths.team_home / "briefs" / config.project_bot / f"{config.unit}.md"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(brief)
@@ -462,7 +461,7 @@ class Observations:
     # The run passes only when these were seen. The verifier launch label is brief and a poll can miss it.
     REQUIRED = ("done report", "verifier verdict", "ready-to-merge notice")
 
-    def __init__(self, timeout_seconds: int):
+    def __init__(self, timeout_seconds: int):  # noqa: ANN204
         self.timeout_seconds = timeout_seconds
         self.seen: dict[str, str] = {}
 
@@ -620,7 +619,7 @@ def print_plan(config: Config) -> None:
     print(f"- bootstrap bot: {config.bootstrap_bot}")
     print(f"- project bot: {config.project_bot}")
     print(f"- project bot token: read from ${config.token_env} when the live run starts; written to the temporary profile's .env, never printed")
-    print("- live run will install into a temporary TEAM_KIT_HOME and Hermes home (HOME is not changed), add the project, dispatch one README unit, wait for verification, raise and clear andon, then stop before merge")
+    print("- live run will install into a temporary TEAM_KIT_HOME and Hermes home (HOME is not changed), add the project, dispatch one README unit, wait for verification, raise and clear andon, then stop before merge")  # noqa: E501
 
 
 def main(argv: list[str] | None = None) -> int:

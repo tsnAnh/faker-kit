@@ -78,10 +78,10 @@ def test_vendors_the_plugins_links_skills_and_agents_and_keeps_the_repositorys_o
     assert not (vendored / "plugins/trust-ladder/test").exists()
     assert (vendored / "plugins/trust-ladder/packs/agnostic/test/bad.txt").exists(), "lint-pack fixtures stay"
     assert os.access(vendored / "plugins/pstack/skills/faker-mode/run.sh", os.X_OK)
-    assert os.readlink(repo / ".claude/skills/faker-mode") == "../../.agents/team-kit/plugins/pstack/skills/faker-mode"
+    assert os.readlink(repo / ".claude/skills/faker-mode") == "../../.agents/team-kit/plugins/pstack/skills/faker-mode"  # noqa: PTH115
     assert (repo / ".claude/skills/faker-mode/SKILL.md").read_text().startswith("---\nname: faker-mode")
     assert (repo / ".claude/skills/shared/SKILL.md").read_text().endswith("from trust-ladder\n"), "trust-ladder wins a shared name"
-    assert os.readlink(repo / ".claude/agents/faker-agent.md") == "../../.agents/team-kit/plugins/pstack/agents/faker-agent.md"
+    assert os.readlink(repo / ".claude/agents/faker-agent.md") == "../../.agents/team-kit/plugins/pstack/agents/faker-agent.md"  # noqa: PTH115
     assert (repo / ".claude/skills/verify-shop/SKILL.md").read_text() == "own"
     assert (repo / ".agents/skills/follow-brief").is_dir() and not (repo / ".agents/skills/follow-brief").is_symlink()
     assert not (repo / ".claude/skills/follow-brief").exists(), "the repository's own skill of that name wins in every agent"
@@ -92,7 +92,7 @@ def test_vendors_the_plugins_links_skills_and_agents_and_keeps_the_repositorys_o
 
 
 def test_check_catches_an_edit_an_extra_file_a_broken_link_and_a_pin_mismatch(tmp_path):
-    kit, ref = make_kit(tmp_path)
+    kit, ref = make_kit(tmp_path)  # noqa: RUF059
     repo = make_repo(tmp_path)
     assert vendor(kit, repo).returncode == 0
     vendored = repo / ".agents" / "team-kit"

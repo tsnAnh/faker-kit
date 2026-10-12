@@ -58,7 +58,7 @@ REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SLACK_CHANNEL_ID = re.compile(r"\A[CG][A-Z0-9]{2,}\Z")
 SLACK_CHANNEL_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,79}\Z")
 
-PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "chief-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")
+PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "chief-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")  # noqa: E501
 BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon")
 BOOTSTRAP_READ_ONLY = ("status",)
 # The chief of staff reads every project. Its writes are a draft under drafts/<bot>/ and `propose`;
@@ -90,7 +90,7 @@ def command_segments(command: str) -> list[str]:
         while words and ENV_ASSIGN.match(words[0]):
             words.pop(0)
         if words:
-            words[0] = os.path.basename(words[0])
+            words[0] = os.path.basename(words[0])  # noqa: PTH119
             out.append(" ".join(words))
     return out
 
@@ -126,7 +126,7 @@ class Bot:
         return (self.repo,) if self.repo else ()
 
     def owns(self, repo: str) -> bool:
-        return bool(self.repo) and repo.lower() == self.repo.lower()
+        return bool(self.repo) and repo.lower() == self.repo.lower()  # type: ignore[union-attr]  # team-kit baseline
 
     def terminal_allow(self) -> re.Pattern:
         commands = {"project": PROJECT_COMMANDS, "bootstrap": BOOTSTRAP_COMMANDS, "chief": CHIEF_COMMANDS}[self.role]
@@ -154,8 +154,8 @@ class SlackConfig:
     bot: str | None = None
     channel_id: str | None = None
     channel_name: str | None = None
-    app_token_env: str = "TEAM_KIT_SLACK_APP_TOKEN"
-    bot_token_env: str = "TEAM_KIT_SLACK_BOT_TOKEN"
+    app_token_env: str = "TEAM_KIT_SLACK_APP_TOKEN"  # noqa: S105
+    bot_token_env: str = "TEAM_KIT_SLACK_BOT_TOKEN"  # noqa: S105
     mirror_notices: bool = False
 
 
@@ -179,7 +179,7 @@ class Policy:
         return found
 
     def projects(self) -> dict[str, Bot]:
-        return {b.project: b for b in self.bots.values() if b.role == "project"}
+        return {b.project: b for b in self.bots.values() if b.role == "project"}  # type: ignore[misc]  # team-kit baseline
 
     def all_repos(self) -> list[str]:
         return [r for b in self.bots.values() for r in b.repos]
@@ -188,7 +188,7 @@ class Policy:
         return next((b for b in self.bots.values() if b.role == "project" and b.owns(repo)), None)
 
 
-def _rule(entry, where: str) -> ToolRule:
+def _rule(entry, where: str) -> ToolRule:  # noqa: ANN001
     if isinstance(entry, str):
         return ToolRule(command=entry)
     if isinstance(entry, dict) and set(entry) <= {"tool", "command"} and entry:
@@ -196,13 +196,13 @@ def _rule(entry, where: str) -> ToolRule:
     raise PolicyError(f"{where}: each entry is a command glob or {{tool, command}}")
 
 
-def _bool(value, where: str) -> bool:
+def _bool(value, where: str) -> bool:  # noqa: ANN001
     if isinstance(value, bool):
         return value
     raise PolicyError(f"{where} must be true or false")
 
 
-def parse_bots(data) -> dict[str, Bot]:
+def parse_bots(data) -> dict[str, Bot]:  # noqa: ANN001
     if data is None:
         return {}
     if not isinstance(data, dict) or data.get("version") != BOTS_VERSION:
@@ -241,7 +241,7 @@ def parse_bots(data) -> dict[str, Bot]:
     return bots
 
 
-def _interval(value, where: str, default: str) -> str:
+def _interval(value, where: str, default: str) -> str:  # noqa: ANN001
     if value is None:
         return default
     value = str(value)
@@ -253,7 +253,7 @@ def _interval(value, where: str, default: str) -> str:
 ALERT_HOST = re.compile(r"\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+\Z")
 
 
-def parse_alert_hosts(value) -> frozenset[str]:
+def parse_alert_hosts(value) -> frozenset[str]:  # noqa: ANN001
     """Hosts an alert source may send its token to, besides each source's own default. Only the owner edits this."""
     if value is None:
         return frozenset()
@@ -262,7 +262,7 @@ def parse_alert_hosts(value) -> frozenset[str]:
     return frozenset(h.lower() for h in value)
 
 
-def parse_slack(data, bots: dict[str, Bot]) -> SlackConfig | None:
+def parse_slack(data, bots: dict[str, Bot]) -> SlackConfig | None:  # noqa: ANN001
     if data is None:
         return None
     if not isinstance(data, dict):
@@ -303,7 +303,7 @@ def parse_slack(data, bots: dict[str, Bot]) -> SlackConfig | None:
     )
 
 
-def parse_policy(data, bots=None, home: Path | None = None) -> Policy:
+def parse_policy(data, bots=None, home: Path | None = None) -> Policy:  # noqa: ANN001
     if isinstance(data, dict) and data.get("version") == 1:
         raise PolicyError(MIGRATE_V1)
     if not isinstance(data, dict) or data.get("version") != GUARD_VERSION:
@@ -326,8 +326,8 @@ def parse_policy(data, bots=None, home: Path | None = None) -> Policy:
     )
 
 
-def _yaml(path: Path, missing_ok: bool):
-    import yaml
+def _yaml(path: Path, missing_ok: bool):  # noqa: ANN202
+    import yaml  # noqa: PLC0415
 
     try:
         return yaml.safe_load(path.read_text())
@@ -364,7 +364,7 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
     if not any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in ROLE_TOOLS[bot.role]):
         return block(f"{bot.role} bot {profile} may not use {tool_name}")
     command = str(args.get("command", ""))
-    if tool_name in ("terminal", "process_manage"):
+    if tool_name in ("terminal", "process_manage"):  # noqa: SIM102
         if tool_name == "process_manage" or not bot.terminal_allow().fullmatch(command):
             return block(f"{bot.role} bot {profile} may only run {ROLE_COMMAND[bot.role]}")
     if tool_name == "patch" and (args.get("mode") not in (None, "replace") or "patch" in args):
@@ -372,12 +372,12 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
         return block("patch may only replace text in one file (mode replace)")
     if tool_name in READ_TOOLS:
         raw = args.get(READ_TOOLS[tool_name])
-        target = os.path.abspath(os.path.expanduser(str(raw))) if raw else ""
+        target = os.path.abspath(os.path.expanduser(str(raw))) if raw else ""  # noqa: PTH100, PTH111
         allowed = bot.read_paths(policy.home)
         if not target or not any(fnmatch.fnmatchcase(target, p) for p in allowed):
             return block(f"{bot.role} bot {profile} may only read its {'drafts' if bot.role == 'chief' else 'briefs and the kit'}")
     if tool_name in WRITE_TOOLS:
-        target = os.path.abspath(os.path.expanduser(str(args.get(WRITE_TOOLS[tool_name], ""))))
+        target = os.path.abspath(os.path.expanduser(str(args.get(WRITE_TOOLS[tool_name], ""))))  # noqa: PTH100, PTH111
         allowed = bot.write_paths(policy.home)
         if not any(fnmatch.fnmatchcase(target, p) for p in allowed):
             where = ", ".join(allowed) if allowed else "nowhere"
@@ -420,7 +420,7 @@ def reader_source(policy: Policy, tool_name: str, args: dict) -> str | None:
     return None
 
 
-def wrap_untrusted(source: str, result) -> str:
+def wrap_untrusted(source: str, result) -> str:  # noqa: ANN001
     text = result if isinstance(result, str) else json.dumps(result, default=str)
     text = re.sub(r"(?i)<(/?)untrusted", r"&lt;\1untrusted", text)
     return (

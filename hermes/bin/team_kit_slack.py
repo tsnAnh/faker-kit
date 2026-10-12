@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         max_events = 1 if args.once else args.max_events
         # The relay reconnects itself with backoff. A bounded run (--once, --max-events) gives up after a few tries.
         SlackRelay(policy).run(max_events=max_events, max_reconnects=3 if max_events is not None else None)
-        return 0
+        return 0  # noqa: TRY300
     except (SlackError, PolicyError) as err:
         print(f"team-kit-slack: refused: {err}", file=sys.stderr)
         return 1

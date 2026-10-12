@@ -20,9 +20,9 @@ thread, so it may keep running after this returns.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import re
-import fcntl
 import select
 import shutil
 import signal
@@ -30,9 +30,9 @@ import subprocess
 import termios
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from team_kit_contracts import CloudCommand
 
@@ -114,14 +114,14 @@ def _child_env() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if key != "CI"}
 
 
-def _reap(proc, timeout: float | None = None) -> None:
-    try:
+def _reap(proc: subprocess.Popen[bytes], timeout: float | None = None) -> None:
+    try:  # noqa: SIM105
         proc.wait(timeout)
-    except Exception:  # still running or already gone; nothing more to do here
+    except Exception:  # still running or already gone; nothing more to do here  # noqa: BLE001, S110
         pass
 
 
-def _drain(fd: int, proc=None) -> None:
+def _drain(fd: int, proc: subprocess.Popen[bytes] | None = None) -> None:
     """Keep reading after the session is known, so a running agent never blocks on a full terminal,
     then reap it once it exits."""
     try:
@@ -132,7 +132,7 @@ def _drain(fd: int, proc=None) -> None:
     except OSError:
         pass
     finally:
-        try:
+        try:  # noqa: SIM105
             os.close(fd)
         except OSError:
             pass
@@ -143,7 +143,7 @@ def _drain(fd: int, proc=None) -> None:
 @dataclass
 class Cloud:
     run_gh: Runner
-    popen: Callable = subprocess.Popen
+    popen: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen
     wait_seconds: float = 180.0
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
@@ -216,7 +216,7 @@ class Cloud:
                 start_new_session=True,
                 preexec_fn=_acquire_terminal,
             )
-            if stdin is not None:
+            if stdin is not None and proc.stdin is not None:
                 try:
                     proc.stdin.write(stdin)
                     proc.stdin.close()
@@ -258,7 +258,7 @@ class Cloud:
                 self.sleep(1.0)
         finally:
             for fd in ([slave] if slave >= 0 else []) + ([] if keep_master else [master]):
-                try:
+                try:  # noqa: SIM105
                     os.close(fd)
                 except OSError:
                     pass
@@ -279,7 +279,7 @@ class Cloud:
             raise CloudError(f"{session} started but did not get its task, so it waits idle: {last[:200]}")
 
     @staticmethod
-    def _stop(proc) -> None:
+    def _stop(proc: subprocess.Popen[bytes]) -> None:
         try:
             os.killpg(proc.pid, signal.SIGTERM)
         except (OSError, AttributeError):

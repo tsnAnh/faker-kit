@@ -34,7 +34,11 @@ requirements() {
   esac
 }
 
-if [ $# -gt 0 ]; then packs=("$@"); else mapfile -t packs < <(find "$packs_dir" -mindepth 2 -maxdepth 2 -name pack.json -printf '%h\n' | xargs -n1 basename | sort); fi
+# Portable: macOS ships bash 3.2 (no mapfile) and BSD find (no -printf).
+if [ $# -gt 0 ]; then packs=("$@"); else
+  packs=()
+  while IFS= read -r pack; do packs+=("$pack"); done < <(for f in "$packs_dir"/*/pack.json; do basename "$(dirname "$f")"; done | sort)
+fi
 
 passed=() failed=() skipped=()
 for pack in "${packs[@]}"; do
