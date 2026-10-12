@@ -10,6 +10,7 @@ notice delivered into Bot Chat. Every failure blocks or wraps; none allows.
 from __future__ import annotations
 
 import concurrent.futures
+import contextvars
 import logging
 import os
 import threading
@@ -60,7 +61,9 @@ class Guard:
             self._tainted.add(self._turn(session_id, turn_id))
 
     def _bounded(self, fn, *args):  # noqa: ANN001, ANN002, ANN202
-        return self._pool.submit(fn, *args).result(timeout=self._timeout)
+        # Run in the caller's context: a gateway serving several profiles names the routed one in a
+        # ContextVar, which a pool thread would not see, and every bot would read as "default".
+        return self._pool.submit(contextvars.copy_context().run, fn, *args).result(timeout=self._timeout)
 
     def pre_tool_call(self, tool_name="", args=None, session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
         try:
