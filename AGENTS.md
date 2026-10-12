@@ -89,6 +89,7 @@ Codex code review reads this section. The Claude review routine reads it with RE
 | Prompts and signing keys never reach argv or logs | tests in `hermes/tests/test_launch.py` and `test_e2e.py` |
 | Cloud results count only with their HMAC signature | tests in `hermes/tests/test_gh.py` |
 | Launch, gate, verify, and merge decisions are made in code | the architecture of `team-kit-gh` (the bot's only tool), and review |
+| Commit messages carry no AI or agent references | `scripts/check-commit-messages.mjs` in `check.sh` (promoted from STYLE.md) |
 | Prefer a vendored skill to a second trust-ladder skill | review (REVIEW.md) |
 | Cloud skills use `gh api` REST, not GraphQL-backed subcommands | review (REVIEW.md) |
 
