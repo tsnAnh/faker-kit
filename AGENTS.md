@@ -31,6 +31,7 @@ To take a newer upstream: `node scripts/sync-upstream.mjs --ref <sha>`. Fix any 
 - `description` says what the skill does and when to use it, in under 1024 characters.
 - Write for an agent reading the file cold. Say which tool does what in Claude Code, Codex, and Pi only where they differ, using the vocabulary in `plugins/trust-ladder/references/compat.md`.
 - Never reuse a vendored skill's name. Pi keeps only the first skill with a given name.
+- If a vendored skill already covers the capability, use it (wrap it if the team needs more) instead of writing a second trust-ladder skill.
 - Add every new skill to `docs/catalog.json` (layer, audience, an example prompt), then run `node scripts/gen-catalog.mjs`. `validate.mjs` fails on a skill without an entry.
 
 ## Checks
@@ -49,6 +50,13 @@ python -m pytest hermes                  # Hermes guard, team-kit-gh, team-kit-a
 bash scripts/test-packs.sh               # lint packs fail on bad fixtures, pass on good
 claude plugin validate .                 # Claude Code marketplace schema
 ```
+
+## Hermes invariants
+
+- `team-kit-gh tick` and every scheduled job decide in code. No model chooses what launches or gates.
+- No webhook or public address. Integrations poll or connect outbound.
+- Secrets never go in the repo, logs, argv, or URLs.
+- Cloud agent results stay HMAC-signed.
 
 ## Dispatch
 

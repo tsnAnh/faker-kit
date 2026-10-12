@@ -34,5 +34,6 @@
     "triage_backend": "claude"
   },
   "security_backend": "claude",
-  "upstream_sync": true
+  "upstream_sync": true,
+  "auto_merge": "low"
 }
