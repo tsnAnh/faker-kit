@@ -42,6 +42,15 @@ slack:
   bot_token_env: TEAM_KIT_SLACK_BOT_TOKEN
   mirror_notices: false
 
+# Whether the guard and Hermes ask the owner in Desktop before a bot acts: every bootstrap bot
+# change, each chief draft and handoff, and any tool after a turn read untrusted content.
+# false stops every question. Deny rules, each role's tool and path limits, and the wrapping of
+# untrusted output still apply, but a prompt injection in an issue, a web page, or a teammate's
+# proposal can then make a bot act within those limits without you seeing it first.
+# team-kit-admin also sets each bot's Hermes approvals.mode to off when this is false; run
+# team-kit-admin sync after changing it.
+ask_owner: true
+
 # Tool results from these are wrapped in <untrusted source=...> and taint the turn.
 # After that, every tool not in read_only_tools needs the owner's approval in Desktop.
 # team-kit-gh report-status is not here: it prints only the parsed status line.

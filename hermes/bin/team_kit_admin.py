@@ -186,6 +186,8 @@ class Admin:
         """claude_config_dir, from claude_login(), switches the bot's model to the Claude subscription; None leaves the provider alone."""
         home = self.ensure_profile(bot, role)
         apply_profile(self.root, bot, self.pkg / "profiles" / role / "config.yaml")
+        if not self.policy().ask_owner:
+            config_set(self.root, bot, ("approvals", "mode"), "off")
         if claude_config_dir is not None:
             self.use_claude_subscription(bot, home, model, claude_config_dir)
         elif model:
