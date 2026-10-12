@@ -80,7 +80,7 @@ Under `~/.hermes/team-kit/`:
 
 These depend on Hermes and the cloud CLIs, and the tests fake them:
 
-- that a profile's `.env` (`GH_TOKEN`) reaches its terminal and its scheduled jobs,
+- the bot's own GitHub token. Found in the pilot (2026-10-12): a routed turn's commands get only the profile `.env` names listed in `terminal.env_passthrough`, and never `GH_TOKEN`, so `gh` in bot commands runs on the machine's keyring login. `team-kit-gh` reads `CLAUDE_CONFIG_DIR` from the profile itself (`lib/team_kit_env.py`); moving `gh` onto the bot's token waits on a token that can also read checks and Actions runs,
 - that a new profile's scheduled jobs run in the shared gateway without a restart,
 - the task line `codex cloud exec` prints, which `team_kit_cloud.py` waits for,
 - the `claude --cloud` contract (Claude Code 2.1.296): `claude --cloud <message>` creates a session only on a terminal on stdout, from a directory whose GitHub remote is the repository, and asks once per directory whether to trust it; `--cloud` cannot be combined with `-p` to create one; `claude --cloud <session> -p` reads the message on stdin, needs no terminal, prints `Sent to cloud session.`, and queues it into the session even before the sandbox starts. Confirmed by hand on 2026-10-12: a session created this way answered its fixed first message, then did the task it got on stdin. Check it with a real launch after every Claude Code upgrade,
