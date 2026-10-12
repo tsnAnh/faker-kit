@@ -135,6 +135,8 @@ SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SHORT_SHA = re.compile(r"\A[0-9a-f]{7,40}\Z")
 REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
+PR_TRIGGER = re.compile(r"\A@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\Z")
+PR_URL_NUMBER = re.compile(r"/pull/(\d+)(?:[#?]|\Z)")
 UPSTREAM_SOURCE = "upstream/source.json"
 UPSTREAM_CARD = "upstream-sync"
 UPSTREAM_URL = re.compile(r"\Ahttps://github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?\Z")
@@ -713,6 +715,79 @@ class Gh:
                 target.write_text(json.dumps({"seen": sorted(kept_seen), "ignored": sorted(kept_ignored)}))
                 target.replace(path)
         return [f"{NOTICE} proposal #{i['number']} from {i['author']}. {i['url']}" for i in fresh]
+
+    def pr_comment_trigger(self, config: dict) -> str:
+        """The mention that turns a pull request comment into a request for this bot: `@<bot name>` unless
+        `pr_comment_trigger` in .agents/dispatch.json names another."""
+        trigger = str(config.get("pr_comment_trigger") or f"@{self.bot.name}")
+        if not PR_TRIGGER.match(trigger):
+            raise Refused(".agents/dispatch.json pr_comment_trigger must be an @mention of letters, digits, and hyphens")
+        return trigger
+
+    def pr_comment_notices(self) -> list[str]:
+        """One notice per new pull request comment from a collaborator that mentions this bot: the pull request,
+        the author, and a link. Never the comment's text, which anyone could word as a notice; the owner reads it
+        and restates the work in Hermes Desktop. Polled, so it needs no webhook.
+
+        The record keeps a `since` time and the comments already handled at it. The first run starts at now, so
+        old comments never arrive at once. A comment whose author could not be checked holds `since` there and is
+        tried again next tick."""
+        try:
+            config = self.dispatch_config()
+        except Refused:
+            return []  # a broken dispatch.json is reported where tick reads it for units
+        trigger = self.pr_comment_trigger(config)
+        mention = re.compile(rf"(?<![A-Za-z0-9_-]){re.escape(trigger)}(?![A-Za-z0-9_-])", re.I)
+        directory = self.policy.home / "pr-comment-notices"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{self.bot.name}.json"
+        with open(directory / ".lock", "w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                record = json.loads(path.read_text())
+                since, handled = str(record["since"]), {int(i) for i in record.get("handled", [])}
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                self.write_record(path, {"since": dt.datetime.fromtimestamp(self.now(), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "handled": []})
+                return []
+            found = []
+            for endpoint in ("issues/comments", "pulls/comments"):
+                for page in range(1, ISSUE_PAGE_LIMIT + 1):
+                    query = urllib.parse.urlencode({"since": since, "per_page": str(ISSUE_PAGE_SIZE), "page": str(page)})
+                    body, more = self.api_page(f"repos/{self.repo}/{endpoint}?{query}")  # conditional: an idle repository costs nothing
+                    items = json.loads(body)
+                    found += [c for c in items if isinstance(c, dict)] if isinstance(items, list) else []
+                    if not more or not items:
+                        break
+            notices, next_since, next_handled, held, seen_now = [], since, set(handled), None, set()
+            for comment in sorted(found, key=lambda c: (str(c.get("updated_at") or ""), int(c.get("id") or 0))):
+                cid, updated = int(comment.get("id") or 0), str(comment.get("updated_at") or "")
+                pull = PR_URL_NUMBER.search(str(comment.get("html_url") or ""))
+                if cid in handled or not pull or not mention.search(str(comment.get("body") or "")):
+                    verdict = False
+                else:
+                    verdict = self.collaborator(comment)
+                if verdict is None:
+                    held = updated if held is None else min(held, updated)
+                    continue
+                seen_now.add(cid)
+                if verdict:
+                    login = str((comment.get("user") or {}).get("login") or "")
+                    notices.append(f"{NOTICE} PR #{pull.group(1)} comment from {login} mentions {trigger}. {comment.get('html_url')}")
+                if updated > next_since:
+                    next_since, next_handled = updated, set()
+                if updated == next_since:
+                    next_handled.add(cid)
+            if held is not None and held <= next_since:
+                # Wait at the unchecked comment; everything handled this round stays handled.
+                next_since, next_handled = held, handled | seen_now
+            self.write_record(path, {"since": next_since, "handled": sorted(next_handled)})
+        return notices
+
+    @staticmethod
+    def write_record(path: Path, data: dict) -> None:
+        target = path.with_name(f".{path.name}.{os.getpid()}")
+        target.write_text(json.dumps(data))
+        target.replace(path)
 
     def comments(self, issue: int) -> list[dict]:
         return json.loads(self.run(["api", "--paginate", f"repos/{self.repo}/issues/{issue}/comments"]))
@@ -2050,6 +2125,10 @@ class Project:
             notices.extend(gh.proposal_notices())
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
             problems["teammate-proposals"] = reason(err)
+        try:
+            notices.extend(gh.pr_comment_notices())
+        except Exception as err:  # noqa: BLE001 - reported once, retried next tick
+            problems["pr-comments"] = reason(err)
         try:
             units = gh.units()
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
