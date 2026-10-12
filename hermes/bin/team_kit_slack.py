@@ -24,8 +24,8 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from team_kit_guard.policy import PolicyError, load_policy  # noqa: E402
-from team_kit_slack_relay import SlackError, SlackRelay, check, launchd_plist, mirror_notice, systemd_unit  # noqa: E402
+from team_kit_guard.policy import PolicyError, load_policy
+from team_kit_slack_relay import SlackError, SlackRelay, check, launchd_plist, mirror_notice, systemd_unit
 
 
 def parser() -> argparse.ArgumentParser:

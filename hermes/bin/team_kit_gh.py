@@ -67,9 +67,9 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord, clean_reason, issue_body  # noqa: E402
-from team_kit_cloud import FINISHED, Cloud, CloudError  # noqa: E402
-from team_kit_contracts import (  # noqa: E402
+from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord, clean_reason, issue_body
+from team_kit_cloud import FINISHED, Cloud, CloudError
+from team_kit_contracts import (
     BRANCH,
     BRIEF_MARKER,
     DEFAULT_ACCEPTED,
@@ -109,18 +109,18 @@ from team_kit_contracts import (  # noqa: E402
     verdict_signed,
     verify_argv,
 )
-from team_kit_guard.policy import NAME, REPO, Bot, Policy, PolicyError, load_policy  # noqa: E402
-from team_kit_incident_sources import (  # noqa: E402
+from team_kit_guard.policy import NAME, REPO, Bot, Policy, PolicyError, load_policy
+from team_kit_incident_sources import (
     ExternalObservation,
     IncidentSourceError,
     poll_sources,
     validate_sources,
 )
-from team_kit_incident_sources import (  # noqa: E402
+from team_kit_incident_sources import (
     fetch_json as fetch_incident_json,
 )
-from team_kit_proposals import active_proposals, format_listing, format_notice, mark_notified, next_unnotified  # noqa: E402
-from team_kit_risk import (  # noqa: E402
+from team_kit_proposals import active_proposals, format_listing, format_notice, mark_notified, next_unnotified
+from team_kit_risk import (
     CODEOWNERS_PATHS,
     REPAIR_HISTORY_FILES,
     RISK_LABELS,

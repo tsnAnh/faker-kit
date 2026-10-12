@@ -54,12 +54,12 @@ for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-import yaml  # noqa: E402
-from install_config import InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, mapping, profile_home, value_at  # noqa: E402
-from team_kit_andon import ANDON_LABEL, MACHINE, Andon, AndonError, clean_reason, issue_body  # noqa: E402
-from team_kit_cloud import CLAUDE_CHECKOUT, Cloud, CloudError  # noqa: E402
-from team_kit_contracts import ContractError, bootstrap_prompt, cloud_argv  # noqa: E402
-from team_kit_guard.policy import (  # noqa: E402
+import yaml
+from install_config import InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, mapping, profile_home, value_at
+from team_kit_andon import ANDON_LABEL, MACHINE, Andon, AndonError, clean_reason, issue_body
+from team_kit_cloud import CLAUDE_CHECKOUT, Cloud, CloudError
+from team_kit_contracts import ContractError, bootstrap_prompt, cloud_argv
+from team_kit_guard.policy import (
     DEFAULT_INCIDENTS_EVERY,
     DEFAULT_SECURITY_EVERY,
     DEFAULT_TICK_EVERY,
@@ -84,7 +84,8 @@ CLAUDE_SUBSCRIPTION_DEFAULT_MODEL = "sonnet"
 # The gateway does not inherit the owner's shell, so a bot's .env carries the Claude Code CLI's config
 # directory: the launcher's `claude --cloud` and the subscription plugin both read it.
 CLAUDE_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
-OLD_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
+# The provider plugin's own setting. It belongs in the root .env (see point_plugin_at_login), never a profile's.
+PLUGIN_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
 LABELS = (
     ("agent-task", "1d76db", "A unit dispatched by a team-kit project bot"),
     ("agent:proposal", "c5def5", "A teammate proposal; the owner must restate the work in Hermes Desktop before any brief is written"),
@@ -239,13 +240,21 @@ class Admin:
             if value_at(current, ("model", key)) is not None:
                 hermes("-p", bot, "config", "unset", f"model.{key}")
         self.record_claude_config_dir(home, config_dir)
+        self.point_plugin_at_login(config_dir)
+
+    def point_plugin_at_login(self, config_dir: str) -> None:
+        """One gateway serves every profile and starts the provider plugin's Claude CLI with the gateway's own
+        environment, which comes from the root .env. A profile's .env never reaches it, so without this the
+        bot's scheduled jobs run logged out. Like CLAUDE_CONFIG_DIR, a shell without it never removes it."""
+        if config_dir:
+            self.set_env(self.root, PLUGIN_CLAUDE_DIR_ENV, config_dir)
 
     def record_claude_config_dir(self, home: Path, config_dir: str) -> None:
         """Keep the CLI's config directory in the bot's .env. A shell without CLAUDE_CONFIG_DIR (the owner's alias
         may set it per command) never removes it, so a later refresh cannot log the bot's launcher out."""
         if config_dir:
             self.set_env(home, CLAUDE_CONFIG_DIR_ENV, config_dir)
-        self.set_env(home, OLD_CLAUDE_DIR_ENV, "")
+        self.set_env(home, PLUGIN_CLAUDE_DIR_ENV, "")
 
     def set_env(self, home: Path, key: str, value: str) -> None:
         """Set or remove one non-secret line in a profile's .env, keeping every other line and mode 600."""

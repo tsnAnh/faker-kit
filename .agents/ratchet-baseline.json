@@ -1,11 +1,11 @@
 {
   "python-noqa": {
-    "total": 228,
+    "total": 209,
     "perFile": {
-      "hermes/bin/team_kit_admin.py": 21,
-      "hermes/bin/team_kit_chief.py": 8,
-      "hermes/bin/team_kit_gh.py": 84,
-      "hermes/bin/team_kit_slack.py": 4,
+      "hermes/bin/team_kit_admin.py": 15,
+      "hermes/bin/team_kit_chief.py": 5,
+      "hermes/bin/team_kit_gh.py": 76,
+      "hermes/bin/team_kit_slack.py": 2,
       "hermes/e2e/run_dispatch_e2e.py": 4,
       "hermes/lib/install_config.py": 7,
       "hermes/lib/team_kit_andon.py": 1,

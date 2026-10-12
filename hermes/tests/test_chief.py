@@ -2,11 +2,13 @@ import base64
 import hashlib
 import json
 import stat
+import sys
 import time
+from pathlib import Path
 
 import pytest
-from conftest import SHOP
-from team_kit_chief import Refused, main
+from conftest import SHOP, executable, hermes_calls
+from team_kit_chief import Refused, main, wake_tick
 
 NOW = 1_800_000_000.0
 CRM = "acme/crm"
@@ -50,8 +52,19 @@ def chief_home(team_kit_home):
     return team_kit_home
 
 
-def run(gh, *args, bot="chanh-van"):
-    return main(list(args), run=gh, bot=bot, now=lambda: NOW)
+class Waker:
+    """Stands in for waking a project bot's tick; wake_tick itself is tested against the Hermes double."""
+
+    def __init__(self, ok=True):
+        self.ok, self.bots = ok, []
+
+    def __call__(self, bot):
+        self.bots.append(bot)
+        return self.ok
+
+
+def run(gh, *args, bot="chanh-van", wake=None):
+    return main(list(args), run=gh, bot=bot, now=lambda: NOW, wake=wake or Waker())
 
 
 def test_status_has_one_line_per_project_and_reads_nothing_but_labels_and_titles(chief_home, capsys):
@@ -137,6 +150,49 @@ def test_propose_writes_one_proposal_for_the_target_project_bot_only(chief_home,
     record = json.loads(files[0].read_text())
     assert record["body"] == source.read_text()
     assert record["expires_at"] - record["created_at"] == 7 * 24 * 3600
+
+
+def test_propose_wakes_only_the_target_bots_tick_so_the_notice_arrives_now(chief_home, capsys):
+    waker = Waker()
+    assert propose(FakeGh(), draft(chief_home), wake=waker) == 0
+    assert waker.bots == ["meo-beo"]
+    assert "within about a minute" in json.loads(capsys.readouterr().out)["delivery"]
+
+
+def test_propose_still_hands_over_when_the_tick_cannot_be_woken(chief_home, capsys):
+    assert propose(FakeGh(), draft(chief_home), wake=Waker(ok=False)) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "next tick" in out["delivery"] and "team-kit-admin activate --bot meo-beo" in out["delivery"]
+    assert len(list((chief_home / "proposals" / "meo-beo").glob("*.json"))) == 1
+
+
+def test_a_refused_proposal_wakes_nobody(chief_home, capsys):
+    waker = Waker()
+    assert propose(FakeGh(), draft(chief_home), digest="0" * 64, wake=waker) == 1
+    assert waker.bots == []
+
+
+@pytest.mark.parametrize(("enabled", "woken"), [(True, True), (False, False)])
+def test_wake_tick_queues_the_bots_tick_through_the_hermes_cli(tmp_path, monkeypatch, enabled, woken):
+    root = tmp_path / ".hermes"
+    profile = root / "profiles" / "meo-beo"
+    profile.mkdir(parents=True)
+    jobs = [{"id": "job-0", "name": "team-kit-status", "enabled": True}, {"id": "job-1", "name": "team-kit-tick", "enabled": enabled}]
+    (profile / "jobs.json").write_text(json.dumps(jobs))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    executable(bin_dir / "hermes", f"#!{sys.executable}\n" + (Path(__file__).resolve().parent / "fake_hermes.py").read_text())
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    assert wake_tick("meo-beo") is woken
+    runs = [c for c in hermes_calls(root) if c[2:4] == ["cron", "run"]]
+    assert runs == ([["-p", "meo-beo", "cron", "run", "job-1"]] if woken else [])
+
+
+def test_wake_tick_is_false_when_hermes_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert wake_tick("meo-beo") is False
 
 
 def test_propose_accepts_the_tilde_form_of_the_drafts_path(chief_home, capsys, monkeypatch):
