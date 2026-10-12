@@ -7,6 +7,7 @@ node scripts/gen-site.mjs
 node scripts/agent-checks/ratchet.mjs check
 node scripts/agent-checks/import-boundaries.mjs
 node scripts/agent-checks/rule-fixtures.mjs
+node scripts/check-commit-messages.mjs
 ruff check
 mypy
 bun test plugins/trust-ladder
