@@ -179,11 +179,13 @@ elif args[0] == "api":
         emit(pull_row(number, listed[number - 7]))
     elif rest == "/issues" and method == "GET":
         wanted = urllib.parse.parse_qs(query)
-        label, state = (wanted.get("labels") or [""])[0], (wanted.get("state") or ["open"])[0]
+        label, want = (wanted.get("labels") or [""])[0], (wanted.get("state") or ["open"])[0]
         since = (wanted.get("since") or [""])[0]
-        found = [i for i in load("issues.json", {}).get(repo, []) if label in (i.get("labels") or [i["label"]]) and i["state"] == state
+        found = [i for i in load("issues.json", {}).get(repo, []) if label in (i.get("labels") or [i["label"]]) and i["state"] == want
                  and (not since or (i.get("closed_at") or i.get("created_at", "2026-10-01T00:00:00Z")) >= since)]
         paged([issue_row(i) for i in sorted(found, key=lambda i: i["number"])])
+    elif rest.startswith("/pulls/") and method == "GET" and rest.endswith("/reviews"):
+        paged([])
     elif rest.startswith("/issues/") and method == "GET" and rest.endswith("/comments"):
         paged(load("comments.json", {}).get(f"{repo}#{rest.split('/')[2]}", []))
     elif rest.startswith("/issues/") and method == "GET" and rest.split("/")[2].isdigit():
