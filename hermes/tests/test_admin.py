@@ -484,6 +484,21 @@ def test_activate_waits_for_the_bots_github_token_then_resumes_its_jobs(ready):
     assert "github_pat_secret" not in json.dumps(out)
 
 
+def test_status_lists_kit_update_pull_requests_and_whether_they_conflict(ready, kit_source):
+    root, _ = ready
+    add_shop(ready)
+    code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 0, out
+    pulls_file = root.parent / ".fake-gh" / "pulls.json"
+    pulls = json.loads(pulls_file.read_text())
+    pulls["acme/shop"][0]["mergeable"] = False
+    pulls_file.write_text(json.dumps(pulls))
+    code, out = admin(ready, "status", profile="ong-xay")
+    assert code == 0, out
+    shop = next(b for b in out["bots"] if b["bot"] == "meo-beo")
+    assert shop["repo"]["kit_prs"] == [{"pr": "https://github.com/acme/shop/pull/7", "conflicts": True}]
+
+
 def test_status_reports_every_bot_and_repository_and_refreshes_counts(ready):
     root, _ = ready
     add_shop(ready)
@@ -493,7 +508,7 @@ def test_status_reports_every_bot_and_repository_and_refreshes_counts(ready):
     shop = next(b for b in out["bots"] if b["bot"] == "meo-beo")
     assert shop["github_login"] is False
     assert shop["jobs"] == {"team-kit-tick": False, "team-kit-status": False, "team-kit-security": False, "team-kit-incidents": False, "team-kit-upstream": False}
-    assert shop["repo"] == {"repo": "acme/shop", "labels_missing": [], "running": 0, "dispatch_json": False}
+    assert shop["repo"] == {"repo": "acme/shop", "labels_missing": [], "running": 0, "dispatch_json": False, "kit_prs": []}
     assert {"bot": "ong-xay", "role": "bootstrap"} in out["bots"]
     counts = json.loads((root / "team-kit" / "in-flight" / "meo-beo.json").read_text())["repos"]
     assert counts == {"acme/shop": 0}

@@ -660,6 +660,7 @@ def test_idle_tick_uses_etags_and_reduces_uncached_github_work(team_kit_home, gh
         f"repos/{REPO}/contents/.agents/dispatch.json",
         f"repos/{REPO}/issues/comments?since={since}&per_page=100&page=1",
         f"repos/{REPO}/pulls/comments?since={since}&per_page=100&page=1",
+        f"repos/{REPO}/pulls?state=open&per_page=100&page=1",
         f"repos/{REPO}/issues?state=open&labels=agent-task&per_page=100&page=1",
         f"repos/{REPO}/issues?state=closed&labels=agent-task&per_page=100&page=1",
     ]
@@ -3189,6 +3190,21 @@ def test_an_approved_unit_that_starts_conflicting_is_a_gate_not_a_merge(team_kit
     [notice] = tick(gh, capsys)
     assert "has merge conflicts with its base branch" in notice and gh.merges == []
     assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+
+
+def test_a_conflicting_kit_update_pull_request_is_told_once_per_head(team_kit_home, gh, capsys):
+    tick(gh, capsys)
+    pr(gh, 7, branch="team-kit/kit-0123456789ab", head="d" * 40)
+    pr(gh, 8, branch="feature/x", head="e" * 40)
+    gh.prs[(REPO, 7)]["mergeable"] = None
+    gh.prs[(REPO, 8)]["mergeable"] = False
+    assert tick(gh, capsys) == ["[SILENT]"], "still computing, and a pull request that is not a kit update, say nothing"
+    gh.prs[(REPO, 7)]["mergeable"] = False
+    assert tick(gh, capsys) == [f"team-kit notice: the kit update https://github.com/{REPO}/pull/7 conflicts with its base branch; "
+                                "ask the bootstrap bot to run `team-kit-admin vendor --project shop`, which rebuilds it on the current branch"]
+    assert tick(gh, capsys) == ["[SILENT]"]
+    gh.prs[(REPO, 7)]["headRefOid"] = "f" * 40
+    assert len(tick(gh, capsys)) == 1, "a rebuilt head that still conflicts is told again"
 
 
 @pytest.mark.parametrize("config", [

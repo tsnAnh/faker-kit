@@ -75,6 +75,7 @@ from team_kit_contracts import (
     DEFAULT_ACCEPTED,
     DIAGNOSIS_MARKER,
     INCIDENT_MARKER,
+    KIT_BRANCH_PREFIX,
     LAUNCHED_MARKER,
     PR_MARKER,
     REPORT_MARKER,
@@ -740,6 +741,36 @@ class Gh:
         if not PR_TRIGGER.match(trigger):
             raise Refused(".agents/dispatch.json pr_comment_trigger must be an @mention of letters, digits, and hyphens")
         return trigger
+
+    def kit_pr_notices(self) -> list[str]:
+        """One notice per head when an open kit update pull request (team-kit-admin vendor's team-kit/kit-* branch)
+        conflicts with its base. `team-kit-admin vendor` rebuilds it on the current branch, which only the bootstrap
+        bot may run, so the notice names that command."""
+        record = self.policy.home / "kit-prs" / f"{self.bot.name}.json"
+        try:
+            told = json.loads(record.read_text())
+        except (OSError, ValueError):
+            told = {}
+        if not isinstance(told, dict):
+            told = {}
+        notices, now_told = [], {}
+        for item in self.api_pages(f"repos/{self.repo}/pulls", {"state": "open"}):
+            if not isinstance(item, dict) or not str((item.get("head") or {}).get("ref") or "").startswith(KIT_BRANCH_PREFIX):
+                continue
+            number = int(item["number"])
+            state = self.pr_state(number)
+            if not state["conflicts"] or not state["head"]:
+                continue
+            now_told[str(number)] = state["head"]
+            if told.get(str(number)) != state["head"]:
+                notices.append(f"{NOTICE} the kit update {item.get('html_url')} conflicts with its base branch; ask the bootstrap bot to run "
+                               f"`team-kit-admin vendor --project {self.bot.project}`, which rebuilds it on the current branch")
+        if now_told != told:
+            record.parent.mkdir(parents=True, exist_ok=True)
+            tmp = record.with_name(f".{record.name}.{os.getpid()}")
+            tmp.write_text(json.dumps(now_told))
+            tmp.replace(record)
+        return notices
 
     def pr_comment_notices(self) -> list[str]:
         """One notice per new pull request comment from a collaborator that mentions this bot: the pull request,
@@ -2334,6 +2365,10 @@ class Project:
             notices.extend(gh.pr_comment_notices())
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
             problems["pr-comments"] = reason(err)
+        try:
+            notices.extend(gh.kit_pr_notices())
+        except (Refused, ValueError, KeyError, TypeError) as err:
+            problems["kit-prs"] = reason(err)
         try:
             units = gh.units()
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
