@@ -9,6 +9,8 @@ line-length = 200
 extend-exclude = [
   ".agents",
   "site",
+  # Third-party packages copied unchanged (see hermes/vendor/README.md).
+  "hermes/vendor",
   # Vendored from upstream (see upstream/source.json); never edited by hand, so never linted here.
   "plugins/advisor",
   "plugins/agent-compatibility",

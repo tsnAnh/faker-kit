@@ -63,28 +63,28 @@ kit_home=${TEAM_KIT_HOME:-$HOME/.hermes/team-kit}
 root=$(dirname "$kit_home")
 kit=$kit_home/kit
 
-# A managed Hermes launcher may be a shell wrapper, not a venv shebang.
-# These helpers only need Python + PyYAML; never run the shell launcher as Python
-# or assume a managed base Python can import packages without its bootstrap.
+# The commands need only a Python 3.9+: PyYAML is used when installed and otherwise comes from the kit's
+# vendored copy (hermes/vendor), so a Python upgrade cannot leave them without it. HERMES_PYTHON names the
+# Python; otherwise python3 on PATH, then the Python in Hermes's shebang. A managed Hermes launcher may be a
+# shell wrapper, so it is never run as Python.
 usable_python() {
-  [ -n "$1" ] && "$1" -c 'import sys, yaml; assert sys.version_info >= (3, 9)' >/dev/null 2>&1
+  [ -n "$1" ] && "$1" -c 'import sys; assert sys.version_info >= (3, 9)' >/dev/null 2>&1
 }
 py=''
 if [ "${HERMES_PYTHON+x}" = x ]; then
   py=$HERMES_PYTHON
-  usable_python "$py" || die "HERMES_PYTHON must name an executable Python 3.9+ with PyYAML installed"
+  usable_python "$py" || die "HERMES_PYTHON must name an executable Python 3.9+"
 else
-  IFS= read -r shebang < "$(command -v hermes)" || true
-  case $shebang in
-    '#!'/*python*) candidate=${shebang#\#!} ;;
-    '#!/usr/bin/env python3') candidate=$(command -v python3 || true) ;;
-    *) candidate='' ;;
-  esac
+  candidate=$(command -v python3 || true)
   if usable_python "$candidate"; then
     py=$candidate
   else
-    candidate=$(command -v python3 || true)
-    usable_python "$candidate" || die "No usable Python 3.9+ with PyYAML; install PyYAML in a helper Python and set HERMES_PYTHON to its executable path"
+    IFS= read -r shebang < "$(command -v hermes)" || true
+    case $shebang in
+      '#!'/*python*) candidate=${shebang#\#!} ;;
+      *) candidate='' ;;
+    esac
+    usable_python "$candidate" || die "No usable Python 3.9+; install one or set HERMES_PYTHON to its executable path"
     py=$candidate
   fi
 fi
@@ -105,11 +105,11 @@ if grep -Eq '^version:[[:space:]]*1[[:space:]]*$' "$kit_home/guard.yaml"; then
   die "$kit_home/guard.yaml is version 1; see hermes/README.md, Migrate from version 1"
 fi
 
-# The wrappers run the pinned kit's commands with the helper Python. %q quotes paths that
-# contain spaces or shell metacharacters.
+# The wrappers run the pinned kit's commands with the chosen Python, or with python3 on PATH if that Python
+# is gone. %q quotes paths that contain spaces or shell metacharacters.
 for name in gh admin chief slack; do
-  printf '#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%q\nexec %q %q "$@"\n' \
-    "$kit_home" "$py" "$pkg/bin/team_kit_$name.py" > "$root/bin/team-kit-$name"
+  printf '#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%q\npy=%q\n[ -x "$py" ] || py=$(command -v python3) || { echo "team-kit-%s: no python3 to run it" >&2; exit 1; }\nexec "$py" %q "$@"\n' \
+    "$kit_home" "$py" "$name" "$pkg/bin/team_kit_$name.py" > "$root/bin/team-kit-$name"
   chmod 755 "$root/bin/team-kit-$name"
 done
 
