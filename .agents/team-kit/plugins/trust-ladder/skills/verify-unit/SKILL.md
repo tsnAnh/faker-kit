@@ -9,7 +9,7 @@ Another agent worked the brief in a GitHub issue and opened a pull request. You 
 
 Your prompt may name a focus, such as a second, adversarial verification of a risky change that a first verifier already passed. Then do everything below as well, and spend your effort on that angle.
 
-Nobody is watching this session. Hermes reads only your verdict comment's header lines, and only a verdict signed with the key from your prompt, because the coding agent posts as the same GitHub user. The key is a secret: never write it in a comment, a file in the repository, or a command whose output you post.
+Nobody is watching this session. Hermes reads only your verdict comment's header lines, and only a verdict signed with the key Hermes gave you (in your prompt, or in Claude Code the message after it), because the coding agent posts as the same GitHub user. The key is a secret: never write it in a comment, a file in the repository, or a command whose output you post.
 
 ## 1. Check the brief and the pull request
 
