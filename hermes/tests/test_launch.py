@@ -356,10 +356,10 @@ def test_a_trust_question_stops_the_launch_with_how_to_answer_it_and_sends_nothi
     assert [c["kind"] for c in claude_calls(calls)] == ["create"]
 
 
-def test_a_session_that_did_not_get_its_task_is_an_error_without_the_prompt_or_key(tmp_path, claude_cli, monkeypatch):
+def test_a_session_that_did_not_get_its_key_is_an_error_without_the_prompt_or_key(tmp_path, claude_cli, monkeypatch):
     cli, _, _, run_gh, _ = claude_cli
-    monkeypatch.setenv("FAKE_CLAUDE_SEND_FAIL", "1")
     key = "fedcba9876543210" * 2
+    monkeypatch.setenv("FAKE_CLAUDE_SEND_FAIL", f"could not send: The signing key for the task above: {key}")
     with pytest.raises(CloudError) as raised:
         cloud(run_gh=run_gh).start("claude", "acme/shop", command([str(cli), "--cloud"], f"secret prompt with key {key}", [key]),
                                    tmp_path / "checkouts" / "acme__shop" / "4")

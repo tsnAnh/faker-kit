@@ -86,7 +86,7 @@ def record(**entry):
 if len(args) == 3 and args[0] == "--cloud" and args[2] == "-p":
     record(kind="send", argv=args, stdin=sys.stdin.read(), cwd=os.getcwd())
     if os.environ.get("FAKE_CLAUDE_SEND_FAIL"):
-        print("Error: session " + args[1] + " is not running; message was: " + open(os.environ["FAKE_CLAUDE_LOG"]).read().splitlines()[-1])
+        print("Error: session " + args[1] + " is not running" + (": " + os.environ["FAKE_CLAUDE_SEND_FAIL"] if os.environ["FAKE_CLAUDE_SEND_FAIL"] != "1" else ""))
         sys.exit(1)
     print("Sent to cloud session.")
     print("Session ID: " + args[1])

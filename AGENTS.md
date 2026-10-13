@@ -60,7 +60,7 @@ claude plugin validate .                 # Claude Code marketplace schema
 One way for each concern. Use it; do not add a second.
 
 - **GitHub reads in `team-kit-gh`:** `Gh.api_page` / `Gh.api_json` (conditional ETag requests). Never shell out to a GraphQL-backed `gh issue`/`gh pr` subcommand in code a cloud session runs; use `gh api` REST calls.
-- **Starting a cloud agent:** `team_kit_cloud.Cloud.start`. A Claude Code session's task is its first message; signing keys go on stdin or as a follow-up message, never in argv.
+- **Starting a cloud agent:** `team_kit_cloud.Cloud.start`. A Claude Code session's task is its first message, a process argument, so it must never hold a secret; `CloudCommand.sensitive` is the only channel for one, sent on stdin or as a follow-up message, never in argv.
 - **Writing a state file:** write a sibling temp file, then `replace` it, with mode 600 for anything holding a key.
 - **Time:** take `now` as a parameter (`self.now`), so tests control it; never call `time.time()` inside a decision.
 - **A secret the owner provides:** the owner puts it in the bot profile's `.env` from their own terminal. Code reads it from the environment and redacts it from every log and error.
