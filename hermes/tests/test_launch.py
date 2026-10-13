@@ -9,7 +9,7 @@ from hashlib import sha256
 
 import pytest
 from conftest import FAKE_CLAUDE, HERMES, KIT
-from team_kit_cloud import KEY_HELD, Cloud, CloudError
+from team_kit_cloud import KEY_HELD, KEY_WAIT, Cloud, CloudError
 from team_kit_contracts import LAUNCH_PROMPTS, CloudCommand, ContractError, cloud_argv, launch_argv, verify_argv
 
 PREFIXES = ("/faker-mode ", "$faker-mode ")
@@ -308,11 +308,20 @@ def test_a_claude_session_starts_with_its_task_and_gets_its_signing_key_only_on_
     assert session == "https://claude.ai/code/session_01FAKEabc"
     create, send = claude_calls(calls)
     checkout = str(workdir.parent / "repo")
-    assert create == {"kind": "create", "cwd": checkout, "argv": ["--cloud", private.prompt.replace(key, KEY_HELD)]}
+    assert create == {"kind": "create", "cwd": checkout, "argv": ["--cloud", private.prompt.replace(key, KEY_HELD) + KEY_WAIT]}
+    assert create["argv"][1].endswith("reply only: waiting for the signing key. Then do the task above."), "it waits for the key"
     assert send == {"kind": "send", "argv": ["--cloud", "session_01FAKEabc", "-p"], "stdin": f"The signing key for the task above: {key}",
                     "cwd": checkout}
     assert key in private.prompt and not any(key in arg for call in (create, send) for arg in call["argv"])
     assert key not in (workdir.parent / "7-verify.log").read_text()
+
+
+@pytest.mark.parametrize("prompt", ["", "--dangerously-skip-permissions"])
+def test_a_claude_task_that_is_empty_or_looks_like_an_option_is_refused_before_anything_runs(tmp_path, claude_cli, prompt):
+    cli, calls, _, run_gh, _ = claude_cli
+    with pytest.raises(CloudError, match="must be text that does not start with -"):
+        cloud(run_gh=run_gh).start("claude", "acme/shop", command([str(cli), "--cloud"], prompt), tmp_path / "checkouts" / "acme__shop" / "5")
+    assert claude_calls(calls) == []
 
 
 def test_a_coding_unit_session_gets_its_task_as_the_only_message(tmp_path, claude_cli):
@@ -356,4 +365,5 @@ def test_a_session_that_did_not_get_its_task_is_an_error_without_the_prompt_or_k
                                    tmp_path / "checkouts" / "acme__shop" / "4")
     error = str(raised.value)
     assert error.startswith("https://claude.ai/code/session_01FAKEabc started but did not get its signing key")
+    assert "[redacted signing key]" in error, "the CLI's own output repeated the key, and it was redacted"
     assert key not in error and "secret prompt" not in error

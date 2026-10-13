@@ -5,7 +5,7 @@ description: Review one Hermes-dispatched unit pull request head in a read-only 
 
 # Review a Unit Pull Request
 
-A Hermes project bot started you to review one pull request head. Your prompt names the pull request, the exact commit, the unit issue, and a key. Nobody is watching this session. Hermes reads only your result comment's header lines, and only a result signed with the key from your prompt.
+A Hermes project bot started you to review one pull request head. Your prompt names the pull request, the exact commit, the unit issue, and a key. Nobody is watching this session. Hermes reads only your result comment's header lines, and only a result signed with the key Hermes gave you (in your prompt, or in Claude Code the message after it).
 
 You change nothing. Never edit a tracked file, commit, push, open or close an issue, approve, request changes, request reviewers, enable auto-merge, merge, or run `gh pr review`. Post exactly one result comment on the unit issue in the prompt.
 
@@ -77,7 +77,7 @@ Comment on the unit issue, not as a GitHub review, with `templates/dispatch/revi
 - `sig:` is the HMAC-SHA256, in lowercase hex, of `<high>|<medium>|<low>|<pr>|<head>` under the key, with no newline.
 - Then the sections Findings and Checked and Clear.
 
-Sign with one of these, replacing `<key>` with the key from your prompt. Do not read the key with `read`: an agent's shell has no terminal, so it gets end of input and signs with an empty key.
+Sign with one of these, replacing `<key>` with the key Hermes gave you (in your prompt, or in Claude Code the message after it). Do not read the key with `read`: an agent's shell has no terminal, so it gets end of input and signs with an empty key.
 
 ```bash
 printf '%s' "<high>|<medium>|<low>|<pr>|<head>" | openssl dgst -sha256 -hmac "<key>" | awk '{print $NF}'

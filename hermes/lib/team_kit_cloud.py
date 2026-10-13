@@ -1,7 +1,7 @@
 """Start one cloud coding agent and return the session it created.
 
 A Claude Code session starts with its task as the first message: `claude --cloud "<task>"`, the only way
-the CLI creates a session. A signing key never reaches that argument: the task names where the key comes,
+the CLI creates a session. A signing key never reaches that argument: the task names where the key comes and waits for it,
 and `claude --cloud <session> -p` sends the key alone on stdin as the next message, a form that needs no
 terminal and queues the message into the session. A task without a key is sent once and needs no second
 message. The CLI creates a session only on a terminal, from a directory whose GitHub remote is the
@@ -59,8 +59,11 @@ REDACTED_PROMPT = "[redacted prompt]"
 REDACTED_KEY = "[redacted signing key]"
 # Claude Code launches from one kept checkout per repository, never pruned, which the owner trusts once.
 CLAUDE_CHECKOUT = "repo"
-# Stands in for a signing key in a Claude Code session's first message; the key follows on stdin.
-KEY_HELD = "[the signing key arrives as the next message in this session; wait for it before you sign]"
+# Stands in for a signing key in a Claude Code session's first message; the key follows on stdin. A session
+# reads a queued message only after its turn ends, so a keyed first message ends that turn at once.
+KEY_HELD = "[the signing key, which arrives as the next message]"
+KEY_WAIT = ("\n\nYour signing key arrives as the next message in this session. Until it does, change nothing and reply "
+            "only: waiting for the signing key. Then do the task above.")
 KEY_MESSAGE = "The signing key for the task above: {key}"
 CLAUDE_SENT = "Sent to cloud session"
 CLAUDE_SESSION_ID = re.compile(r"\A(?:session|cse)_[A-Za-z0-9]+\Z")
@@ -84,12 +87,13 @@ class CloudError(Exception):
 
 
 def first_message(command: CloudCommand) -> str:
-    """A Claude Code session's first message: the prompt with each signing key replaced by KEY_HELD."""
+    """A Claude Code session's first message: the prompt with each signing key replaced by KEY_HELD, and, when it
+    held one, told to wait for the key before it starts."""
     text = command.prompt
-    for secret in command.sensitive:
-        if secret:
-            text = text.replace(secret, KEY_HELD)
-    return text
+    keys = [secret for secret in command.sensitive if secret]
+    for secret in keys:
+        text = text.replace(secret, KEY_HELD)
+    return text + KEY_WAIT if keys else text
 
 
 def clean_terminal_text(raw: bytes) -> str:
@@ -291,7 +295,7 @@ class Cloud:
             done, out = None, type(err).__name__
         if done is None or done.returncode or CLAUDE_SENT not in out:
             last = next((line for line in reversed(self._redact(out, command).splitlines()) if line.strip()), "no output")
-            raise CloudError(f"{session} started but did not get its signing key, so it cannot sign its result: {last[:200]}")
+            raise CloudError(f"{session} started but did not get its signing key, so it waits idle: {last[:200]}")
 
     @staticmethod
     def _stop(proc: subprocess.Popen[bytes]) -> None:

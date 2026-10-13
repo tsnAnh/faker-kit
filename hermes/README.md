@@ -118,7 +118,7 @@ These depend on Hermes and the cloud CLIs, and the tests fake them:
 
 - **"Claude Code asks whether to trust <path>".** The project's launch checkout is new, or its trust was reset. Run `cd <path> && claude`, choose yes, then `/exit`, and launch again.
 - **A Claude launch exits with "Not logged in" or "requires an interactive terminal".** The gateway runs `claude` without your shell. Check that the project bot's `.env` has `CLAUDE_CONFIG_DIR` pointing at the directory your `claude` login uses (rerun `team-kit-admin add-project` from a shell where it is exported), and that nothing replaced `Cloud.popen` or wrapped the launch.
-- **"<session> started but did not get its task, so it waits idle".** Creating the session worked, sending its prompt on stdin did not. The unit is freed and the next tick launches a new session; the idle one can be deleted at claude.ai/code.
+- **"<session> started but did not get its signing key, so it waits idle".** Creating a keyed session (verifier, review, security, or triage) worked, sending its key on stdin did not. The session was told to wait for the key, so it does nothing; delete it at claude.ai/code. The next tick starts a new one.
 - **A Codex launch exits before starting a task.** Read `~/.hermes/team-kit/checkouts/<owner>__<repo>/<unit>.log`. It holds the terminal output with escape sequences removed and prompts and signing keys redacted. Run `codex cloud exec` by hand to see whether it needs a sign-in.
 - **"printed no session in 180s".** `codex cloud exec` is waiting for input or a login. The same log shows what it printed; the process group is stopped.
 

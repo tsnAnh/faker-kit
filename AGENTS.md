@@ -86,7 +86,7 @@ Codex code review reads this section. The Claude review routine reads it with RE
 | The seven shared `hermes/lib` modules stay fully typed | `mypy` (strict overrides in `pyproject.toml`) in `check.sh` |
 | Legacy lint and type suppressions only go down | `.agents/ratchet.json` in `check.sh` |
 | `hermes/lib` never imports a command; the guard imports nothing from `lib/` or `bin/` | `.agents/import-boundaries.json` in `check.sh` |
-| Signing keys never reach argv; prompts and keys never reach logs | tests in `hermes/tests/test_launch.py` and `test_e2e.py` |
+| Signing keys never reach argv or logs | tests in `hermes/tests/test_launch.py` and `test_e2e.py` |
 | Cloud results count only with their HMAC signature | tests in `hermes/tests/test_gh.py` |
 | Launch, gate, verify, and merge decisions are made in code | the architecture of `team-kit-gh` (the bot's only tool), and review |
 | Commit messages carry no AI or agent references | `scripts/check-commit-messages.mjs` in `check.sh` (promoted from STYLE.md) |
@@ -103,7 +103,7 @@ Codex code review reads this section. The Claude review routine reads it with RE
 - The owner wants Hermes bots to act without asking (guard.yaml `ask_owner: false`, Hermes approvals off); keep new bot flows free of owner confirmation steps unless a Hermes invariant requires one.
 - The chief hands work straight to project bots; never give the owner a prompt to paste into another bot's chat.
 - The owner wants Hermes dispatch event-driven: a GitHub event such as a new issue should launch Claude Code as soon as possible, with polling only as a fallback.
-- The owner wants code review done by an outside service (the Claude GitHub app, `.github/workflows/claude-review.yml`), not Hermes review or verifier sessions, and low-risk PRs merged automatically once that app approves (`.agents/dispatch.json`: review and verifier backends `none`, `review_app` `claude[bot]`, `auto_merge` `low`).
+- The owner wants code review done by an outside service (the Claude GitHub app, `.github/workflows/claude-review.yml`), not Hermes review or verifier sessions, and low-risk PRs merged automatically once that app approves (`.agents/dispatch.json`: review and verifier backends `none`, `review_app` `claude[bot]`, `auto_merge` `low`, `security_backend` `none`); no Claude Code cloud session reviews changes.
 
 ## Learned Workspace Facts
 
