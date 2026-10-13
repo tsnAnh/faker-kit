@@ -39,6 +39,9 @@ HERE = Path(__file__).resolve().parent
 for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
+# Last, so an installed PyYAML wins; the vendored copy keeps the command working on a Python without one.
+if (HERE.parent / "vendor").is_dir() and str(HERE.parent / "vendor") not in sys.path:
+    sys.path.append(str(HERE.parent / "vendor"))
 
 from install_config import cron_jobs
 from team_kit_andon import Andon
