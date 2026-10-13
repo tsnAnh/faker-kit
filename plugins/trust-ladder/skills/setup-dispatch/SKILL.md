@@ -1,6 +1,6 @@
 ---
 name: setup-dispatch
-description: Prepare one repository for team-kit dispatch, so a Hermes project bot can brief cloud coding agents there and the owner only merges. The repository side only; a project is one repository, which may hold several apps. Writes .agents/dispatch.json (backend, kit commit, in-flight limit sized by /trust-audit, forbidden paths, trusted dispatchers, verification skill) and .agents/dispatch.md (standing orders), makes sure AGENTS.md describes the repository's layout, and fills in the kit setup the repository still lacks, all in one pull request. Usually run by the cloud session the Hermes bootstrap bot starts, which passes every value in its prompt. Use for /setup-dispatch, "set up this repo for Hermes dispatch", or after a dispatch refusal about the kit pin or dispatch.json.
+description: Prepare one repository for faker-kit dispatch, so a Hermes project bot can brief cloud coding agents there and the owner only merges. The repository side only; a project is one repository, which may hold several apps. Writes .agents/dispatch.json (backend, kit commit, in-flight limit sized by /trust-audit, forbidden paths, trusted dispatchers, verification skill) and .agents/dispatch.md (standing orders), makes sure AGENTS.md describes the repository's layout, and fills in the kit setup the repository still lacks, all in one pull request. Usually run by the cloud session the Hermes bootstrap bot starts, which passes every value in its prompt. Use for /setup-dispatch, "set up this repo for Hermes dispatch", or after a dispatch refusal about the kit pin or dispatch.json.
 ---
 
 # Set up dispatch in a repository
@@ -8,7 +8,7 @@ description: Prepare one repository for team-kit dispatch, so a Hermes project b
 Dispatch has two sides, and both run the same kit commit.
 
 - **The repository**, this skill. It holds `.agents/dispatch.json` and `.agents/dispatch.md`.
-- **The Hermes machine**, set up by the `hermes/` module of the kit: `hermes/install.sh` once per machine, then the bootstrap bot per project. It labels the repository and protects its default branch with `team-kit-admin`. See [hermes/README.md](https://github.com/tsnAnh/team-kit/blob/main/hermes/README.md).
+- **The Hermes machine**, set up by the `hermes/` module of the kit: `hermes/install.sh` once per machine, then the bootstrap bot per project. It labels the repository and protects its default branch with `team-kit-admin`. See [hermes/README.md](https://github.com/tsnAnh/faker-kit/blob/main/hermes/README.md).
 
 A project is one repository. When a product has an API, a web app, and a mobile app, they live side by side in this one repository, so one agent can carry a feature through all of them in one pull request.
 
@@ -51,7 +51,7 @@ Keep it to what an agent needs to plan a change. Do not repeat the README.
 Copy `templates/dispatch/dispatch.json` and fill it:
 
 - `backend` and `kit_ref` from the values.
-- `max_in_flight`: how many units may run here at once, from the repository's trust score. Run `/trust-audit` (Codex: `$trust-audit`) and use its lowest layer, as in [Run many agents](https://github.com/tsnAnh/team-kit/blob/main/docs/how-to/run-many-agents.md):
+- `max_in_flight`: how many units may run here at once, from the repository's trust score. Run `/trust-audit` (Codex: `$trust-audit`) and use its lowest layer, as in [Run many agents](https://github.com/tsnAnh/faker-kit/blob/main/docs/how-to/run-many-agents.md):
 
   | Lowest layer | `max_in_flight` |
   |---|---|

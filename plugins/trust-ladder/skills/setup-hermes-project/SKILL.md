@@ -22,7 +22,7 @@ Every change to the Hermes side goes through `~/.hermes/bin/team-kit-admin`, whi
 ~/.hermes/bin/team-kit-admin status
 ```
 
-- **No such file:** Hermes's team-kit module is not installed. Install it from a checkout of the kit, pinned to the kit's current default-branch commit, with a bootstrap bot:
+- **No such file:** Hermes's faker-kit module is not installed. Install it from a checkout of the kit, pinned to the kit's current default-branch commit, with a bootstrap bot:
 
   ```bash
   ref=$(gh api repos/<kit owner>/<kit repo>/commits/main --jq .sha)
@@ -124,4 +124,4 @@ Tell the owner, in a few lines:
 
 - the bot's name, to add in Hermes Desktop Bot Mode;
 - that they state work in that bot's Bot Chat, and the bot briefs, dispatches, and verifies it, and they merge;
-- where things go wrong: the Troubleshooting section of [hermes/README.md](https://github.com/tsnAnh/team-kit/blob/main/hermes/README.md).
+- where things go wrong: the Troubleshooting section of [hermes/README.md](https://github.com/tsnAnh/faker-kit/blob/main/hermes/README.md).
