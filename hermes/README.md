@@ -1,4 +1,4 @@
-# team-kit for Hermes
+# faker-kit for Hermes
 
 This module runs team-kit dispatch on a [Hermes Agent](https://github.com/NousResearch/hermes-agent) machine: one bootstrap bot that sets projects up, one project bot per project that briefs cloud coding agents (Claude Code or Codex), one pull request per unit, until the owner merges, and an optional chief of staff that routes the owner's intent across projects. The chief reads by default and has one approved write: a local proposal for a project bot. How to use it is in [Dispatch work with Hermes](../docs/how-to/dispatch-with-hermes.md).
 
@@ -13,10 +13,11 @@ GitHub holds every unit's state, as labels on its issue: `agent-task` (queued), 
 ## Install
 
 ```bash
+git clone https://github.com/tsnAnh/faker-kit.git && cd faker-kit
 bash hermes/install.sh --ref <kit commit> --bootstrap-bot <name>
 ```
 
-Run `bash hermes/install.sh --help` for every flag. Then set `trusted_authors` and `max_in_flight_total` in `~/.hermes/team-kit/guard.yaml`, and ask the bootstrap bot for your first project.
+`install.sh` fetches the kit from `https://github.com/tsnAnh/faker-kit.git` unless `--source` names another. Run `bash hermes/install.sh --help` for every flag. Then set `trusted_authors` and `max_in_flight_total` in `~/.hermes/team-kit/guard.yaml`, and ask the bootstrap bot for your first project.
 
 ## How cloud agents get the kit
 
@@ -29,10 +30,10 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | Path | What it is | Installed to |
 |---|---|---|
 | `install.sh` | Fetches the kit at a commit, writes the wrappers, refreshes every bot | — |
-| `bin/team_kit_admin.py` | `team-kit-admin`: the bootstrap bot's only command, and the installer's helper | `~/.hermes/bin/team-kit-admin` (a wrapper) |
-| `bin/team_kit_gh.py` | `team-kit-gh`: a project bot's only GitHub access, and what its jobs run | `~/.hermes/bin/team-kit-gh` (a wrapper) |
-| `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and, with approval, hands one hashed draft to one project bot | `~/.hermes/bin/team-kit-chief` (a wrapper) |
-| `bin/team_kit_slack.py` | `team-kit-slack`: the optional outbound-only Slack Socket Mode relay | `~/.hermes/bin/team-kit-slack` (a wrapper) |
+| `bin/team_kit_admin.py` | `team-kit-admin`: the bootstrap bot's only command, and the installer's helper | `~/.hermes/bin/faker-kit-admin` and `~/.hermes/bin/team-kit-admin` (the same wrapper) |
+| `bin/team_kit_gh.py` | `team-kit-gh`: a project bot's only GitHub access, and what its jobs run | `~/.hermes/bin/faker-kit-gh` and `~/.hermes/bin/team-kit-gh` (the same wrapper) |
+| `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and, with approval, hands one hashed draft to one project bot | `~/.hermes/bin/faker-kit-chief` and `~/.hermes/bin/team-kit-chief` (the same wrapper) |
+| `bin/team_kit_slack.py` | `team-kit-slack`: the optional outbound-only Slack Socket Mode relay | `~/.hermes/bin/faker-kit-slack` and `~/.hermes/bin/team-kit-slack` (the same wrapper) |
 | `lib/team_kit_contracts.py` | The brief, size, report, and launch markers, and the cloud command lines | read from the kit checkout |
 | `lib/team_kit_cloud.py` | Starts a `claude --cloud` session (created with a fixed first message, then sent its prompt on stdin) or a `codex cloud exec` task, and returns its id | read from the kit checkout |
 | `lib/team_kit_andon.py` | The andon cords: the local records, and the `agent:andon` issue body | read from the kit checkout |
@@ -103,6 +104,14 @@ These depend on Hermes and the cloud CLIs, and the tests fake them:
 `team-kit-admin add-project`, `add-chief`, and `add-bootstrap` (or `install.sh --bootstrap-bot NAME`) take `--claude-subscription`. It installs Hermes's [Claude Subscription DirectSDK](https://hermes-agent.nousresearch.com/docs/plugins/claude-subscription-directsdk) provider plugin into that bot's profile only, enables it without permission to replace built-in tools, and sets the bot's `model.provider` to `claude-subscription-directsdk-experimental` and `model.default` to `--model` or `sonnet`. Each turn then runs through the Claude Code CLI logged in on this machine and counts against your Claude subscription, with no API key.
 
 It refuses before changing anything unless `claude` is 2.1.284 or later and `claude auth status` shows a login. Run it from your own shell: the Hermes gateway runs under launchd and does not inherit your shell, so a `CLAUDE_CONFIG_DIR` set there would leave the plugin logged out (HTTP 401). The command records that directory, a path and not a secret, in two places: the bot's `.env` as `CLAUDE_CONFIG_DIR`, which the `claude --cloud` launcher reads, and the root `~/.hermes/.env` as `CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR`, which the plugin reads. The plugin needs the root file because one gateway serves every profile and starts the Claude CLI with its own environment; a profile's `.env` never reaches it, so the bot's gateway turns, such as its replies to delivered notices, would run logged out. A later run from a shell without the variable keeps both lines. Restart the gateway and quit and reopen Hermes Desktop afterwards, so both load the root `.env` again. Run the command again without the flag to leave the provider as it is; switch back with `hermes -p <bot> model`.
+
+## Upgrading from team-kit
+
+The kit was called team-kit. Its public command names are now `faker-kit-gh`, `faker-kit-admin`, `faker-kit-chief`, and `faker-kit-slack`. `install.sh` also keeps `team-kit-gh`, `team-kit-admin`, `team-kit-chief`, and `team-kit-slack` installed as the same commands, and the guard treats both names the same: a rule written for one matches the other, and a bot may run its command under either name.
+
+Some names stay team-kit, because the machine's state and open GitHub issues already use them. Renaming them would strand that state. They are `~/.hermes/team-kit/`, `TEAM_KIT_HOME`, the `TEAM_KIT_*` environment names, the job names such as `team-kit-tick`, the `agent:*` labels, the `<!-- team-kit:... -->` markers and `team-kit notice:`, and the profile prompts and skills that name `team-kit-gh`, `team-kit-admin`, and `team-kit-chief`.
+
+To upgrade, rerun `bash hermes/install.sh --ref <new commit>` from a faker-kit checkout. Nothing migrates and no state moves. The kit checkout at `~/.hermes/team-kit/kit` fetches by URL on each run, so it needs no remote change. `bots.yaml`, `guard.yaml`, job ids, and which jobs are enabled are kept. If a file the kit did not write sits at one of the `~/.hermes/bin/faker-kit-*` paths, `install.sh` stops before changing anything and names it; move it aside and run it again.
 
 ## Upgrade from routine launches
 
