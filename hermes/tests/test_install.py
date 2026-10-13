@@ -182,7 +182,7 @@ def test_a_team_kit_home_elsewhere_moves_bin_and_profiles_with_it_and_leaves_hom
                           env=env, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     assert sorted(p.name for p in (elsewhere / "bin").iterdir()) == WRAPPERS
-    assert f"export TEAM_KIT_HOME={elsewhere / 'team-kit'}\n" in (elsewhere / "bin" / "faker-kit-gh").read_text()
+    assert f"export TEAM_KIT_HOME='{elsewhere / 'team-kit'}'\n" in (elsewhere / "bin" / "faker-kit-gh").read_text()
     assert (elsewhere / "team-kit" / "kit").is_dir()
     assert not (root / "bin").exists() and not (root / "team-kit").exists(), "the real ~/.hermes is untouched"
 
@@ -223,9 +223,9 @@ def test_a_fresh_install_fetches_the_faker_kit_source_by_default(kit_source, mac
     assert sorted(p.name for p in (root / "bin").iterdir()) == WRAPPERS
     for name in WRAPPERS:
         assert os.access(root / "bin" / name, os.X_OK), name
-    py = (root / "bin" / "team-kit-gh").read_text().splitlines()[2].split()[1]
+    py = (root / "bin" / "team-kit-gh").read_text().splitlines()[2].split()[1].strip("'")
     assert (root / "bin" / "faker-kit-gh").read_text() == (
-        f'#!/usr/bin/env bash\nexport TEAM_KIT_HOME={root / "team-kit"}\nexec {py} {root / "team-kit" / "kit" / "hermes" / "bin" / "team_kit_gh.py"} "$@"\n'
+        f"#!/usr/bin/env bash\nexport TEAM_KIT_HOME='{root / 'team-kit'}'\nexec '{py}' '{root / 'team-kit' / 'kit' / 'hermes' / 'bin' / 'team_kit_gh.py'}' \"$@\"\n"
     )
     assert done.stdout.splitlines()[-2] == f"faker-kit Hermes module installed at kit {sha}. The team-kit-* commands remain, as the same commands."
 
@@ -333,3 +333,40 @@ def test_a_source_that_fails_to_fetch_leaves_the_install_as_it_was(kit_source, m
     assert done.returncode != 0
     assert "fatal:" in done.stderr and "no-such-kit" in done.stderr, done.stderr
     assert snapshot(*(Path(p) for p in kept)) == kept
+
+
+def test_a_non_ascii_kit_home_reinstalls_under_any_locale(kit_source, machine, tmp_path):
+    """launchd and cron run install.sh without LANG. The wrappers it writes there must be the ones it recognises later."""
+    _, env = machine
+    elsewhere = tmp_path / "Thư mục café" / ".hermes"
+    src, sha = kit_source
+    runs = {}
+    for run, locale in enumerate(("C", "C.UTF-8", "C")):
+        done = subprocess.run(["bash", str(HERMES / "install.sh"), "--ref", sha, "--source", str(src), "--no-gateway"],
+                              env={**env, "LC_ALL": locale, "TEAM_KIT_HOME": str(elsewhere / "team-kit"), "HERMES_HOME": str(elsewhere)},
+                              capture_output=True, text=True)
+        assert done.returncode == 0, (run, locale, done.stderr)
+        runs[run] = snapshot(*((elsewhere / "bin" / name) for name in WRAPPERS))
+    assert runs[0] == runs[1] == runs[2], "the wrappers do not depend on the locale"
+    outputs = [subprocess.run([str(elsewhere / "bin" / f"{prefix}-admin"), "status"], env={**env, "LC_ALL": "C"}, capture_output=True, text=True)
+               for prefix in ("faker-kit", "team-kit")]
+    assert [o.returncode for o in outputs] == [0, 0], [o.stderr for o in outputs]
+    assert json.loads(outputs[0].stdout) == json.loads(outputs[1].stdout)
+
+
+@pytest.mark.parametrize(("folder", "quoting"), [("café", "$'"), ("my kit", "\\ "), ("kit", "/kit/hermes/bin/team_kit_gh.py \"")])
+def test_a_wrapper_an_earlier_install_quoted_with_printf_q_is_still_a_kit_wrapper(kit_source, machine, tmp_path, folder, quoting):
+    """Older kits quoted with printf %q: bare, backslash-escaped, or, for a non-ASCII path in the C locale, $'...'."""
+    _, env = machine
+    elsewhere = tmp_path / folder / ".hermes"
+    kit_home = elsewhere / "team-kit"
+    src, sha = kit_source
+    (elsewhere / "bin").mkdir(parents=True)
+    older = r'printf "#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%q\nexec %q %q \"\$@\"\n" "$1" /usr/bin/python3 "$1/kit/hermes/bin/team_kit_gh.py"'
+    written = subprocess.run(["bash", "-c", older, "older", str(kit_home)], env={**env, "LC_ALL": "C"}, capture_output=True, text=True, check=True).stdout
+    assert quoting in written
+    (elsewhere / "bin" / "team-kit-gh").write_text(written)
+    done = subprocess.run(["bash", str(HERMES / "install.sh"), "--ref", sha, "--source", str(src), "--no-gateway"],
+                          env={**env, "LC_ALL": "C", "TEAM_KIT_HOME": str(kit_home), "HERMES_HOME": str(elsewhere)}, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert (elsewhere / "bin" / "team-kit-gh").read_text() == (elsewhere / "bin" / "faker-kit-gh").read_text()

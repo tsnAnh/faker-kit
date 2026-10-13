@@ -46,11 +46,21 @@ wrapper_names='gh admin chief slack'
 
 # A kit wrapper is what the wrapper loop below writes, or wrote in an older kit: a regular file whose
 # second line sets TEAM_KIT_HOME and whose third line execs the kit's hermes/bin/team_kit_<name>.py.
+# Older kits quoted with printf %q, which leaves the script path bare, backslash-escaped, or, for a
+# non-ASCII path without a UTF-8 locale, in $'...'; this one single-quotes it.
 is_kit_wrapper() {
   local path=$1 name=$2 first second third
   [ -f "$path" ] && [ ! -L "$path" ] || return 1
   { IFS= read -r first && IFS= read -r second && IFS= read -r third; } < "$path" || return 1
-  [[ $second == 'export TEAM_KIT_HOME='* && $third == 'exec '*"/hermes/bin/team_kit_$name.py \"\$@\"" ]]
+  [[ $second == 'export TEAM_KIT_HOME='* && $third == 'exec '* ]] || return 1
+  [[ $third == *"/hermes/bin/team_kit_$name.py \"\$@\"" || $third == *"/hermes/bin/team_kit_$name.py' \"\$@\"" ]]
+}
+
+# Single quotes give the same bytes under every locale. printf %q does not: launchd and cron run
+# without LANG, and there it writes $'...' for a non-ASCII path.
+shell_quote() {
+  local s=$1 sq="'" q="'\\''"
+  printf "'%s'" "${s//$sq/$q}"
 }
 
 ref='' source=https://github.com/tsnAnh/faker-kit.git bootstrap_bot='' model='' claude_subscription='' gateway=1
@@ -131,14 +141,13 @@ if grep -Eq '^version:[[:space:]]*1[[:space:]]*$' "$kit_home/guard.yaml"; then
   die "$kit_home/guard.yaml is version 1; see hermes/README.md, Migrate from version 1"
 fi
 
-# The wrappers run the pinned kit's commands with the helper Python. %q quotes paths that
-# contain spaces or shell metacharacters. A wrapper replaces the old one in one rename, so a bot
-# never runs a half-written file.
+# The wrappers run the pinned kit's commands with the helper Python. A wrapper replaces the old
+# one in one rename, so a bot never runs a half-written file.
 for prefix in $wrapper_prefixes; do
   for name in $wrapper_names; do
     path=$root/bin/$prefix-$name
-    printf '#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%q\nexec %q %q "$@"\n' \
-      "$kit_home" "$py" "$pkg/bin/team_kit_$name.py" > "$path.tmp.$$"
+    printf '#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%s\nexec %s %s "$@"\n' \
+      "$(shell_quote "$kit_home")" "$(shell_quote "$py")" "$(shell_quote "$pkg/bin/team_kit_$name.py")" > "$path.tmp.$$"
     chmod 755 "$path.tmp.$$"
     mv -f "$path.tmp.$$" "$path"
   done
