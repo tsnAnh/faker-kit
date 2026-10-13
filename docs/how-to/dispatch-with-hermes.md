@@ -107,7 +107,7 @@ The installer works with macOS's bundled Bash 3. It needs a Python 3.9+ that can
 Slack is a relay, not an authority. It opens one outbound Socket Mode WebSocket to Slack, listens only for app mentions in one configured channel, and delivers them to one project bot's Bot Chat as notices like:
 
 ```text
-team-kit notice: proposal from @x in #team-kit: <untrusted source="slack:C123...">...</untrusted>
+team-kit notice: proposal from @x in #faker-kit: <untrusted source="slack:C123...">...</untrusted>
 ```
 
 The notice taints the turn. The bot must not dispatch from it, and any side-effecting tool call would ask for your approval. To turn it on:
@@ -119,7 +119,7 @@ The notice taints the turn. The bot must not dispatch from it, and any side-effe
      enabled: true
      bot: meo-beo
      channel_id: C0123456789
-     channel_name: team-kit
+     channel_name: faker-kit
      app_token_env: TEAM_KIT_SLACK_APP_TOKEN
      bot_token_env: TEAM_KIT_SLACK_BOT_TOKEN
      mirror_notices: false
@@ -268,7 +268,7 @@ Each project bot's `team-kit-status` job sends three lines at 9:00, 13:00, and 1
 - **Every tool call is blocked.** `~/.hermes/team-kit/guard.yaml` or `bots.yaml` is missing, does not parse, or `guard.yaml` is not `version: 2`. The block message names the problem. A version 1 file needs migrating: [hermes/README.md](../../hermes/README.md#migrate-from-version-1).
 - **"profile X is not a team-kit bot in bots.yaml".** Bots are created only by `team-kit-admin`. Ask the bootstrap bot, or rerun `install.sh --bootstrap-bot X` for the bootstrap bot.
 - **"kit commit ... differs from kit_ref ..." or "... has no vendored kit".** The machine, `.agents/dispatch.json`, and the vendored `.agents/team-kit/KIT.json` must pin the same kit commit. Ask the bootstrap bot to run `team-kit-admin vendor` for the project and merge its pull request, which moves both, then ask the project bot to run `team-kit-gh kit-check`.
-- **A cloud agent says the team-kit skills did not load.** The repository's vendored kit is missing or its links are broken. Run `python3 .agents/team-kit/vendor_kit.py --check .` in a clone, then vendor again.
+- **A cloud agent says the kit's skills did not load.** The repository's vendored kit is missing or its links are broken. Run `python3 .agents/team-kit/vendor_kit.py --check .` in a clone, then vendor again.
 - **Nothing launches, and `status` starts with "andon pulled".** A cord is pulled. Ask the bot that pulled it to clear it once the cause is fixed. Closing the `agent:andon` issue on GitHub does not clear it.
 - **A unit stays queued.** Its dependencies have not merged, a cross-project dependency's unit-state file is missing or stale, or a limit is full. `team-kit-gh status` lists it; the next tick launches it when it can. Raise `max_in_flight` in a pull request, or `max_in_flight_total` in `guard.yaml`, if you can take more.
 - **A unit stays running.** No report yet. Open the session on the issue's launch comment. After a day without a report, tick opens a gate.

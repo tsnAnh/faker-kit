@@ -94,7 +94,7 @@ function checkSkills(pluginNames) {
   }
 }
 
-// Hermes skills load only in team-kit bots, never in coding agents, so they live outside plugins/.
+// Hermes skills load only in Hermes bots, never in coding agents, so they live outside plugins/.
 // They follow the trust-ladder naming rules and must not shadow any plugin skill.
 function checkHermesSkills(pluginNames) {
   const pluginSkills = new Set(pluginNames.flatMap((p) => skillDirs(path.join(ROOT, "plugins", p)).map((d) => path.basename(d))));
@@ -163,6 +163,67 @@ function checkNoEditorName() {
   }
 }
 
+const LEGACY_REPO = "tsnAnh/team-kit"; // legacy team-kit name: only LEGACY_LINES may still use it
+// File -> text a line must carry to keep naming the old repository: the rename fact, and lines that
+// install or test the old name on purpose.
+const LEGACY_LINES = {
+  "AGENTS.md": "was renamed from",
+  "scripts/validate.mjs": "legacy team-kit",
+  "docs/how-to/install.md": "legacy team-kit",
+  "site/how-to/install.mdx": "legacy team-kit",
+  "hermes/tests/test_install.py": "legacy team-kit",
+};
+
+// The kit's identity is the marketplace name and package.json's repository. Everything else must agree.
+function kitIdentity() {
+  const repoUrl = readJson("package.json").repository?.url?.replace(/\.git$/, "") ?? "";
+  return { name: readJson(".claude-plugin/marketplace.json").name, repoUrl, slug: repoUrl.replace(/^https:\/\/github\.com\//, "") };
+}
+
+function checkKitIdentity() {
+  const kit = kitIdentity();
+  const pkg = readJson("package.json");
+  if (pkg.name !== kit.name) report("package.json", `name "${pkg.name}" must equal the marketplace name "${kit.name}"`);
+  const pluginFile = `plugins/${OWN_PLUGIN}/.claude-plugin/plugin.json`;
+  const plugin = readJson(pluginFile);
+  for (const field of ["homepage", "repository"]) {
+    if (plugin[field] !== kit.repoUrl) report(pluginFile, `${field} "${plugin[field]}" must be package.json's repository ${kit.repoUrl}`);
+  }
+  const siteRepo = /^const REPO = "([^"]*)"/m.exec(fs.readFileSync(path.join(ROOT, "scripts/gen-site.mjs"), "utf8"))?.[1];
+  if (siteRepo !== kit.repoUrl) report("scripts/gen-site.mjs", `REPO "${siteRepo}" must be package.json's repository ${kit.repoUrl}`);
+
+  const settingsFile = `plugins/${OWN_PLUGIN}/templates/claude-settings.json`;
+  const settings = readJson(settingsFile);
+  for (const [key, market] of Object.entries(settings.extraKnownMarketplaces ?? {})) {
+    if (key !== kit.name) report(settingsFile, `marketplace key "${key}" must be the marketplace name "${kit.name}"`);
+    if (market.source?.repo !== kit.slug) report(settingsFile, `marketplace repo "${market.source?.repo}" must be ${kit.slug}`);
+  }
+  for (const id of Object.keys(settings.enabledPlugins ?? {})) {
+    if (!id.endsWith(`@${kit.name}`)) report(settingsFile, `enabled plugin "${id}" must end with @${kit.name}`);
+  }
+
+  for (const file of textFiles(path.join(ROOT, "plugins", OWN_PLUGIN, "templates", "github")).filter((f) => f.endsWith(".yml"))) {
+    const text = fs.readFileSync(file, "utf8");
+    for (const [, url] of text.matchAll(/plugin_marketplaces:\s*(\S+)/g)) {
+      if (url !== `${kit.repoUrl}.git`) report(rel(file), `plugin_marketplaces ${url} must be ${kit.repoUrl}.git`);
+    }
+    for (const [, id, market] of text.matchAll(/^\s+([a-z0-9-]+)@([a-z0-9-]+)\s*$/gm)) {
+      if (market !== kit.name) report(rel(file), `plugin "${id}@${market}" must end with @${kit.name}`);
+    }
+  }
+
+  for (const file of OWN_ROOTS.flatMap((r) => textFiles(path.join(ROOT, r)))) {
+    const buf = fs.readFileSync(file);
+    if (buf.includes(0) || !buf.includes(LEGACY_REPO)) continue;
+    const label = LEGACY_LINES[rel(file)];
+    buf.toString("utf8").split("\n").forEach((line, i) => {
+      if (line.includes(LEGACY_REPO) && !(label && line.includes(label))) {
+        report(rel(file), `line ${i + 1} names the old repository ${LEGACY_REPO}; use ${kit.slug}`);
+      }
+    });
+  }
+}
+
 function checkOwnPathReferences() {
   const pluginRoot = path.join(ROOT, "plugins", OWN_PLUGIN);
   const vendoredSkillDirs = fs
@@ -188,6 +249,7 @@ function main() {
   checkOwnMarkdown();
   checkOwnPathReferences();
   checkNoEditorName();
+  checkKitIdentity();
   for (const problem of catalogProblems()) problems.push(problem);
   if (problems.length > 0) {
     process.stderr.write(`validate: ${problems.length} problem(s)\n  ${problems.join("\n  ")}\n`);

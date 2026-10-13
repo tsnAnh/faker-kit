@@ -57,4 +57,4 @@ if (problems.length > 0) {
   process.stderr.write(`check-pi-package: ${problems.length} problem(s)\n  ${problems.join("\n  ")}\n`);
   process.exit(1);
 }
-process.stdout.write(`check-pi-package: ${found.size} skills and the team-kit extension load in Pi\n`);
+process.stdout.write(`check-pi-package: ${found.size} skills and the faker-kit extension load in Pi\n`);

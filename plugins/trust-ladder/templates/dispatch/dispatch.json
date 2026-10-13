@@ -1,6 +1,6 @@
 {
   "backend": "claude",
-  "kit_ref": "<full commit SHA of team-kit that both sides run>",
+  "kit_ref": "<full commit SHA of faker-kit that both sides run>",
   "max_in_flight": 1,
   "forbidden_paths": [".github/workflows/", "infra/", "*.lock", ".agents/team-kit/"],
   "trusted_dispatchers": ["<project bot's GitHub login>", "<owner's GitHub login>"],

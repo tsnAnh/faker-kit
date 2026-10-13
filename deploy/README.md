@@ -19,6 +19,8 @@ Pull requests only build the image. Pushes to `main` build, push, and deploy. Un
 
 The Kubernetes API is never exposed: GitHub Actions reaches the server only through SSH.
 
+The kit is now called faker-kit, but the deployment keeps the name `team-kit-docs`. That covers the image, the namespace, every object above, and the `ghcr-pull` secret inside that namespace. Renaming it means a new deployment on the server and a workflow change, which this repository's normal changes do not make.
+
 ## One-time setup
 
 ### On the VPS
