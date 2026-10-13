@@ -47,6 +47,9 @@ ROLE_TOOLS = {
 }
 # Each role's one command.
 ROLE_COMMAND = {"project": "team-kit-gh", "bootstrap": "team-kit-admin", "chief": "team-kit-chief"}
+# install.sh writes every command under both names, so the guard reads faker-kit-<rest> as team-kit-<rest>.
+PROGRAM_PREFIX = "team-kit-"
+PROGRAM_ALIAS_PREFIX = "faker-kit-"
 SEGMENT_SPLIT = re.compile(r"\|\||&&|[;|&\n]|\$\(|`|\)")
 ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
 ENV_NAME = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -82,15 +85,21 @@ def team_kit_home() -> Path:
     return Path(os.environ.get("TEAM_KIT_HOME") or Path.home() / ".hermes" / "team-kit")
 
 
+def canonical_program(word: str) -> str:
+    if word.startswith(PROGRAM_ALIAS_PREFIX):
+        return PROGRAM_PREFIX + word.removeprefix(PROGRAM_ALIAS_PREFIX)
+    return word
+
+
 def command_segments(command: str) -> list[str]:
-    """Each simple command in a shell line, env assignments dropped, program name reduced to its basename."""
+    """Each simple command in a shell line, env assignments dropped, program name reduced to its canonical basename."""
     out = []
     for raw in SEGMENT_SPLIT.split(command or ""):
         words = raw.strip().split()
         while words and ENV_ASSIGN.match(words[0]):
             words.pop(0)
         if words:
-            words[0] = os.path.basename(words[0])  # noqa: PTH119
+            words[0] = canonical_program(os.path.basename(words[0]))  # noqa: PTH119
             out.append(" ".join(words))
     return out
 
@@ -130,7 +139,9 @@ class Bot:
 
     def terminal_allow(self) -> re.Pattern:
         commands = {"project": PROJECT_COMMANDS, "bootstrap": BOOTSTRAP_COMMANDS, "chief": CHIEF_COMMANDS}[self.role]
-        return re.compile(rf"(~/\.hermes/bin/)?{ROLE_COMMAND[self.role]} ({'|'.join(commands)})( {ARG})*")
+        prefixes = f"{re.escape(PROGRAM_PREFIX)}|{re.escape(PROGRAM_ALIAS_PREFIX)}"
+        rest = re.escape(ROLE_COMMAND[self.role].removeprefix(PROGRAM_PREFIX))
+        return re.compile(rf"(~/\.hermes/bin/)?(?:{prefixes}){rest} ({'|'.join(commands)})( {ARG})*")
 
     def write_paths(self, home: Path) -> tuple[str, ...]:
         if self.role == "chief":
@@ -189,11 +200,18 @@ class Policy:
         return next((b for b in self.bots.values() if b.role == "project" and b.owns(repo)), None)
 
 
+def _canonical_glob(command: str | None) -> str | None:
+    if command is None:
+        return None
+    program, sep, rest = str(command).partition(" ")
+    return canonical_program(program) + sep + rest
+
+
 def _rule(entry, where: str) -> ToolRule:  # noqa: ANN001
     if isinstance(entry, str):
-        return ToolRule(command=entry)
+        return ToolRule(command=_canonical_glob(entry))
     if isinstance(entry, dict) and set(entry) <= {"tool", "command"} and entry:
-        return ToolRule(tool=str(entry.get("tool", "terminal")), command=entry.get("command"))
+        return ToolRule(tool=str(entry.get("tool", "terminal")), command=_canonical_glob(entry.get("command")))
     raise PolicyError(f"{where}: each entry is a command glob or {{tool, command}}")
 
 
