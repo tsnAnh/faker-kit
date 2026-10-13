@@ -243,6 +243,7 @@ def pull_fields(data: dict, repo: str) -> dict:
         "author": {"login": (data.get("user") or {}).get("login")},
         "body": data.get("body") or "",
         "labels": data.get("labels") or [],
+        "mergeable": data.get("mergeable"),
     }
 
 
@@ -856,8 +857,9 @@ class Gh:
         data = self.pull(pr)
         head = str(data.get("headRefOid") or "")
         checks = checks_state(self.check_rollup(head)) if SHA.match(head) else "none"
+        # GitHub computes mergeable in the background: null until it knows, false only for a real conflict.
         return {"pr": pr, "state": str(data.get("state", "")).lower(), "merged": bool(data.get("mergedAt")),
-                "head": head if SHA.match(head) else None, "checks": checks}
+                "head": head if SHA.match(head) else None, "checks": checks, "conflicts": data.get("mergeable") is False}
 
     def unit_branch(self, comments: list[dict]) -> str | None:
         """The branch the unit's agent works on: from its latest trusted report, else its latest launch."""
@@ -1264,6 +1266,8 @@ class Gh:
             return self.gate(issue, f"{report['pr']} was closed without merging")
         if pr["checks"] == "failed":
             return self.gate(issue, f"checks failed on {report['pr']} after a done report")
+        if pr["conflicts"]:
+            return self.gate(issue, f"{report['pr']} has merge conflicts with its base branch; relaunch it to resolve them")
         config = self.dispatch_config()
         reviewer = config.get("review_backend", "none")
         if reviewer != "none" and cloud is not None:
@@ -1466,6 +1470,9 @@ class Gh:
             return self.gate(issue, f"checks failed on {pr_url} during verification")
         if pr["checks"] == "pending":
             return None
+        if pr["conflicts"]:
+            self.drop_verify_record(number)
+            return self.gate(issue, f"{pr_url} has merge conflicts with its base branch; relaunch it to resolve them")
         config = self.dispatch_config()
         second = config.get("second_verifier_backend", "none")
         if not record.get("first") and second != "none":
@@ -1579,6 +1586,8 @@ class Gh:
             return None
         if pr["checks"] == "failed":
             return self.gate(issue, f"checks failed on {pr_url} while it waited for review")
+        if pr["conflicts"]:
+            return self.gate(issue, f"{pr_url} has merge conflicts with its base branch; relaunch it to resolve them")
         verdict = self.app_verdict(pr["pr"], pr["head"], app)
         if verdict == "changes":
             return self.gate(issue, f"{app} requested changes on {pr_url}; read its review, then relaunch it with its findings")

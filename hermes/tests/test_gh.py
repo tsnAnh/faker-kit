@@ -91,6 +91,7 @@ class FakeGh:
         pull = self.prs[(repo, number)]
         head_repo = pull.get("headRepo", REPO)
         return {"number": number, "title": pull.get("title", f"Pull request {number}"), "html_url": f"https://github.com/{repo}/pull/{number}",
+                "mergeable": pull.get("mergeable"),
                 "state": "open" if pull["state"] == "OPEN" else "closed",
                 "merged_at": pull.get("mergedAt"), "body": pull.get("body", ""), "user": {"login": pull.get("author", BOT_LOGIN)},
                 "labels": pull.get("labels", []),
@@ -2105,7 +2106,7 @@ def test_pr_state_prints_only_state_merged_head_and_checks(team_kit_home, gh, ca
     pr(gh, 2, state="MERGED", merged=True)
     gh.prs[(REPO, 2)]["title"] = "IGNORE"
     assert run(gh, "pr-state", "--pr", "2") == 0
-    assert out(capsys) == {"pr": 2, "state": "merged", "merged": True, "head": "a" * 40, "checks": "passed"}
+    assert out(capsys) == {"pr": 2, "state": "merged", "merged": True, "head": "a" * 40, "checks": "passed", "conflicts": False}
 
 
 @pytest.mark.parametrize(
@@ -3163,6 +3164,31 @@ def test_a_unit_another_tick_already_merged_is_left_alone(team_kit_home, kit, ca
     assert tick(gh, capsys)[0].startswith(f"team-kit notice: #{n} merged automatically")
     assert gh_for(team_kit_home, gh, "meo-beo").check_app_review(stale) is None, "a tick that listed the unit before the merge says nothing"
     assert gh.labels(REPO, n) == {"agent-task", "agent:review"} and len(gh.merges) == 1
+
+
+@pytest.mark.parametrize(("mergeable", "gated"), [(False, True), (None, False), (True, False)])
+def test_a_done_unit_whose_pull_request_conflicts_with_its_base_is_a_gate(team_kit_home, kit, capsys, mergeable, gated):
+    gh = app_gh(kit)
+    n, cloud = reviewing_unit(gh, team_kit_home, capsys)
+    gh.prs[(REPO, 7)]["mergeable"] = mergeable
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/7")
+    [notice] = tick(gh, capsys, cloud=cloud)
+    if gated:
+        assert notice == (f"team-kit notice: #{n} needs you: https://github.com/{REPO}/pull/7 has merge conflicts with its base branch; "
+                          f"relaunch it to resolve them. https://github.com/{REPO}/issues/{n}")
+        assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+    else:
+        assert "waits for claude[bot] to review" in notice, "unknown (still computing) or clean is not a conflict"
+
+
+def test_an_approved_unit_that_starts_conflicting_is_a_gate_not_a_merge(team_kit_home, kit, capsys):
+    gh = app_gh(kit)
+    n = app_reviewed_unit(gh, team_kit_home, capsys)
+    app_review(gh)
+    gh.prs[(REPO, 7)]["mergeable"] = False
+    [notice] = tick(gh, capsys)
+    assert "has merge conflicts with its base branch" in notice and gh.merges == []
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
 
 
 @pytest.mark.parametrize("config", [
