@@ -89,6 +89,7 @@ CLAUDE_SUBSCRIPTION_DEFAULT_MODEL = "sonnet"
 # The gateway does not inherit the owner's shell, so a bot's .env carries the Claude Code CLI's config
 # directory: the launcher's `claude --cloud` and the subscription plugin both read it.
 CLAUDE_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
+KIT_BRANCH_PREFIX = "team-kit/kit-"  # vendor's pull request branches; team-kit-gh tick watches them for conflicts
 # The provider plugin's own setting. It belongs in the root .env (see point_plugin_at_login), never a profile's.
 PLUGIN_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
 LABELS = (
@@ -526,14 +527,14 @@ class Admin:
         short = kit_ref[:12]
         commit = self.api(f"repos/{repo}/git/commits", "POST",
                           {"message": f"chore(agents): vendor team-kit {short}", "tree": tree, "parents": [base]})["sha"]
-        branch = f"team-kit/kit-{short}"
+        branch = f"{KIT_BRANCH_PREFIX}{short}"
         try:
             self.api(f"repos/{repo}/git/ref/heads/{quote(branch, safe='/')}")
             self.api(f"repos/{repo}/git/refs/heads/{quote(branch, safe='/')}", "PATCH", {"sha": commit, "force": True})
         except Refused:
             self.api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": commit})
         open_prs = [pr for pr in self.api(f"repos/{repo}/pulls?state=open&base={ref_query}&per_page=100") or []
-                    if str((pr.get("head") or {}).get("ref", "")).startswith("team-kit/kit-")]
+                    if str((pr.get("head") or {}).get("ref", "")).startswith(KIT_BRANCH_PREFIX)]
         mine = [pr["html_url"] for pr in open_prs if pr["head"]["ref"] == branch]
         superseded = sorted(pr["html_url"] for pr in open_prs if pr["head"]["ref"] != branch)
         if mine:
@@ -754,6 +755,12 @@ class Admin:
                 item["dispatch_json"] = True
             except Refused:
                 item["dispatch_json"] = False
+            # Open kit update pull requests from `vendor`; a conflicting one is rebuilt by running vendor again.
+            kit_prs = [pr for pr in json.loads(self.run(["api", f"repos/{repo}/pulls?state=open&per_page=100"]))
+                       if str((pr.get("head") or {}).get("ref", "")).startswith(KIT_BRANCH_PREFIX)]
+            item["kit_prs"] = [{"pr": pr["html_url"],
+                                "conflicts": json.loads(self.run(["api", f"repos/{repo}/pulls/{int(pr['number'])}"])).get("mergeable") is False}
+                               for pr in kit_prs]
         except (Refused, ValueError, KeyError) as err:
             item["error"] = str(err)[:200]
         return item

@@ -121,6 +121,7 @@ These depend on Hermes and the cloud CLIs, and the tests fake them:
 - **"<session> started but did not get its signing key, so it waits idle".** Creating a keyed session (verifier, review, security, or triage) worked, sending its key on stdin did not. The session was told to wait for the key, so it does nothing; delete it at claude.ai/code. The next tick starts a new one.
 - **A Codex launch exits before starting a task.** Read `~/.hermes/team-kit/checkouts/<owner>__<repo>/<unit>.log`. It holds the terminal output with escape sequences removed and prompts and signing keys redacted. Run `codex cloud exec` by hand to see whether it needs a sign-in.
 - **"printed no session in 180s".** `codex cloud exec` is waiting for input or a login. The same log shows what it printed; the process group is stopped.
+- **"the kit update <pull request> conflicts with its base branch".** The default branch changed a file the kit update also changes, usually `.agents/dispatch.json`. Ask the bootstrap bot to run `team-kit-admin vendor --project <project>`: it rebuilds the same pull request on the current branch. `team-kit-admin status` lists each project's open kit updates and whether they conflict. A unit's own pull request that conflicts opens a gate instead.
 
 ## Run bots on your Claude subscription
 
