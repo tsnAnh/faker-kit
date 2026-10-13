@@ -37,5 +37,6 @@
   "upstream_sync": true,
   "auto_merge": "low",
   "verification_skill": "verify-team-kit",
-  "second_verifier_backend": "none"
+  "second_verifier_backend": "none",
+  "review_app": "claude[bot]"
 }

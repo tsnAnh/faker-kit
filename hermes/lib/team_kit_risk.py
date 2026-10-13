@@ -130,7 +130,7 @@ def score(files: list[dict[str, Any]], verification: str | None, high_paths: Ite
           checks: str = "passed", risk_overrides: object = (), recent_repair_paths: Iterable[str] = (),
           codeowners_unowned_paths: Iterable[str] = (), repair_history_unchecked: int = 0) -> Risk:
     """files: the pull request's files, each {filename, status, additions, deletions}.
-    verification: the verifier's verdict, or None when nobody verified it. checks: passed or none.
+    verification: the verifier's verdict, the review app's approval, or None when nobody verified it. checks: passed or none.
     recent_repair_paths and codeowners_unowned_paths are exact file paths, never patterns.
     repair_history_unchecked: how many changed files had no revert or hotfix history looked up."""
     paths = [str(f.get("filename") or "") for f in files]
