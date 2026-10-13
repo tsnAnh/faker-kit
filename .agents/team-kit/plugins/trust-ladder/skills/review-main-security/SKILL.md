@@ -5,7 +5,7 @@ description: Review the new commits on a repository's default branch for securit
 
 # Review the default branch for security issues
 
-A Hermes project bot started you because the default branch moved: review what landed since the last review. Your prompt names the commits (`the commits after <base> up to <head>`, or `the last 20 commits up to <head>`), the branch, the issue to post on, and a key. Nobody is watching this session. Hermes reads only your result's header lines, and only a result signed with the key from your prompt, because other agents post as the same GitHub user. The key is a secret: never write it in a comment, a file, or a command whose output you post.
+A Hermes project bot started you because the default branch moved: review what landed since the last review. Your prompt names the commits (`the commits after <base> up to <head>`, or `the last 20 commits up to <head>`), the branch, the issue to post on, and a key. Nobody is watching this session. Hermes reads only your result's header lines, and only a result signed with the key Hermes gave you (in your prompt, or in Claude Code the message after it), because other agents post as the same GitHub user. The key is a secret: never write it in a comment, a file, or a command whose output you post.
 
 You change nothing. Never edit a tracked file, commit, push, open a pull request or an issue, or comment anywhere but the issue in your prompt.
 
