@@ -13,8 +13,8 @@
   "trusted_dispatchers": [
     "tsnAnh"
   ],
-  "review_backend": "claude",
-  "verifier_backend": "claude",
+  "review_backend": "none",
+  "verifier_backend": "none",
   "accept_verifications": [
     "live-ui-verified",
     "unit-test-verified"
@@ -37,5 +37,5 @@
   "upstream_sync": true,
   "auto_merge": "low",
   "verification_skill": "verify-team-kit",
-  "second_verifier_backend": "claude"
+  "second_verifier_backend": "none"
 }
