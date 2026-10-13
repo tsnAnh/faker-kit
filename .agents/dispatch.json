@@ -1,6 +1,6 @@
 {
   "backend": "claude",
-  "kit_ref": "f28bc25a25bb3b83985ff67c24d81ddf79fd440c",
+  "kit_ref": "5dd655e5411cc779d875b0f866dc1ab066e5df8b",
   "max_in_flight": 5,
   "forbidden_paths": [
     ".github/workflows/",
