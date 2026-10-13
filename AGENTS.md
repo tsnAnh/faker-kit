@@ -60,7 +60,7 @@ claude plugin validate .                 # Claude Code marketplace schema
 One way for each concern. Use it; do not add a second.
 
 - **GitHub reads in `team-kit-gh`:** `Gh.api_page` / `Gh.api_json` (conditional ETag requests). Never shell out to a GraphQL-backed `gh issue`/`gh pr` subcommand in code a cloud session runs; use `gh api` REST calls.
-- **Starting a cloud agent:** `team_kit_cloud.Cloud.start`. Prompts go on stdin or as a follow-up message, never in argv.
+- **Starting a cloud agent:** `team_kit_cloud.Cloud.start`. A Claude Code session's task is its first message; signing keys go on stdin or as a follow-up message, never in argv.
 - **Writing a state file:** write a sibling temp file, then `replace` it, with mode 600 for anything holding a key.
 - **Time:** take `now` as a parameter (`self.now`), so tests control it; never call `time.time()` inside a decision.
 - **A secret the owner provides:** the owner puts it in the bot profile's `.env` from their own terminal. Code reads it from the environment and redacts it from every log and error.
@@ -86,7 +86,7 @@ Codex code review reads this section. The Claude review routine reads it with RE
 | The seven shared `hermes/lib` modules stay fully typed | `mypy` (strict overrides in `pyproject.toml`) in `check.sh` |
 | Legacy lint and type suppressions only go down | `.agents/ratchet.json` in `check.sh` |
 | `hermes/lib` never imports a command; the guard imports nothing from `lib/` or `bin/` | `.agents/import-boundaries.json` in `check.sh` |
-| Prompts and signing keys never reach argv or logs | tests in `hermes/tests/test_launch.py` and `test_e2e.py` |
+| Signing keys never reach argv; prompts and keys never reach logs | tests in `hermes/tests/test_launch.py` and `test_e2e.py` |
 | Cloud results count only with their HMAC signature | tests in `hermes/tests/test_gh.py` |
 | Launch, gate, verify, and merge decisions are made in code | the architecture of `team-kit-gh` (the bot's only tool), and review |
 | Commit messages carry no AI or agent references | `scripts/check-commit-messages.mjs` in `check.sh` (promoted from STYLE.md) |
@@ -103,6 +103,7 @@ Codex code review reads this section. The Claude review routine reads it with RE
 - The owner wants Hermes bots to act without asking (guard.yaml `ask_owner: false`, Hermes approvals off); keep new bot flows free of owner confirmation steps unless a Hermes invariant requires one.
 - The chief hands work straight to project bots; never give the owner a prompt to paste into another bot's chat.
 - The owner wants Hermes dispatch event-driven: a GitHub event such as a new issue should launch Claude Code as soon as possible, with polling only as a fallback.
+- The owner wants code review done by an outside service (the Claude GitHub app, `.github/workflows/claude-review.yml`), not Hermes review or verifier sessions, and low-risk PRs merged automatically once that app approves (`.agents/dispatch.json`: review and verifier backends `none`, `review_app` `claude[bot]`, `auto_merge` `low`).
 
 ## Learned Workspace Facts
 
@@ -115,3 +116,7 @@ Codex code review reads this section. The Claude review routine reads it with RE
 - A long-running Bot Chat keeps the skill text it loaded earlier; skill changes reach it only if it reloads the skill.
 - The `claude` CLI on this machine is logged in only with `CLAUDE_CONFIG_DIR=~/.claude`, and its folder-trust entries live in `~/.claude/.claude.json`; a launch without that variable, or from a checkout path not trusted before, stops on the "trust this folder" prompt.
 - The GitHub repository was renamed from `tsnAnh/team-kit` to `tsnAnh/faker-kit`; GitHub redirects the old name.
+- faker-kit is a private repo on GitHub Free: branch protection, rulesets, and GitHub auto-merge are unavailable (HTTP 403), so merge gates are enforced in `team-kit-gh` code.
+- claude-code-action skips with "workflow validation" on a PR that adds or changes its own workflow file; it runs only once the workflow matches the default branch.
+- In claude-code-action, Claude Code refuses a `gh api ... -f body='<long multi-line text>'` command even when it matches an allowed `:*` prefix rule; write the body to a file and pass `-F body=@<file>` with an exact allowed command.
+- Homebrew's default `python3` on this Mac is 3.14 without ruff, mypy, or pytest; run `scripts/check.sh` with a Python 3.12 environment that has the check tools on `PATH`.
