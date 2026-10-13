@@ -53,7 +53,7 @@ describe("migrate-from-team-kit", () => {
     const once = Object.keys(OLD_FILES).map((file) => read(dir, file));
     const again = migrate(dir);
     expect(again.status).toBe(0);
-    expect(again.stdout).toBe(`migrate-from-team-kit: nothing names the team-kit marketplace in ${fs.realpathSync(dir)}\n`);
+    expect(again.stdout).toBe(`migrate-from-team-kit: nothing names the team-kit marketplace in ${path.resolve(dir)}\n`);
     expect(Object.keys(OLD_FILES).map((file) => read(dir, file))).toEqual(once);
   });
 
