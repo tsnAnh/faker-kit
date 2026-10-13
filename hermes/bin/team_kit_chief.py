@@ -76,7 +76,7 @@ def run_gh(args: list[str], input: str | None = None) -> str:
 def wake_tick(bot: str) -> bool:
     """Start the bot's tick now, detached. False when its tick is missing or paused, or Hermes cannot start.
 
-    `hermes cron run` runs the job inline, a model turn that can take minutes, so the chief does not wait
+    `hermes cron run` runs the job inline, and a tick that launches units can take minutes, so the chief does not wait
     for it. The run gets no secret from the chief: Hermes loads the target profile's own .env.
     """
     try:

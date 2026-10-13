@@ -41,6 +41,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -104,6 +105,25 @@ JOBS = ("team-kit-tick", "team-kit-status", "team-kit-security", "team-kit-incid
 SCHEDULE_DEFAULTS = {"tick_every": DEFAULT_TICK_EVERY, "incidents_every": DEFAULT_INCIDENTS_EVERY, "security_every": DEFAULT_SECURITY_EVERY}
 SCHEDULE_FIELDS = {"team-kit-tick": "tick_every", "team-kit-incidents": "incidents_every", "team-kit-security": "security_every"}
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
+JOB_SCRIPTS = "team-kit-jobs"  # under the profile's scripts/, the only folder Hermes runs cron scripts from
+JOB_SCRIPT = """#!/usr/bin/env bash
+# Written by team-kit-admin from hermes/cron/project-jobs.md; hermes/install.sh rewrites it.
+# A Hermes --no-agent job: no model runs here, and Hermes delivers what this prints.
+err=$(mktemp) || exit 1
+trap 'rm -f "$err"' EXIT
+if out=$({command} {subcommand} 2>"$err"); then
+{on_success}
+else
+  code=$?
+  # A refusal is an answer, delivered as one notice. The reason never carries a notice marker of its own.
+  reason=$(sed -e 's/^team-kit-gh: refused: //' -e 's/team-kit notice:/team-kit-notice/g' "$err" | tr '\\n' ' ' | cut -c1-300)
+  reason=${{reason% }}
+  printf 'team-kit notice: {subcommand} refused: %s\\n' "${{reason:-exited with code $code}}"
+  # Anything else is a broken install: exit non-zero too, so Hermes marks the run failed.
+  grep -q '^team-kit-gh: refused: ' "$err" || exit "$code"
+fi
+"""
+JOB_ON_SUCCESS = {"print": "  printf '%s\\n' \"$out\"", "silent": "  :"}
 
 Runner = Callable[..., str]
 
@@ -273,32 +293,56 @@ class Admin:
             out.write("".join(f"{line}\n" for line in lines))
         tmp.replace(env)
 
+    def write_job_scripts(self, bot: str, jobs: list[dict]) -> None:
+        """One script per job, each replaced whole, so a job firing meanwhile runs the old or the new one."""
+        folder = profile_home(self.root, bot) / "scripts" / JOB_SCRIPTS
+        folder.mkdir(parents=True, exist_ok=True)
+        command = shlex.quote(str(self.root / "bin" / "team-kit-gh"))
+        for job in jobs:
+            text = JOB_SCRIPT.format(command=command, subcommand=job["subcommand"], on_success=JOB_ON_SUCCESS[job["output"]])
+            tmp = folder / f".{job['name']}.sh.{os.getpid()}"
+            tmp.write_text(text)
+            tmp.chmod(0o700)
+            tmp.replace(folder / f"{job['name']}.sh")
+
     def create_job(self, bot: str, job: dict, enabled: bool) -> None:
-        args = ["-p", bot, "cron", "create", job["schedule"], job["prompt"], "--name", job["name"], "--deliver", job["deliver"], "--skill", job["skill"]]
+        args = ["-p", bot, "cron", "create", job["schedule"], "--name", job["name"], "--deliver", job["deliver"],
+                "--script", f"{JOB_SCRIPTS}/{job['name']}.sh", "--no-agent"]
         if not enabled:
             args += ["--paused", "--paused-reason", JOBS_PAUSED_REASON]
         hermes(*args)
 
-    def ensure_jobs(self, bot: Bot) -> tuple[list[str], list[str]]:
+    def ensure_jobs(self, bot: Bot) -> tuple[list[str], list[str], list[str]]:
+        """Create missing jobs; reschedule and convert existing ones in place, so each keeps its id and paused state."""
         existing = cron_jobs(hermes("-p", bot.name, "cron", "list", "--all"))
-        created, rescheduled = [], []
-        for job in cron_spec(self.pkg / "cron" / "project-jobs.md", bot.name):
+        specs = cron_spec(self.pkg / "cron" / "project-jobs.md", bot.name)
+        self.write_job_scripts(bot.name, specs)
+        created, rescheduled, converted = [], [], []
+        for job in specs:
             field = SCHEDULE_FIELDS.get(job["name"])
             if field:
                 job = {**job, "schedule": f"every {getattr(bot, field)}"}
             current = existing.get(job["name"])
-            if current and current.get("schedule") == job["schedule"]:
+            if current is None:
+                self.create_job(bot.name, job, False)
+                created.append(job["name"])
                 continue
-            if current and current.get("schedule"):
-                # Edit in place: the job keeps its id, its enabled or paused state, and its paused reason.
-                hermes("-p", bot.name, "cron", "edit", current["id"], "--schedule", job["schedule"])
+            edits = []
+            if current.get("schedule") and current["schedule"] != job["schedule"]:
+                edits += ["--schedule", job["schedule"]]
                 rescheduled.append(job["name"])
-                continue
-            if current:
-                continue
-            self.create_job(bot.name, job, False)
-            created.append(job["name"])
-        return created, rescheduled
+            script = f"{JOB_SCRIPTS}/{job['name']}.sh"
+            if current.get("script") != script or "no-agent" not in current.get("mode", ""):
+                # An older job ran the command through a model turn; drop its prompt and skill.
+                edits += ["--script", script, "--no-agent", "--clear-skills", "--prompt", ""]
+                converted.append(job["name"])
+            if edits:
+                hermes("-p", bot.name, "cron", "edit", current["id"], *edits)
+        for name, current in existing.items():
+            # A job dropped from the spec keeps its script, so it still runs; pause it for the owner to delete.
+            if name.startswith("team-kit-") and name not in {job["name"] for job in specs} and current["enabled"]:
+                hermes("-p", bot.name, "cron", "pause", current["id"])
+        return created, rescheduled, converted
 
     # commands --------------------------------------------------------------------------------------
 
@@ -367,11 +411,11 @@ class Admin:
             checkout = self.cloud.claude_checkout(repo, self.home / "checkouts" / f"{owner}__{name}" / CLAUDE_CHECKOUT)
         except CloudError as err:
             raise Refused(f"cannot prepare the launch checkout: {err}") from err
-        created, rescheduled = self.ensure_jobs(project_bot)
+        created, rescheduled, converted = self.ensure_jobs(project_bot)
         self.write_bots(data)
         return {
             "bot": bot, "project": project, "repo": repo, "labels": [n for n, _, _ in LABELS], "jobs_created_paused": created,
-            "jobs_rescheduled": rescheduled, "tick_every": project_bot.tick_every, "incidents_every": project_bot.incidents_every,
+            "jobs_rescheduled": rescheduled, "jobs_converted": converted, "tick_every": project_bot.tick_every, "incidents_every": project_bot.incidents_every,
             "security_every": project_bot.security_every,
             "launch_checkout": str(checkout),
             "next": [f"For Claude Code sessions, the owner trusts the launch checkout once: cd {checkout} && claude, choose yes, then /exit",

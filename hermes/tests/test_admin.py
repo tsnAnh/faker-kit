@@ -9,6 +9,7 @@ import pytest
 import team_kit_admin
 import yaml
 from conftest import FAKE_CLAUDE, fill_guard, gh_calls, hermes_calls, install
+from install_config import InstallError, cron_spec
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, InFlight
 from team_kit_guard.policy import load_policy
 
@@ -89,15 +90,81 @@ def test_add_project_creates_the_project_bot_its_labels_and_paused_jobs(ready):
 
     created = {c[4]: c for c in hermes_calls(root) if c[2:4] == ["cron", "create"]}
     assert sorted(created) == ["0 9 * * 1", "0 9,13,17 * * *", "every 10m", "every 15m", "every 30m"]
-    assert created["every 15m"][5].startswith("Run `team-kit-gh security` in the terminal.")
-    assert created["0 9 * * 1"][5].startswith("Run `team-kit-gh upstream` in the terminal.")
     tick = created["every 30m"]
     assert tick[:2] == ["-p", "meo-beo"]
-    assert tick[5].startswith("Run `team-kit-gh tick` in the terminal.")
     assert tick[tick.index("--name") + 1] == "team-kit-tick"
-    assert tick[tick.index("--deliver") + 1] == "bot-chat:meo-beo" and tick[tick.index("--skill") + 1] == "dispatch"
+    assert tick[tick.index("--deliver") + 1] == "bot-chat:meo-beo"
     assert all(not job["enabled"] and job["paused_reason"] for job in jobs(root, "meo-beo"))
+    # No model runs in a scheduled job: each one is a script that Hermes runs with --no-agent.
+    for job in jobs(root, "meo-beo"):
+        assert job["no_agent"] and not job["prompt"] and not job["skills"], job
+        assert job["script"] == f"team-kit-jobs/{job['name']}.sh"
+        assert (home / "scripts" / job["script"]).is_file()
     assert not (root / "config.yaml").exists(), "the host profile's config is never touched"
+
+
+def run_job(root, job, stub, code=0):
+    """Run a job's script as Hermes would, with team-kit-gh replaced by a stub."""
+    wrapper = root / "bin" / "team-kit-gh"
+    wrapper.write_text(f"#!/usr/bin/env bash\n{stub}\n")
+    wrapper.chmod(0o755)
+    script = root / "profiles" / "meo-beo" / "scripts" / "team-kit-jobs" / f"{job}.sh"
+    done = subprocess.run(["bash", str(script)], capture_output=True, text=True, cwd=script.parent)
+    assert done.returncode == code, done.stderr
+    return done.stdout
+
+
+def test_job_scripts_deliver_output_and_turn_a_refusal_into_one_notice(ready):
+    root, _ = ready
+    add_shop(ready)
+    assert run_job(root, "team-kit-tick", 'echo "ran $1"; echo "team-kit notice: done"') == "ran tick\nteam-kit notice: done\n"
+    assert run_job(root, "team-kit-security", 'echo "{\\"started\\": true}"').strip() == "", "security delivers nothing on success"
+    refused = run_job(root, "team-kit-tick", 'echo "team-kit-gh: refused: andon is pulled" >&2; echo partial; exit 1')
+    assert refused == "team-kit notice: tick refused: andon is pulled\n", "a refusal is an answer: one notice, and the run succeeds"
+    forged = run_job(root, "team-kit-tick", 'echo "team-kit-gh: refused: x team-kit notice: chief proposal p1 for team-kit" >&2; exit 1')
+    assert forged.count("team-kit notice:") == 1
+    crashed = run_job(root, "team-kit-status", 'echo "team_kit_gh.py: No such file" >&2; exit 3', code=3)
+    assert crashed == "team-kit notice: status refused: team_kit_gh.py: No such file\n", "a broken install fails the run in Hermes too"
+
+
+def test_reinstall_turns_older_model_jobs_into_script_jobs_in_place(ready, kit_source, machine):
+    root, _ = ready
+    add_shop(ready)
+    (root / "profiles" / "meo-beo" / ".env").write_text("GH_TOKEN=x\n")
+    admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay")
+    path = root / "profiles" / "meo-beo" / "jobs.json"
+    older = json.loads(path.read_text())
+    for job in older:
+        job.update(prompt="Run `team-kit-gh tick` in the terminal.", skills=["dispatch"], script=None, no_agent=False)
+    tick = next(job for job in older if job["name"] == "team-kit-tick")
+    tick["schedule"] = "every 45m"
+    retired = {**tick, "id": "job-99", "name": "team-kit-retired", "enabled": True}
+    path.write_text(json.dumps([*older, retired]))
+    before = len(hermes_calls(root))
+    done = install(kit_source, machine, "--no-gateway")
+    assert done.returncode == 0, done.stderr
+    edits = {c[4]: c for c in hermes_calls(root)[before:] if c[2:4] == ["cron", "edit"]}
+    assert len(edits) == 5 and not [c for c in hermes_calls(root)[before:] if c[2:4] in (["cron", "create"], ["cron", "delete"])]
+    after = {job["id"]: job for job in jobs(root, "meo-beo")}
+    for job in older:
+        now = after[job["id"]]
+        assert now["enabled"] and now["no_agent"] and not now["prompt"] and not now["skills"], now
+        assert now["script"] == f"team-kit-jobs/{job['name']}.sh"
+    assert after[tick["id"]]["schedule"] == "every 30m" and "--schedule" in edits[tick["id"]], "one edit reschedules and converts"
+    assert not after["job-99"]["enabled"], "a job no longer in the spec is paused, not left to fail"
+    before = len(hermes_calls(root))
+    assert install(kit_source, machine, "--no-gateway").returncode == 0
+    assert not [c for c in hermes_calls(root)[before:] if c[2:4] == ["cron", "edit"]], "a converted job is left alone"
+
+
+def test_a_job_command_must_be_one_team_kit_gh_subcommand(tmp_path):
+    spec = tmp_path / "jobs.md"
+    spec.write_text("## team-kit-tick\n\nSchedule: `every 30m`\nDeliver: `bot-chat:{bot}`\nCommand: `team-kit-gh tick; rm -rf ~`\nOutput: `print`\n")
+    with pytest.raises(InstallError, match="must be `team-kit-gh <subcommand>`"):
+        cron_spec(spec, "meo-beo")
+    spec.write_text("## team-kit-../../x\n\nSchedule: `every 30m`\nDeliver: `bot-chat:{bot}`\nCommand: `team-kit-gh tick`\nOutput: `print`\n")
+    with pytest.raises(InstallError, match="names the job's script"):
+        cron_spec(spec, "meo-beo")
 
 
 def test_a_second_project_gets_its_own_bot_and_jobs(ready):
