@@ -84,4 +84,4 @@ Record the time from session start to a passing check. If it is over ten minutes
 
 ## Report
 
-The setup script, where it is wired in each agent, the vendored kit commit and any kit skills the repository's own kept out, whether the kit loads in a fresh session of each, the proof for each surface and where the rest is verified, the link to the test pull request, the time to a passing check, and the next steps: send non-engineers [the browser guide](https://github.com/tsnAnh/team-kit/blob/main/docs/how-to/use-the-kit-from-the-browser.md), and run `trust-audit` to see how many agents the repository can take in parallel.
+The setup script, where it is wired in each agent, the vendored kit commit and any kit skills the repository's own kept out, whether the kit loads in a fresh session of each, the proof for each surface and where the rest is verified, the link to the test pull request, the time to a passing check, and the next steps: send non-engineers [the browser guide](https://github.com/tsnAnh/faker-kit/blob/main/docs/how-to/use-the-kit-from-the-browser.md), and run `trust-audit` to see how many agents the repository can take in parallel.

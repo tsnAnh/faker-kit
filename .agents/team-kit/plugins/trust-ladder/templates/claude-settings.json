@@ -1,22 +1,22 @@
 {
   "extraKnownMarketplaces": {
-    "team-kit": {
+    "faker-kit": {
       "source": {
         "source": "github",
-        "repo": "tsnAnh/team-kit"
+        "repo": "tsnAnh/faker-kit"
       }
     }
   },
   "enabledPlugins": {
-    "trust-ladder@team-kit": true,
-    "pstack@team-kit": true,
-    "team-workflows@team-kit": true,
-    "thermos@team-kit": true,
-    "continual-learning@team-kit": true,
-    "cli-for-agent@team-kit": true,
-    "agent-compatibility@team-kit": true,
-    "advisor@team-kit": true,
-    "teaching@team-kit": true
+    "trust-ladder@faker-kit": true,
+    "pstack@faker-kit": true,
+    "team-workflows@faker-kit": true,
+    "thermos@faker-kit": true,
+    "continual-learning@faker-kit": true,
+    "cli-for-agent@faker-kit": true,
+    "agent-compatibility@faker-kit": true,
+    "advisor@faker-kit": true,
+    "teaching@faker-kit": true
   },
   "permissions": {
     "deny": [

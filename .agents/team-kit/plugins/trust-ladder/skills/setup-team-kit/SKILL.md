@@ -45,7 +45,8 @@ So that every teammate, whichever agent they use, gets the kit without setup:
 
 - `.claude/settings.json` from `templates/claude-settings.json`: adds this marketplace, enables the plugins, and denies destructive commands.
 - `.pi/settings.json` from `templates/pi-settings.json`: pins the kit as a project package. Pi applies it after the user trusts the project.
-- `.codex/config.toml` from `templates/codex-config.toml`: sandbox and approval defaults. Codex applies it after the user trusts the project. Codex users add the kit once with `codex plugin marketplace add tsnAnh/team-kit`, then install each plugin, because Codex does not install dependencies. The one-line install loop is at the top of that template.
+- `.codex/config.toml` from `templates/codex-config.toml`: sandbox and approval defaults. Codex applies it after the user trusts the project. Codex users add the kit once with `codex plugin marketplace add tsnAnh/faker-kit`, then install each plugin, because Codex does not install dependencies. The one-line install loop is at the top of that template.
+- If these files already name the `team-kit` marketplace or `@team-kit` plugin ids, an older setup wrote them under the kit's earlier name. From the repository root, run `node <this skill's directory>/scripts/migrate-from-team-kit.mjs .` before copying the templates, so the ids resolve for teammates who never registered team-kit, and keep the rest of each file.
 - Cloud sessions do not install the plugins these files enable. `setup-cloud-agents` vendors the kit into the repository for them.
 - `CODEOWNERS` and the branch-protection checklist in `templates/branch-protection.md`: the required check, resolved review conversations, and one human approval, so changes from anyone, including non-engineers, pass the same gates.
 
