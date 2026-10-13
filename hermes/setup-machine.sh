@@ -127,6 +127,8 @@ install_packages() {
 first=()
 have curl || first+=(curl)
 python3 -c 'import yaml' >/dev/null 2>&1 || first+=(python3 python3-yaml)
+# install.sh builds the kit's own Python from this one; Debian splits venv and ensurepip into python3-venv.
+[ "$os" != Linux ] || python3 -c 'import venv, ensurepip' >/dev/null 2>&1 || first+=(python3-venv)
 install_packages "${first[@]+"${first[@]}"}"
 python3 -c 'import yaml' >/dev/null 2>&1 || die "python3 cannot import yaml (PyYAML)"
 PYTHONPATH=$here/lib python3 -c 'import sys, pathlib, team_kit_machine as m; m.load_machine(pathlib.Path(sys.argv[1]))' "$config" \

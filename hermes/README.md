@@ -56,6 +56,7 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and, with approval, hands one hashed draft to one project bot | `~/.hermes/bin/team-kit-chief` (a wrapper) |
 | `bin/team_kit_slack.py` | `team-kit-slack`: the optional outbound-only Slack Socket Mode relay | `~/.hermes/bin/team-kit-slack` (a wrapper) |
 | `lib/team_kit_contracts.py` | The brief, size, report, and launch markers, and the cloud command lines | read from the kit checkout |
+| `kit-python.sh` | Builds and repairs the kit's own Python (`~/.hermes/team-kit/python`, pinned PyYAML) that every `team-kit-*` wrapper runs in | install.sh, and each wrapper when that Python stops importing yaml |
 | `lib/team_kit_cloud.py` | Starts a `claude --cloud` session (created with its task as the first message; a signing key follows on stdin) or a `codex cloud exec` task, and returns its id | read from the kit checkout |
 | `lib/team_kit_andon.py` | The andon cords: the local records, and the `agent:andon` issue body | read from the kit checkout |
 | `lib/team_kit_slack_relay.py` | Slack Socket Mode, Bot Chat delivery, service unit generation, and optional notice mirroring | read from the kit checkout |

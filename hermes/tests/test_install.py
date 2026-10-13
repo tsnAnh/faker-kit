@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from conftest import HERMES, git, hermes_calls, install
+from conftest import HERMES, git, hermes_calls, install, seed_kit_python
 
 FAKE_HERMES = f"#!{sys.executable}\n" + (Path(__file__).with_name("fake_hermes.py")).read_text()
 
@@ -72,7 +72,7 @@ def test_a_second_run_keeps_guard_yaml_and_bots_yaml(kit_source, machine):
 
 def test_refuses_a_version_1_guard_yaml(kit_source, machine):
     root, _ = machine
-    (root / "team-kit").mkdir()
+    (root / "team-kit").mkdir(exist_ok=True)
     (root / "team-kit" / "guard.yaml").write_text("version: 1\nrepos: [acme/shop]\n")
     done = install(kit_source, machine, "--no-gateway")
     assert done.returncode == 1
@@ -133,7 +133,7 @@ def test_a_config_cli_failure_is_detected(kit_source, machine, failure):
 
 
 @pytest.mark.parametrize("override", [False, True])
-def test_shell_launcher_uses_validated_python_with_spaces(kit_source, machine, override):
+def test_the_commands_run_in_the_kits_python_whatever_hermes_launcher_and_base_python(kit_source, machine, override):
     root, env = machine
     bin_dir = Path(env["PATH"].split(":")[0])
     fake = bin_dir / "fake-hermes"
@@ -150,6 +150,7 @@ def test_shell_launcher_uses_validated_python_with_spaces(kit_source, machine, o
     command = subprocess.run([str(root / "bin" / "team-kit-admin"), "status"], env=env, capture_output=True, text=True)
     assert command.returncode == 0, command.stderr
     assert json.loads(command.stdout)["bots"] == []
+    assert '"$TEAM_KIT_HOME/python/bin/python"' in (root / "bin" / "team-kit-admin").read_text()
 
 
 def test_invalid_explicit_python_fails_without_falling_back(kit_source, machine):
@@ -157,28 +158,47 @@ def test_invalid_explicit_python_fails_without_falling_back(kit_source, machine)
     env["HERMES_PYTHON"] = str(root / "missing-python")
     done = install(kit_source, machine, "--no-gateway")
     assert done.returncode != 0 and "HERMES_PYTHON" in done.stderr
-    assert not (root / "team-kit").exists()
+    assert not (root / "team-kit" / "kit").exists() and not (root / "bin").exists(), "nothing is installed"
 
 
-def test_no_usable_python_reports_actionable_error(kit_source, machine):
-    root, env = machine
-    bin_dir = Path(env["PATH"].split(":")[0])
-    (bin_dir / "hermes").write_text("#!/bin/sh\nexit 0\n")
+def test_no_python_that_can_build_the_kits_python_reports_actionable_error(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
     (bin_dir / "python3").write_text("#!/bin/sh\nexit 1\n")
     (bin_dir / "python3").chmod(0o755)
-    done = install(kit_source, machine, "--no-gateway")
-    assert done.returncode != 0 and "HERMES_PYTHON" in done.stderr and "PyYAML" in done.stderr
-    assert not (root / "team-kit").exists()
+    done = subprocess.run(["/bin/bash", str(HERMES / "kit-python.sh"), "find-base"], env={"PATH": str(bin_dir)}, capture_output=True, text=True)
+    assert done.returncode != 0 and done.stdout == ""
+    assert "apt install python3-venv" in done.stderr and "HERMES_PYTHON" in done.stderr
+
+
+def test_the_kits_python_has_the_pinned_pyyaml(kit_python):
+    done = subprocess.run([str(kit_python / "bin" / "python"), "-c", "import yaml; print(yaml.__version__)"], capture_output=True, text=True)
+    assert done.stdout.strip() == "6.0.3"
+
+
+def test_a_broken_kit_python_is_rebuilt_by_the_next_command_without_touching_its_output(kit_source, machine):
+    root, env = machine
+    assert install(kit_source, machine, "--no-gateway").returncode == 0
+    venv = root / "team-kit" / "python"
+    venv.unlink()
+    (venv / "bin").mkdir(parents=True)  # what a removed base Python leaves: an environment that cannot run
+    command = subprocess.run([str(root / "bin" / "team-kit-admin"), "status"], env=env, capture_output=True, text=True)
+    assert command.returncode == 0, command.stderr
+    assert json.loads(command.stdout)["bots"] == [], "the rebuild writes only to stderr"
+    assert "kit-python.sh: building" in command.stderr
+    assert subprocess.run([str(venv / "bin" / "python"), "-c", "import yaml"]).returncode == 0
+    assert not venv.is_symlink()
 
 
 def test_a_team_kit_home_elsewhere_moves_bin_and_profiles_with_it_and_leaves_home_alone(kit_source, machine, tmp_path):
     root, env = machine
     elsewhere = tmp_path / "scratch" / ".hermes"
     env = {**env, "TEAM_KIT_HOME": str(elsewhere / "team-kit"), "HERMES_HOME": str(elsewhere)}
+    seed_kit_python(elsewhere / "team-kit", (root / "team-kit" / "python").resolve())
     src, sha = kit_source
     done = subprocess.run(["bash", str(HERMES / "install.sh"), "--ref", sha, "--source", str(src), "--no-gateway", "--bootstrap-bot", "ong-xay"],
                           env=env, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     assert (elsewhere / "bin" / "team-kit-gh").exists()
     assert (elsewhere / "team-kit" / "kit").is_dir()
-    assert not (root / "bin").exists() and not (root / "team-kit").exists(), "the real ~/.hermes is untouched"
+    assert not (root / "bin").exists() and not (root / "team-kit" / "kit").exists(), "the real ~/.hermes is untouched"

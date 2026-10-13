@@ -63,30 +63,14 @@ kit_home=${TEAM_KIT_HOME:-$HOME/.hermes/team-kit}
 root=$(dirname "$kit_home")
 kit=$kit_home/kit
 
-# A managed Hermes launcher may be a shell wrapper, not a venv shebang.
-# These helpers only need Python + PyYAML; never run the shell launcher as Python
-# or assume a managed base Python can import packages without its bootstrap.
-usable_python() {
-  [ -n "$1" ] && "$1" -c 'import sys, yaml; assert sys.version_info >= (3, 9)' >/dev/null 2>&1
-}
-py=''
+# The commands run in the kit's own virtual environment ($kit_home/python, PyYAML pinned), never in the
+# system or Homebrew python3, so upgrading that Python cannot break them. HERMES_PYTHON names the Python to
+# build it from; otherwise the first python3 that can build one is used. Checked before anything is written.
 if [ "${HERMES_PYTHON+x}" = x ]; then
-  py=$HERMES_PYTHON
-  usable_python "$py" || die "HERMES_PYTHON must name an executable Python 3.9+ with PyYAML installed"
+  base=$(bash "$here/kit-python.sh" find-base "$HERMES_PYTHON" 2>&1) \
+    || die "HERMES_PYTHON must name an executable Python 3.9+ that can build a virtual environment: ${base#kit-python.sh: }"
 else
-  IFS= read -r shebang < "$(command -v hermes)" || true
-  case $shebang in
-    '#!'/*python*) candidate=${shebang#\#!} ;;
-    '#!/usr/bin/env python3') candidate=$(command -v python3 || true) ;;
-    *) candidate='' ;;
-  esac
-  if usable_python "$candidate"; then
-    py=$candidate
-  else
-    candidate=$(command -v python3 || true)
-    usable_python "$candidate" || die "No usable Python 3.9+ with PyYAML; install PyYAML in a helper Python and set HERMES_PYTHON to its executable path"
-    py=$candidate
-  fi
+  base=$(bash "$here/kit-python.sh" find-base 2>&1) || die "${base#kit-python.sh: }"
 fi
 
 mkdir -p "$kit_home" "$root/bin"
@@ -96,6 +80,9 @@ bash "$here/../plugins/trust-ladder/skills/setup-cloud-agents/scripts/install-ki
 [ "$(git -C "$kit" rev-parse HEAD)" = "$ref" ] || die "kit checkout is not at $ref"
 pkg=$kit/hermes
 [ -f "$pkg/bin/team_kit_admin.py" ] || die "kit $ref has no hermes/ module; pin a newer commit"
+install -m 755 "$here/kit-python.sh" "$kit_home/kit-python.sh"
+bash "$kit_home/kit-python.sh" ensure "$kit_home/python" "$base" || die "could not build the kit's Python at $kit_home/python"
+py=$kit_home/python/bin/python
 
 if [ ! -f "$kit_home/guard.yaml" ]; then
   install -m 600 "$pkg/templates/guard.yaml" "$kit_home/guard.yaml"
@@ -105,11 +92,12 @@ if grep -Eq '^version:[[:space:]]*1[[:space:]]*$' "$kit_home/guard.yaml"; then
   die "$kit_home/guard.yaml is version 1; see hermes/README.md, Migrate from version 1"
 fi
 
-# The wrappers run the pinned kit's commands with the helper Python. %q quotes paths that
+# The wrappers run the pinned kit's commands in the kit's Python, rebuilding it first if it no longer imports
+# yaml. Rebuild output goes to stderr, so a scheduled job's stdout stays its notice. %q quotes paths that
 # contain spaces or shell metacharacters.
 for name in gh admin chief slack; do
-  printf '#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%q\nexec %q %q "$@"\n' \
-    "$kit_home" "$py" "$pkg/bin/team_kit_$name.py" > "$root/bin/team-kit-$name"
+  printf '#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%q\n"$TEAM_KIT_HOME/python/bin/python" -c "import yaml" 2>/dev/null || bash "$TEAM_KIT_HOME/kit-python.sh" ensure "$TEAM_KIT_HOME/python" >&2 || exit 1\nexec "$TEAM_KIT_HOME/python/bin/python" %q "$@"\n' \
+    "$kit_home" "$pkg/bin/team_kit_$name.py" > "$root/bin/team-kit-$name"
   chmod 755 "$root/bin/team-kit-$name"
 done
 

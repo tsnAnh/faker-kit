@@ -102,7 +102,7 @@ Then edit `~/.hermes/team-kit/guard.yaml`:
 
 The bootstrap bot runs `gh` with its own login. Put a token with Administration, Issues, Contents, and Pull requests read and write on your repositories in `~/.hermes/profiles/<bootstrap bot>/.env` as `GH_TOKEN`, or sign `gh` in on the machine. Sign in the coding agent too: `claude` for Claude Code cloud, `codex` for Codex cloud.
 
-The installer works with macOS's bundled Bash 3. It needs a Python 3.9+ that can import PyYAML: it tries the Python in Hermes's shebang, then `python3` on `PATH`. Otherwise, install PyYAML in a helper Python and pass it as `HERMES_PYTHON`. Hermes configuration is changed only through `hermes config set` and read back.
+The installer works with macOS's bundled Bash 3. The team-kit commands run in the kit's own Python, a virtual environment at `~/.hermes/team-kit/python` with a pinned PyYAML, so a Homebrew or system Python upgrade never breaks them. The installer builds it from the first `python3` on `PATH` that can build a virtual environment (Python 3.9+; on Debian, `apt install python3-venv`), or from the Python named in `HERMES_PYTHON`. If it later stops working, for example because that Python was removed, the next team-kit command rebuilds it from whatever Python is installed then; that needs network access for pip. Hermes configuration is changed only through `hermes config set` and read back.
 
 ### Optional Slack relay
 

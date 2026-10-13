@@ -93,7 +93,7 @@ def test_an_unfilled_config_stops_before_anything_is_installed(linux):
     done = setup(linux)
     assert done.returncode == 1
     assert "fill it in first" in done.stderr
-    assert not (root / "team-kit").exists() and not hermes_calls(root)
+    assert not (root / "team-kit" / "kit").exists() and not hermes_calls(root)
 
 
 def test_a_kit_commit_without_machine_setup_is_refused_before_anything_is_installed(linux):
@@ -101,4 +101,4 @@ def test_a_kit_commit_without_machine_setup_is_refused_before_anything_is_instal
     done = subprocess.run(["bash", str(src / "hermes" / "setup-machine.sh"), "--config", str(config), "--ref", "0" * 40, "--yes"],
                           env=env, input="", capture_output=True, text=True)
     assert done.returncode == 1 and "has no machine setup" in done.stderr
-    assert not (root / "team-kit").exists()
+    assert not (root / "team-kit" / "kit").exists()

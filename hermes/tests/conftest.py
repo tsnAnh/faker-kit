@@ -121,10 +121,26 @@ def kit_source(tmp_path_factory):
     return src, git(src, "rev-parse", "HEAD")
 
 
+@pytest.fixture(scope="session")
+def kit_python(tmp_path_factory):
+    """The kit's Python, built once by kit-python.sh from this test run's Python (its PyYAML comes from pip)."""
+    venv = tmp_path_factory.mktemp("kit-python") / "python"
+    done = subprocess.run(["bash", str(HERMES / "kit-python.sh"), "ensure", str(venv), sys.executable], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    return venv
+
+
+def seed_kit_python(kit_home, kit_python):
+    """Link the session's built kit Python into a test install, so install.sh finds it working and skips the build."""
+    kit_home.mkdir(parents=True, exist_ok=True)
+    (kit_home / "python").symlink_to(kit_python, target_is_directory=True)
+
+
 @pytest.fixture
-def machine(tmp_path):
+def machine(tmp_path, kit_python):
     home = tmp_path / "home"
     (home / ".hermes").mkdir(parents=True)
+    seed_kit_python(home / ".hermes" / "team-kit", kit_python)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     tests = Path(__file__).resolve().parent
