@@ -32,7 +32,6 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          show_full_output: true  # tool calls in the log, to prove the permission rules; turn off once a review posts
           # Claude may read only the checkout, write only the review body, and run only commands that name this pull
           # request and this commit, so a diff that asks for a secret, another pull request, or a newer push cannot be followed.
           prompt: |
