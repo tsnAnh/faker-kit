@@ -70,6 +70,44 @@ A repository can make the kit appear for everyone who opens it. `/setup-team-kit
 
 None of these files affect the other agents, so a repository can carry all three. Cloud sessions (Claude Code on the web, Codex cloud) install none of these plugins; [`/setup-cloud-agents`](use-the-kit-from-the-browser.md) vendors the kit into the repository for them.
 
+## Move from the team-kit marketplace
+
+The kit used to be called team-kit, and its repository was renamed to `tsnAnh/faker-kit`. An install made under the old name keeps working, because GitHub redirects the old repository name. `claude plugin marketplace update team-kit` still updates it. Moving is optional.
+
+If you move, remove the old registration first. With both registered, every plugin loads twice: `trust-ladder@team-kit` and `trust-ladder@faker-kit` are both enabled.
+
+**Claude Code.** Removing the marketplace uninstalls its plugins. As the CLI warns, it also deletes their saved options and data, so you enter plugin settings again afterwards.
+
+```bash
+claude plugin marketplace remove team-kit
+claude plugin marketplace add tsnAnh/faker-kit
+claude plugin install trust-ladder@faker-kit
+```
+
+**Codex.** Removing only the marketplace leaves each `[plugins."<plugin>@team-kit"]` entry in `config.toml` and the plugins in the cache. Remove the plugins first.
+
+```bash
+for p in trust-ladder pstack team-workflows thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do
+  codex plugin remove "$p@team-kit"
+done
+codex plugin marketplace remove team-kit
+codex plugin marketplace add tsnAnh/faker-kit
+for p in trust-ladder pstack team-workflows thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do
+  codex plugin add "$p@faker-kit"
+done
+```
+
+**Pi.** With both packages installed, Pi loads two copies of the extension and keeps only the first skill of each name. Remove the old one, with its `@<commit sha>` if you pinned it.
+
+```bash
+pi remove git:github.com/tsnAnh/team-kit   # legacy team-kit source
+pi install git:github.com/tsnAnh/faker-kit@<commit sha>
+```
+
+**A repository set up earlier.** A `.claude/settings.json` written by an older `/setup-team-kit` keeps the `team-kit` marketplace entry and the `@team-kit` plugin ids. They still work. To move it, replace the marketplace key, its `repo`, and the plugin ids as in the current [template](../../plugins/trust-ladder/templates/claude-settings.json). Then ask teammates to remove their old user-level registration, so they do not load two copies.
+
+**Hermes.** Re-run the installer from a faker-kit checkout. Nothing moves. See [Upgrading from team-kit](../../hermes/README.md#upgrading-from-team-kit).
+
 ## Check that it works
 
 Type `/start-here` (Claude Code), `$start-here` (Codex), or `/skill:start-here` (Pi). The agent should ask what you want to do. If it does not know the skill, run the list command for your agent and check that trust-ladder is installed and enabled.

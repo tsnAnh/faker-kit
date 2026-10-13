@@ -32,6 +32,8 @@ pi install git:github.com/tsnAnh/faker-kit
 
 Then type `/start-here` (Codex: `$start-here`, Pi: `/skill:start-here`). Details, team-wide setup, and updating: [Install the kit](docs/how-to/install.md).
 
+Installed it as team-kit? It keeps working. To move to the faker-kit name, see [Move from the team-kit marketplace](docs/how-to/install.md#move-from-the-team-kit-marketplace).
+
 ## Start with your role
 
 | You are | Read |
