@@ -74,6 +74,10 @@ elif args[:1] == ["cron"]:
             print(f"  {job['id']} [{'active' if job['enabled'] else 'paused'}]")
             print(f"    Name:      {job['name']}")
             print(f"    Schedule:  {job.get('schedule', '')}")
+            if job.get("script"):
+                print(f"    Script:    {job['script']}")
+            if job.get("no_agent"):
+                print("    Mode:      no-agent (script stdout delivered directly)")
     elif args[1] == "create":
         if "--paused" not in args:  # noqa: SIM108
             # Deliberately model the unsafe legacy default as active.
@@ -81,9 +85,16 @@ elif args[:1] == ["cron"]:
         else:
             enabled = False
         used = [int(job["id"].removeprefix("job-")) for job in jobs if job["id"].startswith("job-") and job["id"].removeprefix("job-").isdigit()]
-        jobs.append({"id": f"job-{max(used, default=-1) + 1}", "name": args[args.index("--name") + 1],
-                     "schedule": args[2], "prompt": args[3],
-                     "deliver": args[args.index("--deliver") + 1], "skill": args[args.index("--skill") + 1],
+        def option(flag):
+            return args[args.index(flag) + 1] if flag in args else None
+
+        if "--no-agent" in args and not option("--script"):
+            print("no_agent=True requires a script", file=sys.stderr)
+            sys.exit(1)
+        jobs.append({"id": f"job-{max(used, default=-1) + 1}", "name": option("--name"),
+                     "schedule": args[2], "prompt": args[3] if len(args) > 3 and not args[3].startswith("--") else "",
+                     "deliver": option("--deliver"), "skills": [option("--skill")] if option("--skill") else [],
+                     "script": option("--script"), "no_agent": "--no-agent" in args,
                      "enabled": enabled, "state": "active" if enabled else "paused",
                      "paused_reason": args[args.index("--paused-reason") + 1] if "--paused-reason" in args else None})
         jobs_path.write_text(json.dumps(jobs))
@@ -95,6 +106,17 @@ elif args[:1] == ["cron"]:
         # Like Hermes, edit changes configuration only; pause state is separate.
         if "--schedule" in args:
             job["schedule"] = args[args.index("--schedule") + 1]
+        if "--prompt" in args:
+            job["prompt"] = args[args.index("--prompt") + 1]
+        if "--script" in args:
+            job["script"] = args[args.index("--script") + 1]
+        if "--clear-skills" in args:
+            job["skills"] = []
+        if "--no-agent" in args:
+            if not job.get("script"):
+                print("no_agent=True requires a script", file=sys.stderr)
+                sys.exit(1)
+            job["no_agent"] = True
         jobs_path.write_text(json.dumps(jobs))
     elif args[1] == "delete":
         jobs = [job for job in jobs if job["id"] != args[2]]
@@ -104,6 +126,13 @@ elif args[:1] == ["cron"]:
         if not any(j["id"] == args[2] for j in jobs):
             print("no such job", file=sys.stderr)
             sys.exit(1)
+    elif args[1] == "pause":
+        job = next((j for j in jobs if j["id"] == args[2]), None)
+        if job is None:
+            print("no such job", file=sys.stderr)
+            sys.exit(1)
+        job["enabled"], job["state"] = False, "paused"
+        jobs_path.write_text(json.dumps(jobs))
     elif args[1] == "resume":
         job = next((j for j in jobs if j["id"] == args[2]), None)
         if job is None:

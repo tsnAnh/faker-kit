@@ -99,7 +99,7 @@ def apply_profile(root: Path, profile: str, snippet: Path) -> None:
 
 
 def cron_jobs(text: str) -> dict[str, dict]:
-    """`hermes cron list --all` output to {name: {id, enabled}}. The CLI prints an id line, then a Name row."""
+    """`hermes cron list --all` output to {name: {id, enabled, schedule, script, mode}}. The CLI prints an id line, then rows."""
     text = re.sub(r"\x1b\[[0-9;]*m", "", text)
     jobs: dict[str, dict] = {}
     current = None
@@ -118,19 +118,27 @@ def cron_jobs(text: str) -> dict[str, dict]:
         if name and current is not None:
             current["name"] = name.group(1)
             continue
-        schedule = re.match(r"^\s*Schedule:\s*(.*?)\s*$", line)
-        if schedule and current is not None:
-            current["schedule"] = schedule.group(1)
+        row = re.match(r"^\s*(Schedule|Script|Mode):\s*(.*?)\s*$", line)
+        if row and current is not None:
+            current[row.group(1).lower()] = row.group(2)
             continue
     finish()
     return jobs
 
 
+JOB_NAME = re.compile(r"\Ateam-kit-[a-z][a-z0-9-]*\Z")
+JOB_COMMAND = re.compile(r"\Ateam-kit-gh ([a-z][a-z-]*)\Z")
+JOB_OUTPUTS = ("print", "silent")
+
+
 def cron_spec(source: Path, bot: str) -> list[dict]:
-    """The jobs in a cron spec file: each `##` heading is a job, with Schedule, Deliver, Skill, and a text prompt."""
+    """The jobs in a cron spec file: each `##` heading is a job, with Schedule, Deliver, Command, and Output.
+    A Command is one team-kit-gh subcommand with no arguments, so a script can run it without quoting."""
     out = []
     for block in re.split(r"^## ", source.read_text(), flags=re.M)[1:]:
         name = block.split("\n", 1)[0].strip()
+        if not JOB_NAME.match(name):
+            raise InstallError(f"cron job name {name!r} must look like team-kit-<word>; it names the job's script")
 
         def field(key):  # noqa: ANN001, ANN202
             match = re.search(rf"^{key}: `([^`]+)`", block, re.M)  # noqa: B023
@@ -138,8 +146,11 @@ def cron_spec(source: Path, bot: str) -> list[dict]:
                 raise InstallError(f"missing cron {key} field for {name}")  # noqa: B023
             return match.group(1).replace("{bot}", bot)
 
-        match = re.search(r"```text\n(.*?)```", block, re.S)
-        if match is None:
-            raise InstallError(f"missing cron prompt for {name}")
-        out.append({"name": name, "schedule": field("Schedule"), "deliver": field("Deliver"), "skill": field("Skill"), "prompt": match.group(1).strip()})
+        command = JOB_COMMAND.match(field("Command"))
+        if command is None:
+            raise InstallError(f"cron Command for {name} must be `team-kit-gh <subcommand>`")
+        output = field("Output")
+        if output not in JOB_OUTPUTS:
+            raise InstallError(f"cron Output for {name} must be one of {', '.join(JOB_OUTPUTS)}")
+        out.append({"name": name, "schedule": field("Schedule"), "deliver": field("Deliver"), "subcommand": command.group(1), "output": output})
     return out
