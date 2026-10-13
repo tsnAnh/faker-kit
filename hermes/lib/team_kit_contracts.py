@@ -21,6 +21,8 @@ VERIFICATIONS = ("live-ui-verified", "unit-test-verified", "type-check-only", "v
 DEFAULT_ACCEPTED = ("live-ui-verified", "unit-test-verified")
 VERDICT_FIELDS = ("verification", "pr", "head", "sig")
 VERIFIER_BACKENDS = ("claude", "codex", "none")
+# The branch of each kit update pull request team-kit-admin vendor opens; team-kit-gh tick watches them for conflicts.
+KIT_BRANCH_PREFIX = "team-kit/kit-"
 PR_MARKER = re.compile(r"<!-- team-kit:pr v1 card=(?P<card>[A-Za-z0-9_-]+) issue=(?P<issue>[0-9]+) -->")
 REVIEW_LAUNCHED_MARKER = "<!-- team-kit:review-launched v1 -->"
 REVIEW_MARKER = "<!-- team-kit:review v1 -->"

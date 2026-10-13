@@ -75,6 +75,7 @@ from team_kit_contracts import (
     DEFAULT_ACCEPTED,
     DIAGNOSIS_MARKER,
     INCIDENT_MARKER,
+    KIT_BRANCH_PREFIX,
     LAUNCHED_MARKER,
     PR_MARKER,
     REPORT_MARKER,
@@ -151,7 +152,6 @@ LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?\Z")
 RUNNING_LABEL = "agent:running"
 VERIFYING_LABEL = "agent:verifying"
 REVIEW_LABEL = "agent:review"
-KIT_BRANCH_PREFIX = "team-kit/kit-"  # team-kit-admin vendor's pull request branches
 # auto_merge in .agents/dispatch.json: "low" merges a unit whose risk is low and whose verifier, review (Hermes's
 # own, or the review_app's approval of the head), and checks are all clean; anything else waits for the owner. "none", the default, leaves every merge to the owner.
 AUTO_MERGE = ("none", "low")

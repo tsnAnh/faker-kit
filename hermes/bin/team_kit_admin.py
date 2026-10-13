@@ -61,7 +61,7 @@ import yaml
 from install_config import InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, mapping, profile_home, value_at
 from team_kit_andon import ANDON_LABEL, MACHINE, Andon, AndonError, clean_reason, issue_body
 from team_kit_cloud import CLAUDE_CHECKOUT, Cloud, CloudError
-from team_kit_contracts import ContractError, bootstrap_prompt, cloud_argv
+from team_kit_contracts import KIT_BRANCH_PREFIX, ContractError, bootstrap_prompt, cloud_argv
 from team_kit_guard.policy import (
     DEFAULT_INCIDENTS_EVERY,
     DEFAULT_SECURITY_EVERY,
@@ -89,7 +89,6 @@ CLAUDE_SUBSCRIPTION_DEFAULT_MODEL = "sonnet"
 # The gateway does not inherit the owner's shell, so a bot's .env carries the Claude Code CLI's config
 # directory: the launcher's `claude --cloud` and the subscription plugin both read it.
 CLAUDE_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
-KIT_BRANCH_PREFIX = "team-kit/kit-"  # vendor's pull request branches; team-kit-gh tick watches them for conflicts
 # The provider plugin's own setting. It belongs in the root .env (see point_plugin_at_login), never a profile's.
 PLUGIN_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
 LABELS = (
