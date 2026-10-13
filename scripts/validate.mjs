@@ -94,7 +94,7 @@ function checkSkills(pluginNames) {
   }
 }
 
-// Hermes skills load only in team-kit bots, never in coding agents, so they live outside plugins/.
+// Hermes skills load only in Hermes bots, never in coding agents, so they live outside plugins/.
 // They follow the trust-ladder naming rules and must not shadow any plugin skill.
 function checkHermesSkills(pluginNames) {
   const pluginSkills = new Set(pluginNames.flatMap((p) => skillDirs(path.join(ROOT, "plugins", p)).map((d) => path.basename(d))));

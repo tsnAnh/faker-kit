@@ -16,7 +16,7 @@ import path from "node:path";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const DOCS = path.join(ROOT, "docs");
 const SITE = path.join(ROOT, "site");
-const REPO = "https://github.com/tsnAnh/team-kit";
+const REPO = "https://github.com/tsnAnh/faker-kit";
 const GENERATED_DIRS = ["how-to", "explanation", "reference"];
 // docs/ pages the site replaces with its own hand-written pages.
 const REPLACED = {

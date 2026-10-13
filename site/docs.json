@@ -1,7 +1,7 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
-  "name": "team-kit",
+  "name": "faker-kit",
   "description": "Agent skills for Claude Code, Codex, and Pi that make coding agents trustworthy enough to run many at once, and safe enough for anyone on the team to use.",
   "colors": {
     "primary": "#1E6B58",
@@ -103,13 +103,13 @@
     "links": [
       {
         "label": "GitHub",
-        "href": "https://github.com/tsnAnh/team-kit"
+        "href": "https://github.com/tsnAnh/faker-kit"
       }
     ]
   },
   "footer": {
     "socials": {
-      "github": "https://github.com/tsnAnh/team-kit"
+      "github": "https://github.com/tsnAnh/faker-kit"
     }
   }
 }
