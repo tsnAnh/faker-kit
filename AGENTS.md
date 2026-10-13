@@ -102,13 +102,15 @@ Codex code review reads this section. The Claude review routine reads it with RE
 
 - The owner wants Hermes bots to act without asking (guard.yaml `ask_owner: false`, Hermes approvals off); keep new bot flows free of owner confirmation steps unless a Hermes invariant requires one.
 - The chief hands work straight to project bots; never give the owner a prompt to paste into another bot's chat.
+- The owner wants Hermes dispatch event-driven: a GitHub event such as a new issue should launch Claude Code as soon as possible, with polling only as a fallback.
 
 ## Learned Workspace Facts
 
 - The Hermes desktop app runs Bot Chat in its own backend process (a child of Hermes.app), separate from the launchd `ai.hermes.gateway` service; after reinstalling the kit, quit and reopen the app (restarting the gateway is not enough) for guard or plugin changes to take effect.
 - One Hermes process serves several profiles and names the routed profile in a ContextVar (the `hermes_constants` HERMES_HOME override); plugin code that hops threads must use `contextvars.copy_context().run`, or the profile reads as `default`.
 - In a routed Hermes turn, a command's environment gets only the bot `.env` names declared in `terminal.env_passthrough`, and Hermes never passes `GH_TOKEN`/`GITHUB_TOKEN` to commands; team-kit commands read what they need from the bot profile's `.env` themselves (`hermes/lib/team_kit_env.py`), and `gh` in bot commands falls back to the machine's keyring login.
-- `hermes cron run <id>` runs the job inline (an agent job as a full model turn), not on the next scheduler pass as its help says.
+- `hermes cron run <id>` runs the job inline (an agent job as a full model turn), not on the next scheduler pass as its help says. Hermes keeps only the last 50 output files per cron job, so counting output files does not show new runs.
+- Hermes has a built-in webhook platform (`hermes webhook subscribe`, `platforms.webhook` in `~/.hermes/config.yaml`) that verifies GitHub HMAC signatures and can fire an existing cron job per event (`--cron-job`); the CLI validates `--cron-job` against the default profile's jobs even with `--route-profile`, while the gateway fires the job in the routed profile at runtime.
 - Hermes runs a `--no-agent` cron script only from the profile's own `scripts/` folder, with `HERMES_HOME` set to that profile but without `~/.hermes/bin` on `PATH`; team-kit job scripts call the wrapper by its absolute path.
 - A long-running Bot Chat keeps the skill text it loaded earlier; skill changes reach it only if it reloads the skill.
 - The `claude` CLI on this machine is logged in only with `CLAUDE_CONFIG_DIR=~/.claude`, and its folder-trust entries live in `~/.claude/.claude.json`; a launch without that variable, or from a checkout path not trusted before, stops on the "trust this folder" prompt.
