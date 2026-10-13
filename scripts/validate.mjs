@@ -172,6 +172,8 @@ const LEGACY_LINES = {
   "docs/how-to/install.md": "legacy team-kit",
   "site/how-to/install.mdx": "legacy team-kit",
   "hermes/tests/test_install.py": "legacy team-kit",
+  "plugins/trust-ladder/skills/setup-team-kit/scripts/migrate-from-team-kit.mjs": "legacy team-kit",
+  "plugins/trust-ladder/test/migrate-from-team-kit.test.mjs": "legacy team-kit",
 };
 
 // The kit's identity is the marketplace name and package.json's repository. Everything else must agree.

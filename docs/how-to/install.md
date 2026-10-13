@@ -104,7 +104,13 @@ pi remove git:github.com/tsnAnh/team-kit   # legacy team-kit source
 pi install git:github.com/tsnAnh/faker-kit@<commit sha>
 ```
 
-**A repository set up earlier.** A `.claude/settings.json` written by an older `/setup-team-kit` keeps the `team-kit` marketplace entry and the `@team-kit` plugin ids. They still work. To move it, replace the marketplace key, its `repo`, and the plugin ids as in the current [template](../../plugins/trust-ladder/templates/claude-settings.json). Then ask teammates to remove their old user-level registration, so they do not load two copies.
+**A repository set up earlier.** An older `/setup-team-kit` wrote the `team-kit` marketplace and `@team-kit` plugin ids into `.claude/settings.json`. Teammates who registered team-kit before the rename keep working. A teammate who never did does not: Claude Code registers the marketplace under the name in its manifest, now `faker-kit`, so `/plugin install trust-ladder@team-kit` fails with `Plugin "trust-ladder" not found in marketplace "team-kit"`. Move the repository with one command from a checkout of the kit, then commit the result:
+
+```bash
+node <kit checkout>/plugins/trust-ladder/skills/setup-team-kit/scripts/migrate-from-team-kit.mjs <repository>
+```
+
+It renames the marketplace entry and every `@team-kit` id in `.claude/settings.json`, moves a team-kit package in `.pi/settings.json` to faker-kit at the same commit, and updates the install commands in `.codex/config.toml`'s comments. Everything else in those files stays. A second run changes nothing, and `--check` reports without writing. If an id is already enabled under both names, it keeps the faker-kit one. Then ask teammates who registered team-kit to move as above, so they do not load two copies.
 
 **Hermes.** Re-run the installer from a faker-kit checkout. Nothing moves. See [Upgrading from team-kit](../../hermes/README.md#upgrading-from-team-kit).
 
