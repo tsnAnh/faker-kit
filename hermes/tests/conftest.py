@@ -130,7 +130,7 @@ def machine(tmp_path):
     tests = Path(__file__).resolve().parent
     executable(bin_dir / "hermes", f"#!{sys.executable}\n" + (tests / "fake_hermes.py").read_text())
     executable(bin_dir / "gh", f"#!{sys.executable}\n" + (tests / "fake_gh.py").read_text())
-    env = {"HOME": str(home), "PATH": f"{bin_dir}:/usr/bin:/bin", "TMPDIR": str(tmp_path), "TEAM_KIT_SOURCE_URL": "https://github.com/tsnAnh/team-kit.git"}
+    env = {"HOME": str(home), "PATH": f"{bin_dir}:/usr/bin:/bin", "TMPDIR": str(tmp_path), "TEAM_KIT_SOURCE_URL": "https://github.com/tsnAnh/faker-kit.git"}
     return home / ".hermes", env
 
 

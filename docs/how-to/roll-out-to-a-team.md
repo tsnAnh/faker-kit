@@ -61,4 +61,4 @@ Run `/setup-team-kit` in each one. Repositories that share a stack share the sam
 
 ## Keeping the kit current
 
-The kit maintainer updates the vendored plugins with `node scripts/sync-upstream.mjs --ref <sha>` in this repository and reviews `upstream/CHANGES.md` in the diff. Claude Code users then run `claude plugin marketplace update team-kit`; Codex users run `codex plugin marketplace upgrade`; Pi teams bump the pinned commit in `.pi/settings.json`. See this repository's [AGENTS.md](../../AGENTS.md).
+The kit maintainer updates the vendored plugins with `node scripts/sync-upstream.mjs --ref <sha>` in this repository and reviews `upstream/CHANGES.md` in the diff. Claude Code users then run `claude plugin marketplace update faker-kit`; Codex users run `codex plugin marketplace upgrade`; Pi teams bump the pinned commit in `.pi/settings.json`. See this repository's [AGENTS.md](../../AGENTS.md).

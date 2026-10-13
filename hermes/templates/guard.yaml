@@ -37,7 +37,7 @@ slack:
   enabled: false
   bot: meo-beo
   channel_id: C0123456789
-  channel_name: team-kit
+  channel_name: faker-kit
   app_token_env: TEAM_KIT_SLACK_APP_TOKEN
   bot_token_env: TEAM_KIT_SLACK_BOT_TOKEN
   mirror_notices: false

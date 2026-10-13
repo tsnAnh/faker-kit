@@ -5,13 +5,14 @@ usage() {
   cat <<'USAGE'
 Usage: install.sh --ref COMMIT [--source URL_OR_DIR] [--bootstrap-bot NAME] [--model M] [--claude-subscription] [--no-gateway]
 
-Install the team-kit Hermes module on this machine, pinned to one kit commit. Run it again
+Install the faker-kit Hermes module on this machine, pinned to one kit commit. Run it again
 with a new commit to move every bot to it; it keeps guard.yaml, bots.yaml, job state, and
-anything in a profile it does not own.
+anything in a profile it does not own. The team-kit-* commands remain, as the same commands
+as faker-kit-*.
 
   --ref COMMIT           Full 40-character kit commit. Each repository's .agents/dispatch.json
                          kit_ref must equal it before a project bot launches work there.
-  --source SRC           Kit repository (default: https://github.com/tsnAnh/team-kit.git)
+  --source SRC           Kit repository (default: https://github.com/tsnAnh/faker-kit.git)
   --bootstrap-bot NAME   Create or refresh the bootstrap bot, the one that sets up projects.
                          Any Hermes profile name: lowercase letters, digits, - and _.
   --model M              Model for the bootstrap bot (only with --bootstrap-bot)
@@ -26,17 +27,49 @@ It writes, under ~/.hermes:
   team-kit/kit/            the kit at COMMIT; every bot's files come from here
   team-kit/guard.yaml      the policy, written once from hermes/templates/guard.yaml
   team-kit/bots.yaml       each bot's role, project, and repositories; only team-kit-admin writes it
-  bin/team-kit-gh          a project bot's only GitHub command
-  bin/team-kit-admin       the bootstrap bot's only command
-  bin/team-kit-chief       the chief of staff's only command; reads, and proposes with approval
-  bin/team-kit-slack       the outbound-only Slack Socket Mode relay command
+  bin/faker-kit-gh         a project bot's only GitHub command
+  bin/faker-kit-admin      the bootstrap bot's only command
+  bin/faker-kit-chief      the chief of staff's only command; reads, and proposes with approval
+  bin/faker-kit-slack      the outbound-only Slack Socket Mode relay command
+  bin/team-kit-gh, bin/team-kit-admin, bin/team-kit-chief, bin/team-kit-slack
+                           the same four commands under their earlier names
   profiles/<bot>/          for each bot in bots.yaml: SOUL.md, config, the guard plugin, its skill
+
+It stops before changing anything if a file it did not write is at one of the bin/ paths.
 USAGE
 }
 
 die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
-ref='' source=https://github.com/tsnAnh/team-kit.git bootstrap_bot='' model='' claude_subscription='' gateway=1
+wrapper_prefixes='faker-kit team-kit'
+wrapper_names='gh admin chief slack'
+
+# A kit wrapper is what the wrapper loop below writes, or wrote in an older kit: a regular file whose
+# second line sets TEAM_KIT_HOME and that has a line exec-ing the kit's hermes/bin/team_kit_<name>.py.
+# Older kits quoted with printf %q, which leaves the script path bare, backslash-escaped, or, for a
+# non-ASCII path without a UTF-8 locale, in $'...'; this one single-quotes it. Only the ASCII tail of
+# the exec line is compared, so the path's quoting does not matter.
+is_kit_wrapper() {
+  local path=$1 name=$2 line n=0 second='' found=''
+  [ -f "$path" ] && [ ! -L "$path" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    [ "$n" = 2 ] && second=$line
+    if [[ $line == 'exec '* && ( $line == *"team_kit_$name.py \"\$@\"" || $line == *"team_kit_$name.py' \"\$@\"" ) ]]; then
+      found=1
+    fi
+  done < "$path"
+  [[ $second == 'export TEAM_KIT_HOME='* && -n $found ]]
+}
+
+# Single quotes give the same bytes under every locale. printf %q does not: launchd and cron run
+# without LANG, and there it writes $'...' for a non-ASCII path.
+shell_quote() {
+  local s=$1 sq="'" q="'\\''"
+  printf "'%s'" "${s//$sq/$q}"
+}
+
+ref='' source=https://github.com/tsnAnh/faker-kit.git bootstrap_bot='' model='' claude_subscription='' gateway=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --ref) ref=$2; shift 2 ;;
@@ -62,6 +95,15 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 kit_home=${TEAM_KIT_HOME:-$HOME/.hermes/team-kit}
 root=$(dirname "$kit_home")
 kit=$kit_home/kit
+
+for prefix in $wrapper_prefixes; do
+  for name in $wrapper_names; do
+    path=$root/bin/$prefix-$name
+    if [ -e "$path" ] || [ -L "$path" ]; then
+      is_kit_wrapper "$path" "$name" || die "$path exists and is not a kit wrapper; move it aside, then run install.sh again"
+    fi
+  done
+done
 
 # The commands need only a Python 3.9+: PyYAML is used when installed and otherwise comes from the kit's
 # vendored copy (hermes/vendor), so a Python upgrade cannot leave them without it. HERMES_PYTHON names the
@@ -106,11 +148,16 @@ if grep -Eq '^version:[[:space:]]*1[[:space:]]*$' "$kit_home/guard.yaml"; then
 fi
 
 # The wrappers run the pinned kit's commands with the chosen Python, or with python3 on PATH if that Python
-# is gone. %q quotes paths that contain spaces or shell metacharacters.
-for name in gh admin chief slack; do
-  printf '#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%q\npy=%q\n[ -x "$py" ] || py=$(command -v python3) || { echo "team-kit-%s: no python3 to run it" >&2; exit 1; }\nexec "$py" %q "$@"\n' \
-    "$kit_home" "$py" "$name" "$pkg/bin/team_kit_$name.py" > "$root/bin/team-kit-$name"
-  chmod 755 "$root/bin/team-kit-$name"
+# is gone. Paths are single-quoted (shell_quote), the same bytes under every locale. A wrapper replaces the
+# old one in one rename, so a bot never runs a half-written file.
+for prefix in $wrapper_prefixes; do
+  for name in $wrapper_names; do
+    path=$root/bin/$prefix-$name
+    printf '#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%s\npy=%s\n[ -x "$py" ] || py=$(command -v python3) || { echo "faker-kit-%s: no python3 to run it" >&2; exit 1; }\nexec "$py" %s "$@"\n' \
+      "$(shell_quote "$kit_home")" "$(shell_quote "$py")" "$name" "$(shell_quote "$pkg/bin/team_kit_$name.py")" > "$path.tmp.$$"
+    chmod 755 "$path.tmp.$$"
+    mv -f "$path.tmp.$$" "$path"
+  done
 done
 
 export TEAM_KIT_HOME=$kit_home
@@ -125,5 +172,5 @@ if [ "$gateway" = 1 ]; then
   hermes -p default gateway restart >/dev/null 2>&1 || hermes -p default gateway start >/dev/null
 fi
 
-printf 'team-kit Hermes module installed at kit %s.\n' "$ref"
+printf 'faker-kit Hermes module installed at kit %s. The team-kit-* commands remain, as the same commands.\n' "$ref"
 printf 'Each repository'"'"'s .agents/dispatch.json kit_ref must be %s; the bootstrap bot writes it for new repositories.\n' "$ref"

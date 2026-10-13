@@ -26,6 +26,19 @@ function install(kit, work, ...extra) {
   return spawnSync("/bin/bash", [SCRIPT, "--source", kit, "--ref", "HEAD", "--checkout", path.join(work, "kit"), "--dest", path.join(work, "skills"), ...extra], { encoding: "utf8" });
 }
 
+const DEFAULT_SOURCE = "https://github.com/tsnAnh/faker-kit.git";
+
+// Runs with the script's default --source, checkout, and dest under a throwaway HOME. Git rewrites
+// the default URL to `target`, so no network is used and a wrong default fails the fetch.
+function installDefault(home, target) {
+  const gitconfig = path.join(home, "gitconfig");
+  fs.writeFileSync(gitconfig, `[url "${target}"]\n\tinsteadOf = ${DEFAULT_SOURCE}\n`);
+  const env = { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: gitconfig, GIT_CONFIG_NOSYSTEM: "1" };
+  return spawnSync("/bin/bash", [SCRIPT, "--ref", "HEAD"], { encoding: "utf8", env });
+}
+
+const head = (repo) => git(repo, "rev-parse", "HEAD").stdout.trim();
+
 const owner = (work, name) => /description: (.*)/.exec(fs.readFileSync(path.join(work, "skills", name, "SKILL.md"), "utf8"))[1];
 
 describe("install-kit-skills", () => {
@@ -60,6 +73,44 @@ describe("install-kit-skills", () => {
     expect(result.stderr).toContain("links elsewhere; left as is");
     expect(result.stdout).toContain("skipped shared from pstack: trust-ladder already provides it");
     expect(fs.readlinkSync(path.join(work, "skills", "shared"))).toBe(path.join(work, "missing-user-skill"));
+  });
+
+  test("the default source is the faker-kit repository", () => {
+    const kit = fakeKit([["trust-ladder", "start-here"]]);
+    const home = fs.realpathSync(tmp());
+    const result = installDefault(home, kit);
+    expect(result.status).toBe(0);
+    expect(fs.readlinkSync(path.join(home, ".agents", "skills", "start-here"))).toBe(path.join(home, ".team-kit", "plugins", "trust-ladder", "skills", "start-here"));
+  });
+
+  test("an install from the old source upgrades in place from the default source", () => {
+    const kit = fakeKit([["trust-ladder", "start-here"]]);
+    const home = fs.realpathSync(tmp());
+    const env = { ...process.env, HOME: home };
+    expect(spawnSync("/bin/bash", [SCRIPT, "--source", kit, "--ref", "HEAD"], { encoding: "utf8", env }).status).toBe(0);
+    const newer = tmp();
+    git(newer, "clone", "-q", kit, ".");
+    fs.mkdirSync(path.join(newer, "plugins", "pstack", "skills", "faker-mode"), { recursive: true });
+    fs.writeFileSync(path.join(newer, "plugins", "pstack", "skills", "faker-mode", "SKILL.md"), "---\nname: faker-mode\ndescription: pstack\n---\n");
+    git(newer, "add", ".");
+    git(newer, "commit", "-qm", "newer");
+    const result = installDefault(home, newer);
+    expect(result.status).toBe(0);
+    expect(head(path.join(home, ".team-kit"))).toBe(head(newer));
+    expect(fs.readdirSync(path.join(home, ".agents", "skills")).sort()).toEqual(["faker-mode", "start-here"]);
+    expect(fs.readlinkSync(path.join(home, ".agents", "skills", "start-here"))).toBe(path.join(home, ".team-kit", "plugins", "trust-ladder", "skills", "start-here"));
+  });
+
+  test("a source that cannot be fetched fails and leaves the existing links", () => {
+    const kit = fakeKit([["trust-ladder", "start-here"]]);
+    const home = fs.realpathSync(tmp());
+    expect(installDefault(home, kit).status).toBe(0);
+    const before = head(path.join(home, ".team-kit"));
+    const result = installDefault(home, path.join(home, "missing-kit"));
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("missing-kit");
+    expect(head(path.join(home, ".team-kit"))).toBe(before);
+    expect(fs.readlinkSync(path.join(home, ".agents", "skills", "start-here"))).toBe(path.join(home, ".team-kit", "plugins", "trust-ladder", "skills", "start-here"));
   });
 
   test("never replaces a skill the user already has", () => {

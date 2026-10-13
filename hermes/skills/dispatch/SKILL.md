@@ -113,7 +113,7 @@ A unit is one pull request that a stranger could finish without chat access. A f
 
 Give each unit a short id (`csv-export`) and a size: `small`, `medium`, or `large`.
 
-`max_in_flight` in `.agents/dispatch.json` is how many units can run at once, set from the repository's trust score. If the work needs far more units than that, or would run for days, it is a program, not a list of units. Say so, and suggest the owner run it as an Orchestrate program in Claude Code (the kit's [Run many agents](https://github.com/tsnAnh/team-kit/blob/main/docs/how-to/run-many-agents.md) guide).
+`max_in_flight` in `.agents/dispatch.json` is how many units can run at once, set from the repository's trust score. If the work needs far more units than that, or would run for days, it is a program, not a list of units. Say so, and suggest the owner run it as an Orchestrate program in Claude Code (the kit's [Run many agents](https://github.com/tsnAnh/faker-kit/blob/main/docs/how-to/run-many-agents.md) guide).
 
 Restate the units in a short list (id, title, size, dependencies) and ask the owner to confirm with `clarify`. Do not dispatch before they confirm, unless they already said to go ahead or `team-kit-gh project` shows `"ask_owner": false`; then restate the units and dispatch them without asking.
 
