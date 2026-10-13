@@ -1,13 +1,13 @@
 """Start one cloud coding agent and return the session it created.
 
-A Claude Code session is started in two steps, so no prompt text ever reaches a process argument.
-`claude --cloud "<first message>"` creates the session; its argument is a fixed sentence telling the
-session that its task comes next. The CLI creates a session only on a terminal, from a directory whose
-GitHub remote is the repository, and asks once per directory whether to trust it. So every launch runs
-from one kept checkout per repository, which the owner trusts once, on a pseudo-terminal acquired as the
-child's controlling terminal (TIOCSCTTY), with `CI` removed from its environment. Then
-`claude --cloud <session> -p` sends the real prompt, signing keys included, on stdin; that form needs no
-terminal and queues the message into the session.
+A Claude Code session starts with its task as the first message: `claude --cloud "<task>"`, the only way
+the CLI creates a session. A signing key never reaches that argument: the task names where the key comes and waits for it,
+and `claude --cloud <session> -p` sends the key alone on stdin as the next message, a form that needs no
+terminal and queues the message into the session. A task without a key is sent once and needs no second
+message. The CLI creates a session only on a terminal, from a directory whose GitHub remote is the
+repository, and asks once per directory whether to trust it. So every launch runs from one kept checkout
+per repository, which the owner trusts once, on a pseudo-terminal acquired as the child's controlling
+terminal (TIOCSCTTY), with `CI` removed from its environment.
 
 `codex cloud exec` names its environment, which is bound to a repository, so it runs from an empty
 directory with its prompt on stdin (`codex cloud exec -`), on the same kind of pseudo-terminal.
@@ -59,8 +59,12 @@ REDACTED_PROMPT = "[redacted prompt]"
 REDACTED_KEY = "[redacted signing key]"
 # Claude Code launches from one kept checkout per repository, never pruned, which the owner trusts once.
 CLAUDE_CHECKOUT = "repo"
-CLAUDE_FIRST_MESSAGE = ("Your task arrives as the next message in this session. "
-                        "Until it does, change nothing and reply only: waiting for the task.")
+# Stands in for a signing key in a Claude Code session's first message; the key follows on stdin. A session
+# reads a queued message only after its turn ends, so a keyed first message ends that turn at once.
+KEY_HELD = "[the signing key, which arrives as the next message]"
+KEY_WAIT = ("\n\nYour signing key arrives as the next message in this session. Until it does, change nothing and reply "
+            "only: waiting for the signing key. Then do the task above.")
+KEY_MESSAGE = "The signing key for the task above: {key}"
 CLAUDE_SENT = "Sent to cloud session"
 CLAUDE_SESSION_ID = re.compile(r"\A(?:session|cse)_[A-Za-z0-9]+\Z")
 # The CLI's trust question; the terminal cleanup can drop the spaces between its words.
@@ -80,6 +84,16 @@ def run_codex_status(argv: list[str]) -> str:
 
 class CloudError(Exception):
     pass
+
+
+def first_message(command: CloudCommand) -> str:
+    """A Claude Code session's first message: the prompt with each signing key replaced by KEY_HELD, and, when it
+    held one, told to wait for the key before it starts."""
+    text = command.prompt
+    keys = [secret for secret in command.sensitive if secret]
+    for secret in keys:
+        text = text.replace(secret, KEY_HELD)
+    return text + KEY_WAIT if keys else text
 
 
 def clean_terminal_text(raw: bytes) -> str:
@@ -175,8 +189,13 @@ class Cloud:
         log = workdir.with_name(workdir.name + ".log")
         if backend == "claude":
             checkout = self.claude_checkout(repo, workdir.parent / CLAUDE_CHECKOUT)
-            session = self._launch([command.argv[0], "--cloud", CLAUDE_FIRST_MESSAGE], checkout, None, log, command)
-            self._send(command, session, checkout)
+            task = first_message(command)
+            if not task.strip() or task.startswith("-"):
+                raise CloudError("the task for a Claude Code session must be text that does not start with -")
+            session = self._launch([command.argv[0], "--cloud", task], checkout, None, log, command)
+            keys = [secret for secret in command.sensitive if secret]
+            if keys:
+                self._send(command, "\n".join(KEY_MESSAGE.format(key=key) for key in keys), session, checkout)
             return session
         if workdir.exists():
             shutil.rmtree(workdir)
@@ -263,20 +282,20 @@ class Cloud:
                 except OSError:
                     pass
 
-    def _send(self, command: CloudCommand, session: str, cwd: Path) -> None:
-        """Queue the prompt into the new session on stdin. No terminal is needed, and no argument carries it."""
+    def _send(self, command: CloudCommand, message: str, session: str, cwd: Path) -> None:
+        """Queue a message into the new session on stdin. No terminal is needed, and no argument carries it."""
         session_id = session.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0]
         if not CLAUDE_SESSION_ID.match(session_id):
             raise CloudError(f"{session} is not a Claude Code session the CLI can message")
         try:
-            done = subprocess.run([command.argv[0], "--cloud", session_id, "-p"], cwd=str(cwd), input=command.prompt,
+            done = subprocess.run([command.argv[0], "--cloud", session_id, "-p"], cwd=str(cwd), input=message,
                                   capture_output=True, text=True, env=_child_env(), timeout=SEND_TIMEOUT_SECONDS)
             out = done.stdout + done.stderr
         except (OSError, subprocess.TimeoutExpired) as err:
             done, out = None, type(err).__name__
         if done is None or done.returncode or CLAUDE_SENT not in out:
             last = next((line for line in reversed(self._redact(out, command).splitlines()) if line.strip()), "no output")
-            raise CloudError(f"{session} started but did not get its task, so it waits idle: {last[:200]}")
+            raise CloudError(f"{session} started but did not get its signing key, so it waits idle: {last[:200]}")
 
     @staticmethod
     def _stop(proc: subprocess.Popen[bytes]) -> None:
@@ -288,7 +307,10 @@ class Cloud:
 
     @staticmethod
     def _redact(text: str, command: CloudCommand) -> str:
-        safe_text = text.replace(command.prompt, REDACTED_PROMPT) if command.prompt else text
+        safe_text = text
+        for prompt in (command.prompt, first_message(command)):
+            if prompt:
+                safe_text = safe_text.replace(prompt, REDACTED_PROMPT)
         for secret in command.sensitive:
             if secret:
                 safe_text = safe_text.replace(secret, REDACTED_KEY)

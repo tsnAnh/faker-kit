@@ -21,6 +21,8 @@ VERIFICATIONS = ("live-ui-verified", "unit-test-verified", "type-check-only", "v
 DEFAULT_ACCEPTED = ("live-ui-verified", "unit-test-verified")
 VERDICT_FIELDS = ("verification", "pr", "head", "sig")
 VERIFIER_BACKENDS = ("claude", "codex", "none")
+# The branch of each kit update pull request team-kit-admin vendor opens; team-kit-gh tick watches them for conflicts.
+KIT_BRANCH_PREFIX = "team-kit/kit-"
 PR_MARKER = re.compile(r"<!-- team-kit:pr v1 card=(?P<card>[A-Za-z0-9_-]+) issue=(?P<issue>[0-9]+) -->")
 REVIEW_LAUNCHED_MARKER = "<!-- team-kit:review-launched v1 -->"
 REVIEW_MARKER = "<!-- team-kit:review v1 -->"
@@ -517,9 +519,9 @@ def launch_prompt(backend: str, repo: str, issue: int) -> str:
 
 def cloud_argv(backend: str, prompt: str, attempts: int = 1, env_id: str | None = None,
                sensitive: tuple[str, ...] = ()) -> CloudCommand:
-    """The command and private prompt payload that start one cloud coding agent. No shell is involved.
-    For Claude Code, argv names the CLI; team_kit_cloud creates the session with a fixed first message and
-    sends the prompt on stdin, so it never becomes an argument."""
+    """The command and prompt payload that start one cloud coding agent. No shell is involved.
+    For Claude Code, argv names the CLI; team_kit_cloud makes the prompt the session's first message with each
+    sensitive value left out, and sends those values on stdin, so a key never becomes an argument."""
     if backend == "claude":
         return CloudCommand(("claude", "--cloud"), prompt, sensitive)
     if backend != "codex":

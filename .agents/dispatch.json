@@ -1,6 +1,6 @@
 {
   "backend": "claude",
-  "kit_ref": "da39adf6086ad981880e9bb05c5bc995f4f33a90",
+  "kit_ref": "226fe02c984ee97761178818bae844c85477d2ca",
   "max_in_flight": 5,
   "forbidden_paths": [
     ".github/workflows/",
@@ -36,7 +36,7 @@
     "andon_on_red": false,
     "triage_backend": "claude"
   },
-  "security_backend": "claude",
+  "security_backend": "none",
   "upstream_sync": true,
   "auto_merge": "low",
   "verification_skill": "verify-team-kit",

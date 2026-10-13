@@ -156,11 +156,29 @@ Not in upstream. `.claude-plugin/plugin.json` is built from the upstream manifes
 - To: `So `small` turns `gpt-6-sol-high` into `gpt-6-sol-medium`.`
 - Occurrences: `pstack/skills/setup-pstack/SKILL.md:29`
 
+## `pstack-poteto-mode-code-default-sonnet` (model)
+
+- From: `Defaults `grok-4.7-xhigh-fast` for code`
+- To: `Defaults `sonnet` for code`
+- Occurrences: `pstack/skills/poteto-mode/SKILL.md:95`
+
+## `pstack-setup-code-roles-sonnet-haiku` (model)
+
+- From: `feature, refactoring: grok-4.7-xhigh-fast\nbug-fix: grok-4.7-xhigh-fast\nperf-issue: grok-4.7-xhigh-fast\nhillclimb: grok-4.7-xhigh-fast\n`
+- To: `feature, refactoring: sonnet\nbug-fix: sonnet\nperf-issue: sonnet\nhillclimb: sonnet\ntrivial edits: haiku\n`
+- Occurrences: `pstack/skills/setup-pstack/SKILL.md:49`
+
+## `pstack-playbook-code-model-sonnet-haiku` (model)
+
+- From: `model (default `grok-4.7-xhigh-fast`)`
+- To: `model (default `sonnet`, or `haiku` for a trivial mechanical edit)`
+- Occurrences: `pstack/skills/poteto-mode/playbooks/bug-fix.md:9`, `pstack/skills/poteto-mode/playbooks/feature.md:12`, `pstack/skills/poteto-mode/playbooks/hillclimb.md:12`, `pstack/skills/poteto-mode/playbooks/perf-issue.md:17`, `pstack/skills/poteto-mode/playbooks/refactoring.md:11`
+
 ## `pstack-code-roles-current-agent` (model)
 
 - From: `grok-4.7-xhigh-fast`
 - To: `inherit-parent`
-- Occurrences: `pstack/skills/how/SKILL.md:11`, `pstack/skills/poteto-mode/SKILL.md:95`, `pstack/skills/poteto-mode/playbooks/bug-fix.md:9`, `pstack/skills/poteto-mode/playbooks/feature.md:12`, `pstack/skills/poteto-mode/playbooks/hillclimb.md:12`, `pstack/skills/poteto-mode/playbooks/multi-phase-plan.md:13`, `pstack/skills/poteto-mode/playbooks/perf-issue.md:17`, `pstack/skills/poteto-mode/playbooks/refactoring.md:11`, `pstack/skills/reflect/SKILL.md:32`, `pstack/skills/setup-pstack/SKILL.md:49`, `pstack/skills/setup-pstack/SKILL.md:50`, `pstack/skills/setup-pstack/SKILL.md:51`, `pstack/skills/setup-pstack/SKILL.md:52`, `pstack/skills/setup-pstack/SKILL.md:55`, `pstack/skills/setup-pstack/SKILL.md:57`, `pstack/skills/setup-pstack/SKILL.md:59`, `pstack/skills/setup-pstack/SKILL.md:63`, `pstack/skills/swarm/SKILL.md:25`, `pstack/skills/why/SKILL.md:49`
+- Occurrences: `pstack/skills/how/SKILL.md:11`, `pstack/skills/poteto-mode/playbooks/multi-phase-plan.md:13`, `pstack/skills/reflect/SKILL.md:32`, `pstack/skills/setup-pstack/SKILL.md:56`, `pstack/skills/setup-pstack/SKILL.md:58`, `pstack/skills/setup-pstack/SKILL.md:60`, `pstack/skills/setup-pstack/SKILL.md:64`, `pstack/skills/swarm/SKILL.md:25`, `pstack/skills/why/SKILL.md:49`
 
 ## `pstack-how-explainer-current-agent` (model)
 
@@ -194,44 +212,44 @@ Not in upstream. `.claude-plugin/plugin.json` is built from the upstream manifes
 
 ## `pstack-poteto-mode-hardest-current-agent` (model)
 
-- From: `your strongest judgment model (`claude-opus-5-5-xhigh`)`
-- To: `your strongest judgment model (`inherit-parent`)`
+- From: `The hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) go to your strongest judgment model (`claude-opus-5-5-xhigh`), whether the task needs judgment on vague intent or is a precisely specified sequence of steps to execute to the letter. Trivial mechanical edits go to your fast code model.`
+- To: `In Claude Code, a feature, refactor, bug fix, perf fix, hillclimb step, or one of the hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) goes to `sonnet` (Claude Sonnet 5.5). A trivial mechanical edit (a rename, a move, a formatting or one-line fix, or steps specified to the letter with nothing to decide) goes to `haiku` (Claude Haiku 5.5), the `trivial edits` line. The Task tool takes these aliases, not version slugs. In Codex and Pi, which have neither model, omit `model` so the code delegate runs on the parent model.`
 - Occurrences: `pstack/skills/poteto-mode/SKILL.md:95`
 
 ## `pstack-setup-judgment-and-prose` (model)
 
 - From: `judgment and prose: claude-opus-5-5-xhigh`
 - To: `judgment and prose: inherit-parent`
-- Occurrences: `pstack/skills/setup-pstack/SKILL.md:53`
+- Occurrences: `pstack/skills/setup-pstack/SKILL.md:54`
 
 ## `pstack-setup-hardest-tasks` (model)
 
 - From: `hardest tasks: claude-opus-5-5-xhigh`
-- To: `hardest tasks: inherit-parent`
-- Occurrences: `pstack/skills/setup-pstack/SKILL.md:54`
+- To: `hardest tasks: sonnet`
+- Occurrences: `pstack/skills/setup-pstack/SKILL.md:55`
 
 ## `pstack-setup-how-explainer` (model)
 
 - From: `how explainer: claude-opus-5-5-xhigh`
 - To: `how explainer: inherit-parent`
-- Occurrences: `pstack/skills/setup-pstack/SKILL.md:56`
+- Occurrences: `pstack/skills/setup-pstack/SKILL.md:57`
 
 ## `pstack-setup-why-synthesizer` (model)
 
 - From: `why synthesizer: claude-opus-5-5-xhigh`
 - To: `why synthesizer: inherit-parent`
-- Occurrences: `pstack/skills/setup-pstack/SKILL.md:58`
+- Occurrences: `pstack/skills/setup-pstack/SKILL.md:59`
 
 ## `pstack-setup-reflect-judgment` (model)
 
 - From: `reflect judgment, divergent, synthesizer: claude-opus-5-5-xhigh`
 - To: `reflect judgment, divergent, synthesizer: inherit-parent`
-- Occurrences: `pstack/skills/setup-pstack/SKILL.md:60`
+- Occurrences: `pstack/skills/setup-pstack/SKILL.md:61`
 
 ## `pstack-readme-model-split` (model)
 
 - From: `code delegates (feature, refactoring, bug fix, perf, hillclimb) go to grok, while the hardest changes, prose, and judgment go to opus 5.5. the default panel is opus 5.5 / grok.`
-- To: `code delegates (feature, refactoring, bug fix, perf, hillclimb), the hardest changes, prose, judgment, and every seat of the default panel run on your current coding agent's model.`
+- To: `code delegates (feature, refactoring, bug fix, perf, hillclimb) and the hardest changes run on `sonnet` (Claude Sonnet 5.5) in Claude Code, and trivial mechanical edits on `haiku` (Claude Haiku 5.5); in Codex and Pi they run on your current coding agent's model. prose, judgment, and every seat of the default panel run on your current coding agent's model.`
 - Occurrences: `pstack/README.md:30`
 
 ## `agents-fast-model-current-agent` (model)

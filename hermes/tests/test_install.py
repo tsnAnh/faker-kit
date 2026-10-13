@@ -169,8 +169,42 @@ def test_no_usable_python_reports_actionable_error(kit_source, machine):
     (bin_dir / "python3").write_text("#!/bin/sh\nexit 1\n")
     (bin_dir / "python3").chmod(0o755)
     done = install(kit_source, machine, "--no-gateway")
-    assert done.returncode != 0 and "HERMES_PYTHON" in done.stderr and "PyYAML" in done.stderr
+    assert done.returncode != 0 and "HERMES_PYTHON" in done.stderr and "Python 3.9+" in done.stderr
     assert not (root / "team-kit").exists()
+
+
+def test_a_python_without_pyyaml_runs_every_command_with_the_vendored_copy(kit_source, machine):
+    root, env = machine
+    bin_dir = Path(env["PATH"].split(":")[0])
+    # -S leaves out site-packages, so this Python has only the standard library: no PyYAML.
+    bare = bin_dir / "bare-python"
+    bare.write_text('#!/bin/sh\nexec "' + sys.executable + '" -S "$@"\n')
+    bare.chmod(0o755)
+    assert subprocess.run([str(bare), "-c", "import yaml"], capture_output=True).returncode != 0
+    env["HERMES_PYTHON"] = str(bare)
+    done = install(kit_source, machine, "--no-gateway", "--bootstrap-bot", "ong-xay")
+    assert done.returncode == 0, done.stderr
+    for name in ("admin", "gh", "chief", "slack"):
+        assert f"py='{bare}'" in (root / "bin" / f"team-kit-{name}").read_text()
+    command = subprocess.run([str(root / "bin" / "team-kit-admin"), "status"], env=env, capture_output=True, text=True)
+    assert command.returncode == 0, command.stderr
+    assert {"bot": "ong-xay", "role": "bootstrap"} in json.loads(command.stdout)["bots"], "it read bots.yaml and guard.yaml"
+
+
+def test_a_wrapper_whose_python_was_removed_falls_back_to_python3_on_path(kit_source, machine):
+    root, env = machine
+    bin_dir = Path(env["PATH"].split(":")[0])
+    gone = bin_dir / "python-to-remove"
+    gone.write_text('#!/bin/sh\nexec "' + sys.executable + '" "$@"\n')
+    gone.chmod(0o755)
+    env["HERMES_PYTHON"] = str(gone)
+    assert install(kit_source, machine, "--no-gateway").returncode == 0
+    gone.unlink()  # what an upgrade that removes the old interpreter leaves
+    (bin_dir / "python3").write_text('#!/bin/sh\nexec "' + sys.executable + '" "$@"\n')
+    (bin_dir / "python3").chmod(0o755)
+    command = subprocess.run([str(root / "bin" / "team-kit-admin"), "status"], env=env, capture_output=True, text=True)
+    assert command.returncode == 0, command.stderr
+    assert json.loads(command.stdout)["bots"] == []
 
 
 def test_a_team_kit_home_elsewhere_moves_bin_and_profiles_with_it_and_leaves_home_alone(kit_source, machine, tmp_path):
@@ -223,9 +257,9 @@ def test_a_fresh_install_fetches_the_faker_kit_source_by_default(kit_source, mac
     assert sorted(p.name for p in (root / "bin").iterdir()) == WRAPPERS
     for name in WRAPPERS:
         assert os.access(root / "bin" / name, os.X_OK), name
-    py = (root / "bin" / "team-kit-gh").read_text().splitlines()[2].split()[1].strip("'")
+    py = (root / "bin" / "team-kit-gh").read_text().splitlines()[2].removeprefix("py='").removesuffix("'")
     assert (root / "bin" / "faker-kit-gh").read_text() == (
-        f"#!/usr/bin/env bash\nexport TEAM_KIT_HOME='{root / 'team-kit'}'\nexec '{py}' '{root / 'team-kit' / 'kit' / 'hermes' / 'bin' / 'team_kit_gh.py'}' \"$@\"\n"
+        f"#!/usr/bin/env bash\nexport TEAM_KIT_HOME='{root / 'team-kit'}'\npy='{py}'\n[ -x \"$py\" ] || py=$(command -v python3) || {{ echo \"faker-kit-gh: no python3 to run it\" >&2; exit 1; }}\nexec \"$py\" '{root / 'team-kit' / 'kit' / 'hermes' / 'bin' / 'team_kit_gh.py'}' \"$@\"\n"
     )
     assert done.stdout.splitlines()[-2] == f"faker-kit Hermes module installed at kit {sha}. The team-kit-* commands remain, as the same commands."
 

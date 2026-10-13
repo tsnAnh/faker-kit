@@ -1,5 +1,5 @@
 {
-  "$comment": "Model-name rewrites applied to vendored upstream files, in order. Each rule is a literal find/replace scoped to upstream paths by glob. `count` is the exact number of replacements the rule must make across its files; a mismatch fails the sync so upstream changes are never rewritten blindly. Team models: each member runs one coding agent, Claude Code (Opus 5.5, max effort) or Codex (GPT-6 Sol, high effort, never the fast tier). So every role and every panel seat is `inherit-parent`: it runs on the member's own agent, and panels get their independent opinions from separate runs. An explicit model name survives only as an example a user can type, and a GPT name is always `gpt-6-sol-high`.",
+  "$comment": "Model-name rewrites applied to vendored upstream files, in order. Each rule is a literal find/replace scoped to upstream paths by glob. `count` is the exact number of replacements the rule must make across its files; a mismatch fails the sync so upstream changes are never rewritten blindly. Team models: each member runs one coding agent, Claude Code (Opus 5.5, max effort) or Codex (GPT-6 Sol, high effort, never the fast tier). So every judgment, prose, and panel role is `inherit-parent`: it runs on the member's own agent, and panels get their independent opinions from separate runs. Code delegates are the exception the owner chose: in Claude Code they run on `sonnet` (Claude Sonnet 5.5), or `haiku` (Claude Haiku 5.5) for trivial mechanical edits, and in Codex and Pi on the parent model. An explicit model name survives only as an example a user can type, and a GPT name is always `gpt-6-sol-high`.",
   "rules": [
     {
       "id": "pstack-panel-backticked",
@@ -67,13 +67,44 @@
       "count": 1
     },
     {
+      "id": "pstack-poteto-mode-code-default-sonnet",
+      "files": [
+        "pstack/skills/poteto-mode/SKILL.md"
+      ],
+      "from": "Defaults `grok-4.7-xhigh-fast` for code",
+      "to": "Defaults `sonnet` for code",
+      "count": 1
+    },
+    {
+      "id": "pstack-setup-code-roles-sonnet-haiku",
+      "files": [
+        "pstack/skills/setup-pstack/SKILL.md"
+      ],
+      "from": "feature, refactoring: grok-4.7-xhigh-fast\nbug-fix: grok-4.7-xhigh-fast\nperf-issue: grok-4.7-xhigh-fast\nhillclimb: grok-4.7-xhigh-fast\n",
+      "to": "feature, refactoring: sonnet\nbug-fix: sonnet\nperf-issue: sonnet\nhillclimb: sonnet\ntrivial edits: haiku\n",
+      "count": 1
+    },
+    {
+      "id": "pstack-playbook-code-model-sonnet-haiku",
+      "files": [
+        "pstack/skills/poteto-mode/playbooks/bug-fix.md",
+        "pstack/skills/poteto-mode/playbooks/feature.md",
+        "pstack/skills/poteto-mode/playbooks/hillclimb.md",
+        "pstack/skills/poteto-mode/playbooks/perf-issue.md",
+        "pstack/skills/poteto-mode/playbooks/refactoring.md"
+      ],
+      "from": "model (default `grok-4.7-xhigh-fast`)",
+      "to": "model (default `sonnet`, or `haiku` for a trivial mechanical edit)",
+      "count": 5
+    },
+    {
       "id": "pstack-code-roles-current-agent",
       "files": [
         "pstack/**"
       ],
       "from": "grok-4.7-xhigh-fast",
       "to": "inherit-parent",
-      "count": 19
+      "count": 9
     },
     {
       "id": "pstack-how-explainer-current-agent",
@@ -125,8 +156,8 @@
       "files": [
         "pstack/skills/poteto-mode/SKILL.md"
       ],
-      "from": "your strongest judgment model (`claude-opus-5-5-xhigh`)",
-      "to": "your strongest judgment model (`inherit-parent`)",
+      "from": "The hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) go to your strongest judgment model (`claude-opus-5-5-xhigh`), whether the task needs judgment on vague intent or is a precisely specified sequence of steps to execute to the letter. Trivial mechanical edits go to your fast code model.",
+      "to": "In Claude Code, a feature, refactor, bug fix, perf fix, hillclimb step, or one of the hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) goes to `sonnet` (Claude Sonnet 5.5). A trivial mechanical edit (a rename, a move, a formatting or one-line fix, or steps specified to the letter with nothing to decide) goes to `haiku` (Claude Haiku 5.5), the `trivial edits` line. The Task tool takes these aliases, not version slugs. In Codex and Pi, which have neither model, omit `model` so the code delegate runs on the parent model.",
       "count": 1
     },
     {
@@ -144,7 +175,7 @@
         "pstack/skills/setup-pstack/SKILL.md"
       ],
       "from": "hardest tasks: claude-opus-5-5-xhigh",
-      "to": "hardest tasks: inherit-parent",
+      "to": "hardest tasks: sonnet",
       "count": 1
     },
     {
@@ -180,7 +211,7 @@
         "pstack/README.md"
       ],
       "from": "code delegates (feature, refactoring, bug fix, perf, hillclimb) go to grok, while the hardest changes, prose, and judgment go to opus 5.5. the default panel is opus 5.5 / grok.",
-      "to": "code delegates (feature, refactoring, bug fix, perf, hillclimb), the hardest changes, prose, judgment, and every seat of the default panel run on your current coding agent's model.",
+      "to": "code delegates (feature, refactoring, bug fix, perf, hillclimb) and the hardest changes run on `sonnet` (Claude Sonnet 5.5) in Claude Code, and trivial mechanical edits on `haiku` (Claude Haiku 5.5); in Codex and Pi they run on your current coding agent's model. prose, judgment, and every seat of the default panel run on your current coding agent's model.",
       "count": 1
     },
     {

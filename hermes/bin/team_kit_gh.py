@@ -66,6 +66,9 @@ HERE = Path(__file__).resolve().parent
 for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
+# Last, so an installed PyYAML wins; the vendored copy keeps the command working on a Python without one.
+if (HERE.parent / "vendor").is_dir() and str(HERE.parent / "vendor") not in sys.path:
+    sys.path.append(str(HERE.parent / "vendor"))
 
 from team_kit_andon import ANDON_LABEL, MACHINE_MARKER, Andon, AndonError, Cord, clean_reason, issue_body
 from team_kit_cloud import FINISHED, Cloud, CloudError
@@ -75,6 +78,7 @@ from team_kit_contracts import (
     DEFAULT_ACCEPTED,
     DIAGNOSIS_MARKER,
     INCIDENT_MARKER,
+    KIT_BRANCH_PREFIX,
     LAUNCHED_MARKER,
     PR_MARKER,
     REPORT_MARKER,
@@ -243,6 +247,7 @@ def pull_fields(data: dict, repo: str) -> dict:
         "author": {"login": (data.get("user") or {}).get("login")},
         "body": data.get("body") or "",
         "labels": data.get("labels") or [],
+        "mergeable": data.get("mergeable"),
     }
 
 
@@ -740,6 +745,36 @@ class Gh:
             raise Refused(".agents/dispatch.json pr_comment_trigger must be an @mention of letters, digits, and hyphens")
         return trigger
 
+    def kit_pr_notices(self) -> list[str]:
+        """One notice per head when an open kit update pull request (team-kit-admin vendor's team-kit/kit-* branch)
+        conflicts with its base. `team-kit-admin vendor` rebuilds it on the current branch, which only the bootstrap
+        bot may run, so the notice names that command."""
+        record = self.policy.home / "kit-prs" / f"{self.bot.name}.json"
+        try:
+            told = json.loads(record.read_text())
+        except (OSError, ValueError):
+            told = {}
+        if not isinstance(told, dict):
+            told = {}
+        notices, now_told = [], {}
+        for item in self.api_pages(f"repos/{self.repo}/pulls", {"state": "open"}):
+            if not isinstance(item, dict) or not str((item.get("head") or {}).get("ref") or "").startswith(KIT_BRANCH_PREFIX):
+                continue
+            number = int(item["number"])
+            state = self.pr_state(number)
+            if not state["conflicts"] or not state["head"]:
+                continue
+            now_told[str(number)] = state["head"]
+            if told.get(str(number)) != state["head"]:
+                notices.append(f"{NOTICE} the kit update {item.get('html_url')} conflicts with its base branch; ask the bootstrap bot to run "
+                               f"`team-kit-admin vendor --project {self.bot.project}`, which rebuilds it on the current branch")
+        if now_told != told:
+            record.parent.mkdir(parents=True, exist_ok=True)
+            tmp = record.with_name(f".{record.name}.{os.getpid()}")
+            tmp.write_text(json.dumps(now_told))
+            tmp.replace(record)
+        return notices
+
     def pr_comment_notices(self) -> list[str]:
         """One notice per new pull request comment from a collaborator that mentions this bot: the pull request,
         the author, and a link. Never the comment's text, which anyone could word as a notice; the owner reads it
@@ -856,8 +891,9 @@ class Gh:
         data = self.pull(pr)
         head = str(data.get("headRefOid") or "")
         checks = checks_state(self.check_rollup(head)) if SHA.match(head) else "none"
+        # GitHub computes mergeable in the background: null until it knows, false only for a real conflict.
         return {"pr": pr, "state": str(data.get("state", "")).lower(), "merged": bool(data.get("mergedAt")),
-                "head": head if SHA.match(head) else None, "checks": checks}
+                "head": head if SHA.match(head) else None, "checks": checks, "conflicts": data.get("mergeable") is False}
 
     def unit_branch(self, comments: list[dict]) -> str | None:
         """The branch the unit's agent works on: from its latest trusted report, else its latest launch."""
@@ -1264,6 +1300,8 @@ class Gh:
             return self.gate(issue, f"{report['pr']} was closed without merging")
         if pr["checks"] == "failed":
             return self.gate(issue, f"checks failed on {report['pr']} after a done report")
+        if pr["conflicts"]:
+            return self.gate(issue, f"{report['pr']} has merge conflicts with its base branch; relaunch it to resolve them")
         config = self.dispatch_config()
         reviewer = config.get("review_backend", "none")
         if reviewer != "none" and cloud is not None:
@@ -1466,6 +1504,9 @@ class Gh:
             return self.gate(issue, f"checks failed on {pr_url} during verification")
         if pr["checks"] == "pending":
             return None
+        if pr["conflicts"]:
+            self.drop_verify_record(number)
+            return self.gate(issue, f"{pr_url} has merge conflicts with its base branch; relaunch it to resolve them")
         config = self.dispatch_config()
         second = config.get("second_verifier_backend", "none")
         if not record.get("first") and second != "none":
@@ -1579,6 +1620,8 @@ class Gh:
             return None
         if pr["checks"] == "failed":
             return self.gate(issue, f"checks failed on {pr_url} while it waited for review")
+        if pr["conflicts"]:
+            return self.gate(issue, f"{pr_url} has merge conflicts with its base branch; relaunch it to resolve them")
         verdict = self.app_verdict(pr["pr"], pr["head"], app)
         if verdict == "changes":
             return self.gate(issue, f"{app} requested changes on {pr_url}; read its review, then relaunch it with its findings")
@@ -2325,6 +2368,10 @@ class Project:
             notices.extend(gh.pr_comment_notices())
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
             problems["pr-comments"] = reason(err)
+        try:
+            notices.extend(gh.kit_pr_notices())
+        except (Refused, ValueError, KeyError, TypeError) as err:
+            problems["kit-prs"] = reason(err)
         try:
             units = gh.units()
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick

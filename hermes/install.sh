@@ -45,15 +45,21 @@ wrapper_prefixes='faker-kit team-kit'
 wrapper_names='gh admin chief slack'
 
 # A kit wrapper is what the wrapper loop below writes, or wrote in an older kit: a regular file whose
-# second line sets TEAM_KIT_HOME and whose third line execs the kit's hermes/bin/team_kit_<name>.py.
+# second line sets TEAM_KIT_HOME and that has a line exec-ing the kit's hermes/bin/team_kit_<name>.py.
 # Older kits quoted with printf %q, which leaves the script path bare, backslash-escaped, or, for a
-# non-ASCII path without a UTF-8 locale, in $'...'; this one single-quotes it.
+# non-ASCII path without a UTF-8 locale, in $'...'; this one single-quotes it. Only the ASCII tail of
+# the exec line is compared, so the path's quoting does not matter.
 is_kit_wrapper() {
-  local path=$1 name=$2 first second third
+  local path=$1 name=$2 line n=0 second='' found=''
   [ -f "$path" ] && [ ! -L "$path" ] || return 1
-  { IFS= read -r first && IFS= read -r second && IFS= read -r third; } < "$path" || return 1
-  [[ $second == 'export TEAM_KIT_HOME='* && $third == 'exec '* ]] || return 1
-  [[ $third == *"/hermes/bin/team_kit_$name.py \"\$@\"" || $third == *"/hermes/bin/team_kit_$name.py' \"\$@\"" ]]
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    [ "$n" = 2 ] && second=$line
+    if [[ $line == 'exec '* && ( $line == *"team_kit_$name.py \"\$@\"" || $line == *"team_kit_$name.py' \"\$@\"" ) ]]; then
+      found=1
+    fi
+  done < "$path"
+  [[ $second == 'export TEAM_KIT_HOME='* && -n $found ]]
 }
 
 # Single quotes give the same bytes under every locale. printf %q does not: launchd and cron run
@@ -99,28 +105,28 @@ for prefix in $wrapper_prefixes; do
   done
 done
 
-# A managed Hermes launcher may be a shell wrapper, not a venv shebang.
-# These helpers only need Python + PyYAML; never run the shell launcher as Python
-# or assume a managed base Python can import packages without its bootstrap.
+# The commands need only a Python 3.9+: PyYAML is used when installed and otherwise comes from the kit's
+# vendored copy (hermes/vendor), so a Python upgrade cannot leave them without it. HERMES_PYTHON names the
+# Python; otherwise python3 on PATH, then the Python in Hermes's shebang. A managed Hermes launcher may be a
+# shell wrapper, so it is never run as Python.
 usable_python() {
-  [ -n "$1" ] && "$1" -c 'import sys, yaml; assert sys.version_info >= (3, 9)' >/dev/null 2>&1
+  [ -n "$1" ] && "$1" -c 'import sys; assert sys.version_info >= (3, 9)' >/dev/null 2>&1
 }
 py=''
 if [ "${HERMES_PYTHON+x}" = x ]; then
   py=$HERMES_PYTHON
-  usable_python "$py" || die "HERMES_PYTHON must name an executable Python 3.9+ with PyYAML installed"
+  usable_python "$py" || die "HERMES_PYTHON must name an executable Python 3.9+"
 else
-  IFS= read -r shebang < "$(command -v hermes)" || true
-  case $shebang in
-    '#!'/*python*) candidate=${shebang#\#!} ;;
-    '#!/usr/bin/env python3') candidate=$(command -v python3 || true) ;;
-    *) candidate='' ;;
-  esac
+  candidate=$(command -v python3 || true)
   if usable_python "$candidate"; then
     py=$candidate
   else
-    candidate=$(command -v python3 || true)
-    usable_python "$candidate" || die "No usable Python 3.9+ with PyYAML; install PyYAML in a helper Python and set HERMES_PYTHON to its executable path"
+    IFS= read -r shebang < "$(command -v hermes)" || true
+    case $shebang in
+      '#!'/*python*) candidate=${shebang#\#!} ;;
+      *) candidate='' ;;
+    esac
+    usable_python "$candidate" || die "No usable Python 3.9+; install one or set HERMES_PYTHON to its executable path"
     py=$candidate
   fi
 fi
@@ -141,13 +147,14 @@ if grep -Eq '^version:[[:space:]]*1[[:space:]]*$' "$kit_home/guard.yaml"; then
   die "$kit_home/guard.yaml is version 1; see hermes/README.md, Migrate from version 1"
 fi
 
-# The wrappers run the pinned kit's commands with the helper Python. A wrapper replaces the old
-# one in one rename, so a bot never runs a half-written file.
+# The wrappers run the pinned kit's commands with the chosen Python, or with python3 on PATH if that Python
+# is gone. Paths are single-quoted (shell_quote), the same bytes under every locale. A wrapper replaces the
+# old one in one rename, so a bot never runs a half-written file.
 for prefix in $wrapper_prefixes; do
   for name in $wrapper_names; do
     path=$root/bin/$prefix-$name
-    printf '#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%s\nexec %s %s "$@"\n' \
-      "$(shell_quote "$kit_home")" "$(shell_quote "$py")" "$(shell_quote "$pkg/bin/team_kit_$name.py")" > "$path.tmp.$$"
+    printf '#!/usr/bin/env bash\nexport TEAM_KIT_HOME=%s\npy=%s\n[ -x "$py" ] || py=$(command -v python3) || { echo "faker-kit-%s: no python3 to run it" >&2; exit 1; }\nexec "$py" %s "$@"\n' \
+      "$(shell_quote "$kit_home")" "$(shell_quote "$py")" "$name" "$(shell_quote "$pkg/bin/team_kit_$name.py")" > "$path.tmp.$$"
     chmod 755 "$path.tmp.$$"
     mv -f "$path.tmp.$$" "$path"
   done

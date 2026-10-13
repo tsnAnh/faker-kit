@@ -118,7 +118,7 @@ def test_closed_units_are_read_with_since_and_every_page(team_kit_home, gh, bot)
 def test_pr_state_maps_check_runs_and_legacy_statuses(gh, bot, checks, statuses, expected):
     pr(gh, 7, checks=checks)
     gh.statuses[HEAD] = statuses
-    assert bot.pr_state(7) == {"pr": 7, "state": "open", "merged": False, "head": HEAD, "checks": expected}
+    assert bot.pr_state(7) == {"pr": 7, "state": "open", "merged": False, "head": HEAD, "checks": expected, "conflicts": False}
 
 
 @pytest.mark.parametrize(("state", "merged", "words"), [("OPEN", False, "open"), ("CLOSED", False, "closed"), ("MERGED", True, "merged")])
@@ -241,6 +241,6 @@ def test_read_renders_an_issue_and_a_pull_request_with_their_comments(gh, bot):
 def test_the_pr_state_command_reads_through_rest(team_kit_home, gh, capsys):
     pr(gh, 7, checks=("SUCCESS",))
     assert run(gh, "pr-state", "--pr", "7") == 0
-    assert json.loads(capsys.readouterr().out) == {"pr": 7, "state": "open", "merged": False, "head": HEAD, "checks": "passed"}
+    assert json.loads(capsys.readouterr().out) == {"pr": 7, "state": "open", "merged": False, "head": HEAD, "checks": "passed", "conflicts": False}
     assert not any(c[0] in ("pr", "issue") for c in gh.calls)
 

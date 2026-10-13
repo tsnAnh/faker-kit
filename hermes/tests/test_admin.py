@@ -304,7 +304,7 @@ def test_add_project_prepares_the_launch_checkout_and_keeps_the_cli_config_dir(r
     assert env_file.read_text() == "CLAUDE_CONFIG_DIR=/owner/.claude\n", "a shell without CLAUDE_CONFIG_DIR never removes it"
 
 
-def test_setup_repo_creates_the_session_from_the_launch_checkout_and_sends_the_prompt_on_stdin(ready, kit_source, tmp_path):
+def test_setup_repo_starts_the_session_from_the_launch_checkout_with_its_prompt_as_the_first_message(ready, kit_source, tmp_path):
     root, env = ready
     add_shop(ready)
     vendored(root, kit_source[1])
@@ -315,11 +315,10 @@ def test_setup_repo_creates_the_session_from_the_launch_checkout_and_sends_the_p
     code, out = admin(with_env(ready, FAKE_CLAUDE_LOG=str(calls)), "setup-repo", "--project", "shop", "--backend", "claude", profile="ong-xay")
     assert code == 0, out
     assert out == {"project": "shop", "repo": "acme/shop", "backend": "claude", "kit_ref": kit_source[1], "session": "https://claude.ai/code/session_01FAKEabc"}
-    create, send = [json.loads(line) for line in calls.read_text().splitlines()]
+    [create] = [json.loads(line) for line in calls.read_text().splitlines()]
     checkout = str(root / "team-kit" / "checkouts" / "acme__shop" / "repo")
-    assert create["cwd"] == checkout and create["argv"][0] == "--cloud" and "Set up" not in create["argv"][1]
-    assert send["argv"] == ["--cloud", "session_01FAKEabc", "-p"]
-    prompt = send["stdin"]
+    assert create["cwd"] == checkout and create["argv"][0] == "--cloud"
+    prompt = create["argv"][1]
     assert prompt.startswith("Set up acme/shop for team-kit dispatch")
     assert f"vendored in this repository at .agents/team-kit/, at commit {kit_source[1]}" in prompt
     assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in prompt
@@ -485,6 +484,21 @@ def test_activate_waits_for_the_bots_github_token_then_resumes_its_jobs(ready):
     assert "github_pat_secret" not in json.dumps(out)
 
 
+def test_status_lists_kit_update_pull_requests_and_whether_they_conflict(ready, kit_source):
+    root, _ = ready
+    add_shop(ready)
+    code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
+    assert code == 0, out
+    pulls_file = root.parent / ".fake-gh" / "pulls.json"
+    pulls = json.loads(pulls_file.read_text())
+    pulls["acme/shop"][0]["mergeable"] = False
+    pulls_file.write_text(json.dumps(pulls))
+    code, out = admin(ready, "status", profile="ong-xay")
+    assert code == 0, out
+    shop = next(b for b in out["bots"] if b["bot"] == "meo-beo")
+    assert shop["repo"]["kit_prs"] == [{"pr": "https://github.com/acme/shop/pull/7", "conflicts": True}]
+
+
 def test_status_reports_every_bot_and_repository_and_refreshes_counts(ready):
     root, _ = ready
     add_shop(ready)
@@ -494,7 +508,7 @@ def test_status_reports_every_bot_and_repository_and_refreshes_counts(ready):
     shop = next(b for b in out["bots"] if b["bot"] == "meo-beo")
     assert shop["github_login"] is False
     assert shop["jobs"] == {"team-kit-tick": False, "team-kit-status": False, "team-kit-security": False, "team-kit-incidents": False, "team-kit-upstream": False}
-    assert shop["repo"] == {"repo": "acme/shop", "labels_missing": [], "running": 0, "dispatch_json": False}
+    assert shop["repo"] == {"repo": "acme/shop", "labels_missing": [], "running": 0, "dispatch_json": False, "kit_prs": []}
     assert {"bot": "ong-xay", "role": "bootstrap"} in out["bots"]
     counts = json.loads((root / "team-kit" / "in-flight" / "meo-beo.json").read_text())["repos"]
     assert counts == {"acme/shop": 0}
