@@ -19,9 +19,9 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          plugin_marketplaces: https://github.com/tsnAnh/team-kit.git
+          plugin_marketplaces: https://github.com/tsnAnh/faker-kit.git
           plugins: |
-            trust-ladder@team-kit
+            trust-ladder@faker-kit
           prompt: |
             Read .agents/routines/weekly-review.md and follow it.
           claude_args: |

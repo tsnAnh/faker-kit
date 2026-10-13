@@ -15,18 +15,20 @@ Running it again moves the links to the new REF. A real directory, or a link
 that points somewhere else, is never replaced.
 
   --ref REF          Branch, tag, or commit of the kit (default: main; pin a commit)
-  --source SRC       Kit repository (default: https://github.com/tsnAnh/team-kit.git)
-  --checkout DIR     Where to keep the kit (default: $HOME/.team-kit)
+  --source SRC       Kit repository (default: https://github.com/tsnAnh/faker-kit.git)
+  --checkout DIR     Where to keep the kit (default: $HOME/.team-kit, the name it
+                     had before the faker-kit rename; existing links point into
+                     it, and a link into any other folder counts as a conflict)
   --dest DIR         Where to link skills (default: $HOME/.agents/skills)
 
 Examples:
   install-kit-skills.sh --ref 3ebb4e4
-  install-kit-skills.sh --source ../team-kit --dest /tmp/skills
+  install-kit-skills.sh --source ../faker-kit --dest /tmp/skills
 USAGE
 }
 
 ref=main
-source=https://github.com/tsnAnh/team-kit.git
+source=https://github.com/tsnAnh/faker-kit.git
 checkout="$HOME/.team-kit"
 dest="$HOME/.agents/skills"
 while [ $# -gt 0 ]; do
