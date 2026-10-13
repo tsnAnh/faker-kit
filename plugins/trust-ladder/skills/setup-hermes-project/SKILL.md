@@ -92,7 +92,7 @@ It opens a pull request that copies the pinned kit into the repository's `.agent
 ~/.hermes/bin/team-kit-admin setup-repo --project <project> --backend claude|codex [--codex-env <id>]
 ```
 
-This is also the first real launch. For `claude` it creates the session from the launch checkout, then sends the prompt on stdin, so a refusal here names what is wrong: a checkout not trusted yet, or a `claude` not logged in under the bot's `CLAUDE_CONFIG_DIR`. The session opens one pull request with `.agents/dispatch.json` and `.agents/dispatch.md`. Give the owner the session link and, once it appears, the pull request; wait until it is merged.
+This is also the first real launch. For `claude` it creates the session from the launch checkout with the prompt as its first message, so a refusal here names what is wrong: a checkout not trusted yet, or a `claude` not logged in under the bot's `CLAUDE_CONFIG_DIR`. The session opens one pull request with `.agents/dispatch.json` and `.agents/dispatch.md`. Give the owner the session link and, once it appears, the pull request; wait until it is merged.
 
 ## 7. Protect the default branch
 

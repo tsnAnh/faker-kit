@@ -5,7 +5,7 @@ description: Investigate one incident a Hermes project bot opened from polling (
 
 # Triage an incident
 
-Hermes polls the project's default branch and its health URLs. Something failed, so it opened an issue labelled `agent:incident` and started you. Your prompt names the issue, what failed, the branch's head, its last commit with passing checks (or `unknown`), and a key. Nobody is watching this session. Hermes reads only your diagnosis's header, and only one signed with the key from your prompt. The key is a secret: never write it in a comment, a file, or a command whose output you post.
+Hermes polls the project's default branch and its health URLs. Something failed, so it opened an issue labelled `agent:incident` and started you. Your prompt names the issue, what failed, the branch's head, its last commit with passing checks (or `unknown`), and a key. Nobody is watching this session. Hermes reads only your diagnosis's header, and only one signed with the key Hermes gave you (in your prompt, or in Claude Code the message after it). The key is a secret: never write it in a comment, a file, or a command whose output you post.
 
 You find the cause; you never fix it. Never edit a tracked file, commit, push, revert, re-run a workflow, or open a pull request or an issue. The owner decides the fix and asks the project bot to brief it. You may run while the andon cord is pulled: diagnosing is what the stopped line waits for.
 

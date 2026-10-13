@@ -45,12 +45,12 @@ An open issue labelled `agent:proposal` is not a unit. It is a teammate proposal
 Each repository picks its coding agent once, in `.agents/dispatch.json` (`backend` is `claude` or `codex`). A launch does one of these. `N` is 1, 2, or 3 for a small, medium, or large unit.
 
 ```bash
-claude --cloud <fixed first message>             # creates the session, on a terminal
-claude --cloud <session> -p                      # prompt on stdin
+claude --cloud <task>                            # creates the session, on a terminal
+claude --cloud <session> -p                      # signing key on stdin, only for keyed sessions
 codex cloud exec --env ENV_ID --attempts N -   # prompt on stdin
 ```
 
-The prompt always starts with `/faker-mode` or `$faker-mode`. The `faker-mode` skill cannot load itself, so the prompt has to run it as a command. Team-kit never puts prompt text in process arguments or URLs. That keeps prompt material, including one-use signing keys for verifier, PR review, security, and incident sessions, out of process listings. For `claude`, Hermes creates the session from the project's kept launch checkout, which you trust once, on a pseudo-terminal; its only argument is a fixed sentence saying the task comes next. It then sends the real prompt into that session on stdin with `claude --cloud <session> -p`. The sessions show up with your other Claude Code sessions, and the call goes out from your machine, so nothing needs a public address. For `codex`, Hermes runs the command on a pseudo-terminal in an empty directory, strips the terminal escape sequences, and reads the task id from what it prints.
+The prompt always starts with `/faker-mode` or `$faker-mode`. The `faker-mode` skill cannot load itself, so the prompt has to run it as a command. Team-kit never puts a signing key in process arguments or URLs, so one-use keys for verifier, PR review, security, and incident sessions stay out of process listings. For `claude`, Hermes creates the session from the project's kept launch checkout, which you trust once, on a pseudo-terminal, with the task as its first message: the CLI takes a new session's first message only as an argument. A keyed task names where its key comes instead of the key, and Hermes sends the key alone into that session on stdin with `claude --cloud <session> -p`. A coding unit's task holds no key, so it is the only message. The sessions show up with your other Claude Code sessions, and the call goes out from your machine, so nothing needs a public address. For `codex`, Hermes runs the command on a pseudo-terminal in an empty directory, strips the terminal escape sequences, and reads the task id from what it prints.
 
 ### When work splits into several units
 

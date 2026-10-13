@@ -304,7 +304,7 @@ def test_add_project_prepares_the_launch_checkout_and_keeps_the_cli_config_dir(r
     assert env_file.read_text() == "CLAUDE_CONFIG_DIR=/owner/.claude\n", "a shell without CLAUDE_CONFIG_DIR never removes it"
 
 
-def test_setup_repo_creates_the_session_from_the_launch_checkout_and_sends_the_prompt_on_stdin(ready, kit_source, tmp_path):
+def test_setup_repo_starts_the_session_from_the_launch_checkout_with_its_prompt_as_the_first_message(ready, kit_source, tmp_path):
     root, env = ready
     add_shop(ready)
     vendored(root, kit_source[1])
@@ -315,11 +315,10 @@ def test_setup_repo_creates_the_session_from_the_launch_checkout_and_sends_the_p
     code, out = admin(with_env(ready, FAKE_CLAUDE_LOG=str(calls)), "setup-repo", "--project", "shop", "--backend", "claude", profile="ong-xay")
     assert code == 0, out
     assert out == {"project": "shop", "repo": "acme/shop", "backend": "claude", "kit_ref": kit_source[1], "session": "https://claude.ai/code/session_01FAKEabc"}
-    create, send = [json.loads(line) for line in calls.read_text().splitlines()]
+    [create] = [json.loads(line) for line in calls.read_text().splitlines()]
     checkout = str(root / "team-kit" / "checkouts" / "acme__shop" / "repo")
-    assert create["cwd"] == checkout and create["argv"][0] == "--cloud" and "Set up" not in create["argv"][1]
-    assert send["argv"] == ["--cloud", "session_01FAKEabc", "-p"]
-    prompt = send["stdin"]
+    assert create["cwd"] == checkout and create["argv"][0] == "--cloud"
+    prompt = create["argv"][1]
     assert prompt.startswith("Set up acme/shop for team-kit dispatch")
     assert f"vendored in this repository at .agents/team-kit/, at commit {kit_source[1]}" in prompt
     assert ".agents/team-kit/plugins/trust-ladder/skills/setup-dispatch/SKILL.md" in prompt

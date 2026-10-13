@@ -36,7 +36,7 @@
     "andon_on_red": false,
     "triage_backend": "claude"
   },
-  "security_backend": "claude",
+  "security_backend": "none",
   "upstream_sync": true,
   "auto_merge": "low",
   "verification_skill": "verify-team-kit",
