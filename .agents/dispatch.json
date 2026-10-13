@@ -21,7 +21,10 @@
   ],
   "risk_paths_high": [
     "hermes/",
-    "deploy/"
+    "deploy/",
+    ".agents/dispatch.json",
+    "REVIEW.md",
+    "AGENTS.md"
   ],
   "risk_paths_medium": [
     "upstream/",

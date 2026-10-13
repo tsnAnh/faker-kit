@@ -40,8 +40,8 @@ jobs:
 
             Mark each finding `[blocking]` or `[nit]` as REVIEW.md defines them. Do not comment on anything scripts/check.sh enforces.
 
-            Finish by submitting exactly one review with one of these two commands, unchanged except for the body text:
-            - any `[blocking]` finding: `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=REQUEST_CHANGES -f body="<findings>"`
-            - otherwise: `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=APPROVE -f body="<summary and any nits>"`
+            Finish by submitting exactly one review with one of these two commands, unchanged except for the body text. Keep the body in single quotes and write no single quote inside it.
+            - any `[blocking]` finding: `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=REQUEST_CHANGES -f body='<findings>'`
+            - otherwise: `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=APPROVE -f body='<summary and any nits>'`
           claude_args: >-
             --allowedTools "Read,Grep,Glob,Bash(gh pr diff ${{ github.event.pull_request.number }}:*),Bash(gh pr view ${{ github.event.pull_request.number }}:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=APPROVE -f body=:*),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=REQUEST_CHANGES -f body=:*)"

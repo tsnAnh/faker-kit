@@ -154,6 +154,7 @@ REVIEW_LABEL = "agent:review"
 # auto_merge in .agents/dispatch.json: "low" merges a unit whose risk is low and whose verifier, review (Hermes's
 # own, or the review_app's approval of the head), and checks are all clean; anything else waits for the owner. "none", the default, leaves every merge to the owner.
 AUTO_MERGE = ("none", "low")
+APP_MERGE_ATTEMPTS = 3  # merges of an approved unit that GitHub refused before tick leaves it to the owner
 MERGE_METHODS = ("merge", "squash", "rebase")
 HUMAN_LABEL = "agent:needs-human"
 SECURITY_LABEL = "agent:security"
@@ -1186,7 +1187,7 @@ class Gh:
 
     def gate(self, issue: dict, why: str) -> str:
         """The agent stopped and needs the owner. Frees the unit's slot."""
-        held = tuple(label for label in (RUNNING_LABEL, VERIFYING_LABEL) if label in labels_of(issue))
+        held = tuple(label for label in (RUNNING_LABEL, VERIFYING_LABEL, REVIEW_LABEL) if label in labels_of(issue))
         self.relabel(int(issue["number"]), add=HUMAN_LABEL, remove=held)
         return f"{NOTICE} #{issue['number']} needs you: {why}. https://github.com/{self.repo}/issues/{issue['number']}"
 
@@ -1554,6 +1555,11 @@ class Gh:
             return self.app_review_locked(issue, number, path)
 
     def app_review_locked(self, issue: dict, number: int, path: Path) -> str | None:
+        # Another tick may have merged or gated this unit while this one waited for the lock.
+        issue = self.issue(number)
+        labels = labels_of(issue)
+        if issue.get("state") != "open" or REVIEW_LABEL not in labels or HUMAN_LABEL in labels:
+            return None
         config = self.dispatch_config()
         app = self.review_app(config)
         report = self.report_status(number, since_launch=True)
@@ -1571,8 +1577,12 @@ class Gh:
             return self.gate(issue, f"{pr_url} is not this unit's pull request")
         if pr["checks"] == "pending":
             return None
+        if pr["checks"] == "failed":
+            return self.gate(issue, f"checks failed on {pr_url} while it waited for review")
         verdict = self.app_verdict(pr["pr"], pr["head"], app)
-        outcome = "checks failed" if pr["checks"] == "failed" else verdict or "waiting"
+        if verdict == "changes":
+            return self.gate(issue, f"{app} requested changes on {pr_url}; read its review, then relaunch it with its findings")
+        outcome = verdict or "waiting"
         key = {"pr": pr_url, "head": pr["head"], "outcome": outcome}
         try:
             seen = json.loads(path.read_text())
@@ -1580,16 +1590,11 @@ class Gh:
             seen = {}
         said = isinstance(seen, dict) and all(seen.get(k) == v for k, v in key.items())
         checks = "checks passed" if pr["checks"] == "passed" else "no checks ran"
-        if outcome != "approved":
+        if outcome == "waiting":
             if said:
                 return None
             self.write_app_record(path, key)
-            if outcome == "checks failed":
-                return f"{NOTICE} #{number} is in review but checks failed on {pr_url}"
-            if outcome == "waiting":
-                return f"{NOTICE} #{number} waits for {app} to review {pr_url} ({checks})"
-            return (f"{NOTICE} #{number}: {app} requested changes on {pr_url}; read its review, then relaunch with "
-                    f"dispatch --issue {number} or merge it yourself")
+            return f"{NOTICE} #{number} waits for {app} to review {pr_url} ({checks})"
         if said and not seen.get("retry"):
             return None
         verification = f"approved by {app}"
@@ -1598,9 +1603,13 @@ class Gh:
             words, scored = "", self.risk(pr["pr"], verification, pr["checks"])
         else:
             words, scored = self.mark_risk(pr_url, verification, pr["checks"])
-        retry = config.get("auto_merge", "none") == "low" and scored is not None and scored.level == "low" and pr["checks"] == "passed"
-        self.write_app_record(path, {**key, "retry": retry})
+        eligible = config.get("auto_merge", "none") == "low" and scored is not None and scored.level == "low" and pr["checks"] == "passed"
+        failures = int(seen.get("failures", 0)) if said else 0
+        self.write_app_record(path, {**key, "retry": eligible and failures < APP_MERGE_ATTEMPTS, "failures": failures})
         merged, why = self.auto_merge(number, pr_url, pr["head"], scored, pr["checks"])
+        if why:
+            failures += 1
+            self.write_app_record(path, {**key, "retry": eligible and failures < APP_MERGE_ATTEMPTS, "failures": failures})
         if merged:
             return f"{NOTICE} #{number} merged automatically (low risk, {checks}, approved by {app}): {pr_url}"
         if said:
