@@ -31,6 +31,7 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: true  # the log shows each tool call and any refused command; the repository is private
           # Each allowed command names this pull request and this commit, so a diff that asks Claude to approve
           # another pull request, or a newer push, cannot be followed.
           prompt: |
