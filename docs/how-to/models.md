@@ -12,14 +12,15 @@ Never turn on Codex's Fast mode (its toggle in the Codex TUI, or `service_tier =
 
 ## What the skills ask for
 
-pstack's skills name a model for each role. This kit rewrote every one of them to `inherit-parent`, which means "omit the model and use the one you are already running":
+pstack's skills name a model for each role. This kit rewrote every role except code delegates to `inherit-parent`, which means "omit the model and use the one you are already running":
 
-- Single roles: code delegates, explorers, investigators, `/how` explainers, `/why` synthesizers, reflect reviewers, judges.
+- Code delegates: in Claude Code they run on `sonnet` (Claude Sonnet 5.5), the hardest changes included, and trivial mechanical edits run on `haiku` (Claude Haiku 5.5). In Codex and Pi they run on the parent model.
+- Single roles: explorers, investigators, `/how` explainers, `/why` synthesizers, reflect reviewers, judges.
 - Panels: `/arena` runners and its cross-judge, `/architect` design runners, `/interrogate` reviewers. A panel still spawns one run per seat, so its opinions stay independent; they just all run on your agent.
 - The advisor: `/advisor` consults your own model in a fresh context.
 - Agent files (`ci-watcher`, the agent-compatibility reviewers, `advisor-subagent`) say `model: inherit`.
 
-Nothing in a default run calls a model you do not have, so nothing falls back and nothing waits on another tool.
+Nothing in a default run calls a model outside your agent's own family, so nothing falls back and nothing waits on another tool.
 
 Cross-family review still happens once per pull request instead of in every session: [the review bots](build-review-ship.md#review) run Claude and Codex on every pull request, whichever agent wrote the change. They draw on the plans of the teammates who set them up, not on API keys.
 
