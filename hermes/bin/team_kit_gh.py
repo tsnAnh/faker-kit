@@ -1044,8 +1044,9 @@ class Gh:
             args += ["--remove-label", name]
         self.run(args)
 
-    def dispatch(self, unit: str, size: str, brief_text: str, local_commit: str, cloud: Cloud) -> dict:
-        """Open the unit's issue, then launch it now or leave it queued for tick."""
+    def dispatch(self, unit: str, size: str, brief_text: str, local_commit: str, cloud: Cloud, issue: int | None = None) -> dict:
+        """Open the unit's issue, or with `issue` replace the brief of that stopped unit, then launch it now or leave
+        it queued for tick."""
         if size not in UNIT_ATTEMPTS:
             raise Refused(f"size must be one of {', '.join(UNIT_ATTEMPTS)}")
         config = self.dispatch_config()
@@ -1062,8 +1063,11 @@ class Gh:
                 if state == "invalid":
                     raise Refused(detail)
         body = brief_text.rstrip("\n") + "\n\n" + size_marker(size) + "\n"
-        url = self.run(["issue", "create", "-R", self.repo, "--title", brief.title, "--body", body, "--label", TASK_LABEL]).strip()
-        number = int(url.rstrip("/").rsplit("/", 1)[-1])
+        if issue is None:
+            url = self.run(["issue", "create", "-R", self.repo, "--title", brief.title, "--body", body, "--label", TASK_LABEL]).strip()
+            number = int(url.rstrip("/").rsplit("/", 1)[-1])
+        else:
+            url, number = self.rebrief(issue, unit, brief.title, body, config), issue
         out = {"issue": number, "url": url, "unit": unit, "depends": [f"{r}#{n}" for r, n in refs]}
         try:
             launched = self.launch(number, local_commit, cloud)
@@ -1073,6 +1077,23 @@ class Gh:
             # The issue exists either way; tick retries it, so the bot never opens a second one.
             return {**out, "state": "queued", "why": f"launch failed: {err}"}
         return {**out, "state": "running", "session": launched["session"]}
+
+    def rebrief(self, number: int, unit: str, title: str, body: str, config: dict) -> str:
+        """Replace a stopped unit's brief in place, so the same work keeps one issue. It also leaves the gate, so tick
+        launches the unit if this dispatch can only queue it."""
+        # Under the launch lock, so a tick cannot launch the unit on its old brief while this replaces it.
+        with InFlight(self.policy, self.bot, self.run, self.now).lock():
+            current = self.launchable(number, config)  # an open unit by a trusted author, not running, verifying, or done
+            # Only the marker: a unit gated because the rest of its brief is broken is exactly one to re-brief.
+            marker = BRIEF_MARKER.match(str(current.get("body") or ""))
+            card = marker.group("card") if marker else None
+            if card != unit:
+                raise Refused(f"#{number} is unit {card or '(no brief)'}, not {unit}; dispatch {unit} without --issue instead")
+            args = ["issue", "edit", str(number), "-R", self.repo, "--title", title, "--body", body]
+            if HUMAN_LABEL in labels_of(current):
+                args += ["--remove-label", HUMAN_LABEL]
+            self.run(args)
+        return str(current.get("html_url") or f"https://github.com/{self.repo}/issues/{number}")
 
     def launch(self, number: int, local_commit: str, cloud: Cloud) -> dict:
         config = self.dispatch_config()
@@ -2336,6 +2357,7 @@ def parser() -> argparse.ArgumentParser:
             cmd.add_argument("--unit", required=True)
             cmd.add_argument("--size", required=True, choices=list(UNIT_ATTEMPTS))
             cmd.add_argument("--brief-file", required=True)
+            cmd.add_argument("--issue", type=int, help="replace the brief of this stopped unit instead of opening an issue")
         elif name == "read":
             cmd.add_argument("--issue", type=int)
             cmd.add_argument("--pr", type=int)
@@ -2399,7 +2421,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         else:
             gh = Gh(policy, me, run, now)
             if args.command == "dispatch":
-                out = gh.dispatch(args.unit, args.size, brief_text(policy, me, args.brief_file), commit(policy), cloud)
+                out = gh.dispatch(args.unit, args.size, brief_text(policy, me, args.brief_file), commit(policy), cloud, args.issue)
             elif args.command == "launch":
                 out = gh.launch(args.issue, commit(policy), cloud)
             elif args.command == "verify":

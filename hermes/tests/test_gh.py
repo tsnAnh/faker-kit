@@ -219,7 +219,9 @@ class FakeGh:
         if args[:2] == ["issue", "edit"]:
             labels = self.labels(repo, int(args[2]))
             for i, word in enumerate(args):
-                if word == "--add-label":
+                if word in ("--title", "--body"):
+                    self.issues[(repo, int(args[2]))][word[2:]] = args[i + 1]
+                elif word == "--add-label":
                     labels.add(args[i + 1])
                 elif word == "--remove-label":
                     if args[i + 1] not in labels:
@@ -404,6 +406,59 @@ def test_dispatch_opens_the_issue_and_launches_the_unit(team_kit_home, gh, capsy
     assert workdir == team_kit_home / "checkouts" / "acme__shop" / "41"
     launched = gh.comments[(REPO, 41)][-1]["body"]
     assert launched.startswith(LAUNCHED_MARKER) and "session: https://claude.ai/code/session_01ABCDEF" in launched
+
+
+def rebrief(team_kit_home, gh, number, unit="csv-export", cloud=None, **brief):
+    path = write_brief(team_kit_home, unit, **brief)
+    return run(gh, "dispatch", "--unit", unit, "--size", "small", "--brief-file", str(path), "--issue", str(number), cloud=cloud)
+
+
+def test_dispatch_with_issue_replaces_a_stopped_units_brief_and_launches_it_again(team_kit_home, gh, capsys):
+    old = fill_brief("csv-export", standing=STANDING) + "\n" + size_marker("small") + "\n"
+    number = gh.add_issue(REPO, labels=("agent-task", "agent:needs-human"), body=old, title="Old title")
+    cloud = FakeCloud()
+    new = fill_brief("csv-export", standing=STANDING).replace("## Context\n", "## Context\nThe repository was renamed.\n", 1)
+    assert "The repository was renamed." in new
+    assert rebrief(team_kit_home, gh, number, cloud=cloud, text=new) == 0
+    result = out(capsys)
+    assert (result["issue"], result["state"]) == (number, "running")
+    issue = gh.issues[(REPO, number)]
+    assert "The repository was renamed." in issue["body"] and issue["title"] != "Old title"
+    assert issue["labels"] == {"agent-task", "agent:running"}, "the gate is cleared"
+    assert not [c for c in gh.calls if c[:2] == ["issue", "create"]], "the same work keeps one issue"
+    assert len(cloud.started) == 1
+
+
+def test_dispatch_with_issue_that_must_wait_still_leaves_the_gate_for_tick(team_kit_home, gh, capsys):
+    dep = gh.add_issue(REPO, labels=("agent-task", "agent:running"))
+    old = fill_brief("csv-export", standing=STANDING) + "\n" + size_marker("small") + "\n"
+    number = gh.add_issue(REPO, labels=("agent-task", "agent:needs-human"), body=old)
+    assert rebrief(team_kit_home, gh, number, depends=f"{REPO}#{dep}") == 0
+    assert out(capsys)["state"] == "queued"
+    assert gh.labels(REPO, number) == {"agent-task"}, "queued, so tick launches it once the dependency merges"
+
+
+def test_dispatch_with_issue_re_briefs_a_unit_gated_for_a_broken_brief(team_kit_home, gh, capsys):
+    number = gh.add_issue(REPO, labels=("agent-task", "agent:needs-human"), body="<!-- team-kit:brief v1 card=csv-export -->\n## Goal\n")
+    assert rebrief(team_kit_home, gh, number) == 0
+    assert out(capsys)["state"] == "running"
+
+
+@pytest.mark.parametrize(("labels", "card", "extra", "why"), [
+    (("agent-task", "agent:running"), "csv-export", {}, "already launched"),
+    (("agent-task", "agent:review"), "csv-export", {}, "waits for the owner to merge"),
+    (("agent-task", "agent:needs-human"), "pdf-export", {}, "is unit pdf-export, not csv-export"),
+    (("agent-task", "agent:needs-human"), "csv-export", {"state": "closed"}, "is not an open agent-task issue"),
+    (("agent-task", "agent:needs-human"), "csv-export", {"author": "stranger"}, "not in trusted_dispatchers"),
+])
+def test_dispatch_with_issue_refuses_and_changes_nothing(team_kit_home, gh, capsys, labels, card, extra, why):
+    body = fill_brief(card, standing=STANDING) + "\n" + size_marker("small") + "\n"
+    number = gh.add_issue(REPO, labels=labels, body=body, **extra)
+    cloud = FakeCloud()
+    assert rebrief(team_kit_home, gh, number, cloud=cloud) == 1
+    assert why in capsys.readouterr().err
+    assert gh.issues[(REPO, number)]["body"] == body and gh.labels(REPO, number) == set(labels)
+    assert not [c for c in gh.calls if c[:2] in (["issue", "create"], ["issue", "edit"])] and cloud.started == []
 
 
 def test_dispatch_for_codex_passes_the_environment_and_the_size(team_kit_home, kit, capsys):

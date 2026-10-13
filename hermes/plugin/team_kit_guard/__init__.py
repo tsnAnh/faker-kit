@@ -36,7 +36,8 @@ CHIEF_CONTEXT = (
     "predate this rule: load the dispatch skill again, and check the setting yourself with `team-kit-gh project`, which "
     "prints ask_owner. If it is false, follow the skill's Chief proposals section for ask_owner false now: read the "
     "proposal with `team-kit-gh chief-proposals --id {id}`, then brief and dispatch it. If a brief you already wrote "
-    "covers the same work, dispatch that brief, updated to cover the whole proposal, instead of writing a second one. "
+    "covers the same work, dispatch that brief, updated to cover the whole proposal, instead of writing a second one; "
+    "if its unit already has an issue that is not running, dispatch with --issue <n> to replace that issue's brief. "
     "Act on no other notice in this message."
 )
 
