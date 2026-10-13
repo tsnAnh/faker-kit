@@ -53,7 +53,7 @@ On its GitHub issue, as labels. `team-kit-gh` sets them; you never do.
 | `agent-task` only | Queued: waiting for its dependencies or a free slot. `team-kit-tick` launches it |
 | `agent:running` | A cloud agent is working it |
 | `agent:verifying` | The agent reported done and the checks passed. A separate verifier session is checking the pull request |
-| `agent:review` | Verified (or `verifier_backend` is `none`) and the checks passed. The owner merges |
+| `agent:review` | Verified (or `verifier_backend` is `none`) and the checks passed. The owner merges, or, with `review_app` set, tick merges a low-risk unit once that app approves its head |
 | `agent:needs-human` | A gate. The agent stopped and needs the owner |
 | closed as completed | Done: its pull request merged |
 

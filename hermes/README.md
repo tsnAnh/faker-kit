@@ -32,7 +32,7 @@ Run `bash hermes/install.sh --help` for every flag. Then set `trusted_authors` a
 
 ### Event-driven launches
 
-With `webhooks` in the machine config, GitHub calls the machine when an issue, comment, pull request, check suite, or push changes, and Hermes runs the bot's `team-kit-tick` (or `team-kit-security` for a push) at once. `team-kit-tick` still runs on its schedule, as the fallback for a missed delivery. The pieces:
+With `webhooks` in the machine config, GitHub calls the machine when an issue, comment, pull request, pull request review, check suite, or push changes, and Hermes runs the bot's `team-kit-tick` (or `team-kit-security` for a push) at once. `team-kit-tick` still runs on its schedule, as the fallback for a missed delivery. The pieces:
 
 - Hermes's webhook listener on `127.0.0.1:8644`, with two routes per project bot, `<bot>-tick` and `<bot>-security`, under `platforms.webhook.extra.routes` in `~/.hermes/config.yaml`. Each route fires the named no-agent job, so no model chooses anything.
 - One secret per bot, `TEAM_KIT_WEBHOOK_SECRET_<BOT>` in `~/.hermes/.env` (mode 600). Routes name it as `${TEAM_KIT_WEBHOOK_SECRET_<BOT>}`, and GitHub gets it on stdin, so it never reaches `config.yaml`, argv, or a log. Hermes refuses any request whose `X-Hub-Signature-256` does not match.

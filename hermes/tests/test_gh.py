@@ -60,6 +60,7 @@ class FakeGh:
         self.statuses = {}  # commit sha -> legacy commit statuses, as repos/<repo>/commits/<sha>/status lists them
         self.page_size = None  # smaller than GitHub's 100, so a test reaches the second page cheaply
         self.fail_paths = {}  # substring of a request path -> the failure it raises
+        self.reviews = {}  # pull request number -> its reviews, oldest first, as repos/<repo>/pulls/<n>/reviews lists them
 
     def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small", association="NONE", pull_request=False):  # noqa: E501
         self.next += 1
@@ -170,7 +171,7 @@ class FakeGh:
                 rows = self.statuses.get(path.split("/commits/")[1].split("/")[0], [])
                 return paged(rows, "statuses")
             if re.search(r"/pulls/\d+/reviews", path):
-                return paged([])
+                return paged(self.reviews.get(int(re.search(r"/pulls/(\d+)/reviews", path).group(1)), []))
             if re.search(r"/pulls/\d+(\?|$)", path):
                 return finish(json.dumps(self.rest_pull(path.removeprefix("repos/").split("/pulls/")[0], int(re.search(r"/pulls/(\d+)", path).group(1)))))
             if path.startswith(f"repos/{REPO}/pulls?") or re.match(r"repos/[^/]+/[^/]+/pulls\?", path):
@@ -3079,6 +3080,155 @@ def test_auto_merge_settings_are_validated_before_anything_is_dispatched(team_ki
     assert dispatch(team_kit_home, gh) == 1
     assert "auto_merge" in capsys.readouterr().err
     assert gh.issues == {}
+
+
+def app_review(gh, state="APPROVED", login="claude[bot]", kind="Bot", head=HEAD, pr_number=7):
+    gh.reviews.setdefault(pr_number, []).append({"user": {"login": login, "type": kind}, "state": state, "commit_id": head})
+
+
+def app_reviewed_unit(gh, team_kit_home, capsys):
+    """A unit with a done report and passing checks, in agent:review and waiting for the review app."""
+    n, cloud = reviewing_unit(gh, team_kit_home, capsys)
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/7")
+    assert tick(gh, capsys, cloud=cloud) == [f"team-kit notice: #{n} waits for claude[bot] to review https://github.com/{REPO}/pull/7 (checks passed)"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:review"} and cloud.started == []
+    return n
+
+
+def test_a_low_risk_unit_merges_once_the_review_app_approves_its_head(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, verifier_backend="none", review_app="claude[bot]", auto_merge="low")
+    n = app_reviewed_unit(gh, team_kit_home, capsys)
+    assert tick(gh, capsys) == ["[SILENT]"], "the waiting notice is said once"
+    app_review(gh)
+    assert tick(gh, capsys) == [f"team-kit notice: #{n} merged automatically (low risk, checks passed, approved by claude[bot]): "
+                                f"https://github.com/{REPO}/pull/7"]
+    assert gh.merges == [["pr", "merge", "7", "-R", REPO, "--merge", "--match-head-commit", HEAD]]
+    assert gh.issues[(REPO, n)]["state"] == "closed"
+
+
+@pytest.mark.parametrize(("config", "reviews", "expect", "why"), [
+    ({}, [{"state": "APPROVED", "head": "b" * 40}], None, "an approval of an older head"),
+    ({}, [{"state": "APPROVED", "kind": "User"}], None, "a review GitHub does not record as an app's"),
+    ({}, [{"state": "APPROVED", "login": "tsnanh-bot[bot]"}], None, "another app"),
+    ({}, [{"state": "DISMISSED"}], None, "a dismissed approval"),
+    ({"auto_merge": "none"}, [{"state": "APPROVED"}], "is ready for you to merge (checks passed, approved by claude[bot], risk low", "auto_merge off"),
+    ({"risk_paths_high": ["src/"]}, [{"state": "APPROVED"}], "is ready for you to merge (checks passed, approved by claude[bot], risk high",
+     "risk above low"),
+])
+def test_a_unit_the_review_app_did_not_approve_or_that_is_not_low_risk_waits_for_the_owner(team_kit_home, kit, capsys, config, reviews, expect, why):
+    gh = FakeGh(kit, **{"verifier_backend": "none", "review_app": "claude[bot]", "auto_merge": "low", **config})
+    gh.pr_files[7] = [{"filename": "src/app.py", "additions": 3, "deletions": 1, "status": "modified"}]
+    n = app_reviewed_unit(gh, team_kit_home, capsys)
+    for review in reviews:
+        app_review(gh, **review)
+    notices = tick(gh, capsys)
+    assert gh.merges == [], why
+    assert gh.labels(REPO, n) == {"agent-task", "agent:review"}, why
+    if expect is None:
+        assert notices == ["[SILENT]"], why
+    else:
+        [notice] = notices
+        assert notice.startswith(f"team-kit notice: #{n}") and expect in notice, why
+        assert tick(gh, capsys) == ["[SILENT]"], "each outcome is said once per head"
+
+
+@pytest.mark.parametrize("reviews", [[{"state": "CHANGES_REQUESTED"}], [{"state": "APPROVED"}, {"state": "CHANGES_REQUESTED"}]])
+def test_a_change_request_is_a_gate_the_owner_can_relaunch_from(team_kit_home, kit, capsys, reviews):
+    gh = app_gh(kit)
+    n = app_reviewed_unit(gh, team_kit_home, capsys)
+    for review in reviews:
+        app_review(gh, **review)
+    assert tick(gh, capsys) == [f"team-kit notice: #{n} needs you: claude[bot] requested changes on https://github.com/{REPO}/pull/7; "
+                                f"read its review, then relaunch it with its findings. https://github.com/{REPO}/issues/{n}"]
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}, "no agent:review left, so launch --issue accepts it"
+    assert gh.merges == [] and tick(gh, capsys) == ["[SILENT]"]
+
+
+def test_a_merge_github_keeps_refusing_is_left_to_the_owner_after_three_tries(team_kit_home, kit, capsys):
+    gh = app_gh(kit)
+    n = app_reviewed_unit(gh, team_kit_home, capsys)
+    app_review(gh)
+    gh.merge_error = "gh pr merge failed: Resource not accessible by personal access token (HTTP 403)"
+    assert "auto-merge failed" in tick(gh, capsys)[0]
+    assert tick(gh, capsys) == ["[SILENT]"] and tick(gh, capsys) == ["[SILENT]"] and tick(gh, capsys) == ["[SILENT]"]
+    assert len(gh.merges) == 3
+    assert gh.labels(REPO, n) == {"agent-task", "agent:review"}
+
+
+def test_a_unit_another_tick_already_merged_is_left_alone(team_kit_home, kit, capsys):
+    gh = app_gh(kit)
+    n = app_reviewed_unit(gh, team_kit_home, capsys)
+    app_review(gh)
+    stale = {"number": n, "labels": [{"name": "agent-task"}, {"name": "agent:review"}]}
+    assert tick(gh, capsys)[0].startswith(f"team-kit notice: #{n} merged automatically")
+    assert gh_for(team_kit_home, gh, "meo-beo").check_app_review(stale) is None, "a tick that listed the unit before the merge says nothing"
+    assert gh.labels(REPO, n) == {"agent-task", "agent:review"} and len(gh.merges) == 1
+
+
+@pytest.mark.parametrize("config", [
+    {"verifier_backend": "none", "review_app": "claude"},
+    {"review_app": "claude[bot]"},
+    {"verifier_backend": "none", "review_backend": "claude", "review_app": "claude[bot]"},
+])
+def test_review_app_must_be_an_app_login_and_replace_hermes_checks(team_kit_home, kit, capsys, config):
+    gh = FakeGh(kit, **config)
+    assert dispatch(team_kit_home, gh) == 1
+    assert "review_app" in capsys.readouterr().err
+    assert gh.issues == {}
+
+
+def app_gh(kit, **config):
+    return FakeGh(kit, **{"verifier_backend": "none", "review_app": "claude[bot]", "auto_merge": "low", **config})
+
+
+def test_an_approved_unit_whose_merge_failed_merges_on_a_later_tick(team_kit_home, kit, capsys):
+    gh = app_gh(kit)
+    n = app_reviewed_unit(gh, team_kit_home, capsys)
+    app_review(gh)
+    gh.merge_error = "gh pr merge failed: Base branch was modified (HTTP 405)"
+    [notice] = tick(gh, capsys)
+    assert notice.startswith(f"team-kit notice: #{n} is ready for you to merge (checks passed, approved by claude[bot], risk low")
+    assert "auto-merge failed: gh pr merge failed: Base branch was modified" in notice
+    gh.merge_error = None
+    assert tick(gh, capsys) == [f"team-kit notice: #{n} merged automatically (low risk, checks passed, approved by claude[bot]): "
+                                f"https://github.com/{REPO}/pull/7"]
+    assert len(gh.pr_comments[7]) == 1, "the risk comment is posted once per head"
+
+
+def test_an_approval_read_that_fails_is_tried_again_next_tick(team_kit_home, kit, capsys):
+    gh = app_gh(kit)
+    n = app_reviewed_unit(gh, team_kit_home, capsys)
+    app_review(gh)
+    gh.fail_paths["/reviews"] = "gh api failed: HTTP 502"
+    [notice] = tick(gh, capsys)
+    assert f"#{n}" in notice and "HTTP 502" in notice and gh.merges == []
+    del gh.fail_paths["/reviews"]
+    [notice] = tick(gh, capsys)
+    assert notice.startswith(f"team-kit notice: #{n} merged automatically")
+
+
+def test_a_new_push_after_an_approval_waits_for_a_review_of_the_new_head(team_kit_home, kit, capsys):
+    gh = app_gh(kit, auto_merge="none")
+    n = app_reviewed_unit(gh, team_kit_home, capsys)
+    app_review(gh)
+    assert "is ready for you to merge" in tick(gh, capsys)[0]
+    gh.prs[(REPO, 7)]["headRefOid"] = "b" * 40
+    assert tick(gh, capsys) == [f"team-kit notice: #{n} waits for claude[bot] to review https://github.com/{REPO}/pull/7 (checks passed)"]
+    gh.prs[(REPO, 7)]["statusCheckRollup"] = [{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"}]
+    assert tick(gh, capsys) == [f"team-kit notice: #{n} needs you: checks failed on https://github.com/{REPO}/pull/7 while it waited for review. "
+                                f"https://github.com/{REPO}/issues/{n}"]
+
+
+def test_a_report_naming_a_pull_request_that_is_not_the_units_never_merges(team_kit_home, kit, capsys):
+    gh = app_gh(kit)
+    n, cloud = reviewing_unit(gh, team_kit_home, capsys)
+    pr(gh, 8, head="c" * 40, branch="teammate/feature", author="teammate")
+    app_review(gh, head="c" * 40, pr_number=8)
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/8")
+    [notice] = tick(gh, capsys, cloud=cloud)
+    assert notice == (f"team-kit notice: #{n} needs you: https://github.com/{REPO}/pull/8 is not this unit's pull request. "
+                      f"https://github.com/{REPO}/issues/{n}")
+    assert gh.merges == [] and gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
 
 
 def second_verifier_gh(kit, **config):

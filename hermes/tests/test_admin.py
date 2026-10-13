@@ -818,7 +818,7 @@ def test_machine_sets_up_bots_and_signed_webhooks_and_keeps_secrets_out_of_argv_
     listener = config["platforms"]["webhook"]
     assert (listener["enabled"], listener["extra"]["host"], listener["extra"]["port"]) == (True, "127.0.0.1", 8644)
     tick = listener["extra"]["routes"]["meo-beo-tick"]
-    assert tick == {"events": ["issues", "issue_comment", "pull_request", "check_suite"], "secret": "${TEAM_KIT_WEBHOOK_SECRET_MEO_BEO}",
+    assert tick == {"events": ["issues", "issue_comment", "pull_request", "pull_request_review", "check_suite"], "secret": "${TEAM_KIT_WEBHOOK_SECRET_MEO_BEO}",
                     "profile": "meo-beo", "cron_job": "team-kit-tick", "deliver": "log"}
     assert listener["extra"]["routes"]["meo-beo-security"]["events"] == ["push"]
     assert secret not in (root / "config.yaml").read_text()

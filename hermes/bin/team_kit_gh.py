@@ -151,9 +151,10 @@ LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?\Z")
 RUNNING_LABEL = "agent:running"
 VERIFYING_LABEL = "agent:verifying"
 REVIEW_LABEL = "agent:review"
-# auto_merge in .agents/dispatch.json: "low" merges a unit whose risk is low and whose verifier, review, and
-# checks are all clean; anything else waits for the owner. "none", the default, leaves every merge to the owner.
+# auto_merge in .agents/dispatch.json: "low" merges a unit whose risk is low and whose verifier, review (Hermes's
+# own, or the review_app's approval of the head), and checks are all clean; anything else waits for the owner. "none", the default, leaves every merge to the owner.
 AUTO_MERGE = ("none", "low")
+APP_MERGE_ATTEMPTS = 3  # merges of an approved unit that GitHub refused before tick leaves it to the owner
 MERGE_METHODS = ("merge", "squash", "rebase")
 HUMAN_LABEL = "agent:needs-human"
 SECURITY_LABEL = "agent:security"
@@ -576,6 +577,11 @@ class Gh:
         second = config.get("second_verifier_backend", "none")
         if second not in VERIFIER_BACKENDS or (second == "codex" and not config.get("codex_env")):
             raise Refused(".agents/dispatch.json second_verifier_backend must be claude, codex (with codex_env), or none")
+        app = config.get("review_app")
+        if app is not None and not (isinstance(app, str) and LOGIN.match(app) and app.endswith("[bot]")):
+            raise Refused(".agents/dispatch.json review_app must be a GitHub app's login, such as claude[bot]")
+        if app is not None and (verifier != "none" or review != "none"):
+            raise Refused(".agents/dispatch.json review_app replaces Hermes's own checks; set verifier_backend and review_backend to none")
         if config.get("auto_merge", "none") not in AUTO_MERGE:
             raise Refused(f".agents/dispatch.json auto_merge must be one of {', '.join(AUTO_MERGE)}")
         if config.get("auto_merge_method", "merge") not in MERGE_METHODS:
@@ -1181,7 +1187,7 @@ class Gh:
 
     def gate(self, issue: dict, why: str) -> str:
         """The agent stopped and needs the owner. Frees the unit's slot."""
-        held = tuple(label for label in (RUNNING_LABEL, VERIFYING_LABEL) if label in labels_of(issue))
+        held = tuple(label for label in (RUNNING_LABEL, VERIFYING_LABEL, REVIEW_LABEL) if label in labels_of(issue))
         self.relabel(int(issue["number"]), add=HUMAN_LABEL, remove=held)
         return f"{NOTICE} #{issue['number']} needs you: {why}. https://github.com/{self.repo}/issues/{issue['number']}"
 
@@ -1275,6 +1281,9 @@ class Gh:
         verifier = config.get("verifier_backend", config["backend"])
         if verifier == "none" or cloud is None:
             self.relabel(number, add=REVIEW_LABEL, remove=(RUNNING_LABEL,))
+            if self.review_app(config):
+                moved = [{"name": n} for n in sorted(labels_of(issue) - {RUNNING_LABEL} | {REVIEW_LABEL})]
+                return self.check_app_review({**issue, "labels": moved})
             risk, _ = self.mark_risk(report["pr"], None, pr["checks"])
             return f"{NOTICE} #{number} is ready for you to merge ({checks}, not independently verified{risk}): {report['pr']}"
         if self.cord():
@@ -1487,11 +1496,16 @@ class Gh:
             return False, ""
         if risk is None or risk.level != "low" or checks != "passed" or self.cord():
             return False, ""
-        review = Review(self).record(number) or {}
-        counts = review.get("counts") or {}
-        if not (review.get("done") and review.get("pr") == pr_url and review.get("head") == head
-                and int(counts.get("high", 1)) == 0 and int(counts.get("medium", 1)) == 0):
-            return False, ""
+        if config.get("review_backend", "none") != "none":
+            review = Review(self).record(number) or {}
+            counts = review.get("counts") or {}
+            if not (review.get("done") and review.get("pr") == pr_url and review.get("head") == head
+                    and int(counts.get("high", 1)) == 0 and int(counts.get("medium", 1)) == 0):
+                return False, ""
+        else:
+            app = config.get("review_app")
+            if not app or self.app_verdict(int(pr_url.rsplit("/", 1)[1]), head, app) != "approved":
+                return False, ""
         method = config.get("auto_merge_method", "merge")
         try:
             # --match-head-commit makes GitHub refuse if the pull request moved since it was verified.
@@ -1499,6 +1513,115 @@ class Gh:
         except Refused as err:
             return False, f", auto-merge failed: {str(err)[:160]}"
         return True, ""
+
+    # Review app ---------------------------------------------------------------------------------
+    # With verifier_backend none and review_app set, a GitHub app (the Claude GitHub app, say) reviews unit
+    # pull requests outside Hermes. The unit waits in agent:review; each tick reads the app's review of the
+    # current head, and code decides: an approval of a low-risk unit with passing checks merges when
+    # auto_merge is low, and every other outcome is told to the owner once per head.
+
+    def review_app(self, config: dict | None = None) -> str | None:
+        app = (config or self.dispatch_config()).get("review_app")
+        return str(app) if app else None
+
+    def app_verdict(self, pr: int, head: str, app: str) -> str | None:
+        """approved or changes: the app's latest standing review of this exact head, or None. GitHub records who
+        wrote a review, and a login ending in [bot] belongs to an app, which neither a person nor a cloud session
+        posting with the owner's token can write as. So, unlike a comment, the review needs no HMAC of its own."""
+        verdict = None
+        for review in self.api_pages(f"repos/{self.repo}/pulls/{int(pr)}/reviews"):
+            if not isinstance(review, dict):
+                continue
+            user = review.get("user") or {}
+            if str(user.get("login") or "").lower() != app.lower() or user.get("type") != "Bot" or review.get("commit_id") != head:
+                continue
+            state = review.get("state")
+            if state in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+                verdict = {"APPROVED": "approved", "CHANGES_REQUESTED": "changes"}.get(state)
+        return verdict
+
+    def app_record_path(self, number: int) -> Path:
+        return self.policy.home / "app-reviews" / self.bot.name / f"{int(number)}.json"
+
+    def check_app_review(self, issue: dict) -> str | None:
+        """Read the review app's verdict on a unit in agent:review. Returns a notice once per head and outcome.
+        An approval of a unit that may still merge itself (low risk, auto_merge low) is retried each tick, so a
+        cleared andon cord or a merge GitHub refused for a passing reason does not leave it stuck."""
+        number = int(issue["number"])
+        path = self.app_record_path(number)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.with_suffix(".lock").open("w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            return self.app_review_locked(issue, number, path)
+
+    def app_review_locked(self, issue: dict, number: int, path: Path) -> str | None:
+        # Another tick may have merged or gated this unit while this one waited for the lock.
+        issue = self.issue(number)
+        labels = labels_of(issue)
+        if issue.get("state") != "open" or REVIEW_LABEL not in labels or HUMAN_LABEL in labels:
+            return None
+        config = self.dispatch_config()
+        app = self.review_app(config)
+        report = self.report_status(number, since_launch=True)
+        if not app or report["status"] != "done" or not report["pr"]:
+            return None
+        pr_url = report["pr"]
+        pr = self.pr_state(int(pr_url.rsplit("/", 1)[1]))
+        if pr["merged"]:
+            return self.gate(issue, f"{pr_url} merged but the issue is still open; close it as completed")
+        if pr["state"] == "closed":
+            return self.gate(issue, f"{pr_url} was closed without merging")
+        # The report names the pull request; only one that carries this unit's marker, from its branch, may merge.
+        owned = self.unit_pr(number)
+        if not owned or owned["url"].lower() != pr_url.lower() or owned["head"] != pr["head"]:
+            return self.gate(issue, f"{pr_url} is not this unit's pull request")
+        if pr["checks"] == "pending":
+            return None
+        if pr["checks"] == "failed":
+            return self.gate(issue, f"checks failed on {pr_url} while it waited for review")
+        verdict = self.app_verdict(pr["pr"], pr["head"], app)
+        if verdict == "changes":
+            return self.gate(issue, f"{app} requested changes on {pr_url}; read its review, then relaunch it with its findings")
+        outcome = verdict or "waiting"
+        key = {"pr": pr_url, "head": pr["head"], "outcome": outcome}
+        try:
+            seen = json.loads(path.read_text())
+        except (OSError, ValueError):
+            seen = {}
+        said = isinstance(seen, dict) and all(seen.get(k) == v for k, v in key.items())
+        checks = "checks passed" if pr["checks"] == "passed" else "no checks ran"
+        if outcome == "waiting":
+            if said:
+                return None
+            self.write_app_record(path, key)
+            return f"{NOTICE} #{number} waits for {app} to review {pr_url} ({checks})"
+        if said and not seen.get("retry"):
+            return None
+        verification = f"approved by {app}"
+        scored: Risk | None
+        if said:
+            words, scored = "", self.risk(pr["pr"], verification, pr["checks"])
+        else:
+            words, scored = self.mark_risk(pr_url, verification, pr["checks"])
+        eligible = config.get("auto_merge", "none") == "low" and scored is not None and scored.level == "low" and pr["checks"] == "passed"
+        failures = int(seen.get("failures", 0)) if said else 0
+        self.write_app_record(path, {**key, "retry": eligible and failures < APP_MERGE_ATTEMPTS, "failures": failures})
+        merged, why = self.auto_merge(number, pr_url, pr["head"], scored, pr["checks"])
+        if why:
+            failures += 1
+            self.write_app_record(path, {**key, "retry": eligible and failures < APP_MERGE_ATTEMPTS, "failures": failures})
+        if merged:
+            return f"{NOTICE} #{number} merged automatically (low risk, {checks}, approved by {app}): {pr_url}"
+        if said:
+            return None
+        return f"{NOTICE} #{number} is ready for you to merge ({checks}, approved by {app}{words}{why}): {pr_url}"
+
+    @staticmethod
+    def write_app_record(path: Path, data: dict) -> None:
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.touch(mode=0o600)
+        tmp.write_text(json.dumps(data))
+        tmp.replace(path)
 
     def verify(self, number: int, local_commit: str, cloud: Cloud) -> dict:
         """Start a new verifier on a unit's current pull request head, without redoing the coding work."""
@@ -2217,9 +2340,15 @@ class Project:
             labels = labels_of(issue)
             if TASK_LABEL not in labels:
                 continue
-            if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
+            in_review = REVIEW_LABEL in labels and HUMAN_LABEL not in labels
+            if RUNNING_LABEL in labels or VERIFYING_LABEL in labels or in_review:
                 try:
-                    notice = gh.check_verifying(issue, cloud) if VERIFYING_LABEL in labels else gh.check_running(issue, cloud)
+                    if VERIFYING_LABEL in labels:
+                        notice = gh.check_verifying(issue, cloud)
+                    elif RUNNING_LABEL in labels:
+                        notice = gh.check_running(issue, cloud)
+                    else:
+                        notice = gh.check_app_review(issue) if gh.review_app() else None
                 except Exception as err:  # noqa: BLE001 - one broken unit never stops the others
                     problems[f"{gh.repo}#{issue['number']}"] = reason(err)
                     continue

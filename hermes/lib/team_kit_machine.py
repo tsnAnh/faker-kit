@@ -23,7 +23,7 @@ PLACEHOLDER = "CHANGE-ME"
 WEBHOOK_HOST = "127.0.0.1"
 WEBHOOK_PORT = 8644
 # Each route fires one of the bot's no-agent jobs by name, so a route survives the job's id changing.
-ROUTE_JOBS = {"tick": ("team-kit-tick", ("issues", "issue_comment", "pull_request", "check_suite")),
+ROUTE_JOBS = {"tick": ("team-kit-tick", ("issues", "issue_comment", "pull_request", "pull_request_review", "check_suite")),
               "security": ("team-kit-security", ("push",))}
 
 
