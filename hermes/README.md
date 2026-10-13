@@ -8,9 +8,21 @@ It does one level of the kit's [Run many agents](../docs/how-to/run-many-agents.
 
 ## How it keeps track
 
-GitHub holds every unit's state, as labels on its issue: `agent-task` (queued), `agent:running`, `agent:verifying` (done and checks passed; a separate verifier session is checking the pull request), `agent:review` (verified, the owner merges), and `agent:needs-human` (a gate). A closed issue is done. Each tick also publishes that project's unit states to `~/.hermes/team-kit/units/<bot>.json`, so another local project can wait on `OWNER/REPO#n` without reading that repository or token. An open issue labelled `agent:proposal` is only a teammate proposal: tick gives the owner its number, author, and link once (never its title), and only for a collaborator's proposal, and no brief is written until the owner restates the work in Hermes Desktop. An open issue labelled `agent:andon` is the andon cord: while it, or the machine's cord, is pulled, nothing new starts and cloud agents at work stop at their next push. Only `team-kit-gh andon clear` (a project) or `team-kit-admin andon clear` (the machine) clears it; closing the issue on GitHub does not. A signed review session can comment findings on each unit pull request head, one open issue labelled `agent:security` collects the security reviews of each push of the default branch, and an issue labelled `agent:incident` tracks each incident the `team-kit-incidents` job finds by polling the default branch's checks, the project's health URLs, and optional Sentry, PagerDuty, Datadog, or Grafana alert sources. A signed high-confidence incident diagnosis that names a suspect makes the notice propose a deterministic small unit, `revert <full sha>` (naming `git revert -m 1` for a merge commit), but only the owner replying `ok #<incident>` makes the project bot brief it. There is no Kanban board, no webhook, and no public address: each project bot's `team-kit-tick` job runs `team-kit-gh tick` every 30 minutes by default, or the interval in `bots.yaml`, which reads the labels and reports, launches what can start, and opens gates, all in code. The optional Slack relay is outbound-only Socket Mode; it turns mentions into untrusted `team-kit notice:` proposals in Bot Chat and never dispatches work itself.
+GitHub holds every unit's state, as labels on its issue: `agent-task` (queued), `agent:running`, `agent:verifying` (done and checks passed; a separate verifier session is checking the pull request), `agent:review` (verified, the owner merges), and `agent:needs-human` (a gate). A closed issue is done. Each tick also publishes that project's unit states to `~/.hermes/team-kit/units/<bot>.json`, so another local project can wait on `OWNER/REPO#n` without reading that repository or token. An open issue labelled `agent:proposal` is only a teammate proposal: tick gives the owner its number, author, and link once (never its title), and only for a collaborator's proposal, and no brief is written until the owner restates the work in Hermes Desktop. An open issue labelled `agent:andon` is the andon cord: while it, or the machine's cord, is pulled, nothing new starts and cloud agents at work stop at their next push. Only `team-kit-gh andon clear` (a project) or `team-kit-admin andon clear` (the machine) clears it; closing the issue on GitHub does not. A signed review session can comment findings on each unit pull request head, one open issue labelled `agent:security` collects the security reviews of each push of the default branch, and an issue labelled `agent:incident` tracks each incident the `team-kit-incidents` job finds by polling the default branch's checks, the project's health URLs, and optional Sentry, PagerDuty, Datadog, or Grafana alert sources. A signed high-confidence incident diagnosis that names a suspect makes the notice propose a deterministic small unit, `revert <full sha>` (naming `git revert -m 1` for a merge commit), but only the owner replying `ok #<incident>` makes the project bot brief it. There is no Kanban board. Each project bot's `team-kit-tick` job runs `team-kit-gh tick` every 30 minutes by default, or the interval in `bots.yaml`, which reads the labels and reports, launches what can start, and opens gates, all in code. A machine with `webhooks` in its machine config also runs it as soon as GitHub reports a change (Event-driven launches, below); nothing else is public. The optional Slack relay is outbound-only Socket Mode; it turns mentions into untrusted `team-kit notice:` proposals in Bot Chat and never dispatches work itself.
 
 ## Install
+
+On a machine that only runs Hermes, describe it once in a machine config and let one script build it:
+
+```bash
+gh repo clone <you>/<kit repository> && cd <kit repository>
+cp hermes/templates/machine.yaml .agents/hermes-machine.yaml   # fill it in, commit it
+hermes/setup-machine.sh
+```
+
+`setup-machine.sh` installs what is missing (gh, Claude Code, Hermes, cloudflared, PyYAML), asks you to sign in where needed, asks for each token with hidden input, installs the kit (`install.sh`), sets up the bots, guard settings, and signed GitHub webhooks (`team-kit-admin machine`), runs the gateway, the Cloudflare Tunnel, and the Slack relay as services, and checks the result end to end. Run it again after any change; it changes only what differs. Run `hermes/setup-machine.sh --help` for its flags.
+
+To set up a machine by hand instead:
 
 ```bash
 git clone https://github.com/tsnAnh/faker-kit.git && cd faker-kit
@@ -18,6 +30,15 @@ bash hermes/install.sh --ref <kit commit> --bootstrap-bot <name>
 ```
 
 `install.sh` fetches the kit from `https://github.com/tsnAnh/faker-kit.git` unless `--source` names another. Run `bash hermes/install.sh --help` for every flag. Then set `trusted_authors` and `max_in_flight_total` in `~/.hermes/team-kit/guard.yaml`, and ask the bootstrap bot for your first project.
+
+### Event-driven launches
+
+With `webhooks` in the machine config, GitHub calls the machine when an issue, comment, pull request, pull request review, check suite, or push changes, and Hermes runs the bot's `team-kit-tick` (or `team-kit-security` for a push) at once. `team-kit-tick` still runs on its schedule, as the fallback for a missed delivery. The pieces:
+
+- Hermes's webhook listener on `127.0.0.1:8644`, with two routes per project bot, `<bot>-tick` and `<bot>-security`, under `platforms.webhook.extra.routes` in `~/.hermes/config.yaml`. Each route fires the named no-agent job, so no model chooses anything.
+- One secret per bot, `TEAM_KIT_WEBHOOK_SECRET_<BOT>` in `~/.hermes/.env` (mode 600). Routes name it as `${TEAM_KIT_WEBHOOK_SECRET_<BOT>}`, and GitHub gets it on stdin, so it never reaches `config.yaml`, argv, or a log. Hermes refuses any request whose `X-Hub-Signature-256` does not match.
+- A Cloudflare Tunnel (`~/.cloudflared/<tunnel>.yml`) that publishes only `/p/<bot>/webhooks/<route>` on the configured hostname and answers 404 for everything else.
+- One repository webhook per route, created or updated in place by `team-kit-admin machine`.
 
 ## How cloud agents get the kit
 
@@ -29,6 +50,7 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 
 | Path | What it is | Installed to |
 |---|---|---|
+| `setup-machine.sh` | Builds a whole machine from a machine config: packages, sign-ins, tokens, `install.sh`, bots, webhooks, tunnel, services, and checks | — |
 | `install.sh` | Fetches the kit at a commit, writes the wrappers, refreshes every bot | — |
 | `bin/team_kit_admin.py` | `team-kit-admin`: the bootstrap bot's only command, and the installer's helper | `~/.hermes/bin/faker-kit-admin` and `~/.hermes/bin/team-kit-admin` (the same wrapper) |
 | `bin/team_kit_gh.py` | `team-kit-gh`: a project bot's only GitHub access, and what its jobs run | `~/.hermes/bin/faker-kit-gh` and `~/.hermes/bin/team-kit-gh` (the same wrapper) |
@@ -40,11 +62,13 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `lib/team_kit_slack_relay.py` | Slack Socket Mode, Bot Chat delivery, service unit generation, and optional notice mirroring | read from the kit checkout |
 | `lib/team_kit_risk.py` | The risk score of a ready pull request and its suggested reviewers, from rules in code | read from the kit checkout |
 | `lib/install_config.py` | Reads Hermes config, writes it only through `hermes config set` | read from the kit checkout |
+| `lib/team_kit_machine.py` | The machine config: its checks, the guard settings it writes, the webhook routes, and the tunnel config | read from the kit checkout |
 | `plugin/team_kit_guard/` | The Hermes plugin that checks every tool call against `guard.yaml` and `bots.yaml` | each bot's `plugins/` |
 | `profiles/bootstrap/`, `profiles/project/`, `profiles/chief/` | `SOUL.md` and the config merged into each bot's profile | each bot's profile |
 | `skills/bootstrap/`, `skills/dispatch/`, `skills/chief/` | The bots' skills | linked into each bot's `skills/` |
 | `cron/project-jobs.md` | `team-kit-tick`, `team-kit-status`, `team-kit-security`, `team-kit-incidents`, and `team-kit-upstream`, created paused per project bot | each project bot's scheduled jobs |
 | `templates/guard.yaml` | The machine's policy, written once | `~/.hermes/team-kit/guard.yaml` |
+| `templates/machine.yaml` | A machine config to copy and fill in | `.agents/hermes-machine.yaml` in your kit clone |
 | `tests/` | `python -m pytest hermes` | — |
 
 Under `~/.hermes/team-kit/`:

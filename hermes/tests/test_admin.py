@@ -8,10 +8,11 @@ from pathlib import Path
 import pytest
 import team_kit_admin
 import yaml
-from conftest import FAKE_CLAUDE, fill_guard, gh_calls, hermes_calls, install
+from conftest import FAKE_CLAUDE, fill_guard, gh_calls, guard_text, hermes_calls, install
 from install_config import InstallError, cron_spec
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, InFlight
 from team_kit_guard.policy import load_policy
+from team_kit_machine import MachineError, cloudflared_config, edit_guard, parse_machine
 
 SHOP = "acme/shop"
 LABELS = ["agent-task", "agent:proposal", "agent:running", "agent:verifying", "agent:review", "agent:needs-human", "agent:security", "agent:incident", "risk:low", "risk:medium", "risk:high", "agent:andon"]  # noqa: E501
@@ -737,3 +738,109 @@ def test_write_in_flight_called_without_a_clock_stamps_wall_time(team_kit_home):
     team_kit_admin.write_in_flight(team_kit_home, "sep-crm", {"acme/crm": 1})
     stamped = json.loads((team_kit_home / "in-flight" / "sep-crm.json").read_text())["at"]
     assert before <= stamped <= time.time()
+
+
+# machine config -------------------------------------------------------------------------------------
+
+MACHINE = {
+    "version": 1, "bootstrap_bot": "ong-xay", "claude_subscription": False,
+    "guard": {"trusted_authors": ["Codertocat"], "ask_owner": False, "max_in_flight_total": 4},
+    "projects": [{"bot": "meo-beo", "project": "shop", "repo": SHOP, "tick_every": "10m"}],
+    "chief": {"bot": "chanh-van"},
+    "webhooks": {"url": "https://hermes.example.com", "tunnel": "hermes"},
+    "slack": {"bot": "meo-beo", "channel_id": "C0ABCDEF12", "channel_name": "shop"},
+}
+
+
+def machine_config(root, **changes):
+    path = root.parent / "hermes-machine.yaml"
+    path.write_text(yaml.safe_dump({**MACHINE, **changes}))
+    return path
+
+
+@pytest.mark.parametrize(("change", "why"), [
+    ({"webhooks": {"url": "https://hermes.CHANGE-ME.example", "tunnel": "hermes"}}, "fill it in first"),
+    ({"webhooks": {"url": "https://hermes.example.com"}}, "both url and tunnel"),
+    ({"webhooks": {"url": "http://hermes.example.com", "tunnel": "hermes"}}, "is not valid"),
+    ({"chief": {"bot": "meo-beo"}}, "its own profile name"),
+    ({"slack": {"bot": "chanh-van", "channel_id": "C0ABCDEF12", "channel_name": "shop"}}, "one of the project bots"),
+    ({"guard": {"trusted_authors": [], "ask_owner": False}}, "trusted_authors"),
+    ({"version": 2}, "version must be 1"),
+    ({"guard": {"trusted_authors": ["CHANGE-ME"]}}, "still lists CHANGE-ME"),
+    ({"projects": [{"bot": "a-b", "project": "a", "repo": "acme/a"}, {"bot": "a_b", "project": "b", "repo": "acme/b"}]}, "share a webhook secret"),
+])
+def test_a_machine_config_is_refused_before_anything_changes(change, why):
+    with pytest.raises(MachineError, match=why):
+        parse_machine({**MACHINE, **change})
+
+
+def test_machine_settings_go_into_guard_yaml_and_keep_its_comments():
+    template = guard_text()
+    edited = edit_guard(template, parse_machine(MACHINE))
+    policy = yaml.safe_load(edited)
+    assert (policy["ask_owner"], policy["max_in_flight_total"], policy["trusted_authors"]) == (False, 4, ["Codertocat"])
+    assert policy["slack"] | {"enabled": True, "bot": "meo-beo", "channel_id": "C0ABCDEF12", "channel_name": "shop"} == policy["slack"]
+    template_comments = [line for line in template.splitlines() if line.lstrip().startswith("#")]
+    assert template_comments and all(line in edited.splitlines() for line in template_comments)
+    assert edit_guard(edited, parse_machine(MACHINE)) == edited, "running it again changes nothing"
+
+
+def test_guard_edits_keep_the_owners_indentation():
+    template = guard_text().replace("\n  enabled: false", "\n    enabled: false").replace("\n  bot: meo-beo", "\n    bot: meo-beo")
+    template = template.replace("\n  channel_id:", "\n    channel_id:").replace("\n  channel_name:", "\n    channel_name:")
+    template = template.replace("\n  app_token_env:", "\n    app_token_env:").replace("\n  bot_token_env:", "\n    bot_token_env:")
+    template = template.replace("\n  mirror_notices:", "\n    mirror_notices:")
+    assert yaml.safe_load(template)["slack"]["enabled"] is False
+    assert yaml.safe_load(edit_guard(template, parse_machine(MACHINE)))["slack"]["channel_id"] == "C0ABCDEF12"
+
+
+def test_the_tunnel_publishes_only_this_machines_routes_by_exact_path():
+    text = cloudflared_config("abc-123", Path("/home/pi/.cloudflared/abc-123.json"), "hermes.example.com", parse_machine(MACHINE))
+    ingress = yaml.safe_load(text)["ingress"]
+    assert [rule.get("path") for rule in ingress] == ["^/p/meo\\-beo/webhooks/meo\\-beo\\-tick$", "^/p/meo\\-beo/webhooks/meo\\-beo\\-security$", None]
+    assert all(rule["service"] == "http://127.0.0.1:8644" and rule["hostname"] == "hermes.example.com" for rule in ingress[:-1])
+    assert ingress[-1] == {"service": "http_status:404"}, "anything else, /health and other routes included, is 404"
+
+
+def test_machine_sets_up_bots_and_signed_webhooks_and_keeps_secrets_out_of_argv_and_config(ready):
+    root, _ = ready
+    path = machine_config(root)
+    code, out = admin(ready, "machine", "--config", str(path))
+    assert code == 0, out
+    assert bots(root)["meo-beo"]["tick_every"] == "10m" and bots(root)["chanh-van"]["role"] == "chief"
+    assert out["projects"][0]["active"] is False and "GH_TOKEN" in out["pending"][0], "no token yet, so the jobs stay paused"
+    assert all(not job["enabled"] for job in jobs(root, "meo-beo"))
+
+    env = root / ".env"
+    secret = next(line.split("=", 1)[1] for line in env.read_text().splitlines() if line.startswith("TEAM_KIT_WEBHOOK_SECRET_MEO_BEO="))
+    assert len(secret) >= 32 and stat.S_IMODE(env.stat().st_mode) == 0o600
+    config = yaml.safe_load((root / "config.yaml").read_text())
+    listener = config["platforms"]["webhook"]
+    assert (listener["enabled"], listener["extra"]["host"], listener["extra"]["port"]) == (True, "127.0.0.1", 8644)
+    tick = listener["extra"]["routes"]["meo-beo-tick"]
+    assert tick == {"events": ["issues", "issue_comment", "pull_request", "pull_request_review", "check_suite"], "secret": "${TEAM_KIT_WEBHOOK_SECRET_MEO_BEO}",
+                    "profile": "meo-beo", "cron_job": "team-kit-tick", "deliver": "log"}
+    assert listener["extra"]["routes"]["meo-beo-security"]["events"] == ["push"]
+    assert secret not in (root / "config.yaml").read_text()
+
+    hooks = json.loads((root.parent / ".fake-gh" / "hooks.json").read_text())[SHOP]
+    assert sorted(h["config"]["url"] for h in hooks) == ["https://hermes.example.com/p/meo-beo/webhooks/meo-beo-security",
+                                                         "https://hermes.example.com/p/meo-beo/webhooks/meo-beo-tick"]
+    assert all(h["config"]["secret"] == secret and h["config"]["content_type"] == "json" and h["active"] for h in hooks)
+    assert all(secret not in json.dumps(c["args"]) for c in gh_calls(root)), "the secret reaches GitHub on stdin only"
+    assert all(secret not in json.dumps(c) for c in hermes_calls(root))
+
+    (root / "profiles" / "meo-beo" / ".env").write_text("GH_TOKEN=x\n")
+    code, out = admin(ready, "machine", "--config", str(path))
+    assert code == 0, out
+    assert out["projects"][0]["active"] and not out["pending"]
+    assert all(job["enabled"] for job in jobs(root, "meo-beo"))
+    assert [h["hook"] for h in out["webhooks"]] == ["updated", "updated"], "a second run never adds a second hook"
+    assert len(json.loads((root.parent / ".fake-gh" / "hooks.json").read_text())[SHOP]) == 2
+    assert f"TEAM_KIT_WEBHOOK_SECRET_MEO_BEO={secret}" in env.read_text(), "the secret is kept, so GitHub and Hermes still agree"
+
+
+def test_machine_runs_only_from_a_plain_shell(ready):
+    root, _ = ready
+    code, err = admin(ready, "machine", "--config", str(machine_config(root)), profile="ong-xay")
+    assert code == 1 and "runs only from hermes/install.sh" in err

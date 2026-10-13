@@ -1,6 +1,6 @@
 {
   "backend": "claude",
-  "kit_ref": "f28bc25a25bb3b83985ff67c24d81ddf79fd440c",
+  "kit_ref": "da39adf6086ad981880e9bb05c5bc995f4f33a90",
   "max_in_flight": 5,
   "forbidden_paths": [
     ".github/workflows/",
@@ -13,15 +13,18 @@
   "trusted_dispatchers": [
     "tsnAnh"
   ],
-  "review_backend": "claude",
-  "verifier_backend": "claude",
+  "review_backend": "none",
+  "verifier_backend": "none",
   "accept_verifications": [
     "live-ui-verified",
     "unit-test-verified"
   ],
   "risk_paths_high": [
     "hermes/",
-    "deploy/"
+    "deploy/",
+    ".agents/dispatch.json",
+    "REVIEW.md",
+    "AGENTS.md"
   ],
   "risk_paths_medium": [
     "upstream/",
@@ -37,5 +40,6 @@
   "upstream_sync": true,
   "auto_merge": "low",
   "verification_skill": "verify-team-kit",
-  "second_verifier_backend": "claude"
+  "second_verifier_backend": "none",
+  "review_app": "claude[bot]"
 }

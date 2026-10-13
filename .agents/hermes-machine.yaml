@@ -1,0 +1,30 @@
+# The always-on Hermes machine for this repository (a Raspberry Pi 5). Rebuild it anywhere with
+#   gh repo clone tsnAnh/faker-kit && faker-kit/hermes/setup-machine.sh
+# hermes/templates/machine.yaml explains each field. No secrets here.
+version: 1
+bootstrap_bot: team-kit-bootstrap
+claude_subscription: true
+
+guard:
+  trusted_authors:
+    - tsnAnh
+  ask_owner: false
+  max_in_flight_total: 5
+
+projects:
+  - bot: team-kit
+    project: team-kit
+    repo: tsnAnh/faker-kit
+    tick_every: 10m
+
+chief:
+  bot: chief
+
+webhooks:
+  url: https://hermes.CHANGE-ME.example
+  tunnel: hermes
+
+slack:
+  bot: team-kit
+  channel_id: CHANGE-ME
+  channel_name: team-kit
