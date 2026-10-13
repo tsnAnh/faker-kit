@@ -258,8 +258,13 @@ def test_a_fresh_install_fetches_the_faker_kit_source_by_default(kit_source, mac
     for name in WRAPPERS:
         assert os.access(root / "bin" / name, os.X_OK), name
     py = (root / "bin" / "team-kit-gh").read_text().splitlines()[2].removeprefix("py='").removesuffix("'")
+    kit_script = root / "team-kit" / "kit" / "hermes" / "bin" / "team_kit_gh.py"
     assert (root / "bin" / "faker-kit-gh").read_text() == (
-        f"#!/usr/bin/env bash\nexport TEAM_KIT_HOME='{root / 'team-kit'}'\npy='{py}'\n[ -x \"$py\" ] || py=$(command -v python3) || {{ echo \"faker-kit-gh: no python3 to run it\" >&2; exit 1; }}\nexec \"$py\" '{root / 'team-kit' / 'kit' / 'hermes' / 'bin' / 'team_kit_gh.py'}' \"$@\"\n"
+        "#!/usr/bin/env bash\n"
+        f"export TEAM_KIT_HOME='{root / 'team-kit'}'\n"
+        f"py='{py}'\n"
+        '[ -x "$py" ] || py=$(command -v python3) || { echo "faker-kit-gh: no python3 to run it" >&2; exit 1; }\n'
+        f"exec \"$py\" '{kit_script}' \"$@\"\n"
     )
     assert done.stdout.splitlines()[-2] == f"faker-kit Hermes module installed at kit {sha}. The team-kit-* commands remain, as the same commands."
 
