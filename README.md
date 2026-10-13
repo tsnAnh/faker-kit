@@ -1,4 +1,4 @@
-# team-kit
+# faker-kit
 
 A team kit for Claude Code, Codex, and Pi that makes coding agents trustworthy enough to run many at once, and safe enough for anyone on the team to use.
 
@@ -11,21 +11,21 @@ Pick the one agent you use.
 **Claude Code**
 
 ```text
-/plugin marketplace add tsnAnh/team-kit
-/plugin install trust-ladder@team-kit
+/plugin marketplace add tsnAnh/faker-kit
+/plugin install trust-ladder@faker-kit
 ```
 
 **Codex**
 
 ```bash
-codex plugin marketplace add tsnAnh/team-kit
-for p in trust-ladder pstack team-workflows thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do codex plugin add "$p@team-kit"; done
+codex plugin marketplace add tsnAnh/faker-kit
+for p in trust-ladder pstack team-workflows thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do codex plugin add "$p@faker-kit"; done
 ```
 
 **Pi**
 
 ```bash
-pi install git:github.com/tsnAnh/team-kit
+pi install git:github.com/tsnAnh/faker-kit
 ```
 
 **Hermes**, to dispatch work to cloud agents from Hermes Desktop. From a clone of this repository, run `bash hermes/install.sh --ref <commit> --bootstrap-bot <name>`, then ask the bootstrap bot for a project. See [Dispatch work with Hermes](docs/how-to/dispatch-with-hermes.md).

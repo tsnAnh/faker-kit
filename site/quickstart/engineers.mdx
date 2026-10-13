@@ -11,23 +11,23 @@ By the end of this hour, a repository is set up for agents, an agent has shipped
     <Tabs>
       <Tab title="Claude Code">
         ```text
-        /plugin marketplace add tsnAnh/team-kit
-        /plugin install trust-ladder@team-kit
+        /plugin marketplace add tsnAnh/faker-kit
+        /plugin install trust-ladder@faker-kit
         ```
         This also installs the eight plugins it depends on. `claude plugin list` shows all nine.
       </Tab>
       <Tab title="Codex">
         ```bash
-        codex plugin marketplace add tsnAnh/team-kit
+        codex plugin marketplace add tsnAnh/faker-kit
         for p in trust-ladder pstack team-workflows thermos continual-learning cli-for-agent agent-compatibility advisor teaching; do
-          codex plugin add "$p@team-kit"
+          codex plugin add "$p@faker-kit"
         done
         ```
-        At the first start, type `/hooks` and trust the team-kit hooks.
+        At the first start, type `/hooks` and trust the faker-kit hooks.
       </Tab>
       <Tab title="Pi">
         ```bash
-        pi install git:github.com/tsnAnh/team-kit@<commit sha>
+        pi install git:github.com/tsnAnh/faker-kit@<commit sha>
         ```
         pstack's skills also need the `pi-subagents` and `pi-ask-user` packages.
       </Tab>
@@ -69,7 +69,7 @@ Do these once, after the setup pull request merges:
 | Run | Why |
 |---|---|
 | `/setup-review-bots` | Claude and Codex review every pull request, with no API keys |
-| [Branch protection checklist](https://github.com/tsnAnh/team-kit/blob/main/plugins/trust-ladder/templates/branch-protection.md) | Required checks, resolved threads, and a code owner's approval. This is what makes it safe for anyone to open pull requests |
+| [Branch protection checklist](https://github.com/tsnAnh/faker-kit/blob/main/plugins/trust-ladder/templates/branch-protection.md) | Required checks, resolved threads, and a code owner's approval. This is what makes it safe for anyone to open pull requests |
 | `/setup-cloud-agents` | The repository boots in a fresh cloud session, so agents run in parallel and non-engineers need nothing installed |
 | `/setup-routines` | Nightly upkeep and weekly reports run on a schedule |
 | `/trust-audit` | A score per layer. Keep the first row as your baseline |
