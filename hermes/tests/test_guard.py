@@ -27,9 +27,12 @@ def terminal(command):
     return {"tool_name": "terminal", "args": {"command": command}, "session_id": "s1", "turn_id": "t1"}
 
 
+def alias(command):
+    return re.sub(r"\bteam-kit-(gh|admin|chief)\b", r"faker-kit-\1", command)
+
+
 def both_spellings(cases):
     """Each (command, expected) case as written and with its team-kit-* commands spelled faker-kit-*."""
-    alias = lambda command: re.sub(r"\bteam-kit-(gh|admin|chief)\b", r"faker-kit-\1", command)  # noqa: E731
     return [*cases, *((alias(command), *rest) for command, *rest in cases if alias(command) != command)]
 
 
