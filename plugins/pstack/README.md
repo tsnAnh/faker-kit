@@ -27,7 +27,7 @@ two steps:
 
 new here? the [pstack guide](./docs/guide/README.md) walks you through a first real task, from setup and prompting through verification and overnight runs. stuck, or unsure which skill fits? ask [`/faker-help`](./skills/faker-help/SKILL.md).
 
-that's it. the other skills are situational; the mode skill uses them for you as needed. out of the box the mode splits work by model strength: code delegates (feature, refactoring, bug fix, perf, hillclimb), the hardest changes, prose, judgment, and every seat of the default panel run on your current coding agent's model. [`/setup-pstack`](./skills/setup-pstack/SKILL.md) changes any of it.
+that's it. the other skills are situational; the mode skill uses them for you as needed. out of the box the mode splits work by model strength: code delegates (feature, refactoring, bug fix, perf, hillclimb) and the hardest changes run on `sonnet` (Claude Sonnet 5.5) in Claude Code, and trivial mechanical edits on `haiku` (Claude Haiku 5.5); in Codex and Pi they run on your current coding agent's model. prose, judgment, and every seat of the default panel run on your current coding agent's model. [`/setup-pstack`](./skills/setup-pstack/SKILL.md) changes any of it.
 
 ## usage
 
