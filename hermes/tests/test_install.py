@@ -188,7 +188,7 @@ def test_a_team_kit_home_elsewhere_moves_bin_and_profiles_with_it_and_leaves_hom
 
 
 FAKER_KIT_URL = "https://github.com/tsnAnh/faker-kit.git"
-TEAM_KIT_URL = "https://github.com/tsnAnh/team-kit.git"
+TEAM_KIT_URL = "https://github.com/tsnAnh/team-kit.git"  # legacy team-kit URL; install must never fall back to it
 WRAPPERS = sorted(f"{prefix}-{name}" for prefix in ("faker-kit", "team-kit") for name in ("gh", "admin", "chief", "slack"))
 
 
