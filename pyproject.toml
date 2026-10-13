@@ -65,7 +65,7 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool", "po
 
 # Modules held to strict typing. Move a module here once its baseline markers are gone.
 [[tool.mypy.overrides]]
-module = ["team_kit_contracts", "team_kit_risk", "team_kit_cloud", "team_kit_proposals", "team_kit_andon", "team_kit_incident_sources"]
+module = ["team_kit_contracts", "team_kit_risk", "team_kit_cloud", "team_kit_proposals", "team_kit_andon", "team_kit_incident_sources", "team_kit_machine"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_calls = true

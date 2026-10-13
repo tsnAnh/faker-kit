@@ -83,7 +83,7 @@ Codex code review reads this section. The Claude review routine reads it with RE
 | Manifests, frontmatter, links, and catalog entries are valid | `validate.mjs` in `check.sh` |
 | Generated docs and site pages are current | `gen-catalog.mjs --check`, `gen-site.mjs` in `check.sh` |
 | The python lint pack's rules hold for the kit's Python | `ruff check` in `check.sh` |
-| The six shared `hermes/lib` modules stay fully typed | `mypy` (strict overrides in `pyproject.toml`) in `check.sh` |
+| The seven shared `hermes/lib` modules stay fully typed | `mypy` (strict overrides in `pyproject.toml`) in `check.sh` |
 | Legacy lint and type suppressions only go down | `.agents/ratchet.json` in `check.sh` |
 | `hermes/lib` never imports a command; the guard imports nothing from `lib/` or `bin/` | `.agents/import-boundaries.json` in `check.sh` |
 | Prompts and signing keys never reach argv or logs | tests in `hermes/tests/test_launch.py` and `test_e2e.py` |

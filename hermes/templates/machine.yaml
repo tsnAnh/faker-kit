@@ -1,0 +1,41 @@
+# A whole team-kit Hermes machine. hermes/setup-machine.sh reads this file and rebuilds the machine
+# from it, on any Linux or macOS host; run it again after every change. It holds no secret: the
+# script asks for tokens with hidden input and keeps them in the profiles' .env files.
+version: 1
+
+# The bot that sets up projects (hermes/install.sh --bootstrap-bot).
+bootstrap_bot: team-kit-bootstrap
+# true: every bot's model runs on your Claude subscription through the logged-in Claude Code CLI.
+claude_subscription: true
+# Optional: the kit commit to install. Default: kit_ref in this repository's .agents/dispatch.json.
+# kit_ref: 0123456789abcdef0123456789abcdef01234567
+
+# Written into ~/.hermes/team-kit/guard.yaml; its comments explain each setting.
+guard:
+  trusted_authors:
+    - CHANGE-ME          # your GitHub login
+  ask_owner: true
+  max_in_flight_total: 3
+
+# One project bot per repository.
+projects:
+  - bot: my-project
+    project: my-project
+    repo: CHANGE-ME/repo
+    tick_every: 10m        # the fallback poll; GitHub webhooks start work as events happen
+
+# Optional: the chief of staff across all projects.
+chief:
+  bot: chief
+
+# Optional: GitHub events reach Hermes through a Cloudflare Tunnel at this address, a hostname in a
+# zone of your Cloudflare account. Only the signed webhook paths are public.
+webhooks:
+  url: https://hermes.CHANGE-ME.example
+  tunnel: hermes
+
+# Optional: the outbound-only Slack relay. The bot is one of the project bots above.
+# slack:
+#   bot: my-project
+#   channel_id: C0123456789
+#   channel_name: my-project

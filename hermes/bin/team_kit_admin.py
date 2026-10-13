@@ -36,11 +36,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import dataclasses
 import fcntl
 import importlib.util
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -72,8 +74,10 @@ from team_kit_guard.policy import (
     Policy,
     PolicyError,
     load_policy,
+    parse_policy,
     team_kit_home,
 )
+from team_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, edit_guard, load_machine, route_url, routes, secret_env
 
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
 # The Hermes provider plugin that runs a bot's model through the owner's logged-in Claude Code CLI,
@@ -578,6 +582,75 @@ class Admin:
         self.run(["api", "-X", "PUT", f"repos/{repo}/branches/{branch}/protection", "--input", "-"], input=json.dumps(body))
         return {"repo": repo, "branch": branch, "required_checks": checks}
 
+    def machine(self, path: Path) -> dict:
+        """Make this machine match its machine config: guard settings, project bots, the chief, and the signed
+        GitHub webhooks. Every step is safe to run again. Secrets are never read from or written to the config."""
+        machine = load_machine(path)
+        # Slack names a bot that may not exist yet, so it is switched on only once the bots are.
+        self.write_guard(edit_guard((self.home / "guard.yaml").read_text(), dataclasses.replace(machine, slack=None)))
+        projects, pending = [], []
+        for project in machine.projects:
+            out = self.add_project(project.bot, project.project, project.repo, project.model, project.tick_every, project.incidents_every,
+                                   machine.claude_subscription, security_every=project.security_every)
+            home = profile_home(self.root, project.bot)
+            active = self.has_env(home, "GH_TOKEN")
+            if active:
+                self.activate(project.bot)
+            else:
+                pending.append(f"put GH_TOKEN in {home / '.env'} from your own terminal, then run setup again")
+            projects.append({"bot": project.bot, "repo": project.repo, "active": active, "launch_checkout": out["launch_checkout"]})
+        if machine.chief:
+            self.add_chief(machine.chief, machine.chief_model, machine.claude_subscription)
+        if machine.slack:
+            self.write_guard(edit_guard((self.home / "guard.yaml").read_text(), machine))
+        # Every bot, the bootstrap bot included, takes the new guard settings (approvals follow ask_owner).
+        self.sync()
+        hooks = self.webhooks(machine) if machine.webhook_url else []
+        return {"projects": projects, "chief": machine.chief, "webhooks": hooks, "pending": pending}
+
+    def write_guard(self, text: str) -> None:
+        """Replace guard.yaml whole, and only with text the guard itself accepts."""
+        parse_policy(yaml.safe_load(text), self.bots_file(), self.home)
+        path = self.home / "guard.yaml"
+        tmp = path.with_name(f".guard.yaml.{os.getpid()}")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as out:
+            out.write(text)
+        tmp.replace(path)
+
+    def webhooks(self, machine: Machine) -> list[dict]:
+        """One signed route per bot job, served by the default profile's gateway on loopback only, and one GitHub
+        webhook per route. Each bot's secret lives in the root .env, which the gateway reads; config.yaml and
+        argv only ever carry its ${VAR} name, and GitHub gets it on stdin."""
+        listener = ("platforms", "webhook")
+        config_set(self.root, "default", (*listener, "enabled"), True)
+        config_set(self.root, "default", (*listener, "extra", "host"), WEBHOOK_HOST)
+        config_set(self.root, "default", (*listener, "extra", "port"), WEBHOOK_PORT)
+        done = []
+        for project in machine.projects:
+            key = secret_env(project.bot)
+            secret = self.env_value(self.root, key)
+            if not secret:
+                secret = secrets.token_urlsafe(32)
+                self.set_env(self.root, key, secret)
+            for name, route in routes(project.bot).items():
+                for field, value in route.items():
+                    config_set(self.root, "default", (*listener, "extra", "routes", name, field), value)
+                url = route_url(str(machine.webhook_url), project.bot, name)
+                done.append({"repo": project.repo, "url": url, "hook": self.github_hook(project.repo, url, route["events"], secret)})
+        return done
+
+    def github_hook(self, repo: str, url: str, events: list[str], secret: str) -> str:
+        """Create or update the repository webhook for one URL; "created" or "updated"."""
+        hooks = json.loads(self.run(["api", f"repos/{repo}/hooks?per_page=100"]) or "[]")
+        current = next((h for h in hooks if (h.get("config") or {}).get("url") == url), None)
+        body = {"active": True, "events": events, "config": {"url": url, "content_type": "json", "insecure_ssl": "0", "secret": secret}}
+        if current is None:
+            self.run(["api", "-X", "POST", f"repos/{repo}/hooks", "--input", "-"], input=json.dumps({"name": "web", **body}))
+            return "created"
+        self.run(["api", "-X", "PATCH", f"repos/{repo}/hooks/{int(current['id'])}", "--input", "-"], input=json.dumps(body))
+        return "updated"
+
     def activate(self, bot: str) -> dict:
         policy = self.policy()
         me = policy.bot(bot)
@@ -749,6 +822,8 @@ def parser() -> argparse.ArgumentParser:
     sub = top.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
     sub.add_parser("sync")
+    cmd = sub.add_parser("machine")
+    cmd.add_argument("--config", required=True, help="the machine config, such as .agents/hermes-machine.yaml")
     cmd = sub.add_parser("add-bootstrap")
     cmd.add_argument("--bot", required=True)
     cmd.add_argument("--model")
@@ -783,7 +858,7 @@ def parser() -> argparse.ArgumentParser:
     return top
 
 
-INSTALL_ONLY = ("add-bootstrap", "sync")
+INSTALL_ONLY = ("add-bootstrap", "sync", "machine")
 
 
 def caller() -> str | None:
@@ -820,6 +895,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
             out = admin.status()
         elif args.command == "sync":
             out = admin.sync()
+        elif args.command == "machine":
+            out = admin.machine(Path(args.config))
         elif args.command == "add-bootstrap":
             out = admin.add_bootstrap(args.bot, args.model, args.claude_subscription)
         elif args.command == "add-project":
@@ -839,7 +916,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
             out = admin.andon_raise(args.reason, who) if args.action == "raise" else admin.andon_clear() if args.action == "clear" else admin.andon_show()
         else:
             out = admin.activate(args.bot)
-    except (Refused, InstallError, PolicyError, ContractError, AndonError, yaml.YAMLError) as err:
+    except (Refused, InstallError, MachineError, PolicyError, ContractError, AndonError, yaml.YAMLError) as err:
         print(f"team-kit-admin: refused: {err}", file=sys.stderr)
         return 1
     except Exception as err:  # noqa: BLE001 - the bot gets one refusal line, never a traceback

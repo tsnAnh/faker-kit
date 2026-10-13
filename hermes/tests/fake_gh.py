@@ -24,7 +24,17 @@ def save(name, value):
     (state / name).write_text(json.dumps(value))
 
 
-if args[:2] == ["label", "create"]:
+if args[:2] == ["auth", "status"]:
+    # Like gh, the scopes line names each scope in quotes; FAKE_GH_LOGGED_OUT models no login.
+    if os.environ.get("FAKE_GH_LOGGED_OUT"):
+        print("You are not logged into any GitHub hosts.", file=sys.stderr)
+        sys.exit(1)
+    print("github.com\n  ✓ Logged in to github.com account Codertocat (keyring)\n  - Token scopes: 'admin:repo_hook', 'repo', 'workflow'")
+elif args[:2] == ["auth", "setup-git"]:
+    pass
+elif args[:2] == ["auth", "token"]:
+    print("gho_fake_login_token")
+elif args[:2] == ["label", "create"]:
     labels = load("labels.json", {})
     repo = args[args.index("-R") + 1]
     labels.setdefault(repo, [])
@@ -117,7 +127,25 @@ elif args[0] == "api":
                          "repo": {"full_name": repo, "name": repo.split("/")[1], "owner": {"login": repo.split("/")[0]}}},
                 "base": {"repo": {"full_name": repo}}}
 
-    if rest.endswith("/protection") and method == "PUT":
+    if rest == "/hooks" and method == "GET":
+        # Like GitHub, a listed hook never shows its secret.
+        emit([{**h, "config": {k: v for k, v in h["config"].items() if k != "secret"}} for h in load("hooks.json", {}).get(repo, [])])
+    elif rest == "/hooks" and method == "POST":
+        hooks = load("hooks.json", {})
+        hook = {"id": 1 + sum(len(v) for v in hooks.values()), **json.loads(body)}
+        hooks.setdefault(repo, []).append(hook)
+        save("hooks.json", hooks)
+        emit(hook)
+    elif rest.startswith("/hooks/") and method == "PATCH":
+        hooks = load("hooks.json", {})
+        hook = next((h for h in hooks.get(repo, []) if h["id"] == int(rest.rsplit("/", 1)[1])), None)
+        if hook is None:
+            missing()
+        change = json.loads(body)
+        hook.update({k: v for k, v in change.items() if k != "config"}, config={**hook["config"], **change.get("config", {})})
+        save("hooks.json", hooks)
+        emit(hook)
+    elif rest.endswith("/protection") and method == "PUT":
         protection = load("protection.json", {})
         protection[path] = json.loads(body)
         save("protection.json", protection)

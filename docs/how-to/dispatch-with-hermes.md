@@ -83,9 +83,11 @@ Each tick also records that project's open and closed unit issues in `~/.hermes/
 
 ### 1. The machine
 
-Use an always-on machine, such as a home server or a small VM: scheduled jobs run only while the Hermes gateway runs. Hermes Desktop can connect to it from anywhere. Nothing needs a public address.
+Use an always-on machine, such as a home server, a Raspberry Pi, or a small VM: scheduled jobs run only while the Hermes gateway runs. Hermes Desktop connects to it over SSH from anywhere.
 
-From a clone of the kit on that machine:
+The quickest way is one script and one file. Copy `hermes/templates/machine.yaml` to `.agents/hermes-machine.yaml` in your kit clone, fill it in, commit it, and run `hermes/setup-machine.sh` on the machine. It installs and signs in what is missing, asks for tokens with hidden input, and builds the bots, guard settings, signed GitHub webhooks, Cloudflare Tunnel, Slack relay, and services the file describes. With `webhooks` set, GitHub events start units within seconds instead of at the next tick. Rerun it after any change to the file. See `hermes/README.md`, Install, for what each part does.
+
+To set the machine up by hand instead, from a clone of the kit on that machine:
 
 ```bash
 bash hermes/install.sh --ref <kit commit> --bootstrap-bot <name>
