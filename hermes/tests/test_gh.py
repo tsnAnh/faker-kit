@@ -57,6 +57,9 @@ class FakeGh:
         self.parents = {}  # commit sha -> its parents' shas, for repos/<repo>/commits/<sha>
         self.repo_comments = []
         self.merges, self.merge_error = [], None
+        self.statuses = {}  # commit sha -> legacy commit statuses, as repos/<repo>/commits/<sha>/status lists them
+        self.page_size = None  # smaller than GitHub's 100, so a test reaches the second page cheaply
+        self.fail_paths = {}  # substring of a request path -> the failure it raises
 
     def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small", association="NONE", pull_request=False):  # noqa: E501
         self.next += 1
@@ -83,10 +86,34 @@ class FakeGh:
     def labels(self, repo, n):
         return self.issues[(repo, n)]["labels"]
 
+    def rest_pull(self, repo, number):
+        pull = self.prs[(repo, number)]
+        head_repo = pull.get("headRepo", REPO)
+        return {"number": number, "title": pull.get("title", f"Pull request {number}"), "html_url": f"https://github.com/{repo}/pull/{number}",
+                "state": "open" if pull["state"] == "OPEN" else "closed",
+                "merged_at": pull.get("mergedAt"), "body": pull.get("body", ""), "user": {"login": pull.get("author", BOT_LOGIN)},
+                "labels": pull.get("labels", []),
+                "head": {"sha": pull["headRefOid"], "ref": pull.get("headRefName"),
+                         "repo": {"full_name": head_repo, "name": head_repo.split("/")[1], "owner": {"login": head_repo.split("/")[0]}}},
+                "base": {"repo": {"full_name": repo}}}
+
+    def check_runs(self, sha):
+        if sha in self.runs:
+            return self.runs[sha]
+        for pull in self.prs.values():
+            if pull["headRefOid"] == sha:
+                return [{"name": "ci", "status": str(c["status"]).lower(), "conclusion": str(c["conclusion"]).lower() or None}
+                        for c in pull["statusCheckRollup"] if "status" in c]
+        return []
+
     def __call__(self, args, input=None):
         self.calls.append(args)
+        assert "--paginate" not in args, "pages are read one request at a time through Gh.api_pages"
         if args[0] == "api":
             path = args[-1]
+            for part, failure in self.fail_paths.items():
+                if part in path:
+                    raise Refused(failure)
             include = "--include" in args
             given = None
             for i, word in enumerate(args):
@@ -102,6 +129,16 @@ class FakeGh:
                 self.work += 1
                 extra = f"link: {link}\r\n" if link else ""
                 return f"HTTP/2 200 OK\r\netag: {etag}\r\n{extra}\r\n{body}"
+
+            def paged(rows, key=None):
+                query = urllib.parse.parse_qs(path.split("?", 1)[1]) if "?" in path else {}
+                per_page = min(int((query.get("per_page") or ["30"])[0]), self.page_size or 100)
+                page = int((query.get("page") or ["1"])[0])
+                link = None
+                if len(rows) > page * per_page:
+                    link = f'<https://api.github.com/repositories/1/next?page={page + 1}>; rel="next"'
+                chunk = rows[(page - 1) * per_page:page * per_page]
+                return finish(json.dumps({key: chunk, "total_count": len(rows)} if key else chunk), link)
 
             if "/contents/" in path:
                 name = path.split("/contents/", 1)[1]
@@ -123,25 +160,34 @@ class FakeGh:
                             "user": {"login": i["author"]}, "created_at": i["createdAt"], "closed_at": i["closedAt"],
                             "state_reason": i["state_reason"], **({"pull_request": {}} if i["pull_request"] else {})}
 
-                if "--paginate" in args:  # pages run together, as gh prints them
-                    rows = [row(i) for i in found]
-                    return "".join(json.dumps(rows[at:at + 2]) for at in range(0, len(rows), 2)) if rows else "[]"
-                per_page = min(int((params.get("per_page") or ["30"])[0]), 100)
-                page = int((params.get("page") or ["1"])[0])
-                link = None
-                if len(found) > page * per_page:
-                    link = f'<https://api.github.com/repositories/1/issues?page={page + 1}>; rel="next"'
-                return finish(json.dumps([row(i) for i in found[(page - 1) * per_page:page * per_page]]), link)
-            if path.endswith("/check-runs?per_page=100"):
-                sha = path.split("/commits/")[1].split("/")[0]
-                return finish(json.dumps({"check_runs": self.runs.get(sha, [])}))
+                since = (params.get("since") or [""])[0]
+                if since:
+                    found = [i for i in found if (i["closedAt"] or i["createdAt"]) >= since]
+                return paged([row(i) for i in found])
+            if "/check-runs" in path:
+                return paged(self.check_runs(path.split("/commits/")[1].split("/")[0]), "check_runs")
+            if "/commits/" in path and path.split("?")[0].endswith("/status"):
+                rows = self.statuses.get(path.split("/commits/")[1].split("/")[0], [])
+                return paged(rows, "statuses")
+            if re.search(r"/pulls/\d+/reviews", path):
+                return paged([])
+            if re.search(r"/pulls/\d+(\?|$)", path):
+                return finish(json.dumps(self.rest_pull(path.removeprefix("repos/").split("/pulls/")[0], int(re.search(r"/pulls/(\d+)", path).group(1)))))
+            if path.startswith(f"repos/{REPO}/pulls?") or re.match(r"repos/[^/]+/[^/]+/pulls\?", path):
+                repo = "/".join(path.split("/")[1:3])
+                query = urllib.parse.parse_qs(path.split("?", 1)[1])
+                head = (query.get("head") or [""])[0].partition(":")[2]
+                state = (query.get("state") or ["open"])[0]
+                found = [self.rest_pull(r, n) for (r, n), pull in sorted(self.prs.items())
+                         if r == repo and (state == "all" or pull["state"].lower() == state) and (not head or pull.get("headRefName") == head)]
+                return paged(found)
             if "/commits/" in path:
                 ref = path.split("/commits/")[1]
                 if ref in self.parents:
                     return finish(json.dumps({"sha": ref, "parents": [{"sha": p} for p in self.parents[ref]]}))
                 return finish(json.dumps({"sha": self.main_head}))
             if "/pulls/" in path and "/files" in path:
-                return finish(json.dumps(self.pr_files.get(int(path.split("/pulls/")[1].split("/")[0]), [])))
+                return paged(self.pr_files.get(int(path.split("/pulls/")[1].split("/")[0]), []))
             if "/commits?path=" in path:
                 query = urllib.parse.parse_qs(path.split("?", 1)[1])
                 commits = []
@@ -158,46 +204,15 @@ class FakeGh:
                     raise Refused("gh api failed: HTTP 502")
                 return finish(json.dumps({"permission": self.permissions.get(path.split("/collaborators/")[1].split("/")[0], "none")}))
             repo, rest = path.removeprefix("repos/").split("/issues/")
-            if rest.endswith("/comments"):
-                return finish(json.dumps(self.comments.get((repo, int(rest.split("/")[0])), [])))
+            if rest.split("?")[0].endswith("/comments"):
+                return paged(self.comments.get((repo, int(rest.split("/")[0])), []))
             issue = self.issues[(repo, int(rest))]
-            return finish(json.dumps({"number": issue["number"], "body": issue["body"], "state": issue["state"], "state_reason": issue["state_reason"],
+            return finish(json.dumps({"number": issue["number"], "title": issue["title"], "body": issue["body"], "state": issue["state"], "state_reason": issue["state_reason"],
                                       "labels": [{"name": n} for n in sorted(issue["labels"])], "user": {"login": issue["author"]},
                                       "closed_at": issue["closedAt"]}))
+        assert args[:2] not in (["issue", "list"], ["issue", "view"], ["issue", "status"], ["pr", "list"], ["pr", "view"], ["pr", "status"], ["pr", "checks"]), \
+            f"GraphQL-backed read {args[:2]}: read GitHub through Gh.api_page / Gh.api_json"
         repo = args[args.index("-R") + 1]
-        if args[:2] == ["issue", "list"]:
-            label, state = args[args.index("--label") + 1], args[args.index("--state") + 1]
-            found = [i for (r, _), i in self.issues.items() if r == repo and label in i["labels"] and i["state"] == state]
-            found = sorted(found, key=lambda i: -i["number"])
-            if "--limit" in args:
-                found = found[:int(args[args.index("--limit") + 1])]
-            fields = args[args.index("--json") + 1].split(",")
-
-            def field(issue, name):
-                values = {
-                    "number": issue["number"],
-                    "title": issue["title"],
-                    "url": f"https://github.com/{repo}/issues/{issue['number']}",
-                    "labels": [{"name": n} for n in sorted(issue["labels"])],
-                    "createdAt": issue["createdAt"],
-                    "closedAt": issue["closedAt"],
-                    "stateReason": (issue["state_reason"] or "").upper(),
-                    "body": issue["body"],
-                    "author": {"login": issue["author"]},
-                }
-                return values[name]
-
-            return json.dumps([{name: field(i, name) for name in fields} for i in found])
-        if args[:2] == ["pr", "list"]:
-            state = args[args.index("--state") + 1].upper()
-            found = []
-            assert "--search" not in args, "the unit's PR is read by number or branch, never searched"
-            head = args[args.index("--head") + 1] if "--head" in args else None
-            for (r, number), pr in self.prs.items():
-                if r != repo or pr.get("state") != state or (head and pr.get("headRefName") != head):
-                    continue
-                found.append({"number": number, "url": f"https://github.com/{repo}/pull/{number}", **pr_json(pr)})
-            return json.dumps(found)
         if args[:2] == ["issue", "create"]:
             number = self.add_issue(repo, labels=(args[args.index("--label") + 1],), body=args[args.index("--body") + 1], title=args[args.index("--title") + 1])
             return f"https://github.com/{repo}/issues/{number}\n"
@@ -222,11 +237,6 @@ class FakeGh:
         if args[:2] == ["issue", "comment"]:
             self.comment(repo, int(args[2]), args[args.index("--body") + 1], at=NOW)
             return ""
-        if args[:2] == ["pr", "view"]:
-            pr = self.prs[(repo, int(args[2]))]
-            pr.setdefault("labels", [])
-            return json.dumps({k: v for k, v in {**pr, "url": f"https://github.com/{repo}/pull/{args[2]}", "number": int(args[2]), **pr_json(pr)}.items()
-                               if k in args[-1].split(",")})
         if args[:2] == ["pr", "edit"]:
             pr = self.prs[(repo, int(args[2]))]
             names = {label["name"] for label in pr.setdefault("labels", [])}
@@ -255,8 +265,6 @@ class FakeGh:
             if closes and (repo, int(closes.group(1))) in self.issues:
                 self.issues[(repo, int(closes.group(1)))]["state"] = "closed"
             return ""
-        if args[:2] == ["issue", "view"] or args[:2] == ["pr", "view"]:
-            return "body and comments"
         raise AssertionError(f"unexpected gh call {args}")
 
 
@@ -481,7 +489,7 @@ def test_a_launch_counts_itself_at_once_for_the_other_bots(team_kit_home, gh, ca
     gh.add_issue(REPO, labels=("agent-task", "agent:running"))
     assert dispatch(team_kit_home, gh) == 0
     assert json.loads((team_kit_home / "in-flight" / "meo-beo.json").read_text())["repos"] == {REPO: 2}
-    counted = {c[c.index("-R") + 1] for c in gh.calls if c[:2] == ["issue", "list"]}
+    counted = {c[-1].removeprefix("repos/").split("/issues?")[0] for c in gh.calls if c[0] == "api" and "/issues?" in c[-1] and "labels=agent%3Arunning" in c[-1]}
     assert counted == {REPO}, "a bot never asks GitHub about another project's repository"
 
 
@@ -591,7 +599,7 @@ def test_idle_tick_uses_etags_and_reduces_uncached_github_work(team_kit_home, gh
     first = [c for c in gh.calls if c[0] == "api"]
     assert [c[-1] for c in first] == [
         f"repos/{REPO}/issues?state=open&labels=agent%3Aandon&per_page=100&page=1",
-        f"repos/{REPO}/issues?labels=agent%3Aproposal&state=open&per_page=100",
+        f"repos/{REPO}/issues?labels=agent%3Aproposal&state=open&per_page=100&page=1",
         f"repos/{REPO}/contents/.agents/dispatch.json",
         f"repos/{REPO}/issues/comments?since={since}&per_page=100&page=1",
         f"repos/{REPO}/pulls/comments?since={since}&per_page=100&page=1",
@@ -1339,7 +1347,7 @@ def test_the_unit_pr_is_read_from_the_reports_number_or_its_branch_never_a_searc
     gh.comments[(REPO, other)].append({"user": {"login": BOT_LOGIN}, "body": f"{LAUNCHED_MARKER}\nsession: s2\nbackend: claude\n", "created_at": iso(NOW - 300)})
     cloud2 = FakeCloud()
     tick(gh, capsys, cloud=cloud2)
-    assert any(call[:3] == ["pr", "view", "41"] for call in gh.calls)
+    assert any(call[0] == "api" and call[-1] == f"repos/{REPO}/pulls/41" for call in gh.calls)
     [(_, _, command, _)] = cloud2.started
     assert f"/pull/41 at commit {HEAD}" in command.prompt
 
@@ -1948,20 +1956,21 @@ def test_a_unit_labelled_proposal_is_still_a_unit(team_kit_home, gh, capsys):
     cloud = FakeCloud()
     notices = tick(gh, capsys, cloud)
     assert not any("proposal" in n for n in notices)  # the label is ignored: no proposal notice for a unit
-    assert any(call[:3] == ["api", "--paginate", f"repos/{REPO}/issues/{running}/comments"] for call in gh.calls)  # the running unit was checked, not skipped
+    assert any(call[0] == "api" and call[-1].startswith(f"repos/{REPO}/issues/{running}/comments?") for call in gh.calls)  # the running unit was checked, not skipped
     assert len(cloud.started) == 1 and "agent:running" in gh.labels(REPO, queued)  # the queued unit launched
     assert not seen_file(team_kit_home).exists()
 
 
 def test_seen_drops_closed_issues_and_pagination_reads_every_page(team_kit_home, gh, capsys):
-    numbers = [proposal(gh, title=f"Idea {i}") for i in range(5)]  # the fake serves 2 per page
+    gh.page_size = 2
+    numbers = [proposal(gh, title=f"Idea {i}") for i in range(5)]
     assert len(tick(gh, capsys)) == 5
     assert json.loads(seen_file(team_kit_home).read_text())["seen"] == numbers
     gh.issues[(REPO, numbers[0])]["state"] = "closed"
     gh.issues[(REPO, numbers[1])]["labels"] = {"wontfix"}
     assert tick(gh, capsys) == ["[SILENT]"]
     assert json.loads(seen_file(team_kit_home).read_text())["seen"] == numbers[2:]
-    assert any("--paginate" in call and "issues?" in call[-1] for call in gh.calls)
+    assert any("labels=agent%3Aproposal" in call[-1] and "page=3" in call[-1] for call in gh.calls), "the third page of three was read"
     assert not any("--limit" in call and PROPOSAL_LABEL in call for call in gh.calls)
 
 
@@ -2553,7 +2562,7 @@ def test_a_merge_commit_suspect_proposes_git_revert_m_1(team_kit_home, gh, capsy
     [notice] = poll(gh, capsys)
     fix = f"revert {suspect} (a merge commit: git revert -m 1 {suspect})"
     assert f"If you reply `ok #{n}`, I will brief exactly `{fix}` as a small unit" in notice
-    assert ["api", f"repos/{REPO}/commits/{suspect}"] in gh.calls, "the parent count is read from the GitHub API"
+    assert any(call[0] == "api" and call[-1] == f"repos/{REPO}/commits/{suspect}" for call in gh.calls), "the parent count is read from the GitHub API"
     assert incidents(team_kit_home)["open"]["main"]["triage"]["proposed_fix"] == fix
 
 

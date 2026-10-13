@@ -1,8 +1,10 @@
 """Hermetic gh double for install and team-kit-admin tests; this is not GitHub."""
+import hashlib
 import json
 import os
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 
 state = Path(os.environ["HOME"]) / ".fake-gh"
@@ -75,6 +77,46 @@ elif args[0] == "api":
         posted.setdefault(kind, []).append(value)
         save("posted.json", posted)
 
+    def emit(value, link=None):
+        """Print a response like `gh api`: the body, or with --include the status line, headers, and an ETag that If-None-Match can match."""
+        text = json.dumps(value)
+        if "--include" not in args:
+            print(text)
+            return
+        etag = '"' + hashlib.sha256(text.encode()).hexdigest() + '"'
+        given = next((args[i + 1].split(":", 1)[1].strip() for i, a in enumerate(args) if a == "-H" and args[i + 1].lower().startswith("if-none-match:")), None)
+        with (state / "responses.log").open("a") as responses:
+            responses.write(json.dumps({"path": full, "status": 304 if given == etag else 200}) + "\n")
+        if given == etag:
+            sys.stdout.write(f"HTTP/2.0 304 Not Modified\r\netag: {etag}\r\n\r\n")
+            print("gh: HTTP 304", file=sys.stderr)
+            sys.exit(1)
+        sys.stdout.write(f"HTTP/2.0 200 OK\r\netag: {etag}\r\n" + (f"link: {link}\r\n" if link else "") + f"\r\n{text}")
+
+    def paged(rows, key=None):
+        params = urllib.parse.parse_qs(query)
+        per_page = min(int((params.get("per_page") or ["30"])[0]), int(os.environ.get("FAKE_PAGE_SIZE") or 100))
+        page = int((params.get("page") or ["1"])[0])
+        link = f'<https://api.github.com/repositories/1/next?page={page + 1}>; rel="next"' if len(rows) > page * per_page else None
+        chunk = rows[(page - 1) * per_page:page * per_page]
+        emit({key: chunk, "total_count": len(rows)} if key else chunk, link)
+
+    def issue_row(issue):
+        names = issue.get("labels") or [issue["label"]]
+        return {"number": issue["number"], "title": issue["title"], "body": issue["body"], "state": issue["state"], "labels": [{"name": n} for n in names],
+                "user": {"login": issue.get("author", "verify-bot")}, "author_association": issue.get("association", "OWNER"),
+                "created_at": issue.get("created_at", "2026-10-01T00:00:00Z"), "closed_at": issue.get("closed_at"), "state_reason": issue.get("state_reason"),
+                **({"pull_request": {}} if issue.get("pull_request") else {})}
+
+    def pull_row(number, pull):
+        head = pull["head"] if isinstance(pull["head"], dict) else {"ref": pull["head"]}
+        return {**pull, "number": number, "title": pull.get("title", ""), "html_url": pull.get("html_url", f"https://github.com/{repo}/pull/{number}"),
+                "state": pull.get("state", "open"),
+                "merged_at": pull.get("merged_at"), "body": pull.get("body", ""), "user": {"login": pull.get("author", "verify-bot")}, "labels": pull.get("labels", []),
+                "head": {"sha": head.get("sha", "a" * 40), "ref": head["ref"],
+                         "repo": {"full_name": repo, "name": repo.split("/")[1], "owner": {"login": repo.split("/")[0]}}},
+                "base": {"repo": {"full_name": repo}}}
+
     if rest.endswith("/protection") and method == "PUT":
         protection = load("protection.json", {})
         protection[path] = json.loads(body)
@@ -121,8 +163,44 @@ elif args[0] == "api":
         record("commits", json.loads(body))
         print(json.dumps({"sha": "commit1"}))
     elif rest == "/pulls" and method == "GET":
-        pulls = [{**pr, "head": {"ref": pr["head"]} if isinstance(pr["head"], str) else pr["head"]} for pr in load("pulls.json", {}).get(repo, [])]
-        print(json.dumps(pulls))
+        wanted = urllib.parse.parse_qs(query)
+        branch = (wanted.get("head") or [""])[0].partition(":")[2]
+        listed = [pull_row(index + 7, pr) for index, pr in enumerate(load("pulls.json", {}).get(repo, []))]
+        listed = [p for p in listed if (not branch or p["head"]["ref"] == branch) and p["state"] == (wanted.get("state") or [p["state"]])[0]]
+        if "--include" in args or query:
+            paged(listed)
+        else:
+            print(json.dumps([{**pr, "head": {"ref": pr["head"]} if isinstance(pr["head"], str) else pr["head"]} for pr in load("pulls.json", {}).get(repo, [])]))
+    elif rest.startswith("/pulls/") and method == "GET" and rest.split("/")[2].isdigit() and len(rest.split("/")) == 3:
+        number = int(rest.split("/")[2])
+        listed = load("pulls.json", {}).get(repo, [])
+        if not 7 <= number < 7 + len(listed):
+            missing()
+        emit(pull_row(number, listed[number - 7]))
+    elif rest == "/issues" and method == "GET":
+        wanted = urllib.parse.parse_qs(query)
+        label, want = (wanted.get("labels") or [""])[0], (wanted.get("state") or ["open"])[0]
+        since = (wanted.get("since") or [""])[0]
+        found = [i for i in load("issues.json", {}).get(repo, []) if label in (i.get("labels") or [i["label"]]) and i["state"] == want
+                 and (not since or (i.get("closed_at") or i.get("created_at", "2026-10-01T00:00:00Z")) >= since)]
+        paged([issue_row(i) for i in sorted(found, key=lambda i: i["number"])])
+    elif rest.startswith("/pulls/") and method == "GET" and rest.endswith("/reviews"):
+        paged([])
+    elif rest.startswith("/issues/") and method == "GET" and rest.endswith("/comments"):
+        paged(load("comments.json", {}).get(f"{repo}#{rest.split('/')[2]}", []))
+    elif rest.startswith("/issues/") and method == "GET" and rest.split("/")[2].isdigit():
+        found = [i for i in load("issues.json", {}).get(repo, []) if i["number"] == int(rest.split("/")[2])]
+        if not found:
+            missing()
+        emit(issue_row(found[0]))
+    elif rest.startswith("/commits/") and rest.endswith("/check-runs"):
+        paged(load("checks.json", {}).get(rest.split("/")[2], {}).get("runs", []), "check_runs")
+    elif rest.startswith("/commits/") and rest.endswith("/status"):
+        paged(load("checks.json", {}).get(rest.split("/")[2], {}).get("statuses", []), "statuses")
+    elif rest.startswith("/commits/") and method == "GET":
+        emit({"sha": load("heads.json", {}).get(rest.split("/")[2], "c" * 40), "parents": []})
+    elif rest.startswith("/collaborators/") and rest.endswith("/permission"):
+        emit({"permission": load("permissions.json", {}).get(rest.split("/")[2], "none")})
     elif rest == "/pulls" and method == "POST":
         pull = json.loads(body)
         pulls = load("pulls.json", {})

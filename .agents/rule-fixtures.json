@@ -1,3 +1,11 @@
 {
-  "rules": []
+  "rules": [
+    {
+      "id": "gh-graphql-read",
+      "run": "node scripts/agent-checks/ratchet.mjs file --rule gh-graphql-read {file}",
+      "bad": ".agents/rule-fixtures/gh-graphql-read/bad.txt",
+      "good": ".agents/rule-fixtures/gh-graphql-read/good.txt",
+      "expect": "gh-graphql-read: 9 found"
+    }
+  ]
 }

@@ -1,0 +1,12 @@
+# Permitted: REST reads and the writes that stay on the CLI.
+issues = gh.api_pages(f"repos/{gh.repo}/issues", {"labels": label, "state": "open"})
+pull = self.api_json(f"repos/{self.repo}/pulls/{number}")
+self.run(["issue", "create", "-R", self.repo, "--title", title])
+self.run(["issue", "comment", str(number), "-R", self.repo, "--body", text])
+self.run(["issue", "close", str(number), "-R", self.repo])
+self.run(["issue", "edit", str(number), "-R", self.repo, "--add-label", name])
+self.run(["pr", "edit", str(pr), "-R", self.repo, "--add-label", name])
+self.run(["pr", "comment", str(pr), "-R", self.repo, "--body", text])
+self.run(["pr", "merge", str(pr), "-R", self.repo, "--merge"])
+self.run(["api", f"repos/{self.repo}/issues/{number}"])
+note = "Comment on the issue, then view the list of pr checks in the web UI."

@@ -92,6 +92,7 @@ Codex code review reads this section. The Claude review routine reads it with RE
 | Commit messages carry no AI or agent references | `scripts/check-commit-messages.mjs` in `check.sh` (promoted from STYLE.md) |
 | Prefer a vendored skill to a second trust-ladder skill | review (REVIEW.md) |
 | Cloud skills use `gh api` REST, not GraphQL-backed subcommands | review (REVIEW.md) |
+| `team-kit-gh` reads GitHub only through `Gh.api_page` / `Gh.api_json`, never a GraphQL-backed `gh issue` / `gh pr` read | the zero-allowance `gh-graphql-read` rule in `.agents/ratchet.json`, proven by `.agents/rule-fixtures.json`, in `check.sh` |
 
 ## Dispatch
 
