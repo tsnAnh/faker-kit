@@ -83,6 +83,8 @@ from team_kit_guard.policy import (
 from team_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, edit_guard, load_machine, route_url, routes, secret_env
 
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
+# The Hermes profile setting that loads skills from folders outside the profile (machine config `skills`).
+KIT_SKILL_DIRS = ("skills", "external_dirs")
 # The Hermes provider plugin that runs a bot's model through the owner's logged-in Claude Code CLI,
 # so the bot needs no API key. It holds no credentials; the CLI's config directory holds the login.
 CLAUDE_SUBSCRIPTION_PLUGIN = "claude-subscription-directsdk"
@@ -589,6 +591,8 @@ class Admin:
         """Make this machine match its machine config: guard settings, project bots, the chief, and the signed
         GitHub webhooks. Every step is safe to run again. Secrets are never read from or written to the config."""
         machine = load_machine(path)
+        # A wrong plugin name stops setup here, before anything changes.
+        kit_skill_dirs = self.kit_skill_dirs(machine)
         # Slack names a bot that may not exist yet, so it is switched on only once the bots are.
         self.write_guard(edit_guard((self.home / "guard.yaml").read_text(), dataclasses.replace(machine, slack=None)))
         projects, pending = [], []
@@ -608,8 +612,48 @@ class Admin:
             self.write_guard(edit_guard((self.home / "guard.yaml").read_text(), machine))
         # Every bot, the bootstrap bot included, takes the new guard settings (approvals follow ask_owner).
         self.sync()
+        skills = self.kit_skills(machine, kit_skill_dirs)
         hooks = self.webhooks(machine) if machine.webhook_url else []
-        return {"projects": projects, "chief": machine.chief, "webhooks": hooks, "pending": pending}
+        return {"projects": projects, "chief": machine.chief, "skills": skills, "webhooks": hooks, "pending": pending}
+
+    def kit_skill_dirs(self, machine: Machine) -> list[str]:
+        wanted = []
+        for name in machine.skills:
+            folder = self.kit / "plugins" / name / "skills"
+            if not folder.is_dir():
+                raise Refused(f"skills: the kit has no plugin {name} with skills")
+            wanted.append(str(folder))
+        return wanted
+
+    def kit_skills(self, machine: Machine, wanted: list[str]) -> list[str]:
+        """Point the owner's default profile, the bootstrap bot, and every bot in bots.yaml at the skills of the kit
+        plugins the machine config lists, in the installed kit, so a kit update updates them. Skill folders from
+        anywhere else stay; a kit plugin dropped from the config is dropped from each. Returns the profiles covered."""
+        plugins = (self.kit / "plugins").resolve()
+        covered = []
+        for profile in dict.fromkeys(["default", machine.bootstrap_bot, *self.bots_file()["bots"]]):
+            home = profile_home(self.root, profile)
+            if not home.is_dir():
+                continue
+            current = value_at(mapping(home / "config.yaml"), KIT_SKILL_DIRS)
+            if isinstance(current, str):  # Hermes also takes a single folder
+                current = [current]
+            if current is not None and not isinstance(current, list):
+                raise Refused(f"{profile}: skills.external_dirs must be a folder or a list of folders")
+            kept = [d for d in current or [] if not (isinstance(d, str) and self.under(d, home, plugins))]
+            if kept + wanted != (current or []):
+                config_set(self.root, profile, KIT_SKILL_DIRS, kept + wanted)
+            covered.append(profile)
+        return covered
+
+    @staticmethod
+    def under(entry: str, home: Path, folder: Path) -> bool:
+        """Whether a skills folder entry lies in folder, read the way Hermes reads it: relative to the profile's home."""
+        path = Path(os.path.expandvars(entry)).expanduser()
+        try:
+            return (home / path).resolve().is_relative_to(folder)
+        except (OSError, RuntimeError):  # a symlink loop is the owner's to fix, not ours to drop
+            return False
 
     def write_guard(self, text: str) -> None:
         """Replace guard.yaml whole, and only with text the guard itself accepts."""

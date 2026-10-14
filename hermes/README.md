@@ -20,7 +20,7 @@ cp hermes/templates/machine.yaml .agents/hermes-machine.yaml   # fill it in, com
 hermes/setup-machine.sh
 ```
 
-`setup-machine.sh` installs what is missing (gh, Claude Code, Hermes, cloudflared, PyYAML), asks you to sign in where needed, asks for each token with hidden input, installs the kit (`install.sh`), sets up the bots, guard settings, and signed GitHub webhooks (`team-kit-admin machine`), runs the gateway, the Cloudflare Tunnel, and the Slack relay as services, and checks the result end to end. Run it again after any change; it changes only what differs. Run `hermes/setup-machine.sh --help` for its flags.
+`setup-machine.sh` installs what is missing (gh, Claude Code, Hermes, cloudflared, PyYAML), asks you to sign in where needed, asks for each token with hidden input, installs the kit (`install.sh`), sets up the bots, guard settings, and signed GitHub webhooks (`team-kit-admin machine`), points your default Hermes profile and every kit bot at the kit plugins' skills the config lists under `skills` (pstack in the template), runs the gateway, the Cloudflare Tunnel, and the Slack relay as services, and checks the result end to end. Run it again after any change; it changes only what differs. Run `hermes/setup-machine.sh --help` for its flags.
 
 To set up a machine by hand instead:
 

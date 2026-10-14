@@ -114,6 +114,9 @@ def kit_source(tmp_path_factory):
     ignore = shutil.ignore_patterns("__pycache__", ".pytest_cache", "node_modules")
     shutil.copytree(KIT / "plugins" / "trust-ladder", src / "plugins" / "trust-ladder", ignore=ignore)
     shutil.copytree(HERMES, src / "hermes", ignore=ignore)
+    # A vendored plugin with skills, for the machine config's `skills`.
+    (src / "plugins" / "pstack" / "skills" / "faker-mode").mkdir(parents=True)
+    (src / "plugins" / "pstack" / "skills" / "faker-mode" / "SKILL.md").write_text("---\nname: faker-mode\ndescription: stub\n---\n")
     git(src, "init", "-q")
     git(src, "config", "uploadpack.allowAnySHA1InWant", "true")
     git(src, "add", ".")
