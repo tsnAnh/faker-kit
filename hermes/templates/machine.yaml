@@ -14,6 +14,7 @@ claude_subscription: true
 # straight from the installed kit, so a kit update updates them. Remove a name to remove its skills.
 skills:
   - pstack
+  - trust-ladder
 
 # Written into ~/.hermes/team-kit/guard.yaml; its comments explain each setting.
 guard:
