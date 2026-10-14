@@ -5,6 +5,9 @@ version: 1
 bootstrap_bot: team-kit-bootstrap
 claude_subscription: true
 
+skills:
+  - pstack
+
 guard:
   trusted_authors:
     - tsnAnh

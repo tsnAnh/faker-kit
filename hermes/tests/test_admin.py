@@ -780,6 +780,9 @@ def machine_config(root, **changes):
     ({"slack": {"bot": "chanh-van", "channel_id": "C0ABCDEF12", "channel_name": "shop"}}, "one of the project bots"),
     ({"guard": {"trusted_authors": [], "ask_owner": False}}, "trusted_authors"),
     ({"version": 2}, "version must be 1"),
+    ({"skills": ["../pstack"]}, "kit plugin names"),
+    ({"skills": "pstack"}, "kit plugin names"),
+    ({"skills": ""}, "kit plugin names"),
     ({"guard": {"trusted_authors": ["CHANGE-ME"]}}, "still lists CHANGE-ME"),
     ({"projects": [{"bot": "a-b", "project": "a", "repo": "acme/a"}, {"bot": "a_b", "project": "b", "repo": "acme/b"}]}, "share a webhook secret"),
 ])
@@ -852,6 +855,37 @@ def test_machine_sets_up_bots_and_signed_webhooks_and_keeps_secrets_out_of_argv_
     assert [h["hook"] for h in out["webhooks"]] == ["updated", "updated"], "a second run never adds a second hook"
     assert len(json.loads((root.parent / ".fake-gh" / "hooks.json").read_text())[SHOP]) == 2
     assert f"TEAM_KIT_WEBHOOK_SECRET_MEO_BEO={secret}" in env.read_text(), "the secret is kept, so GitHub and Hermes still agree"
+
+
+def test_machine_points_every_profile_at_the_kit_skills_it_lists(ready):
+    root, _ = ready
+    (root / "config.yaml").write_text(yaml.safe_dump({"skills": {"external_dirs": ["/owner/skills", "team-kit/kit/plugins/gone/skills"]}}))
+    (root / "profiles" / "ong-xay" / "config.yaml").write_text(yaml.safe_dump({"skills": {"external_dirs": "~/mine"}}))
+    pstack = str(root / "team-kit" / "kit" / "plugins" / "pstack" / "skills")
+
+    def dirs(profile):
+        home = root if profile == "default" else root / "profiles" / profile
+        return yaml.safe_load((home / "config.yaml").read_text())["skills"]["external_dirs"]
+
+    code, out = admin(ready, "machine", "--config", str(machine_config(root, skills=["pstack"])))
+    assert code == 0, out
+    assert out["skills"] == ["default", "ong-xay", "chanh-van", "meo-beo"], "the owner's profile and every bot"
+    assert dirs("default") == ["/owner/skills", pstack], "the owner's folder stays; a kit plugin no longer listed goes"
+    assert dirs("ong-xay") == ["~/mine", pstack], "a single folder, which Hermes also accepts, stays"
+    assert all(dirs(bot) == [pstack] for bot in ("chanh-van", "meo-beo"))
+
+    sets = len([c for c in hermes_calls(root) if "skills.external_dirs" in c])
+    assert admin(ready, "machine", "--config", str(machine_config(root, skills=["pstack"])))[0] == 0
+    assert len([c for c in hermes_calls(root) if "skills.external_dirs" in c]) == sets, "a second run changes nothing"
+
+    assert admin(ready, "machine", "--config", str(machine_config(root)))[0] == 0
+    assert dirs("default") == ["/owner/skills"] and dirs("meo-beo") == [], "removing a name removes its skills"
+
+    guard = (root / "team-kit" / "guard.yaml").read_text()
+    calls = len(hermes_calls(root))
+    code, err = admin(ready, "machine", "--config", str(machine_config(root, skills=["nope"], guard={**MACHINE["guard"], "max_in_flight_total": 9})))
+    assert code == 1 and "no plugin nope" in err
+    assert (root / "team-kit" / "guard.yaml").read_text() == guard and len(hermes_calls(root)) == calls, "a wrong name changes nothing"
 
 
 def test_machine_runs_only_from_a_plain_shell(ready):

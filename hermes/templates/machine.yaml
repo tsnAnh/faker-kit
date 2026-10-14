@@ -10,6 +10,11 @@ claude_subscription: true
 # Optional: the kit commit to install. Default: kit_ref in this repository's .agents/dispatch.json.
 # kit_ref: 0123456789abcdef0123456789abcdef01234567
 
+# Kit plugins whose skills your default Hermes profile and every kit bot load,
+# straight from the installed kit, so a kit update updates them. Remove a name to remove its skills.
+skills:
+  - pstack
+
 # Written into ~/.hermes/team-kit/guard.yaml; its comments explain each setting.
 guard:
   trusted_authors:

@@ -71,6 +71,7 @@ class Machine:
     tunnel: str | None = None
     slack: Slack | None = None
     kit_ref: str | None = None
+    skills: tuple[str, ...] = ()
 
 
 def _mapping(value: object, where: str) -> dict[str, object]:
@@ -148,9 +149,13 @@ def parse_machine(data: object) -> Machine:
         if slack.bot not in bots:
             raise MachineError(f"slack.bot {slack.bot} must be one of the project bots")
     kit_ref = _text(top, "kit_ref", "machine config", re.compile(r"\A[0-9a-f]{40}\Z"), required=False)
+    skills = [] if top.get("skills") is None else top["skills"]
+    if not isinstance(skills, list) or not all(isinstance(s, str) and NAME.match(s) for s in skills):
+        raise MachineError("skills must list kit plugin names, such as pstack")
     return Machine(bootstrap_bot=bootstrap, trusted_authors=tuple(authors), ask_owner=ask_owner, max_in_flight_total=total,
                    claude_subscription=subscription, projects=tuple(projects), chief=chief_bot,
-                   chief_model=_text(chief, "model", "chief", required=False), webhook_url=url, tunnel=tunnel, slack=slack, kit_ref=kit_ref)
+                   chief_model=_text(chief, "model", "chief", required=False), webhook_url=url, tunnel=tunnel, slack=slack, kit_ref=kit_ref,
+                   skills=tuple(dict.fromkeys(skills)))
 
 
 def load_machine(path: Path) -> Machine:

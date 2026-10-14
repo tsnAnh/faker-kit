@@ -205,6 +205,8 @@ import json, sys
 out = json.loads(sys.argv[1])
 for project in out["projects"]:
     print(f"    {project['bot']}: {project['repo']}")
+if out["skills"]:
+    print(f"    kit skills in: {', '.join(out['skills'])}")
 for hook in out["webhooks"]:
     print(f"    webhook {hook['hook']}: {hook['url']}")
 for line in out["pending"]:
