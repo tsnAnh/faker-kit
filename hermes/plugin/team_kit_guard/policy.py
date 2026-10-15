@@ -62,16 +62,17 @@ REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SLACK_CHANNEL_ID = re.compile(r"\A[CG][A-Z0-9]{2,}\Z")
 SLACK_CHANNEL_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,79}\Z")
 
-PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "code", "kit-check")  # noqa: E501
+PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "merge", "close", "code", "kit-check")  # noqa: E501
 BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon", "setup-request", "discover", "adopt")
 BOOTSTRAP_READ_ONLY = ("status", "discover")
+CLEAN_TURN_COMMANDS = ("merge", "close")
 # The chief of staff reads every project and hands work over by message. Its one write is `new-project`;
 # unless ask_owner is off, the guard asks the owner to approve it every time.
 CHIEF_COMMANDS = ("projects", "status", "show", "new-project", "andon")
 CHIEF_APPROVALS = {
     "new-project": "The chief bot asks the bootstrap bot to set up a new project for this repository. Approve only if you asked for that project.",
 }
-ARG = r"[A-Za-z0-9_./:#=@~,+-]+"
+ARG = r"[A-Za-z0-9_./:=@~,+-][A-Za-z0-9_./:#=@~,+-]*"
 
 MIGRATE_V1 = (
     "guard.yaml is version 1. team-kit now keeps bots in bots.yaml: set `version: 2` in guard.yaml, "
@@ -414,6 +415,9 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
         if not any(fnmatch.fnmatchcase(target, p) for p in allowed):
             where = ", ".join(allowed) if allowed else "nowhere"
             return block(f"{bot.role} bot {profile} may only write {where}")
+    words = command.split()
+    if tainted and bot.role == "project" and tool_name == "terminal" and len(words) > 1 and words[1] in CLEAN_TURN_COMMANDS:
+        return block(f"{words[1]} runs only in a turn that read nothing untrusted; the owner or the chief of staff must ask for it in a new message")
     read_only = tool_name in policy.read_only_tools
     if not policy.ask_owner:
         return None

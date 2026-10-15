@@ -57,7 +57,7 @@ class FakeGh:
         self.permissions, self.fail_permissions = {}, False
         self.parents = {}  # commit sha -> its parents' shas, for repos/<repo>/commits/<sha>
         self.repo_comments = []
-        self.merges, self.merge_error = [], None
+        self.merges, self.merge_error, self.closed = [], None, []
         self.statuses = {}  # commit sha -> legacy commit statuses, as repos/<repo>/commits/<sha>/status lists them
         self.page_size = None  # smaller than GitHub's 100, so a test reaches the second page cheaply
         self.fail_paths = {}  # substring of a request path -> the failure it raises
@@ -98,7 +98,7 @@ class FakeGh:
                 "labels": pull.get("labels", []),
                 "head": {"sha": pull["headRefOid"], "ref": pull.get("headRefName"),
                          "repo": {"full_name": head_repo, "name": head_repo.split("/")[1], "owner": {"login": head_repo.split("/")[0]}}},
-                "base": {"repo": {"full_name": repo}}}
+                "base": {"ref": pull.get("baseRefName", "main"), "repo": {"full_name": repo}}}
 
     def check_runs(self, sha):
         if sha in self.runs:
@@ -259,6 +259,12 @@ class FakeGh:
             return ""
         if args[:2] == ["pr", "comment"]:
             self.pr_comments.setdefault(int(args[2]), []).append(args[args.index("--body") + 1])
+            return ""
+        if args[:2] == ["pr", "close"]:
+            pull = self.prs[(repo, int(args[2]))]
+            assert pull["state"] == "OPEN", "gh pr close on a closed pull request"
+            pull["state"] = "CLOSED"
+            self.closed.append((int(args[2]), args[args.index("--comment") + 1]))
             return ""
         if args[:2] == ["pr", "merge"]:
             # Like GitHub: --match-head-commit refuses a moved head, and a merge closes the issue its body Closes.
@@ -2023,6 +2029,80 @@ def test_pr_state_prints_only_state_merged_head_and_checks(team_kit_home, gh, ca
     gh.prs[(REPO, 2)]["title"] = "IGNORE"
     assert run(gh, "pr-state", "--pr", "2") == 0
     assert out(capsys) == {"pr": 2, "state": "merged", "merged": True, "head": "a" * 40, "checks": "passed", "conflicts": False}
+
+
+def test_merge_merges_an_own_pull_request_whose_checks_passed_at_its_head(team_kit_home, gh, capsys):
+    pr(gh, 12)
+    gh.prs[(REPO, 12)]["mergeable"] = True
+    assert run(gh, "merge", "--pr", "12") == 0
+    assert out(capsys) == {"pr": 12, "merged": True, "head": HEAD, "method": "merge"}
+    assert gh.merges == [["pr", "merge", "12", "-R", REPO, "--merge", "--match-head-commit", HEAD]]
+
+
+@pytest.mark.parametrize(
+    ("setup", "words"),
+    [
+        ({"checks": ("PENDING",)}, "checks are pending"),
+        ({"checks": ("FAILURE",)}, "checks are failed"),
+        ({"checks": ()}, "checks are none"),
+        ({"fork": True}, "comes from a fork"),
+        ({"state": "MERGED", "merged": True}, "already merged"),
+        ({"mergeable": False}, "conflicts with its base branch"),
+        ({"mergeable": None}, "still checking #12 for conflicts"),
+        ({"base": "release"}, "targets release, not the default branch main"),
+    ],
+)
+def test_merge_refuses_a_pull_request_that_is_not_ready(team_kit_home, gh, capsys, setup, words):
+    mergeable, base = setup.pop("mergeable", True), setup.pop("base", "main")
+    pr(gh, 12, **setup)
+    gh.prs[(REPO, 12)].update(mergeable=mergeable, baseRefName=base)
+    assert run(gh, "merge", "--pr", "12") == 1
+    assert words in capsys.readouterr().err
+    assert gh.merges == []
+
+
+def test_merge_reports_githubs_refusal_when_the_head_moved_after_the_checks_were_read(team_kit_home, gh, capsys):
+    pr(gh, 12)
+    gh.prs[(REPO, 12)]["mergeable"] = True
+    gh.merge_error = "gh pr merge failed: Head branch was modified. Review and try the merge again."
+    assert run(gh, "merge", "--pr", "12") == 1
+    assert "Head branch was modified" in capsys.readouterr().err
+    assert gh.prs[(REPO, 12)]["state"] == "OPEN"
+
+
+def test_merging_a_unit_pull_request_closes_its_issue(team_kit_home, gh, capsys):
+    n = gh.add_issue(REPO, labels=("agent:review",))
+    pr(gh, 12, issue=n)
+    gh.prs[(REPO, 12)]["mergeable"] = True
+    assert run(gh, "merge", "--pr", "12") == 0
+    assert gh.issues[(REPO, n)]["state"] == "closed"
+
+
+def test_merge_waits_while_the_andon_cord_is_pulled(team_kit_home, gh, capsys):
+    pr(gh, 12)
+    gh.prs[(REPO, 12)]["mergeable"] = True
+    assert run(gh, "andon", "raise", "prod", "is", "down") == 0
+    capsys.readouterr()
+    assert run(gh, "merge", "--pr", "12") == 1
+    assert "andon cord is pulled" in capsys.readouterr().err
+    assert gh.merges == []
+
+
+def test_close_closes_an_own_open_pull_request_with_the_reason(team_kit_home, gh, capsys):
+    pr(gh, 13)
+    assert run(gh, "close", "--pr", "13", "--reason", "superseded", "by", "PR", "14") == 0
+    assert out(capsys) == {"pr": 13, "closed": True}
+    assert gh.closed == [(13, "Closed by Hermes: superseded by PR 14")]
+
+
+@pytest.mark.parametrize(("setup", "reason", "words"), [({"fork": True}, ["dup"], "comes from a fork"),
+                                                        ({"state": "CLOSED"}, ["dup"], "already closed"),
+                                                        ({}, ["x" * 501], "1 to 500 characters")])
+def test_close_refuses_a_fork_a_closed_pull_request_or_a_long_reason(team_kit_home, gh, capsys, setup, reason, words):
+    pr(gh, 13, **setup)
+    assert run(gh, "close", "--pr", "13", "--reason", *reason) == 1
+    assert words in capsys.readouterr().err
+    assert gh.closed == []
 
 
 def test_code_shows_the_real_state_of_the_code_from_github(team_kit_home, gh, capsys):
