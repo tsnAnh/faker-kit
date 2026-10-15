@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import contextvars
+import hashlib
 import logging
 import os
 import re
@@ -46,6 +47,12 @@ CHIEF_WORK_CONTEXT = (
     "words, brief, and dispatch them, then reply to the chief with the issue numbers."
 )
 RELAYED = re.compile(r"\A(?:Message from [^\n()]{0,120}\(@([a-z0-9][a-z0-9_-]{0,63})\): |\[IMPORTANT: Background process )")
+ROLE_SKILL = {"project": "dispatch", "chief": "chief", "bootstrap": "bootstrap"}
+SKILL_RELOAD_CONTEXT = (
+    "The {skill} skill on this machine is newer than the copy this chat loaded, or this chat began before Hermes last "
+    "restarted. Load the {skill} skill again now. Where it differs from anything earlier in this chat, including what "
+    "this chat said a bot can or cannot do, the new text wins."
+)
 # Which notice each role may act on: the bootstrap bot a chief project request.
 ACTIONABLE = {"bootstrap": (REQUEST_NOTICE, REQUEST_CONTEXT)}
 
@@ -60,11 +67,21 @@ def current_profile() -> str:
         return home.name if home.parent.name == "profiles" else "default"
 
 
+def kit_skill_digest(policy: Policy, skill: str) -> str | None:
+    try:
+        return hashlib.sha256((policy.home / "kit" / "hermes" / "skills" / skill / "SKILL.md").read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
 class Guard:
-    def __init__(self, load: Callable[[], Policy], profile: Callable[[], str], timeout: float = DECISION_TIMEOUT_SECONDS):  # noqa: ANN204
+    def __init__(self, load: Callable[[], Policy], profile: Callable[[], str], timeout: float = DECISION_TIMEOUT_SECONDS,  # noqa: ANN204
+                 skill_digest: Callable[[Policy, str], str | None] | None = None):
         self._load = load
         self._profile = profile
         self._timeout = timeout
+        self._skill_digest = skill_digest
+        self._skills: dict[str, str] = {}
         self._tainted: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="team-kit-guard")
@@ -110,10 +127,34 @@ class Guard:
         return wrap_untrusted(source, result)
 
     def check_message(self, user_message="", session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
+        out = self._message_verdict(str(user_message or ""), session_id, turn_id)
+        reload = self._skill_reload(session_id)
+        if reload is None:
+            return out
+        return {"context": f"{out['context']}\n\n{reload}" if out and out.get("context") else reload}
+
+    def _skill_reload(self, session_id: object) -> str | None:
+        if self._skill_digest is None:
+            return None
+        try:
+            policy = self._bounded(self._load)
+            bot = policy.bots.get(self._profile())
+            skill = ROLE_SKILL.get(bot.role) if bot else None
+            digest = self._skill_digest(policy, skill) if skill else None
+        except Exception:
+            logger.exception("team-kit guard could not read the bot's skill; no reload reminder")
+            return None
+        if skill is None or digest is None:
+            return None
+        with self._lock:
+            seen = self._skills.get(str(session_id or ""))
+            self._skills[str(session_id or "")] = digest
+        return None if seen == digest else SKILL_RELOAD_CONTEXT.format(skill=skill)
+
+    def _message_verdict(self, text: str, session_id: object, turn_id: object) -> dict | None:
         """A cron notice delivered into Bot Chat arrives as a turn. It must not act like the owner, except that with
         ask_owner off a chief project request to the bootstrap bot, or the chief's work message to a project bot, is the
         owner's standing go-ahead. Text inside <untrusted> never counts."""
-        text = str(user_message or "")
         work = CHIEF_WORK.match(text)
         if work:
             go = self._chief_work(work.group(1))
@@ -166,7 +207,7 @@ class Guard:
 
 
 def register(ctx) -> None:  # noqa: ANN001
-    guard = Guard(load=load_policy, profile=current_profile)
+    guard = Guard(load=load_policy, profile=current_profile, skill_digest=kit_skill_digest)
     ctx.register_hook("pre_tool_call", guard.pre_tool_call)
     ctx.register_hook("transform_tool_result", guard.transform_tool_result)
     ctx.register_hook("pre_llm_call", guard.check_message)

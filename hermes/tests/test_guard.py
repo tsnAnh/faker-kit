@@ -607,6 +607,26 @@ def test_an_owner_message_is_not_tainted():
     assert not g.is_tainted("s1", "t1")
 
 
+def test_a_chat_is_told_once_to_reload_its_skill_and_again_when_the_skill_changes():
+    skills = {"dispatch": "v1"}
+    g = Guard(load=quiet_policy, profile=lambda: "meo-beo", skill_digest=lambda policy, skill: skills.get(skill))
+    first = g.check_message(user_message="Merge #17", session_id="s1", turn_id="t1")
+    assert "Load the dispatch skill again now" in first["context"], "a chat from before the restart may hold an old copy"
+    assert g.check_message(user_message="Merge #18", session_id="s1", turn_id="t2") is None
+    skills["dispatch"] = "v2"
+    assert "the new text wins" in g.check_message(user_message="Merge #18", session_id="s1", turn_id="t3")["context"]
+    assert g.check_message(user_message="x", session_id="s1", turn_id="t4") is None
+    notice = g.check_message(user_message="team-kit notice: In flight: 1.", session_id="s2", turn_id="t1")["context"]
+    assert "not a request from the owner" in notice and "Load the dispatch skill again now" in notice, "both contexts reach the bot"
+
+
+def test_the_chief_reloads_the_chief_skill_and_a_missing_skill_says_nothing():
+    chief = Guard(load=quiet_policy, profile=lambda: "chanh-van", skill_digest=lambda policy, skill: "v1" if skill == "chief" else None)
+    assert "Load the chief skill again now" in chief.check_message(user_message="merge it", session_id="s1", turn_id="t1")["context"]
+    quiet = Guard(load=quiet_policy, profile=lambda: "meo-beo", skill_digest=lambda policy, skill: None)
+    assert quiet.check_message(user_message="hi", session_id="s1", turn_id="t1") is None
+
+
 def test_register_wires_the_hooks(team_kit_home):
     hooks = {}
 
