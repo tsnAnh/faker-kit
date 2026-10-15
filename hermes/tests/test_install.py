@@ -58,7 +58,7 @@ def test_installs_the_module_and_the_bootstrap_bot_pinned_to_the_commit(kit_sour
     assert not (root / "team-kit" / "webhook-secret").exists(), "nothing listens, so there is no secret"
     assert stat.S_IMODE((root / "team-kit").stat().st_mode) == 0o700
     assert yaml.safe_load((root / "team-kit" / "guard.yaml").read_text())["version"] == 2
-    for name in ("team-kit-gh", "team-kit-admin", "team-kit-chief", "team-kit-slack"):
+    for name in ("team-kit-gh", "team-kit-admin", "team-kit-chief", "team-kit-slack", "team-kit-runner"):
         wrapper = (root / "bin" / name).read_text()
         assert str(kit / "hermes" / "bin") in wrapper and "TEAM_KIT_HOME" in wrapper
     log = hermes_calls(root)
@@ -237,7 +237,7 @@ def test_a_team_kit_home_elsewhere_moves_bin_and_profiles_with_it_and_leaves_hom
 
 FAKER_KIT_URL = "https://github.com/tsnAnh/faker-kit.git"
 TEAM_KIT_URL = "https://github.com/tsnAnh/team-kit.git"  # legacy team-kit URL; install must never fall back to it
-WRAPPERS = sorted(f"{prefix}-{name}" for prefix in ("faker-kit", "team-kit") for name in ("gh", "admin", "chief", "slack"))
+WRAPPERS = sorted(f"{prefix}-{name}" for prefix in ("faker-kit", "team-kit") for name in ("gh", "admin", "chief", "slack", "runner"))
 
 
 def with_urls(env, tmp_path, mapping):
@@ -306,6 +306,8 @@ def legacy(kit_source, machine):
     assert added.returncode == 0, added.stderr
     for name in ("gh", "admin", "chief", "slack"):
         (root / "bin" / f"faker-kit-{name}").unlink()
+    for name in ("faker-kit-runner", "team-kit-runner"):  # an older kit had no runner command
+        (root / "bin" / name).unlink()
     jobs = root / "profiles" / "meo-beo" / "jobs.json"
     jobs.write_text(json.dumps([{**job, "enabled": job["name"] != "team-kit-upstream", "state": "active"} for job in json.loads(jobs.read_text())]))
     home = root / "team-kit"
@@ -329,7 +331,7 @@ def test_upgrading_an_older_install_adds_the_faker_kit_names_and_keeps_every_sta
     state, profiles = team_kit_state(root), snapshot(*profile_state)
     assert {"andon/meo-beo.json", "bots.yaml", "briefs/meo-beo/t_1.md", "checkouts/acme__shop/repo/.git/HEAD", "checkouts/acme__shop/setup/README.md",
             "guard.yaml", "in-flight/meo-beo.json", "units/meo-beo.json"} <= set(state)
-    assert sorted(p.name for p in (root / "bin").iterdir()) == WRAPPERS[4:]
+    assert sorted(p.name for p in (root / "bin").iterdir()) == [f"team-kit-{n}" for n in ("admin", "chief", "gh", "slack")], "an older kit had four"
 
     done = install(kit_source, machine, "--no-gateway")
     assert done.returncode == 0, done.stderr

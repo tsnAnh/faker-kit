@@ -166,6 +166,24 @@ The notice taints the turn. The bot must not dispatch from it, and any side-effe
 
 There is no public callback URL, inbound listener, webhook secret, or Slack text on a command line. To optionally copy Hermes notices back to Slack, enable `mirror_notices` and pipe a notice file through `team-kit-slack mirror --file <path>` from an operator-controlled script.
 
+### Optional: CI on this machine
+
+GitHub-hosted runners cost Actions minutes and stop when a payment fails. To run a repository's GitHub Actions jobs on the Hermes machine instead, list it under `ci_runners` in the machine config and run `setup-machine.sh` again, or run `team-kit-runner up --config <machine.yaml>` yourself. It needs Docker (Docker Desktop on macOS).
+
+```yaml
+ci_runners:
+  - repo: acme/shop
+    slots: 2        # jobs at once, 1 to 8
+```
+
+Each slot is a background service (a launchd agent on macOS, a systemd user unit on Linux) that registers a just-in-time runner for one job, runs it in a new Ubuntu container, and removes it. The container sees nothing of this machine: no Hermes files, no `gh` login, no bot secrets. The runner's one-job configuration reaches it on stdin, never in an argument, the environment, or a file on this machine. In the workflows, use:
+
+```yaml
+runs-on: [self-hosted, team-kit]
+```
+
+A job that needs Docker itself, such as building and pushing an image, cannot run in that container; keep it on `ubuntu-latest`. Each slot logs to `~/.hermes/team-kit/logs/team-kit-ci-<repo>-<n>.log`. Self-hosted runners are safe here only because the repositories are private: on a public repository anyone's pull request would run on this machine.
+
 ### 2. Each project
 
 The quickest way is your own coding agent: run `/setup-hermes-project` (or `$setup-hermes-project` in Codex) in Claude Code, Codex, or Pi on this machine. It asks a few questions and runs every step below, stopping where you trust the launch checkout or paste a token in your own terminal, or merge a pull request. The bootstrap bot does the same from Hermes Desktop:

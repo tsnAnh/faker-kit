@@ -138,6 +138,7 @@ project_bots=$(read_config 'print(" ".join(p.bot for p in c.projects))')
 webhook_url=$(read_config 'print(c.webhook_url or "")')
 tunnel=$(read_config 'print(c.tunnel or "")')
 slack_bot=$(read_config 'print(c.slack.bot if c.slack else "")')
+ci_runners=$(read_config 'print(" ".join(r.repo for r in c.ci_runners))')
 [ -n "$ref" ] || ref=$(read_config 'print(c.kit_ref or "")')
 [ -n "$ref" ] || ref=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("kit_ref", ""))' "$repo/.agents/dispatch.json")
 [[ $ref =~ ^[0-9a-f]{40}$ ]] || die "no kit commit: pass --ref, or set kit_ref in $config"
@@ -150,6 +151,10 @@ have git || rest+=(git)
 have gh || rest+=(gh)
 [ -n "$webhook_url" ] && ! have cloudflared && rest+=(cloudflared)
 install_packages "${rest[@]+"${rest[@]}"}"
+if [ -n "$ci_runners" ]; then
+  have docker && docker info >/dev/null 2>&1 \
+    || die "ci_runners runs CI jobs in Docker containers: install Docker (Docker Desktop on macOS), start it, and run this again"
+fi
 
 # ---------------------------------------------------------------------------------------------------
 say "2/8 Claude Code and Hermes"
@@ -330,6 +335,9 @@ if [ -n "$slack_bot" ]; then
   fi
   note "Slack relay: running"
 fi
+# Also stops the runner services of repositories the config no longer lists.
+team-kit-runner up --config "$config" >/dev/null || die "the CI runners did not start; see team-kit-runner's message above"
+[ -z "$ci_runners" ] || note "CI runners: $ci_runners, one fresh container per job; workflows use runs-on: [self-hosted, team-kit]"
 
 # ---------------------------------------------------------------------------------------------------
 say "8/8 Checks"

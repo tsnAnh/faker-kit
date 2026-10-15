@@ -51,6 +51,14 @@ class Project:
 
 
 @dataclass(frozen=True)
+class CiRunner:
+    """Self-hosted GitHub Actions runners for one repository: up to `slots` jobs at once, each in its own container."""
+
+    repo: str
+    slots: int = 1
+
+
+@dataclass(frozen=True)
 class Slack:
     bot: str
     channel_id: str
@@ -72,6 +80,7 @@ class Machine:
     slack: Slack | None = None
     kit_ref: str | None = None
     skills: tuple[str, ...] = ()
+    ci_runners: tuple[CiRunner, ...] = ()
 
 
 def _mapping(value: object, where: str) -> dict[str, object]:
@@ -152,10 +161,23 @@ def parse_machine(data: object) -> Machine:
     skills = [] if top.get("skills") is None else top["skills"]
     if not isinstance(skills, list) or not all(isinstance(s, str) and NAME.match(s) for s in skills):
         raise MachineError("skills must list kit plugin names, such as pstack")
+    raw_runners = [] if top.get("ci_runners") is None else top["ci_runners"]
+    if not isinstance(raw_runners, list):
+        raise MachineError("ci_runners must list repositories")
+    runners = []
+    for i, item in enumerate(raw_runners):
+        where = f"ci_runners[{i}]"
+        entry = _mapping(item, where)
+        slots = entry.get("slots", 1)
+        if not isinstance(slots, int) or isinstance(slots, bool) or not 1 <= slots <= 8:
+            raise MachineError(f"{where}.slots must be a number from 1 to 8")
+        runners.append(CiRunner(repo=str(_text(entry, "repo", where, REPO)), slots=slots))
+    if len({r.repo.lower() for r in runners}) != len(runners):
+        raise MachineError("ci_runners lists a repository twice")
     return Machine(bootstrap_bot=bootstrap, trusted_authors=tuple(authors), ask_owner=ask_owner, max_in_flight_total=total,
                    claude_subscription=subscription, projects=tuple(projects), chief=chief_bot,
                    chief_model=_text(chief, "model", "chief", required=False), webhook_url=url, tunnel=tunnel, slack=slack, kit_ref=kit_ref,
-                   skills=tuple(dict.fromkeys(skills)))
+                   skills=tuple(dict.fromkeys(skills)), ci_runners=tuple(runners))
 
 
 def load_machine(path: Path) -> Machine:

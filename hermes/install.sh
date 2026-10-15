@@ -29,10 +29,11 @@ It writes, under ~/.hermes:
   team-kit/bots.yaml       each bot's role, project, and repositories; only team-kit-admin writes it
   bin/faker-kit-gh         a project bot's only GitHub command
   bin/faker-kit-admin      the bootstrap bot's only command
-  bin/faker-kit-chief      the chief of staff's only command; reads, and proposes with approval
+  bin/faker-kit-chief      the chief of staff's only command; reads, and asks the bootstrap bot for new projects
   bin/faker-kit-slack      the outbound-only Slack Socket Mode relay command
-  bin/team-kit-gh, bin/team-kit-admin, bin/team-kit-chief, bin/team-kit-slack
-                           the same four commands under their earlier names
+  bin/faker-kit-runner     runs repositories' GitHub Actions jobs here, one fresh container per job
+  bin/team-kit-gh, bin/team-kit-admin, bin/team-kit-chief, bin/team-kit-slack, bin/team-kit-runner
+                           the same five commands under their earlier names
   profiles/<bot>/          for each bot in bots.yaml: SOUL.md, config, the guard plugin, its skill
 
 It stops before changing anything if a file it did not write is at one of the bin/ paths.
@@ -42,7 +43,7 @@ USAGE
 die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
 wrapper_prefixes='faker-kit team-kit'
-wrapper_names='gh admin chief slack'
+wrapper_names='gh admin chief slack runner'
 
 # A kit wrapper is what the wrapper loop below writes, or wrote in an older kit: a regular file whose
 # second line sets TEAM_KIT_HOME and that has a line exec-ing the kit's hermes/bin/team_kit_<name>.py.
