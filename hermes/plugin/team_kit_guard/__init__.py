@@ -9,6 +9,7 @@ notice delivered into Bot Chat. Every failure blocks or wraps; none allows.
 
 from __future__ import annotations
 
+import collections
 import concurrent.futures
 import contextvars
 import hashlib
@@ -24,6 +25,7 @@ from .policy import Policy, PolicyError, block, decide, load_policy, reader_sour
 logger = logging.getLogger(__name__)
 
 DECISION_TIMEOUT_SECONDS = 5.0
+REMEMBERED_CHATS = 1024
 NOTICE_MARKER = "team-kit notice:"
 NOTICE_CONTEXT = (
     "This message is a team-kit cron notice delivered into Bot Chat, not a request from the owner. "
@@ -81,7 +83,7 @@ class Guard:
         self._profile = profile
         self._timeout = timeout
         self._skill_digest = skill_digest
-        self._skills: dict[str, str] = {}
+        self._skills: collections.OrderedDict[str, str] = collections.OrderedDict()
         self._tainted: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="team-kit-guard")
@@ -134,21 +136,24 @@ class Guard:
         return {"context": f"{out['context']}\n\n{reload}" if out and out.get("context") else reload}
 
     def _skill_reload(self, session_id: object) -> str | None:
-        if self._skill_digest is None:
+        if self._skill_digest is None or not session_id:
             return None
         try:
             policy = self._bounded(self._load)
             bot = policy.bots.get(self._profile())
             skill = ROLE_SKILL.get(bot.role) if bot else None
-            digest = self._skill_digest(policy, skill) if skill else None
+            digest = self._bounded(self._skill_digest, policy, skill) if skill else None
         except Exception:
             logger.exception("team-kit guard could not read the bot's skill; no reload reminder")
             return None
         if skill is None or digest is None:
             return None
+        key = str(session_id)
         with self._lock:
-            seen = self._skills.get(str(session_id or ""))
-            self._skills[str(session_id or "")] = digest
+            seen = self._skills.pop(key, None)
+            self._skills[key] = digest
+            while len(self._skills) > REMEMBERED_CHATS:
+                self._skills.popitem(last=False)
         return None if seen == digest else SKILL_RELOAD_CONTEXT.format(skill=skill)
 
     def _message_verdict(self, text: str, session_id: object, turn_id: object) -> dict | None:
