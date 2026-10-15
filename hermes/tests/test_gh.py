@@ -23,6 +23,7 @@ from team_kit_contracts import (
     review_signed,
     security_signature,
     size_marker,
+    vendor_record,
     verdict_signature,
 )
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, PROPOSAL_LABEL, REPORT_DEADLINE_SECONDS, UNIT_STATE_FRESH_SECONDS, Gh, Refused, checks_state, main, run_gh
@@ -58,7 +59,6 @@ class FakeGh:
         self.parents = {}  # commit sha -> its parents' shas, for repos/<repo>/commits/<sha>
         self.repo_comments = []
         self.merges, self.merge_error, self.closed = [], None, []
-        self.files_at = {}  # commit sha -> {path: text}, as repos/<repo>/contents/<path>?ref=<sha> reads them
         self.statuses = {}  # commit sha -> legacy commit statuses, as repos/<repo>/commits/<sha>/status lists them
         self.page_size = None  # smaller than GitHub's 100, so a test reaches the second page cheaply
         self.fail_paths = {}  # substring of a request path -> the failure it raises
@@ -93,7 +93,7 @@ class FakeGh:
         pull = self.prs[(repo, number)]
         head_repo = pull.get("headRepo", REPO)
         return {"number": number, "title": pull.get("title", f"Pull request {number}"), "html_url": f"https://github.com/{repo}/pull/{number}",
-                "mergeable": pull.get("mergeable"), "changed_files": pull.get("changed_files", len(self.pr_files.get(number, []))),
+                "mergeable": pull.get("mergeable"),
                 "state": "open" if pull["state"] == "OPEN" else "closed",
                 "merged_at": pull.get("mergedAt"), "body": pull.get("body", ""), "user": {"login": pull.get("author", BOT_LOGIN)},
                 "labels": pull.get("labels", []),
@@ -145,11 +145,10 @@ class FakeGh:
                 return finish(json.dumps({key: chunk, "total_count": len(rows)} if key else chunk), link)
 
             if "/contents/" in path:
-                name, _, query = path.split("/contents/", 1)[1].partition("?")
-                files = self.files_at.get(urllib.parse.parse_qs(query)["ref"][0], {}) if query else self.files
-                if name not in files:
+                name = path.split("/contents/", 1)[1]
+                if name not in self.files:
                     raise Refused("gh api failed: Not Found")
-                return finish(json.dumps({"content": base64.b64encode(files[name].encode()).decode()}))
+                return finish(json.dumps({"content": base64.b64encode(self.files[name].encode()).decode()}))
             if path.count("/") == 2:
                 return finish(json.dumps({"default_branch": "main"}))
             if "/issues?" in path:
@@ -3257,25 +3256,24 @@ def test_a_conflicting_kit_update_pull_request_is_told_once_per_head(team_kit_ho
 KIT_HEAD = "d" * 40
 
 
-def kit_update(gh, kit, **change):
-    """An open kit update pull request on this machine's kit, as team-kit-admin vendor opens it, ready to land."""
-    pr(gh, 9, branch=change.pop("branch", f"team-kit/kit-{kit[:12]}"), head=KIT_HEAD, author=change.pop("author", None), fork=change.pop("fork", False),
-       checks=change.pop("checks", ("SUCCESS",)))
-    gh.prs[(REPO, 9)]["mergeable"] = change.pop("mergeable", True)
-    gh.pr_files[9] = [{"filename": f} for f in change.pop("files", [".agents/team-kit/KIT.json", ".claude/skills/follow-brief", ".agents/dispatch.json"])]
-    dispatch = {**json.loads(gh.files[".agents/dispatch.json"]), "kit_ref": kit, **change.pop("dispatch", {})}
-    gh.files_at[KIT_HEAD] = {".agents/team-kit/KIT.json": json.dumps({"version": 1, "kit_ref": change.pop("vendored", kit)}),
-                             ".agents/dispatch.json": json.dumps(dispatch)}
-    gh.files[".agents/dispatch.json"] = json.dumps({**json.loads(gh.files[".agents/dispatch.json"]), "kit_ref": "0" * 40})
+def kit_update(gh, team_kit_home, kit, made=KIT_HEAD, **change):
+    """An open kit update pull request on this machine's kit, whose head is the commit team-kit-admin vendor made."""
+    branch = change.pop("branch", f"team-kit/kit-{kit[:12]}")
+    pr(gh, 9, branch=branch, head=KIT_HEAD, fork=change.pop("fork", False), checks=change.pop("checks", ("SUCCESS",)))
+    gh.prs[(REPO, 9)].update(mergeable=change.pop("mergeable", True), baseRefName=change.pop("base", "main"))
+    if made:
+        record = vendor_record(team_kit_home, REPO)
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"branch": f"team-kit/kit-{kit[:12]}", "commit": made}))
     assert not change
 
 
-def test_tick_merges_the_kit_update_for_this_machines_kit_when_it_holds_only_vendored_files(team_kit_home, kit, capsys):
+def test_tick_merges_the_kit_update_whose_head_is_the_commit_vendor_made(team_kit_home, kit, capsys):
     gh = app_gh(kit)
-    kit_update(gh, kit)
+    kit_update(gh, team_kit_home, kit)
     out = tick(gh, capsys)
     assert out[0] == (f"team-kit notice: merged the kit update https://github.com/{REPO}/pull/9 automatically (kit {kit[:12]}, "
-                      "checks passed, only vendored files)")
+                      "the commit team-kit-admin vendor made, checks passed)")
     assert gh.merges == [["pr", "merge", "9", "-R", REPO, "--merge", "--match-head-commit", KIT_HEAD]]
     assert not any("kit update" in line for line in tick(gh, capsys)), "merged once"
 
@@ -3284,35 +3282,35 @@ def test_tick_merges_the_kit_update_for_this_machines_kit_when_it_holds_only_ven
     ("config", "change"),
     [
         ({"auto_merge": "none"}, {}),
+        ({}, {"made": "e" * 40}),
+        ({}, {"made": None}),
         ({}, {"branch": "team-kit/kit-0123456789ab"}),
-        ({}, {"files": [".agents/team-kit/KIT.json", "src/app.py"]}),
-        ({}, {"dispatch": {"max_in_flight": 9}}),
-        ({}, {"vendored": "e" * 40}),
         ({}, {"checks": ("PENDING",)}),
         ({}, {"checks": ()}),
-        ({}, {"author": "mallory"}),
         ({}, {"fork": True}),
         ({}, {"mergeable": None}),
+        ({}, {"base": "release"}),
     ],
 )
-def test_a_kit_update_that_is_not_exactly_this_machines_kit_waits_for_the_owner(team_kit_home, kit, capsys, config, change):
+def test_a_kit_update_that_is_not_the_vendor_commit_ready_to_merge_waits_for_the_owner(team_kit_home, kit, capsys, config, change):
     gh = app_gh(kit, **config)
-    kit_update(gh, kit, **change)
+    kit_update(gh, team_kit_home, kit, **change)
     out = tick(gh, capsys)
     assert gh.merges == [] and not any("merged the kit update" in line for line in out)
 
 
-def test_a_kit_update_whose_file_list_github_cut_short_is_not_merged(team_kit_home, kit, capsys):
+def test_a_kit_update_github_refuses_to_merge_is_told_once_per_head(team_kit_home, kit, capsys):
     gh = app_gh(kit)
-    kit_update(gh, kit)
-    gh.prs[(REPO, 9)]["changed_files"] = 3001
-    tick(gh, capsys)
-    assert gh.merges == []
+    kit_update(gh, team_kit_home, kit)
+    gh.merge_error = "gh pr merge failed: Base branch was modified (HTTP 405)"
+    assert tick(gh, capsys)[0] == (f"team-kit notice: the kit update https://github.com/{REPO}/pull/9 could not merge: "
+                                   "gh pr merge failed: Base branch was modified (HTTP 405)")
+    assert not any("kit update" in line for line in tick(gh, capsys))
 
 
 def test_no_kit_update_merges_while_the_andon_cord_is_pulled(team_kit_home, kit, capsys):
     gh = app_gh(kit)
-    kit_update(gh, kit)
+    kit_update(gh, team_kit_home, kit)
     assert run(gh, "andon", "raise", "stop") == 0
     capsys.readouterr()
     tick(gh, capsys)
