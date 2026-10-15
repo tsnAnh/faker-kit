@@ -48,7 +48,8 @@ class FakeGh:
         self.files = {".agents/dispatch.json": json.dumps(dispatch), ".agents/dispatch.md": STANDING,
                       ".agents/team-kit/KIT.json": json.dumps({"version": 1, "kit_ref": kit_ref})}
         self.issues, self.comments, self.prs, self.calls = {}, {}, {}, []
-        self.branch_commits = []  # the default branch's history, newest first, as GET /commits?sha= lists it
+        self.branch_commits = []
+        self.annotations = {}  # check run id -> its annotations  # the default branch's history, newest first, as GET /commits?sha= lists it
         self.work = 0
         self.next = 40
         self.main_head = "c" * 40
@@ -167,6 +168,8 @@ class FakeGh:
                 if since:
                     found = [i for i in found if (i["closedAt"] or i["createdAt"]) >= since]
                 return paged([row(i) for i in found])
+            if "/check-runs/" in path and path.endswith("/annotations"):
+                return finish(json.dumps(self.annotations.get(int(path.split("/check-runs/")[1].split("/")[0]), [])))
             if "/check-runs" in path:
                 return paged(self.check_runs(path.split("/commits/")[1].split("/")[0]), "check_runs")
             if "/commits/" in path and path.split("?")[0].endswith("/status"):
@@ -1524,6 +1527,17 @@ def test_checks_are_read_again_before_review(team_kit_home, gh, capsys):
     assert "checks failed on" in tick(gh, capsys)[0]
 
 
+def test_ci_github_never_started_gates_with_the_billing_cause_not_a_code_failure(team_kit_home, gh, capsys):
+    n = verifying_unit(gh, team_kit_home)
+    head = gh.prs[(REPO, 7)]["headRefOid"]
+    gh.runs[head] = [unstarted(77)]
+    gh.annotations[77] = [{"message": BILLING}]
+    verdict(gh, n, team_kit_home)
+    [notice] = tick(gh, capsys)
+    assert "CI did not run on" in notice and "fix billing" in notice and "checks failed" not in notice
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}, "CI is still required: the unit waits for it"
+
+
 @pytest.mark.parametrize("forgery", ["unsigned", "wrong key", "edited", "untrusted", "before launch"])
 def test_only_the_verifiers_own_signed_verdict_counts(team_kit_home, gh, capsys, forgery):
     n = verifying_unit(gh, team_kit_home)
@@ -2140,6 +2154,37 @@ def test_code_shows_the_real_state_of_the_code_from_github(team_kit_home, gh, ca
 )
 def test_checks_state_reads_check_runs_and_commit_statuses(rollup, state):
     assert checks_state(rollup) == state
+
+
+BILLING = "The job was not started because recent account payments have failed or your spending limit needs to be increased."
+
+
+def unstarted(run_id, name="check"):
+    return {"id": run_id, "name": name, "status": "completed", "conclusion": "failure", "output": {"annotations_count": 2}}
+
+
+@pytest.mark.parametrize(
+    ("rollup", "state"),
+    [
+        ([{"status": "COMPLETED", "conclusion": "NOT_STARTED"}], "not started"),
+        ([{"status": "COMPLETED", "conclusion": "NOT_STARTED"}, {"status": "COMPLETED", "conclusion": "FAILURE"}], "failed"),
+        ([{"status": "COMPLETED", "conclusion": "NOT_STARTED"}, {"status": "IN_PROGRESS"}], "pending"),
+        ([{"status": "COMPLETED", "conclusion": "NOT_STARTED"}, {"status": "COMPLETED", "conclusion": "SUCCESS"}], "not started"),
+    ],
+)
+def test_a_run_github_never_started_is_neither_a_pass_nor_a_failure(rollup, state):
+    assert checks_state(rollup) == state
+
+
+def test_ci_github_refused_to_start_gates_the_unit_with_the_billing_cause(team_kit_home, gh, capsys):
+    pr(gh, 5, checks=("FAILURE",), head="b" * 40)
+    gh.runs["b" * 40] = [unstarted(77)]
+    gh.annotations[77] = [{"message": "The ubuntu-latest label will migrate"}, {"message": BILLING}]
+    assert run(gh, "pr-state", "--pr", "5") == 0
+    assert out(capsys)["checks"] == "not started"
+    gh.annotations[77] = [{"message": "Process completed with exit code 1."}]
+    assert run(gh, "pr-state", "--pr", "5") == 0
+    assert out(capsys)["checks"] == "failed", "a job that ran and failed is still a failure"
 
 
 def test_show_prints_a_repository_file(team_kit_home, gh, capsys):
@@ -3351,3 +3396,13 @@ def test_a_bad_second_verifier_setting_is_refused_before_anything_is_dispatched(
     gh = FakeGh(kit, **bad)
     assert dispatch(team_kit_home, gh) == 1
     assert "second_verifier_backend" in capsys.readouterr().err
+
+
+def test_ci_github_never_started_on_main_opens_no_incident(team_kit_home, gh, capsys):
+    gh.main_head = "2" * 40
+    gh.runs["2" * 40] = [unstarted(78)]
+    gh.annotations[78] = [{"message": BILLING}]
+    assert not any("main is red" in line for line in poll(gh, capsys))
+    assert not [i for (repo, _), i in gh.issues.items() if repo == REPO and "agent:incident" in i["labels"]]
+    red(gh, "3" * 40, "test")
+    assert any("main is red: test" in line for line in poll(gh, capsys)), "a real failure still opens one"
