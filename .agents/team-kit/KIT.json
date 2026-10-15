@@ -454,7 +454,7 @@
   "plugins/trust-ladder/skills/setup-cloud-agents/scripts/install-kit-skills.sh": "89ebcefec6e379b1c6dafb2afa3e4d920f46d2267b22b13159d1e1a2c20dd9ca",
   "plugins/trust-ladder/skills/setup-cloud-agents/scripts/vendor_kit.py": "5c1b99b8924e874183a8a8448e67b6f4b6f5b943a88f54982ca13a33a64408e9",
   "plugins/trust-ladder/skills/setup-dispatch/SKILL.md": "dbe0ba7fb1d6f5c89a53f0ceeee8acad64693653dc56a0179457fbbc5232db41",
-  "plugins/trust-ladder/skills/setup-hermes-project/SKILL.md": "1be315860dc30e6c68e481633af1f64e1322077b72fdd56d32a777b4ca1144c5",
+  "plugins/trust-ladder/skills/setup-hermes-project/SKILL.md": "4d9f6ec2b07efd3f80696b77e00b8e3a6372f751d2a65757bc03ee1829f7a062",
   "plugins/trust-ladder/skills/setup-lint-pack/SKILL.md": "ea9f61868d758ab5be186ed5d82c121de8b563ddac20a5738739ca6b800650c5",
   "plugins/trust-ladder/skills/setup-lint-pack/scripts/install-pack.mjs": "863666fc99934d1b89945171ff06580a31649f14d92f869cd72662b38fa8dff7",
   "plugins/trust-ladder/skills/setup-review-bots/SKILL.md": "88648d7bfe50cbb513497710793ed2f329f6ae4860c587ed31b8e7f06752d168",
@@ -505,7 +505,7 @@
   "plugins/trust-ladder/templates/routines/weekly-review.md": "9180d5f01a5f6139e56db31cfc4040e426e13b27b2bc05bfd5cc9bad453c6089",
   "vendor_kit.py": "5c1b99b8924e874183a8a8448e67b6f4b6f5b943a88f54982ca13a33a64408e9"
  },
- "kit_ref": "96067c93618170ad2a5abdea63389ccc0aa67776",
+ "kit_ref": "b87dca4914a207cf36d572d4c126921e3e53d14e",
  "links": {
   ".agents/skills/advisor": "../../.agents/team-kit/plugins/advisor/skills/advisor",
   ".agents/skills/architect": "../../.agents/team-kit/plugins/pstack/skills/architect",

@@ -57,9 +57,9 @@ It creates the bot's profile, its scheduled jobs (paused), the team-kit labels i
 
 `--claude-subscription` also installs Hermes's `claude-subscription-directsdk` provider plugin in the bot's profile and runs the bot's own model (`--model`, default `sonnet`) on the owner's subscription. It refuses, before changing anything, unless `claude` is 2.1.284 or later and `claude auth status` shows a login.
 
-## 4. The owner trusts the checkout and adds the GitHub token
+## 4. The owner trusts the checkout
 
-Ask the owner to do both in **their own terminal**, not through you.
+Ask the owner to do this in **their own terminal**, not through you.
 
 1. **Trust the launch checkout once** (claude only). Claude Code asks once per folder whether to trust it, and a launch cannot answer:
 
@@ -68,15 +68,7 @@ Ask the owner to do both in **their own terminal**, not through you.
    ```
 
    Choose yes, then type `/exit`.
-2. **Put the bot's GitHub token in place.** This works in bash and zsh, prompts without echoing, and writes it to the bot's `.env`, readable only by them:
-
-   ```bash
-   f=~/.hermes/profiles/<bot>/.env; k=GH_TOKEN; printf '%s: ' "$k"; stty -echo; IFS= read -r v; stty echo; echo; [ -n "$v" ] && (umask 077; { grep -v "^$k=" "$f" 2>/dev/null; printf '%s=%s\n' "$k" "$v"; } > "$f.new" && mv "$f.new" "$f"); unset v
-   ```
-
-   Use a fine-grained GitHub token of the bot's login for this repository only, with Issues read and write, and Contents, Pull requests, Checks, and Commit statuses read. If the owner wants low-risk units to merge themselves (`auto_merge: "low"` in `.agents/dispatch.json`), Contents and Pull requests need write instead.
-
-Then run `team-kit-admin status` and check the bot shows `github_login: true`.
+2. **No GitHub token.** Every bot shares this machine's `gh` login (`gh auth login`, once per machine). A bot needs a `GH_TOKEN` in its profile's `.env` only to act as a different GitHub account. Run `team-kit-admin status` and check the bot shows `github_login: true`; if it shows `false`, the owner runs `gh auth login` once.
 
 ## 5. Vendor the kit
 
@@ -116,7 +108,7 @@ GitHub allows branch protection on a private repository only on a paid plan. If 
 ~/.hermes/bin/team-kit-admin activate --bot <bot>
 ```
 
-It resumes the bot's jobs; it refuses while `GH_TOKEN` is missing. Run `status` once more and show the owner the bot's line: project, repository, the GitHub token present, and every job on.
+It resumes the bot's jobs; it refuses only while the bot has no GitHub login. Run `status` once more and show the owner the bot's line: project, repository, `github_login: true`, and every job on.
 
 ## 9. Hand over
 
