@@ -37,6 +37,10 @@ elif args[:2] == ["auth", "token"]:
 elif args[:2] == ["label", "create"]:
     labels = load("labels.json", {})
     repo = args[args.index("-R") + 1]
+    # Like GitHub, which answers HTTP 422 for a label description over 100 characters.
+    if "--description" in args and len(args[args.index("--description") + 1]) > 100:
+        print(f"HTTP 422: Validation Failed (https://api.github.com/repos/{repo}/labels)\ndescription is too long (maximum is 100 characters)", file=sys.stderr)
+        sys.exit(1)
     labels.setdefault(repo, [])
     if args[2] not in labels[repo]:
         labels[repo].append(args[2])
