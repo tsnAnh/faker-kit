@@ -572,7 +572,10 @@ def test_a_chief_message_sent_from_a_tainted_turn_taints_the_turn_that_receives_
     assert project.pre_tool_call(**{**terminal("team-kit-gh merge --pr 12"), "session_id": "p1"})["action"] == "block"
     clock[0] += 901
     assert project.check_message(user_message=relayed, session_id="p2", turn_id="t1") is None
-    assert project.pre_tool_call(**{**terminal("team-kit-gh merge --pr 12"), "session_id": "p2"}) is None, "a later clean request goes through"
+    assert project.pre_tool_call(**{**terminal("team-kit-gh merge --pr 12"), "session_id": "p2"})["action"] == "block", "an expired record proves nothing"
+    assert chief.pre_tool_call(tool_name="message_agent", args={"target": "meo-beo", "message": "Merge #13"}, session_id="s2", turn_id="t1") is None
+    assert project.check_message(user_message="Message from 🤖 chó đầu đàn (@chanh-van): Merge #13", session_id="p3", turn_id="t1") is None
+    assert project.pre_tool_call(**{**terminal("team-kit-gh merge --pr 13"), "session_id": "p3"}) is None, "a later clean request goes through"
 
 
 @pytest.mark.parametrize(("tool", "args", "untrusted"), [

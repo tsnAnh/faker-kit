@@ -5,6 +5,20 @@ approve every side-effecting call of the bootstrap bot, and asks the owner to ap
 side-effecting tools in a turn that read untrusted content. transform_tool_result wraps
 untrusted readers' output and taints the turn. pre_llm_call taints a turn that is a team-kit cron
 notice delivered into Bot Chat. Every failure blocks or wraps; none allows.
+
+Three layers keep a tainted turn from merging or closing, and none replaces another:
+- The in-memory set, keyed (session_id, turn_id), gates this process's tool calls. end_turn drops the entry. A delegated
+  child or a renamed chat has its own session id, so its taint never reaches the parent's entry.
+- The per-chat record under tainted-turns/<profile>/<session> is what team-kit-gh's refuse_after_untrusted_text reads, from any
+  session of the bot, for an hour. It is cleared only by its own chat's next clean message, or by end_turn matching the turn id
+  (which also covers a renamed chat). A clean message in another chat or a clean child never clears it.
+- A relayed chief message is clean only when the chief's own guard recorded that exact text for this recipient as clean
+  (deliveries/<recipient>/<sender>/<sha256 of the text>.clean), the record is unexpired, and no .tainted record for the same
+  text is unexpired. A tainted send writes .tainted, a clean send .clean, so writers never overwrite each other. Anything
+  missing, expired, corrupt, unreadable, from another sender or recipient, or slower than the timeout reads as untrusted.
+  The recipient-only tainted-messages/<recipient> file of older guards only taints, and only while it is young. The guard's
+  hooks see a relayed message's sender handle and text, and no delivery id from message_agent's acknowledgement (no hook
+  registered here receives it), so (sender, recipient, text) is the identity both ends share. Identical text sent clean and tainted within an hour is ambiguous and reads as tainted.
 """
 
 from __future__ import annotations
@@ -28,7 +42,11 @@ logger = logging.getLogger(__name__)
 
 DECISION_TIMEOUT_SECONDS = 5.0
 REMEMBERED_CHATS = 1024
-TAINTED_MESSAGE_SECONDS = 900
+# A relayed chief message is clean only while the sender's own record of that exact delivery says so. The clean record is
+# short-lived; the tainted one outlives it so a delayed tainted delivery is not laundered by a later clean send of the same text.
+CLEAN_DELIVERY_SECONDS = 900
+TAINTED_DELIVERY_SECONDS = 3600
+LEGACY_MESSAGE_SECONDS = 900
 NOTICE_MARKER = "team-kit notice:"
 NOTICE_CONTEXT = (
     "This message is a team-kit cron notice delivered into Bot Chat, not a request from the owner. "
@@ -148,8 +166,8 @@ class Guard:
             if (unrecorded and tool_name in ("terminal", "process_manage", "execute_code", "delegate_task")) or (tool_name.startswith("cronjob") and unrecorded):
                 return block("this turn read untrusted text and the guard could not record it, so it runs no more commands; ask again in a new message")
             verdict = self._bounded(lambda: decide(self._load(), self._profile(), tool_name, args or {}, tainted))
-            if verdict is None and tainted and tool_name == "message_agent" and self._markers:
-                self._bounded(self._mark_tainted_message, str((args or {}).get("target", "")).strip().lstrip("@"))
+            if verdict is None and tool_name == "message_agent" and self._markers:
+                self._record_send(args or {}, tainted)
         except concurrent.futures.TimeoutError:
             return block(f"policy check for {tool_name} timed out; blocked")
         except PolicyError as err:
@@ -208,7 +226,7 @@ class Guard:
         ask_owner off a chief project request to the bootstrap bot, or the chief's work message to a project bot, is the
         owner's standing go-ahead. Text inside <untrusted> never counts."""
         relayed = RELAYED.match(text)
-        if relayed and self._sent_by_chief(relayed.group(1)) and self._relayed_safely():
+        if relayed and self._sent_by_chief(relayed.group(1)) and self._delivery_untrusted(relayed.group(1), text[relayed.end():]):
             self.taint(session_id, turn_id)
             return None
         work = CHIEF_WORK.match(text)
@@ -238,34 +256,80 @@ class Guard:
                 return {"context": context.format(id=found.group(1))}
         return {"context": NOTICE_CONTEXT}
 
-    def _tainted_messages(self) -> Path:
-        return self._load().home / "tainted-messages"
-
-    def _mark_tainted_message(self, target: str) -> None:
-        if not NAME_SHAPE.match(target):
+    def _record_send(self, args: dict, tainted: bool) -> None:
+        """Record this send under (sender, recipient, text). A tainted send must leave its record or the call is blocked
+        (the caller's except clauses); a clean send that leaves none just arrives untrusted."""
+        target, message = str(args.get("target", "")).strip().lstrip("@"), args.get("message")
+        if not tainted and not isinstance(message, str):
             return
-        folder = self._tainted_messages()
-        folder.mkdir(parents=True, exist_ok=True)
-        tmp = folder / f".{target}.{os.getpid()}"
-        tmp.write_text(str(self._now() + TAINTED_MESSAGE_SECONDS))
-        tmp.replace(folder / target)
+        text = message if isinstance(message, str) else json.dumps(message, default=str)
+        if tainted:
+            self._bounded(self._write_delivery, target, text, True)
+            return
+        try:
+            self._bounded(self._write_delivery, target, text, False)
+        except Exception:
+            logger.exception("team-kit guard could not record a clean message; the recipient will treat it as untrusted")
 
-    def _relayed_safely(self) -> bool:
+    @staticmethod
+    def _delivery_name(text: str) -> str:
+        return hashlib.sha256(" ".join(text.split()).encode()).hexdigest()
+
+    def _deliveries(self, sender: str, recipient: str) -> Path:
+        if not (NAME_SHAPE.match(sender) and NAME_SHAPE.match(recipient)):
+            raise ValueError("a delivery is recorded only between bots named in the shape team-kit writes them")
+        return self._load().home / "deliveries" / recipient / sender
+
+    def _write_delivery(self, target: str, text: str, tainted: bool) -> None:
+        # One file per kind: a writer never reads or rewrites the other kind's file, so concurrent sends cannot overwrite each other.
+        folder = self._deliveries(self._profile(), target)
+        folder.mkdir(parents=True, exist_ok=True)
+        self._prune(folder)
+        now = self._now()
+        expires = now + (TAINTED_DELIVERY_SECONDS if tainted else CLEAN_DELIVERY_SECONDS)
+        record = folder / f"{self._delivery_name(text)}.{'tainted' if tainted else 'clean'}"
+        tmp = record.with_name(f".{record.name}.{os.getpid()}.{threading.get_ident()}")
+        tmp.write_text(str(expires))
+        tmp.replace(record)
+
+    def _prune(self, folder: Path) -> None:
+        for record in folder.iterdir():
+            try:
+                if not record.name.startswith(".") and float(record.read_text()) <= self._now():
+                    record.unlink(missing_ok=True)
+            except (OSError, ValueError):
+                continue  # an unreadable record stays: the receiver reads it as untrusted
+
+    def _delivery_untrusted(self, sender: str, text: str) -> bool:
+        """True unless the sender's guard recorded this exact text as clean, unexpired, and not also as tainted."""
         if not self._markers:
             return False
         try:
-            return bool(self._bounded(self._relayed_from_a_tainted_turn))
+            return bool(self._bounded(self._check_delivery, sender, text))
         except Exception:
             logger.exception("team-kit guard could not check the chief's message; it counts as untrusted")
             return True
 
-    def _relayed_from_a_tainted_turn(self) -> bool:
+    def _check_delivery(self, sender: str, text: str) -> bool:
+        recipient = self._profile()
+        legacy = self._load().home / "tainted-messages" / recipient
         try:
-            marker = self._tainted_messages() / self._profile()
-            return marker.exists() and float(marker.read_text()) > self._now()
-        except Exception:
-            logger.exception("team-kit guard could not read the tainted-message marker; the message counts as untrusted")
+            # The pre-provenance marker named only the recipient. It can only taint, never prove: honor it while it is young.
+            if self._now() < legacy.stat().st_mtime + LEGACY_MESSAGE_SECONDS:
+                return True
+        except FileNotFoundError:
+            pass
+        folder, name = self._deliveries(sender, recipient), self._delivery_name(text)
+        try:
+            clean = float((folder / f"{name}.clean").read_text())
+        except FileNotFoundError:
             return True
+        try:
+            tainted = float((folder / f"{name}.tainted").read_text())
+        except FileNotFoundError:
+            tainted = 0.0
+        now = self._now()
+        return not (clean > now and tainted <= now)  # nan compares false both ways, so it reads as untrusted
 
     def _sent_by_chief(self, sender: str | None) -> bool:
         try:
