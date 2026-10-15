@@ -80,16 +80,17 @@ SECRET_SEGMENTS = re.compile(
     r"|printenv\b|env\Z|export\Z|export -p\b|set\Z|declare -[a-z]*[px]|compgen -[ve]\b)"
 )
 WIPE = re.compile(r"""\brm\s+(?:-\S+\s+)*-[a-zA-Z]*[rR][a-zA-Z]*\s+(?:-\S+\s+)*["']?(?:/|~|\$HOME|\$\{HOME\})/?\*?["']?(?=$|[\s;&|)'"])""")
-ARGV_GAP = r"""(?:['"]?\s*,\s*['"]?|\s+)"""
-HERMES_RUN = re.compile(rf"""(?<![\w.-])(?:[^\s'"]*/)?hermes(?:{ARGV_GAP}--?[\w-]+(?:=\S+)?(?:{ARGV_GAP}(?!chat\b|send\b)[\w.@-]+)?)*"""
-                        rf"""{ARGV_GAP}(?:chat|send|run|gateway|cron|sessions|-z|-q)\b""")
+HERMES_SUBCOMMANDS = ("chat", "send", "run", "gateway", "cron", "sessions", "acp", "kanban", "peer", "proxy", "webhook", "profile", "model",
+                      "setup", "update", "config", "login", "auth", "tools", "skills", "mcp", "plugins", "doctor")
+HERMES_RUN = re.compile(r"""[\[(]\s*['"](?:[\w./~-]{0,200}/)?hermes['"]"""
+                        rf"""|(?<![\w.-])hermes['"]?(?:\s*,\s*['"]|\s+)(?:-|(?:{"|".join(HERMES_SUBCOMMANDS)})\b)""")
+GIT_SHELL_ALIAS = re.compile(r"alias\.[^=\s]+(?:=|\s+)!", re.I)
 CODE_BLOCKS = (
     (re.compile(r"\bgh\W+pr\W+merge\b"), "raw gh pr merge skips team-kit-gh merge's checks gate"),
     (re.compile(r"\bgh\W+repo\W+delete\b"), "it deletes a repository"),
     (re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch)\b"), "it merges or deletes through GraphQL"),
     (re.compile(r"\bgit\b[^\n]{0,80}?\bpush\b"), "push from the terminal with a named branch, not from code or a delegated task"),
     (WIPE, "it wipes / or the home folder"),
-    (HERMES_RUN, "a bot never runs the default Hermes agent"),
 )
 INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|perl|ruby|php|bun|deno|osascript)\Z")
 INTERPRETER_CODE_OPTIONS = ("-c", "-e", "-E", "-r", "--eval", "--command", "-p", "--print")
@@ -104,7 +105,6 @@ WRAPPER_VALUE_OPTIONS = {"env": ("-u", "-C", "-P", "-L", "-U", "--unset", "--chd
                                    "--arg-file", "--max-lines", "--max-chars", "--eof")}
 SHELL_VALUE_OPTIONS = ("-o", "+o", "-O", "+O", "--rcfile", "--init-file")
 FISH_VALUE_OPTIONS = ("-C", "--init-command", "-d", "--debug", "-o", "--debug-output", "--features", "-p", "--profile")
-CODE_TOOLS = ("execute_code", "delegate_task", "cronjob*")
 SHELLS = ("sh", "bash", "zsh", "dash", "fish")
 GIT_VALUE_OPTIONS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env")
 PUSH_VALUE_OPTIONS = ("-o", "--push-option", "--repo", "--receive-pack", "--exec")
@@ -484,33 +484,30 @@ def unwrap(program: str, rest: list[str]) -> list[str]:
     return rest
 
 
-def shell_script(words: list[str]) -> str | None:
+def shell_parts(words: list[str]) -> tuple[str | None, str | None]:
     valued = FISH_VALUE_OPTIONS if Path(words[0]).name == "fish" else SHELL_VALUE_OPTIONS
-    i, runs_script, operand = 1, False, False
+    i, runs_script = 1, False
     while i < len(words):
         word = words[i]
-        if word == "<<<":
-            return words[i + 1] if i + 1 < len(words) else UNCHECKABLE
         if word == "--":
             i += 1
-            operand = i < len(words)
             break
         if word.startswith("--command="):
-            return word.split("=", 1)[1]
+            return word.split("=", 1)[1], None
         if word == "--command":
             runs_script, i = True, i + 1
             break
         if word in valued:
             i += 2
-        elif word.startswith(("-", "+")) and len(word) > 1:
-            runs_script = runs_script or (not word.startswith("--") and "c" in word[1:])
+        elif word.startswith("--"):
             i += 1
+        elif word.startswith(("-", "+")) and len(word) > 1:
+            runs_script = runs_script or "c" in word[1:]
+            i += 1 + sum(letter in "oO" for letter in word[1:])
         else:
-            operand = True
             break
-    if runs_script:
-        return words[i] if i < len(words) else UNCHECKABLE
-    return None if operand else UNCHECKABLE
+    rest = words[i] if i < len(words) else None
+    return (rest if runs_script else None), (None if runs_script else rest)
 
 
 def shell_words(segment: str, keep_path: bool = False) -> list[str]:
@@ -538,7 +535,7 @@ def shell_commands(text: str, depth: int = 0, keep_path: bool = False) -> list[l
         if not words:
             continue
         program = Path(words[0]).name
-        script = shell_script(words) if program in SHELLS else " ".join(words[2 if words[1:2] == ["--"] else 1:]) if program == "eval" else None
+        script = shell_parts(words)[0] if program in SHELLS else " ".join(words[2 if words[1:2] == ["--"] else 1:]) if program == "eval" else None
         if script == UNCHECKABLE or (script is not None and depth >= 3):
             out.append([UNCHECKABLE, *words])
         elif script is not None:
@@ -563,9 +560,70 @@ def interpreter_code(command: str) -> list[str]:
             running = True
         elif running and token in INTERPRETER_CODE_OPTIONS and i + 1 < len(tokens):
             code.append(tokens[i + 1])
-        elif running and token.startswith("-") and token[:2] in ("-c", "-e") and len(token) > 2:
-            code.append(token[2:])
+        elif running and token.startswith("-") and not token.startswith("--") and len(token) > 1:
+            letters = token[1:]
+            at = next((k for k, letter in enumerate(letters) if letter in "ceE"), None)
+            if at is not None and at + 1 < len(letters):
+                code.append(letters[at + 1:])
+            elif at is not None and i + 1 < len(tokens):
+                code.append(tokens[i + 1])
+    if any(INTERPRETER.match(Path(t).name) for t in tokens) and "<<" in command and not code:
+        return [command]
     return code
+
+
+def shell_inputs(command: str) -> list[tuple[str, str]]:
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return []
+    found: list[tuple[str, str]] = []
+    segment: list[str] = []
+    piped = False
+    for token in [*tokens, ";"]:
+        if token and set(token) <= set(";&|()"):
+            found += piped_shell(segment, piped)
+            piped, segment = token in ("|", "|&"), []
+        else:
+            segment.append(token)
+    return found
+
+
+def piped_shell(segment: list[str], piped: bool) -> list[tuple[str, str]]:
+    words = segment
+    while words and (ENV_ASSIGN.match(words[0]) or Path(words[0]).name in WRAPPERS):
+        if Path(words[0]).name == "xargs":
+            return []
+        words = words[1:] if ENV_ASSIGN.match(words[0]) else unwrap(Path(words[0]).name, words[1:])
+    if not words or Path(words[0]).name not in SHELLS:
+        return []
+    args, found, from_file, substituted, i = [words[0]], [], False, False, 1
+    while i < len(words):
+        word, after = words[i], words[i + 1] if i + 1 < len(words) else ""
+        if word.isdigit() and after[:1] in "<>" and after:
+            i += 1
+        elif word == "<<<":
+            found.append(("script", after))
+            i += 2
+        elif word.startswith("<<"):
+            i += 2
+        elif word.startswith("<") and "(" not in word and after and not after.startswith("<"):
+            from_file, i = True, i + 2
+        elif word.startswith("<"):
+            substituted, i = True, i + 1
+        elif word.startswith(">"):
+            i += 2
+        else:
+            args.append(word)
+            i += 1
+    script, operand = shell_parts(args)
+    if script is not None or found:
+        return found
+    if substituted or (operand or "").startswith("/dev/fd/") or (piped and not from_file and operand in (None, "-", "/dev/stdin")):
+        return [("block", "the guard cannot check commands a shell reads from a pipe or process substitution; write them to a script file and run that")]
+    return []
 
 
 def git_push_problem(args: list[str]) -> str | None:
@@ -646,14 +704,14 @@ def wipes_home_or_root(words: list[str]) -> bool:
 def command_problem(policy: Policy, words: list[str]) -> str | None:
     program = words[0]
     if program == UNCHECKABLE:
-        return "the guard cannot check commands a shell reads from stdin or nests this deep; write them to a script file and run that"
+        return "the guard cannot check shells or eval nested this deep; write the commands to a script file and run that"
     if program == "gh" and words[1:3] == ["pr", "merge"]:
         return "raw gh pr merge skips team-kit-gh merge's checks gate"
     if program == "gh" and words[1:3] == ["repo", "delete"]:
         return "it deletes a repository"
     if program == "gh" and words[1:2] == ["api"]:
         return gh_api_problem(words[2:])
-    if program == "git" and any(re.match(r"alias\.[^=]+=\s*!", w) for w in words):
+    if program == "git" and GIT_SHELL_ALIAS.search(" ".join(words)):
         return "a git shell alias can hide any command"
     if program == "git":
         i = 1
@@ -680,22 +738,34 @@ def hard_block(policy: Policy, tool_name: str, args: dict) -> str | None:
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
         return None
     if tool_name in ("terminal", "process_manage"):
-        command = str(args.get("command", ""))
-        if re.search(r">\s*\S*" + PROTECTED_KIT.pattern, command, re.I):
-            return "bots never change the kit or ~/.hermes/bin"
-        commands = shell_commands(command, keep_path=True)
-        for words in commands:
-            why = command_problem(policy, [canonical_program(Path(words[0]).name), *words[1:]])
-            if why:
-                return why
-        return code_problem(interpreter_code(command))
-    if not any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CODE_TOOLS):
-        return None
-    return code_problem(strings(args))
+        return terminal_problem(policy, str(args.get("command", "")))
+    if tool_name == "execute_code":
+        return code_problem(strings(args), hermes=True)
+    if fnmatch.fnmatchcase(tool_name, "cronjob*"):
+        return code_problem(strings(args)) or code_problem(strings({k: args.get(k) for k in ("script", "command")}), hermes=True)
+    if tool_name == "delegate_task":
+        return code_problem(strings(args))
+    return None
 
 
-def code_problem(texts: list[str]) -> str | None:
+def terminal_problem(policy: Policy, command: str, depth: int = 0) -> str | None:
+    if re.search(r">\s*\S*" + PROTECTED_KIT.pattern, command, re.I):
+        return "bots never change the kit or ~/.hermes/bin"
+    for words in shell_commands(command, keep_path=True):
+        why = command_problem(policy, [canonical_program(Path(words[0]).name), *words[1:]])
+        if why:
+            return why
+    for kind, value in shell_inputs(command):
+        why = value if kind == "block" else terminal_problem(policy, value, depth + 1) if depth < 3 else command_problem(policy, [UNCHECKABLE])
+        if why:
+            return why
+    return code_problem(interpreter_code(command), hermes=True)
+
+
+def code_problem(texts: list[str], hermes: bool = False) -> str | None:
     for text in texts:
+        if hermes and HERMES_RUN.search(text):
+            return "a bot never runs the default Hermes agent"
         for pattern, why in CODE_BLOCKS:
             if pattern.search(text):
                 return why

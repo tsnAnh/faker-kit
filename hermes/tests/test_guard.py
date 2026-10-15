@@ -619,6 +619,13 @@ def test_with_ask_owner_on_the_bootstrap_and_chief_changes_still_need_the_owner(
     "sudo -Eu root gh pr merge 5", "echo 5 | xargs -tI % gh pr merge %", "python3 -c \"import os; os.system('hermes chat -q hi')\"",
     "python3 -c \"import os; os.system('/usr/local/bin/hermes -p default chat -q hi')\"", "echo 'gh pr merge 5' | bash",
     "bash <<< 'gh pr merge 5'", "git -c alias.m='!gh pr merge 5' m", "arch -arm64 gh pr merge 5",
+    "python3 - <<'EOF'\nsubprocess.run([\"git\",\"push\",\"origin\",\"main\",\"--force\"])\nEOF",
+    "node <<'EOF'\nrequire('child_process').execSync('gh pr merge 5')\nEOF", "python3 -Sc \"import os; os.system('gh pr merge 1')\"",
+    "node -pe \"require('child_process').execSync('gh pr merge 1')\"", "python3 - <<EOF\nos.system('hermes chat -q hi')\nEOF",
+    "echo 'hermes chat -q hi' | bash -", "echo 'hermes chat -q hi' | bash /dev/stdin", "bash <<<'hermes chat -q hi'",
+    "bash 0<<< 'hermes chat -q hi'", "bash < <(echo hermes chat -q hi)", "bash <(echo 'hermes chat -q hi')", "echo x | sudo bash",
+    "bash -euo pipefail -c 'gh pr merge 1'", "bash -euo pipefail -c 'hermes chat -q hi'", "git -calias.x=!sh x", "git -c Alias.X='!sh' x",
+    "git config alias.x '!hermes chat'",
 ])
 def test_the_second_review_bypasses_are_blocked(command):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal(command))["action"] == "block", command
@@ -632,6 +639,8 @@ def test_the_second_review_bypasses_are_blocked(command):
     "python3 -m pytest hermes/tests -q", "bash -o pipefail -c 'npm test | tee log'", "env -S 'npm test'", "eval \"$(direnv export bash)\"",
     "python3 -m pytest -q && git push -u origin feature/x", "node build.js && git add -A && git commit -m wip && git push origin feat/y",
     "python3 scripts/release.py --notes 'after review run git push'", "bash scripts/setup.sh --fast", "fish -C 'set x 1' -c 'npm test'",
+    "git commit -m \"fix(hermes): block curl | bash\"", "grep -E \"fish|bash\" -r .", "find . -name '*.sh' | xargs -n1 bash -n",
+    "echo \"run: make && bash\"", "bash -s -- arg < script.sh", "bash", "cat <<EOF > notes.txt\nhello\nEOF", "bash <<EOF\nnpm test\nEOF",
 ])
 def test_ordinary_work_is_not_blocked(command):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal(command)) is None, command
@@ -712,11 +721,31 @@ def test_code_that_only_names_the_hermes_folder_is_not_blocked(tool, args):
 
 
 @pytest.mark.parametrize(("tool", "args"), [
-    ("delegate_task", {"goal": "run hermes chat -q hi with the default profile"}), ("cronjob_create", {"script": "#!/bin/sh\nhermes chat -q hi"}),
+    ("cronjob_create", {"script": "#!/bin/sh\nhermes chat -q hi"}),
     ("execute_code", {"code": "subprocess.run(['hermes', '-p', 'default', 'chat'])"}),
 ])
 def test_delegated_scheduled_or_code_runs_of_the_default_agent_are_blocked(tool, args):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name=tool, args=args)["action"] == "block"
+
+
+@pytest.mark.parametrize(("tool", "args"), [
+    ("delegate_task", {"goal": "Fix the hermes gateway restart bug in hermes/lib"}), ("delegate_task", {"goal": "Investigate why hermes cron jobs miss runs"}),
+    ("cronjob", {"prompt": "Summarize hermes sessions from today"}),
+])
+def test_prose_about_hermes_in_delegated_or_scheduled_tasks_is_not_blocked(tool, args):
+    assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name=tool, args=args) is None
+
+
+def test_the_hermes_scan_stays_fast_on_long_crafted_code():
+    started = time.monotonic()
+    code = "run([\"hermes\", " + ", ".join(f'"--x={n}", "a"' for n in range(2000)) + ", \"status\"])" + " --a=b x" * 2000
+    Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name="execute_code", args={"code": code})
+    assert time.monotonic() - started < 2
+
+
+@pytest.mark.parametrize("code", ["subprocess.run(['hermes'], input='x')", "subprocess.run(['hermes', 'acp'])"])
+def test_bare_or_subcommand_runs_of_hermes_from_code_are_blocked(code):
+    assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name="execute_code", args={"code": code})["action"] == "block"
 
 
 @pytest.mark.parametrize("code", ["subprocess.run(['hermes', 'chat'])", "os.system('hermes chat -q x')", "subprocess.run('gh pr merge 1', shell=True)",
