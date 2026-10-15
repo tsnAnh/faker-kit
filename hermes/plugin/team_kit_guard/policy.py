@@ -85,11 +85,15 @@ CODE_BLOCKS = (
     (re.compile(r"\bgh\W+repo\W+delete\b"), "it deletes a repository"),
     (re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch)\b"), "it merges or deletes through GraphQL"),
     (re.compile(r"\bgit\b[^\n]{0,80}?\bpush\b"), "push from the terminal with a named branch, not from code or a delegated task"),
-    (re.compile(r"(?<![\w.-])hermes(?![\w.-])"), "a bot never runs the default Hermes agent"),
+    (re.compile(r"(?<![\w./-])hermes(?:\s+-\S+)*\s+(?:chat|send|run|-z|-q)\b|['\"]hermes['\"]"), "a bot never runs the default Hermes agent"),
     (WIPE, "it wipes / or the home folder"),
 )
 GRAPHQL_BLOCKS = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch)\b")
-WRAPPERS = ("env", "command", "exec", "nohup", "sudo", "xargs", "time", "nice", "stdbuf", "caffeinate")
+WRAPPERS = ("env", "command", "exec", "nohup", "sudo", "xargs", "time", "nice", "stdbuf", "caffeinate", "timeout")
+WRAPPER_VALUE_OPTIONS = {"env": ("-u", "-C", "-S", "--unset", "--chdir"), "nice": ("-n", "--adjustment"), "timeout": ("-s", "-k", "--signal", "--kill-after"),
+                         "sudo": ("-u", "-g", "-C", "-D", "-h", "-p", "-U", "-r", "-t"), "stdbuf": ("-i", "-o", "-e"),
+                         "xargs": ("-I", "-L", "-n", "-P", "-s", "-d", "-E", "-a"), "caffeinate": ("-t", "-w")}
+CODE_TOOLS = ("execute_code", "delegate_task", "cronjob*")
 SHELLS = ("sh", "bash", "zsh", "dash", "fish")
 GIT_VALUE_OPTIONS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env")
 PUSH_VALUE_OPTIONS = ("-o", "--push-option", "--repo", "--receive-pack", "--exec")
@@ -112,6 +116,10 @@ def team_kit_program(word: str) -> bool:
 
 def tainted_turn_marker(home: Path, profile: str) -> Path:
     return home / "tainted-turns" / profile
+
+
+def tainted_turn_record(home: Path, profile: str, session: str) -> Path:
+    return tainted_turn_marker(home, profile) / (re.sub(r"[^A-Za-z0-9_.-]", "_", session)[:120] or "unknown")
 
 
 MIGRATE_V1 = (
@@ -432,14 +440,15 @@ def shell_words(segment: str, keep_path: bool = False) -> list[str]:
         program = Path(words[0]).name
         if ENV_ASSIGN.match(words[0]):
             words.pop(0)
-        elif program in WRAPPERS or program == "timeout":
-            if all(w.startswith("-") or ENV_ASSIGN.match(w) for w in words[1:]):
+        elif program in WRAPPERS:
+            rest, valued = words[1:], WRAPPER_VALUE_OPTIONS.get(program, ())
+            while rest and (rest[0].startswith("-") or ENV_ASSIGN.match(rest[0])):
+                rest = rest[2:] if rest[0] in valued else rest[1:]
+            if program == "timeout" and rest:
+                rest = rest[1:]
+            if not rest:
                 break
-            words.pop(0)
-            while words and (words[0].startswith("-") or ENV_ASSIGN.match(words[0])):
-                words.pop(0)
-            if program == "timeout" and words:
-                words.pop(0)
+            words = rest
         else:
             break
     if words and not keep_path:
@@ -453,8 +462,9 @@ def shell_commands(text: str, depth: int = 0, keep_path: bool = False) -> list[l
         words = shell_words(raw.strip(), keep_path)
         if not words:
             continue
-        if Path(words[0]).name in SHELLS and "-c" in words[:-1] and depth < 3:
-            out += shell_commands(words[words.index("-c") + 1], depth + 1, keep_path)
+        script = next((i + 1 for i, w in enumerate(words[1:-1], 1) if w.startswith("-") and not w.startswith("--") and "c" in w[1:]), None)
+        if Path(words[0]).name in SHELLS and script and depth < 3:
+            out += shell_commands(words[script], depth + 1, keep_path)
             continue
         out.append(words)
     return out
@@ -575,6 +585,8 @@ def hard_block(policy: Policy, tool_name: str, args: dict) -> str | None:
             why = command_problem(policy, words)
             if why:
                 return why
+        return None
+    if not any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CODE_TOOLS):
         return None
     for text in strings(args):
         for pattern, why in CODE_BLOCKS:

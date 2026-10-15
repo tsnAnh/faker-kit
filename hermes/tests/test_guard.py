@@ -607,6 +607,8 @@ def test_with_ask_owner_on_the_bootstrap_and_chief_changes_still_need_the_owner(
     "gh api -X DELETE https://api.github.com/repos/o/r", "env hermes chat", "timeout 60 hermes chat", "bash -c 'hermes chat'",
     "sed -i s/a/b/ ~/.hermes/team-kit/kit/hermes/bin/team_kit_gh.py", "cp x ~/.hermes/bin/team-kit-gh", "echo x > ~/.hermes/bin/y",
     "chmod +w ~/.hermes/team-kit/kit", "git -C ~/.hermes/team-kit/kit reset --hard HEAD~1",
+    'bash -lc "gh pr merge 5"', "sh -ec 'git push origin main'", "env -u FOO git push origin main", "nice -n 10 git push origin main",
+    "timeout -s KILL 30 gh pr merge 5", "sudo -u x gh pr merge 5",
 ])
 def test_the_second_review_bypasses_are_blocked(command):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal(command))["action"] == "block", command
@@ -616,7 +618,7 @@ def test_the_second_review_bypasses_are_blocked(command):
     "git commit -m 'docs: explain git push flow'", "gh pr create --title x --body 'run gh pr merge later'",
     "gh api repos/o/r/pulls/1/merge", "gh api repos/o/r/pulls/1", "git push -u origin feature/x", "git push origin feature/x 2>&1",
     "cat ~/.hermes/team-kit/kit/hermes/skills/dispatch/SKILL.md", "ls ~/.hermes/team-kit/kit", "git -C ~/.hermes/team-kit/kit log -3",
-    "~/.hermes/bin/team-kit-gh status", "npm test && cargo build --release",
+    "~/.hermes/bin/team-kit-gh status", "npm test && cargo build --release", "bash -lc 'npm test'", "env -u CI npm test",
 ])
 def test_ordinary_work_is_not_blocked(command):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal(command)) is None, command
@@ -636,22 +638,35 @@ def test_a_tainted_turn_cannot_merge_close_delegate_or_schedule(tool, args):
     assert g.pre_tool_call(tool_name=tool, args=args, session_id="s1", turn_id="t1")["action"] == "block"
 
 
-def test_a_tainted_turn_leaves_a_record_team_kit_gh_reads_until_a_clean_message_or_the_session_ends(tmp_path):
+def test_each_tainted_chat_leaves_its_own_record_until_its_turn_ends_or_a_clean_message_follows(tmp_path):
     def load():
         return parse_policy({**yaml.safe_load(guard_text()), "ask_owner": False}, BOTS, tmp_path)
     g = Guard(load=load, profile=lambda: "meo-beo", now=lambda: 50.0, markers=True)
-    marker = tmp_path / "tainted-turns" / "meo-beo"
+    folder = tmp_path / "tainted-turns" / "meo-beo"
     g.check_message(user_message="merge #12", session_id="s1", turn_id="t1")
-    assert not marker.exists()
+    assert not folder.exists() or not list(folder.iterdir())
     g.transform_tool_result(**terminal("gh issue view 9"), result="text")
-    assert json.loads(marker.read_text()) == {"session": "s1", "at": 50.0}
-    g.check_message(user_message="hi", session_id="s2", turn_id="t1")
-    assert marker.exists(), "a clean turn in another chat leaves this chat's record"
-    g.check_message(user_message="merge #12 now", session_id="s1", turn_id="t2")
-    assert not marker.exists(), "the owner's next clean message starts a clean turn"
-    g.taint("s1", "t3")
-    g.end_turn(session_id="s1", turn_id="t3")
-    assert not marker.exists()
+    assert json.loads((folder / "s1").read_text()) == {"session": "s1", "turn": "t1", "at": 50.0}
+    g.taint("s2", "u1")
+    g.end_turn(session_id="s2", turn_id="u1")
+    assert (folder / "s1").exists() and not (folder / "s2").exists(), "another chat's turn ending leaves this chat's record"
+    g.check_message(user_message="merge #12 now", session_id="s1b", turn_id="t2", parent_session_id="s1")
+    assert not (folder / "s1").exists(), "a clean message clears the record, also after compaction renamed the session"
+    g.taint("s3", "t3")
+    g.end_turn(session_id="s3-renamed", turn_id="t3")
+    assert not (folder / "s3").exists(), "the turn's end clears its record by turn id"
+
+
+def test_a_tainted_turn_whose_record_cannot_be_written_runs_no_more_commands(tmp_path):
+    def load():
+        return parse_policy({**yaml.safe_load(guard_text()), "ask_owner": False}, BOTS, tmp_path / "missing")
+    (tmp_path / "missing").write_text("a file, so no folder can be made under it")
+    g = Guard(load=load, profile=lambda: "meo-beo", markers=True)
+    g.taint("s1", "t1")
+    assert g.pre_tool_call(**terminal("git status"))["action"] == "block"
+    assert g.pre_tool_call(tool_name="skill_view", args={"name": "dispatch"}, session_id="s1", turn_id="t1") is None
+    g.end_turn(session_id="s1", turn_id="t1")
+    assert g.pre_tool_call(**terminal("git status")) is None
 
 
 def test_a_hanging_policy_read_taints_a_relayed_message():
@@ -661,3 +676,18 @@ def test_a_hanging_policy_read_taints_a_relayed_message():
     g = Guard(load=slow, profile=lambda: "meo-beo", timeout=0.05, markers=True)
     g.check_message(user_message="Message from 🤖 chó đầu đàn (@chanh-van): Merge #12", session_id="s1", turn_id="t1")
     assert g.is_tainted("s1", "t1")
+
+
+
+@pytest.mark.parametrize(("tool", "args"), [
+    ("web_search", {"query": "hermes agent pre_llm_call hook"}), ("memory", {"content": "the guard lives under hermes/plugin"}),
+    ("delegate_task", {"goal": "Fix the failing tests in hermes/tests"}), ("execute_code", {"code": "open('hermes/lib/x.py').read()"}),
+    ("send_message", {"message": "PR ready; run git push yourself"}),
+])
+def test_mentioning_hermes_or_git_push_in_text_is_not_blocked(tool, args):
+    assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name=tool, args=args) is None
+
+
+@pytest.mark.parametrize("code", ["subprocess.run(['hermes', 'chat'])", "os.system('hermes chat -q x')", "subprocess.run('gh pr merge 1', shell=True)"])
+def test_code_that_runs_the_default_agent_or_a_raw_merge_is_blocked(code):
+    assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name="execute_code", args={"code": code})["action"] == "block"

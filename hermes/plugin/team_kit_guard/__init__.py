@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from .policy import Policy, PolicyError, block, decide, load_policy, reader_source, tainted_turn_marker, wrap_untrusted
+from .policy import Policy, PolicyError, block, decide, load_policy, reader_source, tainted_turn_marker, tainted_turn_record, wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,7 @@ class Guard:
         self._skill_digest = skill_digest
         self._now = now
         self._markers = markers
+        self._unrecorded: set[tuple[str, str]] = set()
         self._skills: collections.OrderedDict[str, str] = collections.OrderedDict()
         self._tainted: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
@@ -108,24 +109,31 @@ class Guard:
             self._tainted.add(self._turn(session_id, turn_id))
         if self._markers:
             try:
-                self._bounded(self._write_turn_marker, str(session_id or ""))
+                self._bounded(self._write_turn_marker, str(session_id or ""), str(turn_id or ""))
             except Exception:
-                logger.exception("team-kit guard could not record the tainted turn for team-kit-gh")
+                logger.exception("team-kit guard could not record the tainted turn for team-kit-gh; the turn may run no commands")
+                with self._lock:
+                    self._unrecorded.add(self._turn(session_id, turn_id))
 
-    def _write_turn_marker(self, session: str) -> None:
-        marker = tainted_turn_marker(self._load().home, self._profile())
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        tmp = marker.with_name(f".{marker.name}.{os.getpid()}.{threading.get_ident()}")
-        tmp.write_text(json.dumps({"session": session, "at": self._now()}))
-        tmp.replace(marker)
+    def _write_turn_marker(self, session: str, turn: str) -> None:
+        record = tainted_turn_record(self._load().home, self._profile(), session)
+        record.parent.mkdir(parents=True, exist_ok=True)
+        tmp = record.with_name(f".{record.name}.{os.getpid()}.{threading.get_ident()}")
+        tmp.write_text(json.dumps({"session": session, "turn": turn, "at": self._now()}))
+        tmp.replace(record)
 
-    def _clear_turn_marker(self, session: str) -> None:
-        marker = tainted_turn_marker(self._load().home, self._profile())
-        try:
-            if json.loads(marker.read_text()).get("session") == session:
-                marker.unlink()
-        except (OSError, ValueError, AttributeError):
+    def _clear_turn_marker(self, sessions: tuple[str, ...] = (), turn: str = "") -> None:
+        folder = tainted_turn_marker(self._load().home, self._profile())
+        for session in sessions:
+            tainted_turn_record(folder.parent.parent, self._profile(), session).unlink(missing_ok=True)
+        if not turn or not folder.is_dir():
             return
+        for record in folder.iterdir():
+            try:
+                if json.loads(record.read_text()).get("turn") == turn:
+                    record.unlink(missing_ok=True)
+            except (OSError, ValueError, AttributeError):
+                continue
 
     def _bounded(self, fn, *args):  # noqa: ANN001, ANN002, ANN202
         # Run in the caller's context: a gateway serving several profiles names the routed one in a
@@ -135,6 +143,10 @@ class Guard:
     def pre_tool_call(self, tool_name="", args=None, session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
         try:
             tainted = self.is_tainted(session_id, turn_id)
+            with self._lock:
+                unrecorded = self._turn(session_id, turn_id) in self._unrecorded
+            if (unrecorded and tool_name in ("terminal", "process_manage", "execute_code", "delegate_task")) or (tool_name.startswith("cronjob") and unrecorded):
+                return block("this turn read untrusted text and the guard could not record it, so it runs no more commands; ask again in a new message")
             verdict = self._bounded(lambda: decide(self._load(), self._profile(), tool_name, args or {}, tainted))
             if verdict is None and tainted and tool_name == "message_agent" and self._markers:
                 self._bounded(self._mark_tainted_message, str((args or {}).get("target", "")).strip().lstrip("@"))
@@ -158,11 +170,12 @@ class Guard:
         self.taint(session_id, turn_id)
         return wrap_untrusted(source, result)
 
-    def check_message(self, user_message="", session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
+    def check_message(self, user_message="", session_id="", turn_id="", parent_session_id="", **_):  # noqa: ANN001, ANN003, ANN201
         out = self._message_verdict(str(user_message or ""), session_id, turn_id)
         if self._markers and not self.is_tainted(session_id, turn_id):
             try:
-                self._bounded(self._clear_turn_marker, str(session_id or ""))
+                sessions = tuple(str(s) for s in (session_id, parent_session_id) if s)
+                self._bounded(self._clear_turn_marker, sessions)
             except Exception:
                 logger.exception("team-kit guard could not clear the tainted-turn record")
         reload = self._skill_reload(session_id)
@@ -277,9 +290,10 @@ class Guard:
     def end_turn(self, session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
         with self._lock:
             self._tainted.discard(self._turn(session_id, turn_id))
+            self._unrecorded.discard(self._turn(session_id, turn_id))
         if self._markers:
             try:
-                self._bounded(self._clear_turn_marker, str(session_id or ""))
+                self._bounded(self._clear_turn_marker, tuple(str(s) for s in (session_id,) if s), str(turn_id or ""))
             except Exception:
                 logger.exception("team-kit guard could not clear the tainted-turn record")
 

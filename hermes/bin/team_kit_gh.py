@@ -986,15 +986,19 @@ class Gh:
                 "head": head if SHA.match(head) else None, "checks": checks, "conflicts": data.get("mergeable") is False}
 
     def refuse_after_untrusted_text(self, action: str) -> None:
-        try:
-            marker = json.loads(tainted_turn_marker(self.policy.home, self.bot.name).read_text())
-        except FileNotFoundError:
-            return
-        except (OSError, ValueError):
-            raise Refused(f"{action} could not read this bot's tainted-turn record; ask again in a new message") from None
-        if not isinstance(marker, dict) or self.now() - float(marker.get("at", self.now())) < TAINTED_TURN_SECONDS:
-            raise Refused(f"this bot read text strangers wrote in its current turn, so it may not {action}; "
-                          "the owner or the chief of staff asks again in a new message")
+        folder = tainted_turn_marker(self.policy.home, self.bot.name)
+        for record in sorted(folder.iterdir()) if folder.is_dir() else []:
+            if record.name.startswith("."):
+                continue
+            try:
+                at = float(json.loads(record.read_text())["at"])
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError, KeyError, TypeError):
+                raise Refused(f"{action} could not read this bot's tainted-turn record; ask again in a new message") from None
+            if self.now() - at < TAINTED_TURN_SECONDS:
+                raise Refused(f"this bot read text strangers wrote in its current turn, so it may not {action}; "
+                              "the owner or the chief of staff asks again in a new message")
 
     def own_open_pull(self, pr: int) -> dict:
         data = self.pull(pr)

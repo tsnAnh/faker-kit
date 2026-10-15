@@ -2084,7 +2084,9 @@ def test_merging_a_unit_pull_request_closes_its_issue(team_kit_home, gh, capsys)
 def test_merge_and_close_refuse_while_the_bots_turn_read_untrusted_text(team_kit_home, gh, capsys, record, refused):
     pr(gh, 12)
     gh.prs[(REPO, 12)]["mergeable"] = True
-    marker = team_kit_home / "tainted-turns" / "meo-beo"
+    marker = team_kit_home / "tainted-turns" / "meo-beo" / "s1"
+    (team_kit_home / "tainted-turns" / "meo-beo" / "s2").parent.mkdir(parents=True, exist_ok=True)
+    (team_kit_home / "tainted-turns" / "meo-beo" / "s2").write_text(json.dumps({"session": "s2", "at": NOW - 7200}))
     if record is not None:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(record if isinstance(record, str) else json.dumps(record))
