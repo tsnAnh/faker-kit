@@ -37,7 +37,8 @@ DEFAULT_READ_ONLY_TOOLS = (
 )
 CHAT_TOOLS = ("message_agent", "clarify", "todo_*", "skills_list", "skill_view", "session_search")
 TRUSTED_RESULTS = (*CHAT_TOOLS, "write_file", "patch")
-PATH_ARGS = {"write_file": ("path",), "patch": ("path",), "read_file": ("path",), "search_files": ("path", "pattern")}
+PATH_ARGS = {"write_file": ("path",), "patch": ("path",), "read_file": ("path",), "search_files": ("path",)}
+TEAM_KIT_PROGRAMS = ("team-kit-gh", "team-kit-admin", "team-kit-chief")
 # Each role's one command.
 ROLE_COMMAND = {"project": "team-kit-gh", "bootstrap": "team-kit-admin", "chief": "team-kit-chief"}
 # install.sh writes every command under both names, so the guard reads faker-kit-<rest> as team-kit-<rest>.
@@ -65,13 +66,28 @@ CHIEF_APPROVALS = {
     "new-project": "The chief bot asks the bootstrap bot to set up a new project for this repository. Approve only if you asked for that project.",
 }
 SECRET_TEXT = re.compile(
-    r"""(?:^|[\s'"=:~$({/])\.env(?:\.[\w.-]+)?(?=$|[\s'"/;|&)])"""
-    r"|\.ssh\b|\.config/gh\b|\bhosts\.yml\b|\bauth\.json\b|\bid_(?:rsa|ed25519|ecdsa)\b|\.(?:pem|p12|keychain-db)\b"
-    r"|\.hermes(?!/bin/|/team-kit/kit/|/team-kit/briefs/)|\.hermes/[^\s'\"]*\.\.|\bHERMES_HOME\b|\bTEAM_KIT_HOME\b",
+    r"(?<![\w.-])\.env(?:\.(?!example(?![\w-])|sample(?![\w-])|template(?![\w-])|dist(?![\w-]))[\w-]+)*(?![\w.-])"
+    r"|\.ssh(?![\w-])|\.config/gh(?![\w-])|\.git-credentials|\.netrc(?![\w-])|\.aws/credentials|\bid_(?:rsa|ed25519|ecdsa)(?![\w-])"
+    r"|login\.keychain|\.hermes(?!/bin(?![\w-])|/team-kit/kit(?![\w-])|/team-kit/briefs(?![\w-]))(?![\w-])|\.hermes/\S*\.\."
+    r"|\bHERMES_HOME\b|\bTEAM_KIT_HOME\b",
     re.I,
 )
-SECRET_COMMANDS = ("gh auth token*", "gh auth status*-t", "gh auth status*-t *", "gh auth status*--show-token*", "security find-*",
-                   "security dump-keychain*", "security export*", "printenv*", "env", "export -p", "declare -*x*", "git credential*")
+WRITE_PROTECTED = re.compile(r"\.hermes(?!/team-kit/briefs(?![\w-]))(?![\w-])", re.I)
+PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
+SECRET_SEGMENTS = re.compile(
+    r"\A(?:gh auth token\b|gh auth status\b.*(?:\s-t\b|--show-token)|security (?:find-|dump-keychain|export)|git credential\b"
+    r"|printenv\b|env\Z|export\Z|export -p\b|set\Z|declare -[a-z]*[px]|compgen -[ve]\b)"
+)
+GIT_PUSH = re.compile(r"\bgit((?:\s+-[Cc]\s+\S+|\s+--[\w-]+=\S+)*)\s+push\b([^;&|\n]*)")
+GH_API = re.compile(r"\bgh\s+api\b([^;&|\n]*)")
+GH_METHOD = re.compile(r"(?:-X\s*|--method[=\s]+)['\"]?([A-Za-z]+)")
+WIPE = re.compile(r"""\brm\s+(?:-\S+\s+)*-[a-zA-Z]*[rR][a-zA-Z]*\s+(?:-\S+\s+)*["']?(?:/|~|\$HOME|\$\{HOME\})/?\*?["']?(?=$|[\s;&|)])""")
+HARD_TEXT = (
+    (re.compile(r"\bgh\s+pr\s+merge\b"), "raw gh pr merge skips team-kit-gh merge's checks gate"),
+    (re.compile(r"\bgh\s+repo\s+delete\b"), "it deletes a repository"),
+    (re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch)\b"), "it merges or deletes through GraphQL"),
+    (WIPE, "it wipes / or the home folder"),
+)
 
 MIGRATE_V1 = (
     "guard.yaml is version 1. team-kit now keeps bots in bots.yaml: set `version: 2` in guard.yaml, "
@@ -126,13 +142,6 @@ class ToolRule:
 # Readers whose output anyone can write, wrapped whatever guard.yaml says, so a machine with an older guard.yaml
 # still marks them: `code` prints commit and pull request titles.
 ALWAYS_UNTRUSTED = (ToolRule(tool="terminal", command="team-kit-gh code*"),)
-
-HARD_DENY = tuple(ToolRule(command=c) for c in (
-    "gh pr merge*", "gh api*PUT*/merge*", "gh api*/merge*PUT*", "gh api*-X DELETE*", "gh api*--method DELETE*", "gh repo delete*",
-    "git push* main", "git push* main *", "git push* *:main*", "git push* master", "git push* master *", "git push* *:master*",
-    "git push* --force*", "git push* -f*", "git push* +*",
-    "rm -*[rR]* /", "rm -*[rR]* ~", "rm -*[rR]* ~/", "rm -*[rR]* $HOME", "rm -*[rR]* $HOME/",
-))
 
 @dataclass(frozen=True)
 class Bot:
@@ -370,51 +379,157 @@ def approve(message: str, tool_name: str, args: dict, kind: str) -> dict:
     return {"action": "approve", "message": message, "rule_key": f"team-kit-{kind}:{tool_name}:{call_digest(args)}"}
 
 
+def strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [t for v in value.values() for t in strings(v)]
+    if isinstance(value, (list, tuple)):
+        return [t for v in value for t in strings(v)]
+    return []
+
+
+def scanned_text(tool_name: str, args: dict) -> list[str]:
+    if tool_name in PATH_ARGS:
+        texts = [str(args.get(k) or "") for k in PATH_ARGS[tool_name]]
+        if tool_name == "patch":
+            texts += PATCH_FILE.findall(str(args.get("patch") or ""))
+        return texts
+    return strings(args)
+
+
+def git_push_problem(rest: str) -> str | None:
+    words = rest.split()
+    if any(w in ("--all", "--mirror", "--delete", "-d") or w.startswith(("--force", "-f", "--mirror")) for w in words):
+        return "force, mirror, and delete pushes are blocked"
+    plain = [w for w in words if not w.startswith("-")]
+    refspecs = plain[1:]
+    if not refspecs:
+        return "name the branch: git push origin <branch>, never a bare push that could reach main"
+    for spec in refspecs:
+        if spec.startswith("+"):
+            return "a + refspec force-pushes"
+        target = spec.split(":", 1)[1] if ":" in spec else spec
+        if target.removeprefix("refs/heads/") in ("HEAD", "main", "master", ""):
+            return f"pushing to {target or 'a deleted branch'} could reach main; push a named feature branch"
+    return None
+
+
+def gh_api_problem(rest: str) -> str | None:
+    found = GH_METHOD.search(rest)
+    method = found.group(1).upper() if found else ""
+    path = next((w.strip("'\"") for w in rest.split() if w.strip("'\"").lstrip("/").startswith("repos/")), "").split("?")[0].strip("/")
+    parts = path.split("/")
+    if method == "DELETE" and len(parts) == 3:
+        return "it deletes a repository"
+    if parts[-1:] == ["merge"] and method in ("PUT", "POST", ""):
+        return "a raw merge skips team-kit-gh merge's checks gate"
+    if parts[-1:] == ["merges"]:
+        return "it merges branches straight into a base branch"
+    return None
+
+
+def hard_block(tool_name: str, args: dict) -> str | None:
+    if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
+        return None
+    for text in strings(args):
+        for pattern, why in HARD_TEXT:
+            if pattern.search(text):
+                return why
+        problems = [git_push_problem(m.group(2)) for m in GIT_PUSH.finditer(text)] + [gh_api_problem(m.group(1)) for m in GH_API.finditer(text)]
+        found = next((p for p in problems if p), None)
+        if found:
+            return found
+    return None
+
+
+def default_agent_use(policy: Policy, profile: str, tool_name: str, args: dict) -> str | None:
+    if tool_name == "message_agent":
+        target = str(args.get("target", "")).strip().lstrip("@")
+        if target == profile or target not in policy.bots:
+            others = ", ".join(sorted(name for name in policy.bots if name != profile)) or "none"
+            return f"{profile} may message only this machine's team-kit bots ({others}), never the default Hermes agent"
+        return None
+    for text in strings(args) if tool_name not in PATH_ARGS and not any(fnmatch.fnmatchcase(tool_name, p) for p in CHAT_TOOLS) else []:
+        for segment in command_segments(text):
+            words = segment.split()
+            if words[0] != "hermes":
+                continue
+            chosen = next((words[i + 1] for i, w in enumerate(words[:-1]) if w in ("-p", "--profile")), None)
+            chosen = chosen or next((w.split("=", 1)[1] for w in words if w.startswith("--profile=")), None)
+            if chosen not in policy.bots or chosen == "default":
+                return "a bot runs hermes only with -p naming a team-kit bot, never the default Hermes agent"
+    return None
+
+
 def secret_reference(tool_name: str, args: dict) -> str | None:
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS):
         return None
-    if tool_name in ("terminal", "process_manage"):
-        for segment in command_segments(str(args.get("command", ""))):
-            if any(fnmatch.fnmatchcase(segment, pattern) for pattern in SECRET_COMMANDS):
-                return segment[:60]
-    scanned = {k: args.get(k) for k in PATH_ARGS[tool_name]} if tool_name in PATH_ARGS else args
-    found = SECRET_TEXT.search(json.dumps(scanned, default=str))
-    return found.group(0).strip(" '\"=:~$({/") if found else None
+    for text in scanned_text(tool_name, args):
+        if tool_name not in PATH_ARGS:
+            for segment in command_segments(text):
+                if SECRET_SEGMENTS.match(segment):
+                    return segment[:60]
+        found = SECRET_TEXT.search(text)
+        if found:
+            return found.group(0)
+    if tool_name in ("write_file", "patch"):
+        for text in scanned_text(tool_name, args):
+            if WRITE_PROTECTED.search(text):
+                return "the Hermes home, the kit, or its commands"
+    if tool_name == "search_files":
+        where = os.path.abspath(os.path.expanduser(str(args.get("path") or ".")))  # noqa: PTH100, PTH111
+        if where in ("/", "/Users", "/home", os.path.expanduser("~")):  # noqa: PTH111
+            return "the whole home folder; search a project folder"
+    return None
+
+
+def clean_turn_command(tool_name: str, args: dict) -> str | None:
+    if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
+        return None
+    for text in strings(args):
+        found = re.search(r"\b(?:team|faker)-kit-gh\s+(merge|close)\b", text)
+        if found:
+            return found.group(1)
+    return None
 
 
 def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bool) -> dict | None:
-    """The pre_tool_call verdict. Every bot may use every tool and the shell; the blocks are the hard denies, guard.yaml's
-    deny rules, secrets, and merge or close in a tainted turn. Unless ask_owner is off, bootstrap and chief approval and
-    taint then ask the owner."""
-    for rule in (*HARD_DENY, *policy.deny):
+    """The pre_tool_call verdict. Every bot may use every tool and the shell; the blocks are the hard blocks, guard.yaml's
+    deny rules, secrets, the default Hermes agent, and merge or close in a tainted turn. Unless ask_owner is off,
+    bootstrap and chief approval and taint then ask the owner."""
+    why = hard_block(tool_name, args)
+    if why:
+        return block(f"{tool_name} is blocked for every bot: {why}")
+    for rule in policy.deny:
         if rule.matches(tool_name, args):
             return block(f"{tool_name} matches deny rule `{rule.label()}`")
     secret = secret_reference(tool_name, args)
     if secret:
-        return block(f"{tool_name} touches {secret}, a secret store; bots never read or write secrets")
+        return block(f"{tool_name} touches {secret}, a secret store or the kit's own files; bots never read secrets or edit the kit")
     bot = policy.bots.get(profile)
     if bot is None:
         return block(f"profile {profile} is not a team-kit bot in bots.yaml; every tool call is blocked")
-    if tool_name == "message_agent" and str(args.get("target", "")).strip().lstrip("@") == profile:
-        return block(f"{profile} may not message itself")
-    command = str(args.get("command", ""))
-    clean_turn = [s for s in command_segments(command) if s.split(" ")[0] == "team-kit-gh" and s.split(" ")[1:2] and s.split(" ")[1] in CLEAN_TURN_COMMANDS]
-    if tainted and tool_name == "terminal" and clean_turn:
-        return block(f"{clean_turn[0].split(' ')[1]} runs only in a turn that read nothing untrusted; the owner or the chief of staff must ask for it in a new message")
+    default = default_agent_use(policy, profile, tool_name, args)
+    if default:
+        return block(default)
+    gated = clean_turn_command(tool_name, args)
+    if tainted and gated:
+        return block(f"{gated} runs only in a turn that read nothing untrusted; the owner or the chief of staff must ask for it in a new message")
     read_only = tool_name in policy.read_only_tools
     if not policy.ask_owner:
         return None
-    if bot.role == "bootstrap" and not read_only:
-        words = command.split()
-        if not (tool_name == "terminal" and len(words) > 1 and words[1] in BOOTSTRAP_READ_ONLY):
-            return approve(
-                f"The bootstrap bot changes this machine or GitHub. Approve {tool_name} only if you asked for it.",
-                tool_name, args, "bootstrap",
-            )
+    segments = [s.split() for s in command_segments(str(args.get("command", "")))] if tool_name == "terminal" else []
+    bootstrap_reads = bool(segments) and all(w[0] == "team-kit-admin" and w[1:2] and w[1] in BOOTSTRAP_READ_ONLY for w in segments)
+    if bot.role == "bootstrap" and not read_only and not bootstrap_reads:
+        return approve(
+            f"The bootstrap bot changes this machine or GitHub. Approve {tool_name} only if you asked for it.",
+            tool_name, args, "bootstrap",
+        )
     if bot.role == "chief" and not read_only:
-        words = command.split()
-        if tool_name == "terminal" and len(words) > 1 and words[1] in CHIEF_APPROVALS:
-            return approve(CHIEF_APPROVALS[words[1]], tool_name, args, "chief")
+        asked = next((w[1] for w in segments if w[0] == "team-kit-chief" and w[1:2] and w[1] in CHIEF_APPROVALS), None)
+        if asked:
+            return approve(CHIEF_APPROVALS[asked], tool_name, args, "chief")
     if tainted and not read_only:
         return approve(f"This turn read untrusted content. Approve {tool_name} only if you asked for it.", tool_name, args, "taint")
     return None
@@ -431,7 +546,7 @@ def reader_source(policy: Policy, tool_name: str, args: dict) -> str | None:
     if any(rule.matches(tool_name, args) for rule in policy.untrusted_readers):
         return source
     if tool_name in ("terminal", "process_manage"):
-        return None if segments and all(s.startswith(PROGRAM_PREFIX) for s in segments) else source
+        return None if segments and all(s.split()[0] in TEAM_KIT_PROGRAMS for s in segments) else source
     return None if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in TRUSTED_RESULTS) else source
 
 
