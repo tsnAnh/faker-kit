@@ -433,6 +433,8 @@ def test_vendor_lists_older_kit_pull_requests_it_supersedes(ready, kit_source):
                                      {"html_url": "https://github.com/acme/shop/pull/4", "head": "feature/other"}]})
     code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
     assert code == 0 and out["superseded"] == ["https://github.com/acme/shop/pull/2"]
+    assert posted(root)["pull_edits"] == [{"pr": 7, "state": "closed"}], "only the older kit update closes"
+    assert posted(root)["comments"] == [{"issue": 7, "body": f"Superseded by {out['pr']}, which vendors team-kit {kit_source[1][:12]}."}]
 
 
 @pytest.mark.parametrize("problem", ["symlinked skills folder", "invalid dispatch.json", "dirty kit"])

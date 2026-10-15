@@ -578,7 +578,9 @@ class Admin:
         open_prs = [pr for pr in self.api(f"repos/{repo}/pulls?state=open&base={ref_query}&per_page=100") or []
                     if str((pr.get("head") or {}).get("ref", "")).startswith(KIT_BRANCH_PREFIX)]
         mine = [pr["html_url"] for pr in open_prs if pr["head"]["ref"] == branch]
-        superseded = sorted(pr["html_url"] for pr in open_prs if pr["head"]["ref"] != branch)
+        older = [pr for pr in open_prs if pr["head"]["ref"] != branch
+                 and str(((pr["head"].get("repo") or {}).get("full_name")) or "").lower() == repo.lower()]
+        superseded = sorted(pr["html_url"] for pr in older)
         if mine:
             url = mine[0]
         else:
@@ -589,6 +591,10 @@ class Admin:
                     f"{', '.join(skipped) or 'none'}. Removed: {', '.join(sorted(stale)) or 'nothing'}.")
             url = self.api(f"repos/{repo}/pulls", "POST", {"title": f"chore(agents): vendor team-kit {short}", "head": branch,
                                                          "base": default, "body": body})["html_url"]
+        for pr in older:
+            number = int(pr["number"])
+            self.api(f"repos/{repo}/issues/{number}/comments", "POST", {"body": f"Superseded by {url}, which vendors team-kit {short}."})
+            self.api(f"repos/{repo}/pulls/{number}", "PATCH", {"state": "closed"})
         return {**result, "branch": branch, "pr": url, "superseded": superseded}
 
     def setup_repo(self, project: str, backend: str, codex_env: str | None) -> dict:

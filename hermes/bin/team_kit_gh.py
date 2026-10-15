@@ -168,6 +168,8 @@ HUMAN_LABEL = "agent:needs-human"
 SECURITY_LABEL = "agent:security"
 INCIDENT_LABEL = "agent:incident"
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
+DISPATCH_FILE = ".agents/dispatch.json"
+KIT_PATHS = (".agents/team-kit/", ".claude/skills/", ".agents/skills/", ".claude/agents/")
 SILENT = "[SILENT]"
 HEALTH_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,31}\Z")
 # A health check opens an incident after this many failed polls in a row, and closes it after as
@@ -257,6 +259,7 @@ def pull_fields(data: dict, repo: str) -> dict:
         "body": data.get("body") or "",
         "labels": data.get("labels") or [],
         "mergeable": data.get("mergeable"),
+        "changedFiles": data.get("changed_files"),
     }
 
 
@@ -551,11 +554,11 @@ class Gh:
                 return items
         raise Refused(f"more than {ISSUE_PAGE_LIMIT * ISSUE_PAGE_SIZE} items at {path}")
 
-    def file(self, path: str) -> str:
-        if not REPO_PATH.match(path):
+    def file(self, path: str, ref: str | None = None) -> str:
+        if not REPO_PATH.match(path) or (ref is not None and not SHA.match(ref)):
             raise Refused(f"{path!r} is not a plain path inside the repository")
         try:
-            data = self.api_json(f"repos/{self.repo}/contents/{path}")
+            data = self.api_json(f"repos/{self.repo}/contents/{path}" + (f"?ref={ref}" if ref else ""))
             return base64.b64decode(data["content"]).decode()
         except (ValueError, TypeError, KeyError):
             raise Refused(f"{path} is not a readable file in {self.repo}") from None
@@ -768,10 +771,10 @@ class Gh:
             raise Refused(".agents/dispatch.json pr_comment_trigger must be an @mention of letters, digits, and hyphens")
         return trigger
 
-    def kit_pr_notices(self) -> list[str]:
-        """One notice per head when an open kit update pull request (team-kit-admin vendor's team-kit/kit-* branch)
-        conflicts with its base. `team-kit-admin vendor` rebuilds it on the current branch, which only the bootstrap
-        bot may run, so the notice names that command."""
+    def kit_prs(self, local_commit: str) -> list[str]:
+        """Open kit update pull requests (team-kit-admin vendor's team-kit/kit-* branches): one notice per head when one
+        conflicts with its base, which only the bootstrap bot's `team-kit-admin vendor` rebuilds; and, with auto_merge
+        low, the merge of the one that vendors this machine's kit once land_kit_pr finds it holds nothing else."""
         record = self.policy.home / "kit-prs" / f"{self.bot.name}.json"
         try:
             told = json.loads(record.read_text())
@@ -785,7 +788,12 @@ class Gh:
                 continue
             number = int(item["number"])
             state = self.pr_state(number)
-            if not state["conflicts"] or not state["head"]:
+            if not state["head"]:
+                continue
+            if not state["conflicts"]:
+                if item["head"]["ref"] == f"{KIT_BRANCH_PREFIX}{local_commit[:12]}" and self.land_kit_pr(number, local_commit):
+                    notices.append(f"{NOTICE} merged the kit update {item.get('html_url')} automatically (kit {local_commit[:12]}, "
+                                   "checks passed, only vendored files)")
                 continue
             now_told[str(number)] = state["head"]
             if told.get(str(number)) != state["head"]:
@@ -797,6 +805,37 @@ class Gh:
             tmp.write_text(json.dumps(now_told))
             tmp.replace(record)
         return notices
+
+    def land_kit_pr(self, number: int, local_commit: str) -> bool:
+        try:
+            config = self.dispatch_config()
+        except Refused:
+            return False
+        if config.get("auto_merge", "none") != "low" or self.cord():
+            return False
+        data = self.pull(number)
+        head = str(data.get("headRefOid") or "")
+        author = str((data.get("author") or {}).get("login") or "").lower()
+        default = str(self.api_json(f"repos/{self.repo}").get("default_branch") or "")
+        if (data.get("isCrossRepository") is not False or author not in self.policy.trusted_authors or not SHA.match(head)
+                or data.get("baseRefName") != default or data.get("mergeable") is not True
+                or checks_state(self.check_rollup(head)) != "passed"):
+            return False
+        files = [str(f.get("filename") or "") for f in self.api_pages(f"repos/{self.repo}/pulls/{int(number)}/files")]
+        if len(files) != data.get("changedFiles") or not all(f.startswith(KIT_PATHS) or f == DISPATCH_FILE for f in files):
+            return False
+        try:
+            if json.loads(self.file(VENDOR_MANIFEST, head)).get("kit_ref") != local_commit:
+                return False
+            if DISPATCH_FILE in files:
+                before, after = json.loads(self.file(DISPATCH_FILE)), json.loads(self.file(DISPATCH_FILE, head))
+                before.pop("kit_ref", None)
+                if after.pop("kit_ref", None) != local_commit or before != after:
+                    return False
+        except (Refused, ValueError, AttributeError):
+            return False
+        self.run(["pr", "merge", str(number), "-R", self.repo, f"--{config.get('auto_merge_method', 'merge')}", "--match-head-commit", head])
+        return True
 
     def pr_comment_notices(self) -> list[str]:
         """One notice per new pull request comment from a collaborator that mentions this bot: the pull request,
@@ -2461,7 +2500,7 @@ class Project:
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
             problems["pr-comments"] = reason(err)
         try:
-            notices.extend(gh.kit_pr_notices())
+            notices.extend(gh.kit_prs(local_commit))
         except (Refused, ValueError, KeyError, TypeError) as err:
             problems["kit-prs"] = reason(err)
         try:
