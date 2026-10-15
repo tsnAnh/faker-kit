@@ -119,7 +119,7 @@ from team_kit_contracts import (
     verify_argv,
 )
 from team_kit_env import EnvFileError, use_bot_env
-from team_kit_guard.policy import NAME, REPO, Bot, Policy, PolicyError, load_policy
+from team_kit_guard.policy import NAME, REPO, TAINTED_TURN_SECONDS, Bot, Policy, PolicyError, load_policy, tainted_turn_marker
 from team_kit_incident_sources import (
     ExternalObservation,
     IncidentSourceError,
@@ -985,6 +985,21 @@ class Gh:
         return {"pr": pr, "state": str(data.get("state", "")).lower(), "merged": bool(data.get("mergedAt")),
                 "head": head if SHA.match(head) else None, "checks": checks, "conflicts": data.get("mergeable") is False}
 
+    def refuse_after_untrusted_text(self, action: str) -> None:
+        folder = tainted_turn_marker(self.policy.home, self.bot.name)
+        for record in sorted(folder.iterdir()) if folder.is_dir() else []:
+            if record.name.startswith("."):
+                continue
+            try:
+                at = float(json.loads(record.read_text())["at"])
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError, KeyError, TypeError):
+                raise Refused(f"{action} could not read this bot's tainted-turn record; ask again in a new message") from None
+            if self.now() - at < TAINTED_TURN_SECONDS:
+                raise Refused(f"this bot read text strangers wrote in its current turn, so it may not {action}; "
+                              "the owner or the chief of staff asks again in a new message")
+
     def own_open_pull(self, pr: int) -> dict:
         data = self.pull(pr)
         if data.get("isCrossRepository") is not False:
@@ -994,6 +1009,7 @@ class Gh:
         return data
 
     def merge_pr(self, pr: int) -> dict:
+        self.refuse_after_untrusted_text("merge")
         data = self.own_open_pull(pr)
         head = str(data.get("headRefOid") or "")
         if not SHA.match(head):
@@ -1018,6 +1034,7 @@ class Gh:
         why = " ".join(reason.split())
         if not why or len(why) > CLOSE_REASON_MAX:
             raise Refused(f"close needs --reason of 1 to {CLOSE_REASON_MAX} characters, posted on the pull request")
+        self.refuse_after_untrusted_text("close")
         self.own_open_pull(pr)
         self.run(["pr", "close", str(pr), "-R", self.repo, "--comment", f"Closed by Hermes: {why}"])
         return {"pr": pr, "closed": True}

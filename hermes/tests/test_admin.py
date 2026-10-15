@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import team_kit_admin
 import yaml
-from conftest import FAKE_CLAUDE, fill_guard, gh_calls, guard_text, hermes_calls, install
+from conftest import ALL_TOOLSETS, FAKE_CLAUDE, fill_guard, gh_calls, guard_text, hermes_calls, install
 from install_config import InstallError, cron_spec
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, InFlight
 from team_kit_guard.policy import load_policy
@@ -82,7 +82,7 @@ def test_add_project_creates_the_project_bot_its_labels_and_paused_jobs(ready):
 
     home = root / "profiles" / "meo-beo"
     config = yaml.safe_load((home / "config.yaml").read_text())
-    assert config["toolsets"] == ["terminal", "file", "clarify", "skills"]
+    assert config["toolsets"] == ALL_TOOLSETS
     assert config["plugins"]["enabled"] == ["team_kit_guard"]
     assert config["approvals"] == {"mode": "manual", "cron_mode": "deny"}
     assert sorted(p.name for p in (home / "skills").iterdir()) == ["dispatch"]

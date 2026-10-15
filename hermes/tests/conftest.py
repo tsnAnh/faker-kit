@@ -26,6 +26,9 @@ BOTS = {
     },
 }
 
+ALL_TOOLSETS = ["web", "browser", "terminal", "file", "code_execution", "vision", "image_gen", "tts", "skills", "todo",
+                "memory", "session_search", "connections", "clarify", "delegation", "cronjob", "computer_use"]
+
 
 def guard_text():
     text = GUARD_TEMPLATE.read_text().replace("  - OWNER-LOGIN", "  - Codertocat\n  - meo-beo-gh")

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from conftest import HERMES, git, hermes_calls, install
+from conftest import ALL_TOOLSETS, HERMES, git, hermes_calls, install
 
 FAKE_HERMES = f"#!{sys.executable}\n" + (Path(__file__).with_name("fake_hermes.py")).read_text()
 
@@ -31,7 +31,7 @@ def test_a_folder_a_deleted_profile_left_behind_is_created_again(kit_source, mac
     done = install(kit_source, machine, "--no-gateway", "--bootstrap-bot", "ong-xay")
     assert done.returncode == 0, done.stderr
     assert ["-p", "default", "profile", "create", "ong-xay"] in hermes_calls(root)
-    assert read_config(root, "ong-xay")["toolsets"] == ["terminal", "clarify", "skills"]
+    assert read_config(root, "ong-xay")["toolsets"] == ALL_TOOLSETS
 
 
 def test_installs_the_module_and_the_bootstrap_bot_pinned_to_the_commit(kit_source, machine):
@@ -45,7 +45,7 @@ def test_installs_the_module_and_the_bootstrap_bot_pinned_to_the_commit(kit_sour
     assert stat.S_IMODE((root / "team-kit" / "bots.yaml").stat().st_mode) == 0o600
     home = root / "profiles" / "ong-xay"
     config = read_config(root, "ong-xay")
-    assert config["toolsets"] == ["terminal", "clarify", "skills"]
+    assert config["toolsets"] == ALL_TOOLSETS
     assert config["plugins"]["enabled"] == ["team_kit_guard"]
     assert config["approvals"] == {"mode": "manual", "cron_mode": "deny"}
     assert config["model"] == {"default": "strong-model"}

@@ -4,7 +4,7 @@
 # `hermes -p NAME config set model.default <model>`.
 #
 # No Kanban: a unit's state is the labels on its GitHub issue, which team-kit-gh reads and sets.
-toolsets: [terminal, file, clarify, skills]
+toolsets: [web, browser, terminal, file, code_execution, vision, image_gen, tts, skills, todo, memory, session_search, connections, clarify, delegation, cronjob, computer_use]
 approvals:
   mode: manual
   cron_mode: deny

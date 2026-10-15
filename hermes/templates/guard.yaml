@@ -63,24 +63,10 @@ untrusted_readers:
   - tool: terminal
     command: "team-kit-gh read *"
 
-# Tool calls blocked outright, for every bot. A plain string is a glob over each simple
+# More tool calls to block for every bot, beyond the guard's own: secrets, raw gh pr merge, repository
+# deletion, pushes to main, force-pushes, and wiping / or home. A plain string is a glob over each simple
 # command in a terminal call. {tool, command} matches other tools.
-deny:
-  - "gh pr merge*"
-  - "gh api* -X DELETE*"
-  - "gh api* --method DELETE*"
-  - "gh repo delete*"
-  - "git push* main"
-  - "git push* main *"
-  - "git push* *:main*"
-  - "git push* master"
-  - "git push* *:master*"
-  - "git push* --force*"
-  - "git push* -f*"
-  - tool: delegate_task
-  - tool: cronjob_manage
-  - tool: execute_code
-  - tool: skill_manage
+deny: []
 
 # Tools that never change anything. Everything else counts as side-effecting.
 read_only_tools:
