@@ -25,9 +25,12 @@ case "${1:-}" in
     sha=a16be01dcc480aab2f55f444b620142152f66e31564b3b9376506d624c28a2ad
     file=$cache/ktlint-1.5.0 ;;
   swiftlint)
-    url=https://github.com/realm/SwiftLint/releases/download/0.65.1/swiftlint_linux_amd64.zip
-    sha=caeed6f4a679c35539ffaf124f6c4ab4a8416917f7d8796279dc52b74026059d
-    file=$cache/swiftlint-0.65.1.zip
+    case "$(uname -m)" in
+      aarch64|arm64) arch=arm64; sha=9ffa52f478e6d8eb485d37d14715ffac90abc81c58f3370d598bf75be05605f8 ;;
+      *) arch=amd64; sha=caeed6f4a679c35539ffaf124f6c4ab4a8416917f7d8796279dc52b74026059d ;;
+    esac
+    url=https://github.com/realm/SwiftLint/releases/download/0.65.1/swiftlint_linux_$arch.zip
+    file=$cache/swiftlint-0.65.1-$arch.zip
     unpack=swiftlint-static ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
