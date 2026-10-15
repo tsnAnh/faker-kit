@@ -844,7 +844,8 @@ class Admin:
 
     def setup_request(self, request_id: str, who: str | None) -> dict:
         """Set up the project a chief request names, in code: the bot with the settings of this machine's first project
-        bot (its schedules, Claude subscription, and Claude Code login folder), then the kit vendoring pull request. Every
+        bot (its schedules, Claude subscription, Claude Code login folder, and extra skill folders), then the kit vendoring
+        pull request. Every
         step is safe to run again, and the request is removed only once both succeeded."""
         bootstrap = self.bootstrap_bot(who)
         with request_lock(self.home, bootstrap):
@@ -865,10 +866,12 @@ class Admin:
             raise Refused(f"request {request.id}: {'bot ' + bot if existing is not None else 'project ' + project} exists already; nothing was changed")
         mark_request(request, self.now(), "started")
         reference = self.reference_project(bot)
-        subscription, schedules = False, {}
+        subscription, schedules, skill_dirs = False, {}, None
         if reference is not None:
             ref_home = profile_home(self.root, reference.name)
-            subscription = value_at(mapping(ref_home / "config.yaml"), ("model", "provider")) == CLAUDE_SUBSCRIPTION_PROVIDER
+            ref_config = mapping(ref_home / "config.yaml")
+            subscription = value_at(ref_config, ("model", "provider")) == CLAUDE_SUBSCRIPTION_PROVIDER
+            skill_dirs = value_at(ref_config, KIT_SKILL_DIRS)
             schedules = {"tick_every": reference.tick_every, "incidents_every": reference.incidents_every, "security_every": reference.security_every}
             config_dir = self.env_value(ref_home, CLAUDE_CONFIG_DIR_ENV)
             if config_dir and not os.environ.get(CLAUDE_CONFIG_DIR_ENV):
@@ -876,6 +879,8 @@ class Admin:
                 os.environ[CLAUDE_CONFIG_DIR_ENV] = config_dir
         out = self.add_project(bot, project, repo, None, schedules.get("tick_every"), schedules.get("incidents_every"),
                                subscription, security_every=schedules.get("security_every"))
+        if skill_dirs:  # the machine config's `skills`, such as pstack, which every bot loads
+            config_set(self.root, bot, KIT_SKILL_DIRS, skill_dirs)
         vendored = self.vendor(project)
         finish_request(request)
         return {**out, "request": request.id, "settings_from": reference.name if reference else None, "vendor": vendored,

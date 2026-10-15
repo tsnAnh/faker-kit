@@ -926,12 +926,16 @@ def test_setup_request_sets_the_project_up_like_the_first_project_bot_then_vendo
     assert code == 0, out
     with (root / "profiles" / "meo-beo" / ".env").open("a") as env:
         env.write("CLAUDE_CONFIG_DIR=/home/owner/.claude\n")
+    pstack = str(root / "team-kit" / "kit" / "plugins" / "pstack" / "skills")
+    config = root / "profiles" / "meo-beo" / "config.yaml"
+    config.write_text(yaml.safe_dump({**yaml.safe_load(config.read_text()), "skills": {"external_dirs": [pstack]}}))
     request = request_blog(root)
 
     code, out = admin(ready, "setup-request", "--id", request["id"], profile="ong-xay")
     assert code == 0, out
     assert bots(root)["blog"] == {"role": "project", "project": "blog", "repo": "acme/blog", "tick_every": "1m"}, "the first project's schedule"
     assert "CLAUDE_CONFIG_DIR=/home/owner/.claude" in (root / "profiles" / "blog" / ".env").read_text(), "where claude is logged in"
+    assert yaml.safe_load((root / "profiles" / "blog" / "config.yaml").read_text())["skills"]["external_dirs"] == [pstack], "the kit skills every bot loads"
     assert (out["request"], out["settings_from"]) == (request["id"], "meo-beo")
     assert out["vendor"]["branch"] == f"team-kit/kit-{kit_source[1][:12]}" and out["vendor"]["pr"]
     assert out["next"][0].startswith("The owner merges the kit pull request")
