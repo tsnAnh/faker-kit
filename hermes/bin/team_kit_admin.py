@@ -880,6 +880,11 @@ class Admin:
         if not retry and (existing is not None or project in policy.projects()):
             raise Refused(f"request {request.id}: {'bot ' + bot if existing is not None else 'project ' + project} exists already; nothing was changed")
         mark_request(request, self.now(), "started")
+        out = self.adopt_repo(repo, project, bot)
+        finish_request(request)
+        return {**out, "request": request.id}
+
+    def adopt_repo(self, repo: str, project: str, bot: str) -> dict:
         reference = self.reference_project(bot)
         subscription, schedules, skill_dirs = False, {}, None
         if reference is not None:
@@ -897,10 +902,58 @@ class Admin:
         if skill_dirs:  # the machine config's `skills`, such as pstack, which every bot loads
             config_set(self.root, bot, KIT_SKILL_DIRS, skill_dirs)
         vendored = self.vendor(project)
-        finish_request(request)
-        return {**out, "request": request.id, "settings_from": reference.name if reference else None, "vendor": vendored,
+        return {**out, "settings_from": reference.name if reference else None, "vendor": vendored,
                 "next": [f"The owner merges the kit pull request{': ' + str(vendored.get('pr')) if vendored.get('pr') else ''}",
                          *out["next"]]}
+
+    def discover(self, directory: str) -> dict:
+        home = Path.home().resolve()
+        root = Path(directory).expanduser().resolve()
+        if root != home and home not in root.parents:
+            raise Refused(f"{directory} is outside the owner's home folder")
+        if not root.is_dir():
+            raise Refused(f"{directory} is not a folder")
+        policy = self.policy()
+        owners = {str(b.repo).lower(): b for b in policy.projects().values()}
+        taken = set(policy.bots) | set(policy.projects())
+        found: dict[str, dict] = {}
+        skipped = []
+        for path in repo_folders(root):
+            remote = git_remote(path)
+            name = github_repo(remote) if remote else None
+            if name is None:
+                skipped.append({"path": str(path), "why": "no GitHub remote named origin"})
+                continue
+            try:
+                full = str(json.loads(self.run(["api", f"repos/{name}"]))["full_name"])
+            except (Refused, ValueError, KeyError):
+                skipped.append({"path": str(path), "why": f"{name} is not readable with this machine's gh login"})
+                continue
+            if full.lower() in found:
+                continue
+            owner = owners.get(full.lower())
+            entry: dict = {"repo": full, "path": str(path), "project": owner.project if owner else None}
+            if owner is None:
+                slug = suggested_name(full.split("/")[1], taken)
+                taken.add(slug)
+                entry["adopt"] = f"team-kit-admin adopt --repo {full} --project {slug} --bot {slug}"
+            found[full.lower()] = entry
+        repos = sorted(found.values(), key=lambda e: e["repo"].lower())
+        return {"dir": str(root), "repos": repos, "new": sum(1 for e in repos if e["project"] is None), "skipped": skipped}
+
+    def adopt(self, repo: str, project: str, bot: str) -> dict:
+        if not REPO.match(repo):
+            raise Refused(f"--repo {repo!r} must be OWNER/REPO")
+        for value, what in ((project, "--project"), (bot, "--bot")):
+            if not NAME.match(value) or value in RESERVED_NAMES:
+                raise Refused(f"{what} {value!r} must be lowercase letters, digits, - and _, and not default")
+        policy = self.policy()
+        holder = next((b for b in policy.projects().values() if str(b.repo).lower() == repo.lower()), None)
+        if holder is not None and (holder.name, holder.project) != (bot, project):
+            raise Refused(f"{repo} is already project {holder.project} with bot {holder.name}")
+        if holder is None and (bot in policy.bots or project in policy.projects()):
+            raise Refused(f"{'bot ' + bot if bot in policy.bots else 'project ' + project} exists already; pick another name")
+        return self.adopt_repo(repo, project, bot)
 
     def repo_status(self, repo: str) -> dict:
         item: dict = {"repo": repo}
@@ -977,6 +1030,47 @@ def check_interval(value: str | None, what: str) -> None:
         raise Refused(f"{what} must be a positive interval like 10m or 1h")
 
 
+GITHUB_REMOTE = re.compile(r"\A(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?\Z")
+DISCOVER_DEPTH = 2
+DISCOVER_LIMIT = 500
+
+
+def repo_folders(root: Path) -> list[Path]:
+    found: list[Path] = []
+    level = [root]
+    for _ in range(DISCOVER_DEPTH + 1):
+        following = []
+        for folder in level:
+            if (folder / ".git").exists():
+                found.append(folder)
+                continue
+            try:
+                children = sorted(c for c in folder.iterdir() if c.is_dir() and not c.is_symlink() and not c.name.startswith("."))
+            except OSError:
+                continue
+            following.extend(children)
+        level = following[:DISCOVER_LIMIT]
+    return found[:DISCOVER_LIMIT]
+
+
+def git_remote(path: Path) -> str | None:
+    done = subprocess.run(["git", "-C", str(path), "config", "--get", "remote.origin.url"], capture_output=True, text=True, timeout=10)
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def github_repo(remote: str) -> str | None:
+    match = GITHUB_REMOTE.match(remote)
+    return match.group(1) if match else None
+
+
+def suggested_name(repo_name: str, taken: set[str]) -> str:
+    base = re.sub(r"[^a-z0-9_-]+", "-", repo_name.lower()).strip("-_")[:60] or "project"
+    name, n = base, 2
+    while name in taken or name == "default":
+        name, n = f"{base}-{n}", n + 1
+    return name
+
+
 def git(path: Path, *args: str) -> str:
     done = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True)
     if done.returncode != 0:
@@ -1022,6 +1116,12 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("inbox")
     cmd = sub.add_parser("setup-request")
     cmd.add_argument("--id", required=True)
+    cmd = sub.add_parser("discover")
+    cmd.add_argument("--dir", required=True)
+    cmd = sub.add_parser("adopt")
+    cmd.add_argument("--repo", required=True)
+    cmd.add_argument("--project", required=True)
+    cmd.add_argument("--bot", required=True)
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
     cmd.add_argument("reason", nargs="*")
@@ -1085,6 +1185,10 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
             return 0
         elif args.command == "setup-request":
             out = admin.setup_request(args.id, who)
+        elif args.command == "discover":
+            out = admin.discover(args.dir)
+        elif args.command == "adopt":
+            out = admin.adopt(args.repo, args.project, args.bot)
         elif args.command == "andon":
             if args.action != "raise" and args.reason:
                 raise Refused(f"andon {args.action} takes no reason")  # noqa: TRY301
