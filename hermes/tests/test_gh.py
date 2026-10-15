@@ -48,6 +48,7 @@ class FakeGh:
         self.files = {".agents/dispatch.json": json.dumps(dispatch), ".agents/dispatch.md": STANDING,
                       ".agents/team-kit/KIT.json": json.dumps({"version": 1, "kit_ref": kit_ref})}
         self.issues, self.comments, self.prs, self.calls = {}, {}, {}, []
+        self.branch_commits = []  # the default branch's history, newest first, as GET /commits?sha= lists it
         self.work = 0
         self.next = 40
         self.main_head = "c" * 40
@@ -190,6 +191,8 @@ class FakeGh:
                 return finish(json.dumps({"sha": self.main_head}))
             if "/pulls/" in path and "/files" in path:
                 return paged(self.pr_files.get(int(path.split("/pulls/")[1].split("/")[0]), []))
+            if "/commits?sha=" in path:
+                return finish(json.dumps(self.branch_commits[: int(urllib.parse.parse_qs(path.split("?", 1)[1])["per_page"][0])]))
             if "/commits?path=" in path:
                 query = urllib.parse.parse_qs(path.split("?", 1)[1])
                 commits = []
@@ -2110,6 +2113,19 @@ def test_pr_state_prints_only_state_merged_head_and_checks(team_kit_home, gh, ca
     assert out(capsys) == {"pr": 2, "state": "merged", "merged": True, "head": "a" * 40, "checks": "passed", "conflicts": False}
 
 
+def test_code_shows_the_real_state_of_the_code_from_github(team_kit_home, gh, capsys):
+    gh.branch_commits = [{"sha": c * 40, "author": {"login": "Codertocat"},
+                          "commit": {"message": f"Change {c}\n\nlong body", "author": {"date": "2026-10-15T04:00:00Z", "name": "C"}}} for c in "fedcba9876543"]
+    gh.runs["f" * 40] = [{"name": "ci", "status": "completed", "conclusion": "failure"}]
+    pr(gh, 5, checks=("FAILURE",), head="b" * 40)
+    gh.prs[(REPO, 5)]["title"] = "Set up dispatch"
+    assert run(gh, "code") == 0
+    state = out(capsys)
+    assert (state["default_branch"], state["head_checks"]) == ("main", "failed")
+    assert len(state["commits"]) == 10 and state["commits"][0] == {"sha": "f" * 12, "date": "2026-10-15T04:00:00Z", "author": "Codertocat", "title": "Change f"}
+    assert state["open_pull_requests"] == [{"pr": 5, "title": "Set up dispatch", "author": BOT_LOGIN, "draft": False, "updated": None, "checks": "failed"}]
+
+
 @pytest.mark.parametrize(
     ("rollup", "state"),
     [
@@ -2162,6 +2178,12 @@ def test_launch_refuses_until_the_repository_has_the_same_kit_vendored(team_kit_
 def test_kit_check_reports_the_vendored_kit(team_kit_home, gh, kit, capsys):
     assert run(gh, "kit-check") == 0
     assert out(capsys) == {"kit": kit, "kit_ref": kit, "vendored": kit}
+
+
+def test_a_repository_not_set_up_yet_says_so_instead_of_not_found(team_kit_home, gh, capsys):
+    del gh.files[".agents/dispatch.json"]
+    assert run(gh, "kit-check") == 1
+    assert "has no .agents/dispatch.json yet: the setup pull request adds it" in capsys.readouterr().err
 
 
 def test_a_broken_dispatch_json_is_a_refusal(team_kit_home, gh, capsys):
