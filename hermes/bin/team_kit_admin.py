@@ -915,14 +915,15 @@ class Admin:
             raise Refused(f"{directory} is not a folder")
         policy = self.policy()
         owners = {str(b.repo).lower(): b for b in policy.projects().values()}
-        taken = set(policy.bots) | set(policy.projects())
+        taken = set(policy.bots) | set(policy.projects()) | self.profile_folders()
         found: dict[str, dict] = {}
         skipped = []
-        for path in repo_folders(root):
+        folders, truncated = repo_folders(root)
+        for path in folders:
             remote = git_remote(path)
             name = github_repo(remote) if remote else None
             if name is None:
-                skipped.append({"path": str(path), "why": "no GitHub remote named origin"})
+                skipped.append({"path": str(path), "why": "no readable GitHub remote named origin"})
                 continue
             try:
                 full = str(json.loads(self.run(["api", f"repos/{name}"]))["full_name"])
@@ -939,21 +940,29 @@ class Admin:
                 entry["adopt"] = f"team-kit-admin adopt --repo {full} --project {slug} --bot {slug}"
             found[full.lower()] = entry
         repos = sorted(found.values(), key=lambda e: e["repo"].lower())
-        return {"dir": str(root), "repos": repos, "new": sum(1 for e in repos if e["project"] is None), "skipped": skipped}
+        return {"dir": str(root), "repos": repos, "new": sum(1 for e in repos if e["project"] is None), "skipped": skipped,
+                "truncated": truncated}
 
-    def adopt(self, repo: str, project: str, bot: str) -> dict:
+    def profile_folders(self) -> set[str]:
+        folder = self.root / "profiles"
+        return {p.name for p in folder.iterdir() if p.is_dir()} if folder.is_dir() else set()
+
+    def adopt(self, repo: str, project: str, bot: str, who: str | None) -> dict:
         if not REPO.match(repo):
             raise Refused(f"--repo {repo!r} must be OWNER/REPO")
         for value, what in ((project, "--project"), (bot, "--bot")):
             if not NAME.match(value) or value in RESERVED_NAMES:
                 raise Refused(f"{what} {value!r} must be lowercase letters, digits, - and _, and not default")
-        policy = self.policy()
-        holder = next((b for b in policy.projects().values() if str(b.repo).lower() == repo.lower()), None)
-        if holder is not None and (holder.name, holder.project) != (bot, project):
-            raise Refused(f"{repo} is already project {holder.project} with bot {holder.name}")
-        if holder is None and (bot in policy.bots or project in policy.projects()):
-            raise Refused(f"{'bot ' + bot if bot in policy.bots else 'project ' + project} exists already; pick another name")
-        return self.adopt_repo(repo, project, bot)
+        with request_lock(self.home, self.bootstrap_bot(who)):
+            policy = self.policy()
+            holder = next((b for b in policy.projects().values() if str(b.repo).lower() == repo.lower()), None)
+            if holder is not None and (holder.name, holder.project) != (bot, project):
+                raise Refused(f"{repo} is already project {holder.project} with bot {holder.name}")
+            if holder is None and (bot in policy.bots or project in policy.projects()):
+                raise Refused(f"{'bot ' + bot if bot in policy.bots else 'project ' + project} exists already; pick another name")
+            if holder is None and bot in self.profile_folders():
+                raise Refused(f"a Hermes profile named {bot} exists already and is not a team-kit bot; pick another --bot")
+            return self.adopt_repo(repo, project, bot)
 
     def repo_status(self, repo: str) -> dict:
         item: dict = {"repo": repo}
@@ -1035,9 +1044,10 @@ DISCOVER_DEPTH = 2
 DISCOVER_LIMIT = 500
 
 
-def repo_folders(root: Path) -> list[Path]:
+def repo_folders(root: Path) -> tuple[list[Path], bool]:
     found: list[Path] = []
     level = [root]
+    truncated = False
     for _ in range(DISCOVER_DEPTH + 1):
         following = []
         for folder in level:
@@ -1049,18 +1059,24 @@ def repo_folders(root: Path) -> list[Path]:
             except OSError:
                 continue
             following.extend(children)
+        truncated = truncated or len(following) > DISCOVER_LIMIT
         level = following[:DISCOVER_LIMIT]
-    return found[:DISCOVER_LIMIT]
+    return found[:DISCOVER_LIMIT], truncated or len(found) > DISCOVER_LIMIT
 
 
 def git_remote(path: Path) -> str | None:
-    done = subprocess.run(["git", "-C", str(path), "config", "--get", "remote.origin.url"], capture_output=True, text=True, timeout=10)
+    try:
+        done = subprocess.run(["git", "-C", str(path), "config", "--get", "remote.origin.url"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
     return done.stdout.strip() if done.returncode == 0 else None
 
 
 def github_repo(remote: str) -> str | None:
     match = GITHUB_REMOTE.match(remote)
-    return match.group(1) if match else None
+    if not match or any(part in (".", "..") for part in match.group(1).split("/")):
+        return None
+    return match.group(1)
 
 
 def suggested_name(repo_name: str, taken: set[str]) -> str:
@@ -1188,7 +1204,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
         elif args.command == "discover":
             out = admin.discover(args.dir)
         elif args.command == "adopt":
-            out = admin.adopt(args.repo, args.project, args.bot)
+            out = admin.adopt(args.repo, args.project, args.bot, who)
         elif args.command == "andon":
             if args.action != "raise" and args.reason:
                 raise Refused(f"andon {args.action} takes no reason")  # noqa: TRY301
