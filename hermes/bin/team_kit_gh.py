@@ -618,7 +618,7 @@ class Gh:
         if not SHA.match(pinned):
             raise Refused("kit_ref in .agents/dispatch.json must be a full 40-character commit")
         if local_commit != pinned:
-            raise Refused(f"kit commit {local_commit[:12]} differs from kit_ref {pinned[:12]}; update one side first")
+            raise Refused(f"kit commit {local_commit[:12]} differs from kit_ref {pinned[:12]}; ask the bootstrap bot to run team-kit-admin vendor, which moves kit_ref")
         # The cloud agent gets its skills from the copy in the repository, so that copy must be the same kit.
         try:
             vendored = json.loads(self.file(VENDOR_MANIFEST)).get("kit_ref")

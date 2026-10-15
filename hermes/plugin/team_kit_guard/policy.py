@@ -395,6 +395,12 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
         return block(f"profile {profile} is not a team-kit bot in bots.yaml; every tool call is blocked")
     if not any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in ROLE_TOOLS[bot.role]):
         return block(f"{bot.role} bot {profile} may not use {tool_name}")
+    if tool_name == "message_agent":
+        # Only another kit bot: the default Hermes agent, or a bot on another machine, has tools no kit role grants.
+        target = str(args.get("target", "")).strip().lstrip("@")
+        if target == profile or target not in policy.bots:
+            others = ", ".join(sorted(name for name in policy.bots if name != profile)) or "none"
+            return block(f"{bot.role} bot {profile} may message only this machine's team-kit bots ({others})")
     command = str(args.get("command", ""))
     if tool_name in ("terminal", "process_manage"):  # noqa: SIM102
         if tool_name == "process_manage" or not bot.terminal_allow().fullmatch(command):

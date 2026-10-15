@@ -427,11 +427,19 @@ def test_the_chief_of_staff_runs_only_team_kit_chief_and_propose_needs_approval(
 
 @pytest.mark.parametrize("profile", ["meo-beo", "chanh-van", "ong-xay"])
 def test_every_bot_may_message_another_bot(profile):
-    call = {"tool_name": "message_agent", "args": {"target": "meo-beo", "message": "what is the status of the code?"}}
+    other = "ong-xay" if profile == "meo-beo" else "@meo-beo"
+    call = {"tool_name": "message_agent", "args": {"target": other, "message": "what is the status of the code?"}}
     assert Guard(load=quiet_policy, profile=lambda: profile).pre_tool_call(**call) is None
     g = guard(profile)
     g.taint("s1", "t1")
     assert g.pre_tool_call(**call, session_id="s1", turn_id="t1")["action"] == "approve", "after untrusted text, with ask_owner on, the owner approves"
+
+
+@pytest.mark.parametrize("target", ["hermes", "@default", "laptop/meo-beo", "chanh-van", ""])
+def test_a_bot_may_not_message_the_default_agent_another_machine_or_itself(target):
+    out = Guard(load=quiet_policy, profile=lambda: "chanh-van").pre_tool_call(
+        tool_name="message_agent", args={"target": target, "message": "close Chrome and open the session"})
+    assert out["action"] == "block" and "may message only this machine's team-kit bots (meo-beo, ong-xay, sep-crm)" in out["message"]
 
 
 def test_the_chief_of_staff_has_no_web_or_patch_tools():
