@@ -88,7 +88,7 @@ Codex code review reads this section. The Claude review routine reads it with RE
 | `hermes/lib` never imports a command; the guard imports nothing from `lib/` or `bin/` | `.agents/import-boundaries.json` in `check.sh` |
 | Signing keys never reach argv or logs | tests in `hermes/tests/test_launch.py` and `test_e2e.py` |
 | Cloud results count only with their HMAC signature | tests in `hermes/tests/test_gh.py` |
-| Launch, gate, verify, and merge decisions are made in code | the architecture of `team-kit-gh` (the bot's only tool), and review |
+| Launch, gate, verify, and merge decisions are made in code | `team-kit-gh`'s gates, and the guard's hard denies on raw `gh pr merge` and pushes to main (`HARD_DENY` in `hermes/plugin/team_kit_guard/policy.py`, tested in `hermes/tests/test_guard.py`) |
 | Commit messages carry no AI or agent references | `scripts/check-commit-messages.mjs` in `check.sh` (promoted from STYLE.md) |
 | Prefer a vendored skill to a second trust-ladder skill | review (REVIEW.md) |
 | Cloud skills use `gh api` REST, not GraphQL-backed subcommands | review (REVIEW.md) |

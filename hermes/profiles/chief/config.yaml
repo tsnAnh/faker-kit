@@ -3,9 +3,7 @@
 # The model is set separately: add-chief --model M, or
 # `hermes -p NAME config set model.default <model>`.
 #
-# The chief of staff has no web, file, or Kanban tools, and no scheduled jobs. Its only command is
-# team-kit-chief; it hands work to project bots with Bot Mode's message_agent.
-toolsets: [terminal, clarify, skills]
+toolsets: [web, browser, terminal, file, code_execution, vision, image_gen, tts, skills, todo, memory, session_search, connections, clarify, delegation, cronjob, computer_use]
 approvals:
   mode: manual
   cron_mode: deny

@@ -5,7 +5,7 @@
 #
 # The bootstrap bot has no file, web, or Kanban tools. Its only side effects are team-kit-admin
 # commands, and the guard asks the owner to approve each one but `status`.
-toolsets: [terminal, clarify, skills]
+toolsets: [web, browser, terminal, file, code_execution, vision, image_gen, tts, skills, todo, memory, session_search, connections, clarify, delegation, cronjob, computer_use]
 approvals:
   mode: manual
   cron_mode: deny

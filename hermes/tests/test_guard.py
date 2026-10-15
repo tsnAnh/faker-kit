@@ -9,7 +9,7 @@ import pytest
 import yaml
 from conftest import BOTS, GUARD_TEMPLATE, SHOP, guard_text
 from team_kit_guard import NOTICE_CONTEXT, REMEMBERED_CHATS, Guard, current_profile, register
-from team_kit_guard.policy import MIGRATE_V1, PolicyError, load_policy, parse_policy
+from team_kit_guard.policy import HARD_DENY, MIGRATE_V1, PolicyError, load_policy, parse_policy
 from team_kit_requests import ProjectRequest, format_request_notice
 
 SAMPLE = GUARD_TEMPLATE
@@ -38,24 +38,31 @@ def both_spellings(cases):
 
 DENY_EXAMPLES = {
     "gh pr merge*": "gh pr merge 12 --squash",
-    "gh api* -X DELETE*": "gh api repos/acme/shop/git/refs/heads/x -X DELETE",
-    "gh api* --method DELETE*": "gh api --method DELETE repos/acme/shop",
+    "gh api*PUT*/merge*": "gh api -X PUT repos/acme/shop/pulls/1/merge",
+    "gh api*/merge*PUT*": "gh api repos/acme/shop/pulls/1/merge -X PUT",
+    "gh api*-X DELETE*": "gh api repos/acme/shop/git/refs/heads/x -X DELETE",
+    "gh api*--method DELETE*": "gh api --method DELETE repos/acme/shop",
     "gh repo delete*": "gh repo delete acme/shop --yes",
     "git push* main": "git push origin main",
     "git push* main *": "git push origin main --tags",
     "git push* *:main*": "git push origin HEAD:main",
     "git push* master": "git push origin master",
+    "git push* master *": "git push origin master --tags",
     "git push* *:master*": "git push origin feature:master",
     "git push* --force*": "git push --force origin feature",
     "git push* -f*": "git push -f origin feature",
+    "git push* +*": "git push origin +feature",
+    "rm -*[rR]* /": "rm -rf /",
+    "rm -*[rR]* ~": "rm -rf ~",
+    "rm -*[rR]* ~/": "rm -fr ~/",
+    "rm -*[rR]* $HOME": "rm -Rf $HOME",
+    "rm -*[rR]* $HOME/": "rm -r $HOME/",
 }
-DENY_TOOLS = ["delegate_task", "cronjob_manage", "execute_code", "skill_manage"]
 
 
-def test_every_deny_rule_in_the_sample_has_an_example_here():
-    rules = yaml.safe_load(SAMPLE.read_text())["deny"]
-    assert sorted(r for r in rules if isinstance(r, str)) == sorted(DENY_EXAMPLES)
-    assert sorted(r["tool"] for r in rules if isinstance(r, dict)) == sorted(DENY_TOOLS)
+def test_every_hard_deny_rule_has_an_example_and_the_sample_adds_none():
+    assert sorted(r.command for r in HARD_DENY) == sorted(DENY_EXAMPLES)
+    assert yaml.safe_load(SAMPLE.read_text())["deny"] == []
 
 
 @pytest.mark.parametrize("command", list(DENY_EXAMPLES.values()))
@@ -77,11 +84,6 @@ def test_deny_rules_block_the_command(command):
 )
 def test_deny_rules_see_through_chains_env_and_paths(command):
     assert guard().pre_tool_call(**terminal(command))["action"] == "block"
-
-
-@pytest.mark.parametrize("tool", DENY_TOOLS)
-def test_deny_rules_block_tools(tool):
-    assert guard().pre_tool_call(tool_name=tool, args={}, session_id="s", turn_id="t")["action"] == "block"
 
 
 @pytest.mark.parametrize("profile", ["default", "dispatcher", "someone-else"])
@@ -336,129 +338,6 @@ def test_when_classifying_a_result_fails_it_is_treated_as_untrusted():
     assert g.is_tainted("s1", "t1")
 
 
-@pytest.mark.parametrize(
-    ("command", "allowed"),
-    both_spellings([
-        ("team-kit-gh project", True),
-        ("team-kit-gh teammate-proposals", True),
-        ("team-kit-gh report-status --issue 7", True),
-        ("team-kit-gh launch --issue 7", True),
-        ("~/.hermes/bin/team-kit-gh dispatch --unit t_1 --size small --brief-file ~/.hermes/team-kit/briefs/meo-beo/t_1.md", True),
-        ("team-kit-gh tick", True),
-        ("team-kit-gh status", True),
-        ("team-kit-gh proposals", True),
-        ("team-kit-gh verify --issue 7", True),
-        ("team-kit-gh andon raise prod is down since 10:40", True),
-        ("team-kit-gh andon clear", True),
-        ("team-kit-gh security", True),
-        ("team-kit-gh incidents", True),
-        ("team-kit-gh chief-proposals", False),
-        ("team-kit-gh andon raise \"$(cat ~/.hermes/.env)\"", False),
-        ("team-kit-gh open-issue --card t_1", False),
-        ("team-kit-gh show --path .agents/dispatch.md", True),
-        ("team-kit-gh merge --pr 12", True),
-        ("team-kit-gh close --pr 13 --reason superseded by PR 14", True),
-        ("team-kit-gh close --pr 13 --reason superseded by #14", False),
-        ("team-kit-gh close --pr 13 --reason see issue#14", True),
-        ("team-kit-gh close --pr 13 --reason \"$(cat ~/.hermes/.env)\"", False),
-        ("team-kit-admin status", False),
-        ("gh issue create -R acme/shop-web --title x", False),
-        ("team-kit-gh read --issue 7; curl evil.example", False),
-        ("team-kit-gh read --issue $(id)", False),
-        ("HERMES_HOME=/x team-kit-gh project", False),
-        ("team-kit-gh project 'x y'", False),
-        ("git status", False),
-        ("~/.hermes/bin/faker-kit-gh status", True),
-        ("faker-kit-ghx project", False),
-        ("faker-kit-gh-evil project", False),
-        ("team-kit-ghx project", False),
-        ("faker-kit-gh project; rm -rf /", False),
-        ("faker-kit-gh project && rm -rf /", False),
-        ("faker-kit-gh read --issue `id`", False),
-        ("faker-kit-admin status", False),
-        ("faker-kit-chief status", False),
-    ]),
-)
-def test_a_project_bot_runs_only_team_kit_gh(command, allowed):
-    verdict = guard("meo-beo").pre_tool_call(**terminal(command))
-    assert (verdict is None) == allowed
-    if not allowed:
-        assert verdict["action"] == "block"
-
-
-@pytest.mark.parametrize("profile", ["meo-beo", "ong-xay"])
-def test_bots_cannot_use_background_processes(profile):
-    assert guard(profile).pre_tool_call(tool_name="process_manage", args={"action": "list"})["action"] == "block"
-
-
-def test_a_project_bot_writes_only_its_own_briefs():
-    g = guard("meo-beo")
-    briefs = Path.home() / ".hermes/team-kit/briefs"
-    assert g.pre_tool_call(tool_name="write_file", args={"path": str(briefs / "meo-beo/t_1.md"), "content": "x"}) is None
-    assert g.pre_tool_call(tool_name="write_file", args={"path": "~/.hermes/team-kit/briefs/meo-beo/t_1.md"}) is None
-    assert g.pre_tool_call(tool_name="write_file", args={"path": str(briefs / "sep-crm/t_1.md")})["action"] == "block"
-    assert g.pre_tool_call(tool_name="write_file", args={"path": str(briefs / "t_1.md")})["action"] == "block"
-    assert g.pre_tool_call(tool_name="patch", args={"path": "src/app.py"})["action"] == "block"
-    assert g.pre_tool_call(tool_name="write_file", args={"path": "~/.hermes/team-kit/briefs/meo-beo/../../bots.yaml"})["action"] == "block"
-
-
-@pytest.mark.parametrize(
-    ("command", "verdict"),
-    both_spellings([
-        ("team-kit-admin status", None),
-        ("team-kit-admin discover --dir ~/AIProjects/Titonium", None),
-        ("team-kit-admin adopt --repo acme/blog --project blog --bot blog", "approve"),
-        ("~/.hermes/bin/team-kit-admin status", None),
-        ("team-kit-admin add-project --bot meo-beo --project shop --repo acme/shop", "approve"),
-        ("team-kit-admin setup-repo --project shop --backend claude", "approve"),
-        ("team-kit-admin vendor --project shop", "approve"),
-        ("team-kit-admin add-repo --project shop --repo acme/shop-web", "block"),
-        ("team-kit-admin protect --project shop --check check", "approve"),
-        ("team-kit-admin activate --bot meo-beo", "approve"),
-        ("team-kit-admin andon raise cloud bill spike", "approve"),
-        ("team-kit-admin andon clear", "approve"),
-        ("team-kit-admin add-chief --bot chanh-van", "approve"),
-        ("team-kit-admin setup-request --id 20261015t020000z-blog", "approve"),
-        ("team-kit-admin inbox", "block"),
-        ("team-kit-admin sync", "block"),
-        ("team-kit-admin add-bootstrap --bot x", "block"),
-        ("team-kit-admin status; rm -rf ~", "block"),
-        ("team-kit-gh project", "block"),
-        ("gh api repos/acme/shop-web/hooks", "block"),
-        ("faker-kit-adminx status", "block"),
-    ]),
-)
-def test_the_bootstrap_bot_runs_only_team_kit_admin_and_the_owner_approves_changes(command, verdict):
-    out = guard("ong-xay").pre_tool_call(**terminal(command))
-    assert (out or {}).get("action") == verdict
-    if verdict == "approve":
-        assert out["rule_key"].startswith("team-kit-bootstrap:terminal:")
-
-
-@pytest.mark.parametrize(
-    ("command", "expected"),
-    both_spellings([
-        ("team-kit-chief status", None),
-        ("~/.hermes/bin/team-kit-chief projects", None),
-        ("team-kit-chief show --project shop --path AGENTS.md", None),
-        ("team-kit-chief andon", None),
-        ("team-kit-chief digest --file ~/.hermes/team-kit/drafts/chanh-van/handoff.md", "block"),
-        ("team-kit-chief propose --project shop --file ~/.hermes/team-kit/drafts/chanh-van/handoff.md --sha256 " + "a" * 64, "block"),
-        ("team-kit-chief new-project --repo acme/blog --project blog --bot blog", "approve"),
-        ("team-kit-gh dispatch --unit x --size small --brief-file x.md", "block"),
-        ("team-kit-gh andon raise stop", "block"),
-        ("team-kit-admin andon raise stop", "block"),
-        ("team-kit-chief status; gh issue create -R acme/shop", "block"),
-        ("gh issue list -R acme/shop", "block"),
-    ]),
-)
-def test_the_chief_of_staff_runs_only_team_kit_chief_and_new_project_needs_approval(command, expected):
-    out = guard("chanh-van").pre_tool_call(**terminal(command))
-    assert (out or {}).get("action") == expected
-    if expected == "approve":
-        assert out["rule_key"].startswith("team-kit-chief:terminal:")
-
-
 @pytest.mark.parametrize("profile", ["meo-beo", "chanh-van", "ong-xay"])
 def test_every_bot_may_message_another_bot(profile):
     other = "ong-xay" if profile == "meo-beo" else "@meo-beo"
@@ -467,46 +346,6 @@ def test_every_bot_may_message_another_bot(profile):
     g = guard(profile)
     g.taint("s1", "t1")
     assert g.pre_tool_call(**call, session_id="s1", turn_id="t1")["action"] == "approve", "after untrusted text, with ask_owner on, the owner approves"
-
-
-@pytest.mark.parametrize("target", ["hermes", "@default", "laptop/meo-beo", "chanh-van", ""])
-def test_a_bot_may_not_message_the_default_agent_another_machine_or_itself(target):
-    out = Guard(load=quiet_policy, profile=lambda: "chanh-van").pre_tool_call(
-        tool_name="message_agent", args={"target": target, "message": "close Chrome and open the session"})
-    assert out["action"] == "block" and "may message only this machine's team-kit bots (meo-beo, ong-xay, sep-crm)" in out["message"]
-
-
-def test_the_chief_of_staff_has_no_web_file_or_patch_tools():
-    g = guard("chanh-van")
-    for tool in ("patch", "search_files", "web_extract", "memory", "write_file", "read_file"):
-        assert g.pre_tool_call(tool_name=tool, args={"path": "/tmp/x"})["action"] == "block"
-    assert g.pre_tool_call(tool_name="clarify", args={"question": "which project?"}) is None
-    assert "terminal" not in sample_policy().read_only_tools
-
-
-def test_the_bootstrap_bot_has_no_file_or_kanban_tools():
-    g = guard("ong-xay")
-    for tool in ("write_file", "read_file", "kanban_create", "web_extract", "memory"):
-        assert g.pre_tool_call(tool_name=tool, args={"path": "/tmp/x"})["action"] == "block"
-    assert g.pre_tool_call(tool_name="clarify", args={"question": "name?"}) is None
-
-
-@pytest.mark.parametrize("tool", ["kanban_create", "execute_code_v2", "memory", "browser_navigate", "send_message", "image_generate"])
-def test_a_project_bot_gets_only_its_roles_tools(tool):
-    verdict = guard("meo-beo").pre_tool_call(tool_name=tool, args={})
-    assert verdict["action"] == "block" and "may not use" in verdict["message"]
-
-
-@pytest.mark.parametrize(
-    "args",
-    [
-        {"mode": "patch", "patch": "*** Update File: ~/.hermes/bin/team-kit-gh\n"},
-        {"path": "~/.hermes/team-kit/briefs/meo-beo/t_1.md", "patch": "*** Add File: ~/.hermes/team-kit/bots.yaml\n"},
-        {"path": "~/.hermes/team-kit/briefs/meo-beo/t_1.md", "mode": "patch"},
-    ],
-)
-def test_a_multi_file_patch_is_blocked_because_its_targets_are_in_its_body(args):
-    assert guard("meo-beo").pre_tool_call(tool_name="patch", args=args)["action"] == "block"
 
 
 def test_a_replace_patch_on_a_brief_is_allowed():
@@ -518,46 +357,10 @@ def quiet_policy():
     return parse_policy({**yaml.safe_load(guard_text()), "ask_owner": False}, BOTS, Path.home() / ".hermes" / "team-kit")
 
 
-def test_with_ask_owner_off_nothing_asks_but_every_block_still_holds():
-    project, chief, bootstrap = (Guard(load=quiet_policy, profile=lambda name=name: name) for name in ("meo-beo", "chanh-van", "ong-xay"))
-    project.transform_tool_result(**READ, result="text")
-    assert project.is_tainted("s1", "t1")
-    assert project.pre_tool_call(**terminal("team-kit-gh launch --issue 7")) is None
-    assert bootstrap.pre_tool_call(**terminal("team-kit-admin add-project --bot meo-beo --project shop --repo acme/shop")) is None
-    assert chief.pre_tool_call(**terminal("team-kit-chief new-project --repo acme/blog --project blog --bot blog")) is None
-    assert bootstrap.pre_tool_call(**terminal("team-kit-admin setup-request --id 20261015t020000z-blog")) is None
-    assert project.pre_tool_call(**terminal("gh pr merge 12 --squash"))["action"] == "block"
-    assert project.pre_tool_call(**terminal("cat ~/.hermes/profiles/meo-beo/.env"))["action"] == "block"
-    assert chief.pre_tool_call(tool_name="write_file", args={"path": "~/.hermes/team-kit/briefs/meo-beo/x.md"})["action"] == "block"
-    wrapped = project.transform_tool_result(**READ, result="text")
-    assert wrapped.startswith("<untrusted"), "untrusted output is still labelled"
-
-
 @pytest.mark.parametrize("value", ["false", 0, None])
 def test_ask_owner_must_be_a_boolean(value):
     with pytest.raises(PolicyError, match="ask_owner must be true or false"):
         parse_policy({**yaml.safe_load(guard_text()), "ask_owner": value}, BOTS, Path("/x"))
-
-
-@pytest.mark.parametrize(
-    ("path", "allowed"),
-    [
-        ("~/.hermes/team-kit/briefs/meo-beo/t_1.md", True),
-        ("~/.hermes/team-kit/kit/plugins/trust-ladder/templates/dispatch/brief.md", True),
-        ("~/.hermes/team-kit/webhook-secret", False),
-        ("~/.hermes/team-kit/guard.yaml", False),
-        ("~/.hermes/config.yaml", False),
-        ("~/.hermes/profiles/meo-beo/.env", False),
-        ("~/.config/gh/hosts.yml", False),
-        ("~/.hermes/team-kit/briefs/sep-crm/t_1.md", False),
-        ("~/.hermes/team-kit/kit/../webhook-secret", False),
-        (None, False),
-    ],
-)
-def test_a_project_bot_reads_only_its_briefs_and_the_kit(path, allowed):
-    for tool in ("read_file", "search_files"):
-        verdict = guard("meo-beo").pre_tool_call(tool_name=tool, args={"path": path} if path else {})
-        assert (verdict is None) == allowed
 
 
 def request_notice(request_id="20261015t020000z-blog"):
@@ -696,3 +499,82 @@ def test_chief_work_that_is_no_go_ahead_taints_the_turn_so_the_owner_approves_a_
     assert g.check_message(user_message=message, session_id="s1", turn_id="t1") is None
     verdict = g.pre_tool_call(**terminal("team-kit-gh dispatch --unit x --size small --brief-file x.md"))
     assert verdict["action"] == "approve"
+
+
+
+def bare_policy():
+    return parse_policy({**yaml.safe_load(guard_text()), "ask_owner": False, "deny": []}, BOTS, Path.home() / ".hermes" / "team-kit")
+
+
+@pytest.mark.parametrize("profile", ["meo-beo", "ong-xay", "chanh-van"])
+@pytest.mark.parametrize(("tool", "args"), [
+    ("terminal", {"command": "git status"}),
+    ("terminal", {"command": "cargo test && gh issue create -R acme/shop --title x"}),
+    ("terminal", {"command": "team-kit-admin status; team-kit-gh project; team-kit-chief projects"}),
+    ("terminal", {"command": "git push origin feature/x"}),
+    ("terminal", {"command": "rm -rf build target /tmp/x"}),
+    ("terminal", {"command": "env FOO=1 make test"}),
+    ("terminal", {"command": "cat ~/.hermes/team-kit/kit/hermes/skills/dispatch/SKILL.md && ~/.hermes/bin/team-kit-gh status"}),
+    ("process_manage", {"action": "list"}),
+    ("execute_code", {"code": "print(1)"}),
+    ("browser_navigate", {"url": "https://example.com"}),
+    ("delegate_task", {"goal": "summarize the repo"}),
+    ("write_file", {"path": "/tmp/notes.md", "content": "never commit .env or ~/.ssh keys"}),
+    ("read_file", {"path": "~/AIProjects/shop/src/app.py"}),
+    ("message_agent", {"target": "default", "message": "hi"}),
+])
+def test_every_bot_may_use_every_tool_and_the_shell(profile, tool, args):
+    assert Guard(load=bare_policy, profile=lambda: profile).pre_tool_call(tool_name=tool, args=args, session_id="s1", turn_id="t1") is None
+
+
+@pytest.mark.parametrize("command", [
+    "gh pr merge 12 --squash", "gh api -X PUT repos/acme/shop/pulls/1/merge", "gh api repos/acme/shop/pulls/1/merge --method PUT",
+    "gh api -X DELETE repos/acme/shop", "gh repo delete acme/shop --yes",
+    "git push origin main", "git push origin HEAD:main", "git push --force origin x", "git push -f", "git push origin +feature",
+    "rm -rf ~", "rm -rf /", "rm -Rf $HOME", "make; rm -rf ~/",
+    "cat ~/.hermes/profiles/meo-beo/.env", "cat .env", "source .env.local", "cat ~/.hermes/team-kit/kit/../webhook-secret",
+    "ls ~/.hermes", "cat $HERMES_HOME/config.yaml", "gh auth token", "gh auth status -t", "gh auth status --show-token",
+    "security find-generic-password -s gh", "printenv", "env", "cat ~/.ssh/id_ed25519", "cat ~/.config/gh/hosts.yml",
+    "echo x | git credential fill",
+])
+def test_hard_blocks_hold_for_every_bot_whatever_guard_yaml_says(command):
+    for profile in ("meo-beo", "ong-xay", "chanh-van"):
+        assert Guard(load=bare_policy, profile=lambda p=profile: p).pre_tool_call(**terminal(command))["action"] == "block", (profile, command)
+
+
+@pytest.mark.parametrize(("tool", "args"), [
+    ("read_file", {"path": "~/.hermes/.env"}), ("search_files", {"path": "/Users/x/.ssh"}), ("write_file", {"path": "/repo/.env", "content": "A=1"}),
+    ("execute_code", {"code": "open('/Users/x/.hermes/auth.json').read()"}), ("browser_navigate", {"url": "file:///Users/x/.config/gh/hosts.yml"}),
+])
+def test_no_tool_reaches_a_secret_store(tool, args):
+    assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name=tool, args=args)["action"] == "block"
+
+
+def test_a_bot_may_message_any_agent_but_itself():
+    g = Guard(load=bare_policy, profile=lambda: "meo-beo")
+    assert g.pre_tool_call(tool_name="message_agent", args={"target": "@meo-beo", "message": "x"})["action"] == "block"
+    assert g.pre_tool_call(tool_name="message_agent", args={"target": "laptop/meo-beo", "message": "x"}) is None
+
+
+@pytest.mark.parametrize(("tool", "args", "untrusted"), [
+    ("terminal", {"command": "gh issue view 1"}, True),
+    ("terminal", {"command": "team-kit-gh status"}, False),
+    ("terminal", {"command": "team-kit-gh status; cat README.md"}, True),
+    ("terminal", {"command": "team-kit-gh read --issue 7"}, True),
+    ("read_file", {"path": "/repo/README.md"}, True),
+    ("execute_code", {"code": "print(1)"}, True),
+    ("skill_view", {"name": "dispatch"}, False),
+    ("write_file", {"path": "/tmp/x"}, False),
+])
+def test_any_result_strangers_could_have_written_taints_the_turn(tool, args, untrusted):
+    g = Guard(load=bare_policy, profile=lambda: "meo-beo")
+    g.transform_tool_result(tool_name=tool, args=args, result="text", session_id="s1", turn_id="t1")
+    assert g.is_tainted("s1", "t1") is untrusted
+
+
+def test_with_ask_owner_on_the_bootstrap_and_chief_changes_still_need_the_owner():
+    bootstrap, chief = guard("ong-xay"), guard("chanh-van")
+    assert bootstrap.pre_tool_call(**terminal("team-kit-admin add-project --bot x --project x --repo acme/x"))["action"] == "approve"
+    assert bootstrap.pre_tool_call(**terminal("team-kit-admin status")) is None
+    assert chief.pre_tool_call(**terminal("team-kit-chief new-project --repo acme/blog --project blog --bot blog"))["action"] == "approve"
+    assert chief.pre_tool_call(**terminal("team-kit-chief status")) is None

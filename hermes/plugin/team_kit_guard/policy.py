@@ -35,17 +35,9 @@ DEFAULT_READ_ONLY_TOOLS = (
     "skills_list", "skill_view", "session_search", "clarify", "todo_list",
     "web_search", "web_extract", "vision_analyze",
 )
-WRITE_TOOLS = {"write_file": "path", "patch": "path"}
-READ_TOOLS = {"read_file": "path", "search_files": "path"}
-# Each role's tools, as globs over Hermes tool names. Anything else is blocked, whatever the
-# profile's toolsets or guard.yaml say, so a toolset change cannot widen a bot. Every role may
-# message another bot (Hermes Bot Mode's message_agent), so bots ask and hand work to each other.
-ROLE_TOOLS = {
-    "project": ("terminal", "read_file", "search_files", "write_file", "patch", "clarify",
-                "skills_list", "skill_view", "todo_*", "session_search", "message_agent"),
-    "bootstrap": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search", "message_agent"),
-    "chief": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search", "message_agent"),
-}
+CHAT_TOOLS = ("message_agent", "clarify", "todo_*", "skills_list", "skill_view", "session_search")
+TRUSTED_RESULTS = (*CHAT_TOOLS, "write_file", "patch")
+PATH_ARGS = {"write_file": ("path",), "patch": ("path",), "read_file": ("path",), "search_files": ("path", "pattern")}
 # Each role's one command.
 ROLE_COMMAND = {"project": "team-kit-gh", "bootstrap": "team-kit-admin", "chief": "team-kit-chief"}
 # install.sh writes every command under both names, so the guard reads faker-kit-<rest> as team-kit-<rest>.
@@ -72,7 +64,14 @@ CHIEF_COMMANDS = ("projects", "status", "show", "new-project", "andon")
 CHIEF_APPROVALS = {
     "new-project": "The chief bot asks the bootstrap bot to set up a new project for this repository. Approve only if you asked for that project.",
 }
-ARG = r"[A-Za-z0-9_./:=@~,+-][A-Za-z0-9_./:#=@~,+-]*"
+SECRET_TEXT = re.compile(
+    r"""(?:^|[\s'"=:~$({/])\.env(?:\.[\w.-]+)?(?=$|[\s'"/;|&)])"""
+    r"|\.ssh\b|\.config/gh\b|\bhosts\.yml\b|\bauth\.json\b|\bid_(?:rsa|ed25519|ecdsa)\b|\.(?:pem|p12|keychain-db)\b"
+    r"|\.hermes(?!/bin/|/team-kit/kit/|/team-kit/briefs/)|\.hermes/[^\s'\"]*\.\.|\bHERMES_HOME\b|\bTEAM_KIT_HOME\b",
+    re.I,
+)
+SECRET_COMMANDS = ("gh auth token*", "gh auth status*-t", "gh auth status*-t *", "gh auth status*--show-token*", "security find-*",
+                   "security dump-keychain*", "security export*", "printenv*", "env", "export -p", "declare -*x*", "git credential*")
 
 MIGRATE_V1 = (
     "guard.yaml is version 1. team-kit now keeps bots in bots.yaml: set `version: 2` in guard.yaml, "
@@ -128,6 +127,13 @@ class ToolRule:
 # still marks them: `code` prints commit and pull request titles.
 ALWAYS_UNTRUSTED = (ToolRule(tool="terminal", command="team-kit-gh code*"),)
 
+HARD_DENY = tuple(ToolRule(command=c) for c in (
+    "gh pr merge*", "gh api*PUT*/merge*", "gh api*/merge*PUT*", "gh api*-X DELETE*", "gh api*--method DELETE*", "gh repo delete*",
+    "git push* main", "git push* main *", "git push* *:main*", "git push* master", "git push* master *", "git push* *:master*",
+    "git push* --force*", "git push* -f*", "git push* +*",
+    "rm -*[rR]* /", "rm -*[rR]* ~", "rm -*[rR]* ~/", "rm -*[rR]* $HOME", "rm -*[rR]* $HOME/",
+))
+
 @dataclass(frozen=True)
 class Bot:
     name: str
@@ -145,21 +151,6 @@ class Bot:
     def owns(self, repo: str) -> bool:
         return bool(self.repo) and repo.lower() == self.repo.lower()  # type: ignore[union-attr]  # team-kit baseline
 
-    def terminal_allow(self) -> re.Pattern:
-        commands = {"project": PROJECT_COMMANDS, "bootstrap": BOOTSTRAP_COMMANDS, "chief": CHIEF_COMMANDS}[self.role]
-        prefixes = f"{re.escape(PROGRAM_PREFIX)}|{re.escape(PROGRAM_ALIAS_PREFIX)}"
-        rest = re.escape(ROLE_COMMAND[self.role].removeprefix(PROGRAM_PREFIX))
-        return re.compile(rf"(~/\.hermes/bin/)?(?:{prefixes}){rest} ({'|'.join(commands)})( {ARG})*")
-
-    def write_paths(self, home: Path) -> tuple[str, ...]:
-        return (str(home / "briefs" / self.name / "*"),) if self.role == "project" else ()
-
-    def read_paths(self, home: Path) -> tuple[str, ...]:
-        """A project bot's own briefs and the pinned kit (templates, skills). Never secrets, configs, or other bots' files."""
-        if self.role != "project":
-            return ()
-        briefs, kit = str(home / "briefs" / self.name), str(home / "kit")
-        return (briefs, briefs + "/*", kit, kit + "/*")
 
 
 @dataclass(frozen=True)
@@ -379,45 +370,37 @@ def approve(message: str, tool_name: str, args: dict, kind: str) -> dict:
     return {"action": "approve", "message": message, "rule_key": f"team-kit-{kind}:{tool_name}:{call_digest(args)}"}
 
 
+def secret_reference(tool_name: str, args: dict) -> str | None:
+    if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS):
+        return None
+    if tool_name in ("terminal", "process_manage"):
+        for segment in command_segments(str(args.get("command", ""))):
+            if any(fnmatch.fnmatchcase(segment, pattern) for pattern in SECRET_COMMANDS):
+                return segment[:60]
+    scanned = {k: args.get(k) for k in PATH_ARGS[tool_name]} if tool_name in PATH_ARGS else args
+    found = SECRET_TEXT.search(json.dumps(scanned, default=str))
+    return found.group(0).strip(" '\"=:~$({/") if found else None
+
+
 def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bool) -> dict | None:
-    """The pre_tool_call verdict. Order: deny, bot role allowlists, then, unless ask_owner is off, bootstrap and chief
-    approval and taint. Turning ask_owner off removes only the questions; every block above still applies."""
-    for rule in policy.deny:
+    """The pre_tool_call verdict. Every bot may use every tool and the shell; the blocks are the hard denies, guard.yaml's
+    deny rules, secrets, and merge or close in a tainted turn. Unless ask_owner is off, bootstrap and chief approval and
+    taint then ask the owner."""
+    for rule in (*HARD_DENY, *policy.deny):
         if rule.matches(tool_name, args):
             return block(f"{tool_name} matches deny rule `{rule.label()}`")
+    secret = secret_reference(tool_name, args)
+    if secret:
+        return block(f"{tool_name} touches {secret}, a secret store; bots never read or write secrets")
     bot = policy.bots.get(profile)
     if bot is None:
         return block(f"profile {profile} is not a team-kit bot in bots.yaml; every tool call is blocked")
-    if not any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in ROLE_TOOLS[bot.role]):
-        return block(f"{bot.role} bot {profile} may not use {tool_name}")
-    if tool_name == "message_agent":
-        # Only another kit bot: the default Hermes agent, or a bot on another machine, has tools no kit role grants.
-        target = str(args.get("target", "")).strip().lstrip("@")
-        if target == profile or target not in policy.bots:
-            others = ", ".join(sorted(name for name in policy.bots if name != profile)) or "none"
-            return block(f"{bot.role} bot {profile} may message only this machine's team-kit bots ({others})")
+    if tool_name == "message_agent" and str(args.get("target", "")).strip().lstrip("@") == profile:
+        return block(f"{profile} may not message itself")
     command = str(args.get("command", ""))
-    if tool_name in ("terminal", "process_manage"):  # noqa: SIM102
-        if tool_name == "process_manage" or not bot.terminal_allow().fullmatch(command):
-            return block(f"{bot.role} bot {profile} may only run {ROLE_COMMAND[bot.role]}")
-    if tool_name == "patch" and (args.get("mode") not in (None, "replace") or "patch" in args):
-        # A multi-file patch names its targets in its body, out of reach of the path check.
-        return block("patch may only replace text in one file (mode replace)")
-    if tool_name in READ_TOOLS:
-        raw = args.get(READ_TOOLS[tool_name])
-        target = os.path.abspath(os.path.expanduser(str(raw))) if raw else ""  # noqa: PTH100, PTH111
-        allowed = bot.read_paths(policy.home)
-        if not target or not any(fnmatch.fnmatchcase(target, p) for p in allowed):
-            return block(f"{bot.role} bot {profile} may only read its briefs and the kit")
-    if tool_name in WRITE_TOOLS:
-        target = os.path.abspath(os.path.expanduser(str(args.get(WRITE_TOOLS[tool_name], ""))))  # noqa: PTH100, PTH111
-        allowed = bot.write_paths(policy.home)
-        if not any(fnmatch.fnmatchcase(target, p) for p in allowed):
-            where = ", ".join(allowed) if allowed else "nowhere"
-            return block(f"{bot.role} bot {profile} may only write {where}")
-    words = command.split()
-    if tainted and bot.role == "project" and tool_name == "terminal" and len(words) > 1 and words[1] in CLEAN_TURN_COMMANDS:
-        return block(f"{words[1]} runs only in a turn that read nothing untrusted; the owner or the chief of staff must ask for it in a new message")
+    clean_turn = [s for s in command_segments(command) if s.split(" ")[0] == "team-kit-gh" and s.split(" ")[1:2] and s.split(" ")[1] in CLEAN_TURN_COMMANDS]
+    if tainted and tool_name == "terminal" and clean_turn:
+        return block(f"{clean_turn[0].split(' ')[1]} runs only in a turn that read nothing untrusted; the owner or the chief of staff must ask for it in a new message")
     read_only = tool_name in policy.read_only_tools
     if not policy.ask_owner:
         return None
@@ -443,11 +426,13 @@ def call_digest(args: dict) -> str:
 
 
 def reader_source(policy: Policy, tool_name: str, args: dict) -> str | None:
-    for rule in policy.untrusted_readers:
-        if rule.matches(tool_name, args):
-            segments = command_segments(str(args.get("command", "")))
-            return f"{tool_name}:{segments[0][:120]}" if segments else tool_name
-    return None
+    segments = command_segments(str(args.get("command", "")))
+    source = f"{tool_name}:{segments[0][:120]}" if segments else tool_name
+    if any(rule.matches(tool_name, args) for rule in policy.untrusted_readers):
+        return source
+    if tool_name in ("terminal", "process_manage"):
+        return None if segments and all(s.startswith(PROGRAM_PREFIX) for s in segments) else source
+    return None if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in TRUSTED_RESULTS) else source
 
 
 def wrap_untrusted(source: str, result) -> str:  # noqa: ANN001
