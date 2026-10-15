@@ -40,6 +40,10 @@ With `webhooks` in the machine config, GitHub calls the machine when an issue, c
 - A Cloudflare Tunnel (`~/.cloudflared/<tunnel>.yml`) that publishes only `/p/<bot>/webhooks/<route>` on the configured hostname and answers 404 for everything else.
 - One repository webhook per route, created or updated in place by `team-kit-admin machine`.
 
+## CI on this machine
+
+`team-kit-runner up --config <machine.yaml>` (also step 7 of `setup-machine.sh`) runs the GitHub Actions jobs of every repository under `ci_runners` here, one fresh Ubuntu container per job, so CI needs no GitHub-hosted minutes. Workflows ask for them with `runs-on: [self-hosted, team-kit]`. The image is `hermes/ci-runner/`; the services are `team-kit-ci-<repo>-<slot>`. See [CI on this machine](../docs/how-to/dispatch-with-hermes.md#optional-ci-on-this-machine).
+
 ## How cloud agents get the kit
 
 A cloud session starts from a clone of the project's repository and nothing else: it installs no plugins and cannot fetch the kit while the kit's repository is private. So `team-kit-admin vendor` copies the kit, at this machine's commit, into the repository's `.agents/team-kit/` in a pull request, and links its skills into `.claude/skills/` and `.agents/skills/`. It builds the copy with `vendor_kit.py` from the trust-ladder `setup-cloud-agents` skill, and `python3 .agents/team-kit/vendor_kit.py --check .` in the repository verifies it.

@@ -30,6 +30,13 @@ projects:
     repo: CHANGE-ME/repo
     tick_every: 10m        # the fallback poll; GitHub webhooks start work as events happen
 
+# Optional: run these repositories' GitHub Actions jobs on this machine (needs Docker). Each job gets
+# a fresh Linux container that sees nothing of this machine. Workflows ask for them with
+# `runs-on: [self-hosted, team-kit]`. slots: how many jobs run at once (1 to 8, default 1).
+# ci_runners:
+#   - repo: CHANGE-ME/repo
+#     slots: 2
+
 # Optional: the chief of staff across all projects.
 chief:
   bot: chief

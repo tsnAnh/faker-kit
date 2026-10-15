@@ -803,6 +803,11 @@ def machine_config(root, **changes):
     ({"skills": ["../pstack"]}, "kit plugin names"),
     ({"skills": "pstack"}, "kit plugin names"),
     ({"skills": ""}, "kit plugin names"),
+    ({"ci_runners": "acme/shop"}, "ci_runners must list"),
+    ({"ci_runners": [{"repo": "acme"}]}, "is not valid"),
+    ({"ci_runners": [{"repo": "acme/shop", "slots": 9}]}, "from 1 to 8"),
+    ({"ci_runners": [{"repo": "acme/shop", "slots": True}]}, "from 1 to 8"),
+    ({"ci_runners": [{"repo": "acme/shop"}, {"repo": "ACME/shop"}]}, "twice"),
     ({"guard": {"trusted_authors": ["CHANGE-ME"]}}, "still lists CHANGE-ME"),
     ({"projects": [{"bot": "a-b", "project": "a", "repo": "acme/a"}, {"bot": "a_b", "project": "b", "repo": "acme/b"}]}, "share a webhook secret"),
 ])
