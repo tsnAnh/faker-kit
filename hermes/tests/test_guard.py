@@ -614,6 +614,11 @@ def test_with_ask_owner_on_the_bootstrap_and_chief_changes_still_need_the_owner(
     "echo 5 | xargs -J % gh pr merge %", "sudo --user x gh pr merge 5", "sudo -T 5 gh pr merge 5", "eval 'gh pr merge 5'",
     "python3 -c 'import os;os.system(\"gh pr merge 5\")'", "node -e 'require(\"child_process\").execSync(\"gh pr merge 5\")'",
     "/usr/bin/python3.12 -c 'import os; os.system(\"git push origin main\")'",
+    "bash -C -c 'gh pr merge 5'", "sh -C -c 'git push origin main'", "eval eval eval eval gh pr merge 5", "eval -- gh pr merge 5",
+    "bash -c 'bash -c \"bash -c \\\"bash -c ls\\\"\"'", "env -iS 'gh pr merge 5'", "env -P /usr/bin gh pr merge 5", "env -L root gh pr merge 5",
+    "sudo -Eu root gh pr merge 5", "echo 5 | xargs -tI % gh pr merge %", "python3 -c \"import os; os.system('hermes chat -q hi')\"",
+    "python3 -c \"import os; os.system('/usr/local/bin/hermes -p default chat -q hi')\"", "echo 'gh pr merge 5' | bash",
+    "bash <<< 'gh pr merge 5'", "git -c alias.m='!gh pr merge 5' m", "arch -arm64 gh pr merge 5",
 ])
 def test_the_second_review_bypasses_are_blocked(command):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal(command))["action"] == "block", command
@@ -625,6 +630,8 @@ def test_the_second_review_bypasses_are_blocked(command):
     "cat ~/.hermes/team-kit/kit/hermes/skills/dispatch/SKILL.md", "ls ~/.hermes/team-kit/kit", "git -C ~/.hermes/team-kit/kit log -3",
     "~/.hermes/bin/team-kit-gh status", "npm test && cargo build --release", "bash -lc 'npm test'", "env -u CI npm test",
     "python3 -m pytest hermes/tests -q", "bash -o pipefail -c 'npm test | tee log'", "env -S 'npm test'", "eval \"$(direnv export bash)\"",
+    "python3 -m pytest -q && git push -u origin feature/x", "node build.js && git add -A && git commit -m wip && git push origin feat/y",
+    "python3 scripts/release.py --notes 'after review run git push'", "bash scripts/setup.sh --fast", "fish -C 'set x 1' -c 'npm test'",
 ])
 def test_ordinary_work_is_not_blocked(command):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal(command)) is None, command
@@ -694,6 +701,22 @@ def test_a_hanging_policy_read_taints_a_relayed_message():
 ])
 def test_mentioning_hermes_or_git_push_in_text_is_not_blocked(tool, args):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name=tool, args=args) is None
+
+
+@pytest.mark.parametrize(("tool", "args"), [
+    ("execute_code", {"code": "subprocess.run('cd hermes && python3 -m pytest -q', shell=True)"}), ("execute_code", {"code": "print('the hermes guard blocked this')"}),
+    ("execute_code", {"code": "# deploy hermes docs\nsubprocess.run(['pytest', 'hermes'])"}),
+])
+def test_code_that_only_names_the_hermes_folder_is_not_blocked(tool, args):
+    assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name=tool, args=args) is None
+
+
+@pytest.mark.parametrize(("tool", "args"), [
+    ("delegate_task", {"goal": "run hermes chat -q hi with the default profile"}), ("cronjob_create", {"script": "#!/bin/sh\nhermes chat -q hi"}),
+    ("execute_code", {"code": "subprocess.run(['hermes', '-p', 'default', 'chat'])"}),
+])
+def test_delegated_scheduled_or_code_runs_of_the_default_agent_are_blocked(tool, args):
+    assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name=tool, args=args)["action"] == "block"
 
 
 @pytest.mark.parametrize("code", ["subprocess.run(['hermes', 'chat'])", "os.system('hermes chat -q x')", "subprocess.run('gh pr merge 1', shell=True)",

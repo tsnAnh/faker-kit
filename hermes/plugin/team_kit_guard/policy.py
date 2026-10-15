@@ -80,25 +80,30 @@ SECRET_SEGMENTS = re.compile(
     r"|printenv\b|env\Z|export\Z|export -p\b|set\Z|declare -[a-z]*[px]|compgen -[ve]\b)"
 )
 WIPE = re.compile(r"""\brm\s+(?:-\S+\s+)*-[a-zA-Z]*[rR][a-zA-Z]*\s+(?:-\S+\s+)*["']?(?:/|~|\$HOME|\$\{HOME\})/?\*?["']?(?=$|[\s;&|)'"])""")
+ARGV_GAP = r"""(?:['"]?\s*,\s*['"]?|\s+)"""
+HERMES_RUN = re.compile(rf"""(?<![\w.-])(?:[^\s'"]*/)?hermes(?:{ARGV_GAP}--?[\w-]+(?:=\S+)?(?:{ARGV_GAP}(?!chat\b|send\b)[\w.@-]+)?)*"""
+                        rf"""{ARGV_GAP}(?:chat|send|run|gateway|cron|sessions|-z|-q)\b""")
 CODE_BLOCKS = (
     (re.compile(r"\bgh\W+pr\W+merge\b"), "raw gh pr merge skips team-kit-gh merge's checks gate"),
     (re.compile(r"\bgh\W+repo\W+delete\b"), "it deletes a repository"),
     (re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch)\b"), "it merges or deletes through GraphQL"),
     (re.compile(r"\bgit\b[^\n]{0,80}?\bpush\b"), "push from the terminal with a named branch, not from code or a delegated task"),
     (WIPE, "it wipes / or the home folder"),
+    (HERMES_RUN, "a bot never runs the default Hermes agent"),
 )
-HERMES_IN_CODE = re.compile(r"""(?:^|[\s'"(;&|,\[=])(?:[^\s'"]*/)?hermes(?=\s|['"]\s*[,\])]|$)""", re.M)
 INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|perl|ruby|php|bun|deno|osascript)\Z")
+INTERPRETER_CODE_OPTIONS = ("-c", "-e", "-E", "-r", "--eval", "--command", "-p", "--print")
+UNCHECKABLE = "(unchecked)"
 GRAPHQL_BLOCKS = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch)\b")
-WRAPPERS = ("env", "command", "exec", "nohup", "sudo", "xargs", "time", "nice", "stdbuf", "caffeinate", "timeout")
-WRAPPER_VALUE_OPTIONS = {"env": ("-u", "-C", "--unset", "--chdir"), "nice": ("-n", "--adjustment"), "timeout": ("-s", "-k", "--signal", "--kill-after"),
+WRAPPERS = ("env", "command", "exec", "nohup", "sudo", "xargs", "time", "nice", "stdbuf", "caffeinate", "timeout", "arch")
+WRAPPER_VALUE_OPTIONS = {"env": ("-u", "-C", "-P", "-L", "-U", "--unset", "--chdir"), "arch": ("-arch", "-e"), "nice": ("-n", "--adjustment"), "timeout": ("-s", "-k", "--signal", "--kill-after"),
                          "sudo": ("-u", "-g", "-C", "-D", "-h", "-p", "-U", "-r", "-t", "-T", "-R", "--user", "--group", "--close-from", "--chdir",
                                   "--host", "--prompt", "--other-user", "--role", "--type", "--command-timeout", "--chroot"),
                          "stdbuf": ("-i", "-o", "-e"), "exec": ("-a",), "caffeinate": ("-t", "-w"),
                          "xargs": ("-I", "-J", "-L", "-R", "-S", "-n", "-P", "-s", "-d", "-E", "-a", "--max-args", "--max-procs", "--delimiter",
                                    "--arg-file", "--max-lines", "--max-chars", "--eof")}
-SPLIT_STRING = ("-S", "--split-string")
-SHELL_VALUE_OPTIONS = ("-o", "+o", "-O", "+O", "--rcfile", "--init-file", "-C", "--init-command")
+SHELL_VALUE_OPTIONS = ("-o", "+o", "-O", "+O", "--rcfile", "--init-file")
+FISH_VALUE_OPTIONS = ("-C", "--init-command", "-d", "--debug", "-o", "--debug-output", "--features", "-p", "--profile")
 CODE_TOOLS = ("execute_code", "delegate_task", "cronjob*")
 SHELLS = ("sh", "bash", "zsh", "dash", "fish")
 GIT_VALUE_OPTIONS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env")
@@ -437,57 +442,85 @@ def scanned_text(tool_name: str, args: dict) -> list[str]:
     return strings(args)
 
 
-def split_string(rest: list[str]) -> list[str] | None:
-    word = rest[0]
-    if word in SPLIT_STRING and len(rest) > 1:
-        return shlex.split(rest[1]) + rest[2:]
-    for flag in SPLIT_STRING:
-        if word.startswith(flag) and word != flag:
-            return shlex.split(word[len(flag):].lstrip("=")) + rest[1:]
-    return None
+def split_words(text: str) -> list[str]:
+    try:
+        return shlex.split(text, comments=False)
+    except ValueError:
+        return [w.strip("'\"") for w in text.split()]
+
+
+def unwrap(program: str, rest: list[str]) -> list[str]:
+    valued = WRAPPER_VALUE_OPTIONS.get(program, ())
+    while rest:
+        word = rest[0]
+        if ENV_ASSIGN.match(word) or word == "-":
+            rest = rest[1:]
+            continue
+        if word == "--":
+            rest = rest[1:]
+            break
+        if not word.startswith("-"):
+            break
+        if word in valued:
+            rest = rest[2:]
+            continue
+        if word.startswith("--"):
+            name, eq, value = word.partition("=")
+            if program == "env" and name == "--split-string":
+                return split_words(value) + rest[1:] if eq else split_words(rest[1]) + rest[2:] if len(rest) > 1 else []
+            rest = rest[2:] if name in valued and not eq else rest[1:]
+            continue
+        for k, letter in enumerate(word[1:], 1):
+            if program == "env" and letter == "S":
+                value = word[k + 1:]
+                return split_words(value) + rest[1:] if value else split_words(rest[1]) + rest[2:] if len(rest) > 1 else []
+            if f"-{letter}" in valued:
+                rest = rest[1:] if word[k + 1:] else rest[2:]
+                break
+        else:
+            rest = rest[1:]
+    if program == "timeout" and rest:
+        rest = rest[1:]
+    return rest
 
 
 def shell_script(words: list[str]) -> str | None:
-    i, runs_script = 1, False
+    valued = FISH_VALUE_OPTIONS if Path(words[0]).name == "fish" else SHELL_VALUE_OPTIONS
+    i, runs_script, operand = 1, False, False
     while i < len(words):
         word = words[i]
+        if word == "<<<":
+            return words[i + 1] if i + 1 < len(words) else UNCHECKABLE
         if word == "--":
             i += 1
+            operand = i < len(words)
             break
         if word.startswith("--command="):
             return word.split("=", 1)[1]
         if word == "--command":
             runs_script, i = True, i + 1
             break
-        if word in SHELL_VALUE_OPTIONS:
+        if word in valued:
             i += 2
-        elif word.startswith(("-", "+")):
+        elif word.startswith(("-", "+")) and len(word) > 1:
             runs_script = runs_script or (not word.startswith("--") and "c" in word[1:])
             i += 1
         else:
+            operand = True
             break
-    return words[i] if runs_script and i < len(words) else None
+    if runs_script:
+        return words[i] if i < len(words) else UNCHECKABLE
+    return None if operand else UNCHECKABLE
 
 
 def shell_words(segment: str, keep_path: bool = False) -> list[str]:
-    try:
-        words = shlex.split(segment, comments=False)
-    except ValueError:
-        words = [w.strip("'\"") for w in segment.split()]
+    words = split_words(segment)
     while words:
         program = Path(words[0]).name
         if ENV_ASSIGN.match(words[0]):
             words.pop(0)
         elif program in WRAPPERS:
-            rest, valued = words[1:], WRAPPER_VALUE_OPTIONS.get(program, ())
-            while rest and (rest[0].startswith("-") or ENV_ASSIGN.match(rest[0])):
-                split = split_string(rest) if program == "env" else None
-                if split is not None:
-                    rest = split
-                    break
-                rest = rest[2:] if rest[0] in valued else rest[1:]
-            if program == "timeout" and rest:
-                rest = rest[1:]
+            rest = unwrap(program, words[1:])
             if not rest:
                 break
             words = rest
@@ -505,12 +538,34 @@ def shell_commands(text: str, depth: int = 0, keep_path: bool = False) -> list[l
         if not words:
             continue
         program = Path(words[0]).name
-        script = shell_script(words) if program in SHELLS else " ".join(words[1:]) if program == "eval" else None
-        if script is not None and depth < 3:
+        script = shell_script(words) if program in SHELLS else " ".join(words[2 if words[1:2] == ["--"] else 1:]) if program == "eval" else None
+        if script == UNCHECKABLE or (script is not None and depth >= 3):
+            out.append([UNCHECKABLE, *words])
+        elif script is not None:
             out += shell_commands(script, depth + 1, keep_path)
-            continue
-        out.append(words)
+        else:
+            out.append(words)
     return out
+
+
+def interpreter_code(command: str) -> list[str]:
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return [command]
+    code, running = [], False
+    for i, token in enumerate(tokens):
+        if token and set(token) <= set(";&|()"):
+            running = False
+        elif INTERPRETER.match(Path(token).name):
+            running = True
+        elif running and token in INTERPRETER_CODE_OPTIONS and i + 1 < len(tokens):
+            code.append(tokens[i + 1])
+        elif running and token.startswith("-") and token[:2] in ("-c", "-e") and len(token) > 2:
+            code.append(token[2:])
+    return code
 
 
 def git_push_problem(args: list[str]) -> str | None:
@@ -590,12 +645,16 @@ def wipes_home_or_root(words: list[str]) -> bool:
 
 def command_problem(policy: Policy, words: list[str]) -> str | None:
     program = words[0]
+    if program == UNCHECKABLE:
+        return "the guard cannot check commands a shell reads from stdin or nests this deep; write them to a script file and run that"
     if program == "gh" and words[1:3] == ["pr", "merge"]:
         return "raw gh pr merge skips team-kit-gh merge's checks gate"
     if program == "gh" and words[1:3] == ["repo", "delete"]:
         return "it deletes a repository"
     if program == "gh" and words[1:2] == ["api"]:
         return gh_api_problem(words[2:])
+    if program == "git" and any(re.match(r"alias\.[^=]+=\s*!", w) for w in words):
+        return "a git shell alias can hide any command"
     if program == "git":
         i = 1
         while i < len(words) and words[i].startswith("-"):
@@ -629,9 +688,7 @@ def hard_block(policy: Policy, tool_name: str, args: dict) -> str | None:
             why = command_problem(policy, [canonical_program(Path(words[0]).name), *words[1:]])
             if why:
                 return why
-        return code_problem([command]) if any(INTERPRETER.match(Path(words[0]).name) for words in commands) else None
-    if tool_name == "execute_code" and any(HERMES_IN_CODE.search(text) for text in strings(args)):
-        return "a bot never runs the default Hermes agent"
+        return code_problem(interpreter_code(command))
     if not any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CODE_TOOLS):
         return None
     return code_problem(strings(args))
