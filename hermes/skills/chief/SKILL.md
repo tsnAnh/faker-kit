@@ -70,7 +70,7 @@ When the owner wants a repository set up that `team-kit-chief projects` does not
 
 1. Take the repository as `OWNER/REPO` from the owner's words. The project slug and the bot's name default to the repository's name in lowercase, with anything but letters, digits, `-` and `_` turned into `-`, unless the owner named them. Ask with `clarify` only if the repository is unclear.
 2. Run `team-kit-chief new-project --repo <OWNER/REPO> --project <slug> --bot <name>`.
-3. Relay its `delivery` line in one sentence: the bootstrap bot gets the request within about a minute and sets the project up, then tells the owner the few steps only they can do (merging the kit pull request, trusting the checkout, the bot's GitHub token). If it refuses because the machine has no bootstrap bot, say that the owner runs `hermes/install.sh --bootstrap-bot <name>` once; that is the only command to give them.
+3. Relay its `delivery` line in one sentence: the bootstrap bot gets the request within about a minute and sets the project up, then tells the owner the few steps only they can do (merging the kit pull request, trusting the checkout); bots share this machine's GitHub login, so there is no token to make. If it refuses because the machine has no bootstrap bot, say that the owner runs `hermes/install.sh --bootstrap-bot <name>` once; that is the only command to give them.
 
 Once the project exists, hand it work with `propose` like any other project.
 

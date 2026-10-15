@@ -222,10 +222,10 @@ for bot in $project_bots; do
   if env_has "$env_file" GH_TOKEN; then
     note "$bot: GH_TOKEN is set"
   else
-    note "$bot needs GH_TOKEN. Paste a token, or press Enter to use your gh login's token."
+    # Every bot shares this machine's gh login unless it has a token of its own (another account).
+    note "$bot uses this machine's gh login. Press Enter to keep that, or paste a token for a separate bot account."
     token=$(ask_secret "GH_TOKEN for $bot")
-    [ -n "$token" ] || token=$(gh auth token)
-    env_set "$env_file" GH_TOKEN "$token"
+    [ -z "$token" ] || env_set "$env_file" GH_TOKEN "$token"
     unset token
   fi
   # The bots exist now, so their jobs can start; activate resumes only paused ones.

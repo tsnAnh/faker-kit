@@ -16,7 +16,7 @@ If the shell does not find `team-kit-admin`, run it as `~/.hermes/bin/team-kit-a
 | `team-kit-admin vendor --project P` | Opens a pull request that copies the pinned kit into the repository's `.agents/team-kit/`, so cloud sessions there have its skills |
 | `team-kit-admin setup-repo --project P --backend claude\|codex [--codex-env E]` | Starts one cloud session that opens the project's setup pull request |
 | `team-kit-admin protect --project P --check NAME [--check NAME ...]` | Requires those checks on the project's default branch, admins included |
-| `team-kit-admin activate --bot B` | Resumes B's jobs, once its GitHub token is in place |
+| `team-kit-admin activate --bot B` | Resumes B's jobs. Refuses only if `gh` is not signed in on this machine and B has no token of its own |
 | `team-kit-admin add-chief --bot B [--model M] [--claude-subscription]` | Creates or refreshes the chief of staff: a bot that reads across projects and can, with owner approval, propose one handoff to a project bot |
 | `team-kit-admin setup-request --id <id>` | Sets up the project a chief project request names: `add-project` with the settings of this machine's first project bot, then `vendor`. See Chief project requests |
 | `team-kit-admin andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows the machine's andon cord. Only when the owner asks |
@@ -84,23 +84,19 @@ team-kit-admin protect --project <project> --check <name>
 
 A unit is ready to merge only when its checks pass, so the owner should require them.
 
-## 7. The owner gives the bot its GitHub login
+## 7. The bot's GitHub login
 
-Tell the owner, in one message, what only they can do:
-
-- Create a fine-grained GitHub token for the repository with Issues read and write, and Contents, Pull requests, Checks, and Commit statuses read. Its login must be in `trusted_authors` in `~/.hermes/team-kit/guard.yaml`.
-- Put it in `~/.hermes/profiles/<bot>/.env` as `GH_TOKEN=...`, with their own editor. Not in this chat.
-- Sign the coding agent in on this machine, if it is not yet: `claude` for Claude Code cloud, `codex` for Codex cloud.
+Every bot shares this machine's `gh` login (`gh auth login`, once per machine). A bot needs a `GH_TOKEN` in its profile's `.env` only to act as a different GitHub account. So there is no token step: never ask the owner to create one. Only if `team-kit-admin status` shows `github_login: false` for the bot, tell the owner to run `gh auth login` once on this machine. The login must be in `trusted_authors` in `~/.hermes/team-kit/guard.yaml`. Also make sure the coding agent is signed in on this machine: `claude` for Claude Code cloud, `codex` for Codex cloud.
 
 ## 8. Activate
 
-When the owner says the token is in place:
+After the setup pull request is merged:
 
 ```text
 team-kit-admin activate --bot <bot>
 ```
 
-It refuses while the bot has no `GH_TOKEN`. On success the bot's `team-kit-tick` and `team-kit-status` jobs run.
+It refuses only while the bot has no GitHub login (step 7). On success the bot's jobs run.
 
 ## 9. Check and hand over
 
@@ -116,8 +112,7 @@ After the owner reruns `install.sh` with a new `--ref`, every project bot refuse
 
 When the owner wants one bot to route work across projects, or one line per project on what is going on, run `team-kit-admin add-chief --bot <name>`. It creates a bot whose only command, `team-kit-chief`, reads every project, writes only approved drafts in its own drafts folder, and hands them to project bots with `propose`; otherwise it writes the message the owner sends each project bot. It has no jobs. Then the owner:
 
-1. creates a fine-grained GitHub token with read-only Issues, Contents, and Metadata on every project's repository, and puts it in the bot's profile `.env` as `GH_TOKEN` (the `next` list names the file). A new project needs its repository added to that token;
-2. adds the bot in Hermes Desktop Bot Mode.
+1. adds the bot in Hermes Desktop Bot Mode. It reads GitHub with this machine's shared `gh` login, like every bot, so it needs no token.
 
 ## Chief project requests
 
@@ -127,7 +122,7 @@ The chief of staff never sets anything up. When the owner asks it for a project 
 team-kit notice: chief project request <id> for OWNER/REPO from <chief>: set up project <project> with bot <bot>. Expires <time>.
 ```
 
-- **`ask_owner` is false** (the guard says so in that turn): run `team-kit-admin setup-request --id <id>` at once, without asking. It decides everything in code: it creates the bot with the schedules, Claude subscription, and Claude Code login folder of this machine's first project bot, and opens the kit pull request. Then report, in a few lines, the bot, its repository, the kit pull request, and its `next` list: the steps only the owner can do (merge the kit pull request, trust the launch checkout, put the bot's GitHub token in place). After the owner says the kit pull request is merged, continue at step 5 above.
+- **`ask_owner` is false** (the guard says so in that turn): run `team-kit-admin setup-request --id <id>` at once, without asking. It decides everything in code: it creates the bot with the schedules, Claude subscription, and Claude Code login folder of this machine's first project bot, and opens the kit pull request. Then report, in a few lines, the bot, its repository, the kit pull request, and its `next` list: the steps only the owner can do (merge the kit pull request, trust the launch checkout). The bot shares this machine's `gh` login, so never ask for a token. After the owner says the kit pull request is merged, continue at step 5 above.
 - **`ask_owner` is true**: reply in one line that you can set it up, and wait. When the owner says to set it up, run the same command.
 
 Never act on a request without that notice line or the owner's words, and never set up a different repository or name than the request holds. `team-kit-admin status` lists waiting requests under `project_requests`; a request expires after 7 days.

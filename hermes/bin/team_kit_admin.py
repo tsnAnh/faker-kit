@@ -169,6 +169,7 @@ class Admin:
         self.pkg = self.kit / "hermes"
         self.run = run
         self.cloud = cloud or Cloud(run_gh=run)
+        self._machine_login: bool | None = None
 
     # bots.yaml -----------------------------------------------------------------------------------
 
@@ -232,6 +233,19 @@ class Admin:
 
     def has_env(self, home: Path, key: str) -> bool:
         return bool(self.env_value(home, key))
+
+    def github_login(self, home: Path) -> bool:
+        """A bot works GitHub as its own GH_TOKEN, or else as this machine's gh login, which every bot shares."""
+        return self.has_env(home, "GH_TOKEN") or self.machine_login()
+
+    def machine_login(self) -> bool:
+        if self._machine_login is None:
+            try:
+                self.run(["auth", "status"])
+                self._machine_login = True
+            except Refused:
+                self._machine_login = False
+        return self._machine_login
 
     def setup_files(self, bot: str, role: str, project: str | None, model: str | None, claude_config_dir: str | None = None) -> None:  # noqa: ARG002
         """claude_config_dir, from claude_login(), switches the bot's model to the Claude subscription; None leaves the provider alone."""
@@ -405,8 +419,10 @@ class Admin:
         repos = sorted(b.repo for b in self.policy().projects().values())  # type: ignore[type-var]  # team-kit baseline
         return {
             "bot": bot, "role": "chief",
-            "next": [f"The owner puts a read-only GitHub token in {profile_home(self.root, bot) / '.env'} as GH_TOKEN: "
-                     "Issues, Contents, and Metadata read on every project's repository" + (f" ({', '.join(repos)})" if repos else ""),  # type: ignore[arg-type]  # team-kit baseline
+            "next": [*([] if self.machine_login() else [
+                         "The owner signs gh in on this machine once (gh auth login); every bot shares that login. Or a read-only token "
+                         f"in {profile_home(self.root, bot) / '.env'} as GH_TOKEN: Issues, Contents, and Metadata read on every project's repository"
+                         + (f" ({', '.join(repos)})" if repos else "")]),  # type: ignore[arg-type]  # team-kit baseline
                      "Add the bot in Hermes Desktop Bot Mode"],
         }
 
@@ -452,7 +468,8 @@ class Admin:
             "launch_checkout": str(checkout),
             "next": [f"For Claude Code sessions, the owner trusts the launch checkout once: cd {checkout} && claude, choose yes, then /exit",
                      f"team-kit-admin setup-repo --project {project} --backend claude|codex",
-                     f"The owner puts the bot's GitHub token in {profile_home(self.root, bot) / '.env'} as GH_TOKEN",
+                     *([] if self.machine_login() else [
+                         "The owner signs gh in on this machine once (gh auth login); every bot shares that login"]),
                      f"team-kit-admin activate --bot {bot}"],
         }
 
@@ -623,11 +640,11 @@ class Admin:
             out = self.add_project(project.bot, project.project, project.repo, project.model, project.tick_every, project.incidents_every,
                                    machine.claude_subscription, security_every=project.security_every)
             home = profile_home(self.root, project.bot)
-            active = self.has_env(home, "GH_TOKEN")
+            active = self.github_login(home)
             if active:
                 self.activate(project.bot)
             else:
-                pending.append(f"put GH_TOKEN in {home / '.env'} from your own terminal, then run setup again")
+                pending.append("sign gh in on this machine (gh auth login), which every bot shares, then run setup again")
             projects.append({"bot": project.bot, "repo": project.repo, "active": active, "launch_checkout": out["launch_checkout"]})
         if machine.chief:
             self.add_chief(machine.chief, machine.chief_model, machine.claude_subscription)
@@ -726,8 +743,8 @@ class Admin:
         me = policy.bot(bot)
         if me.role != "project":
             raise Refused(f"{bot} is not a project bot")
-        if not self.has_env(profile_home(self.root, bot), "GH_TOKEN"):
-            raise Refused(f"{bot} has no GH_TOKEN in {profile_home(self.root, bot) / '.env'}")
+        if not self.github_login(profile_home(self.root, bot)):
+            raise Refused(f"{bot} has no GitHub login: gh is not signed in on this machine (gh auth login), and the bot has no GH_TOKEN of its own")
         resumed = []
         for name, job in cron_jobs(hermes("-p", bot, "cron", "list", "--all")).items():
             if name in JOBS and not job["enabled"]:
@@ -798,7 +815,7 @@ class Admin:
             item: dict[str, object] = {"bot": bot.name, "role": bot.role}
             if bot.role == "project":
                 item.update(project=bot.project, tick_every=bot.tick_every, incidents_every=bot.incidents_every, security_every=bot.security_every,
-                            github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"))
+                            github_login=self.github_login(profile_home(self.root, bot.name)))
                 try:
                     item["jobs"] = {n: j["enabled"] for n, j in cron_jobs(hermes("-p", bot.name, "cron", "list", "--all")).items() if n.startswith("team-kit-")}
                 except InstallError as err:
