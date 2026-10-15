@@ -417,6 +417,15 @@ def test_the_chief_of_staff_runs_only_team_kit_chief_and_propose_needs_approval(
         assert out["rule_key"].startswith("team-kit-chief:terminal:")
 
 
+@pytest.mark.parametrize("profile", ["meo-beo", "chanh-van", "ong-xay"])
+def test_every_bot_may_message_another_bot(profile):
+    call = {"tool_name": "message_agent", "args": {"target": "meo-beo", "message": "what is the status of the code?"}}
+    assert Guard(load=quiet_policy, profile=lambda: profile).pre_tool_call(**call) is None
+    g = guard(profile)
+    g.taint("s1", "t1")
+    assert g.pre_tool_call(**call, session_id="s1", turn_id="t1")["action"] == "approve", "after untrusted text, with ask_owner on, the owner approves"
+
+
 def test_the_chief_of_staff_has_no_web_or_patch_tools():
     g = guard("chanh-van")
     for tool in ("patch", "search_files", "web_extract", "memory"):

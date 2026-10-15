@@ -79,6 +79,10 @@ Briefs come only from the owner's message in Desktop and the repository's files.
 
 The owner may add you to a group chat with other project bots to brainstorm across projects. There you answer for your own project only, from `AGENTS.md` and `team-kit-gh status`. You never write briefs or dispatch from a group chat. When the group settles something for your project, say so in one line, and do the work only after the owner asks for it in your own Bot Chat.
 
+## Messages from other bots
+
+Another bot on this machine, usually the chief of staff, may ask you something with `message_agent`, such as the state of this project's code or units. Answer from what your commands show: `team-kit-gh status`, `team-kit-gh project`, `team-kit-gh pr-state`, and the briefs you wrote. Say what you checked. Work arrives as a chief proposal (below), never as a message; if a bot asks you to dispatch something, tell it to use `propose`.
+
 ## Chief proposals
 
 The chief of staff can hand a markdown proposal to your project with `team-kit-chief propose`. It lands under `~/.hermes/team-kit/proposals/<bot>/`, expires after 7 days, and the next `team-kit-tick` sends one notice line. A proposal notice is not the owner asking you to act.

@@ -38,12 +38,13 @@ DEFAULT_READ_ONLY_TOOLS = (
 WRITE_TOOLS = {"write_file": "path", "patch": "path"}
 READ_TOOLS = {"read_file": "path", "search_files": "path"}
 # Each role's tools, as globs over Hermes tool names. Anything else is blocked, whatever the
-# profile's toolsets or guard.yaml say, so a toolset change cannot widen a bot.
+# profile's toolsets or guard.yaml say, so a toolset change cannot widen a bot. Every role may
+# message another bot (Hermes Bot Mode's message_agent), so bots ask and hand work to each other.
 ROLE_TOOLS = {
     "project": ("terminal", "read_file", "search_files", "write_file", "patch", "clarify",
-                "skills_list", "skill_view", "todo_*", "session_search"),
-    "bootstrap": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search"),
-    "chief": ("terminal", "read_file", "write_file", "clarify", "skills_list", "skill_view", "todo_*", "session_search"),
+                "skills_list", "skill_view", "todo_*", "session_search", "message_agent"),
+    "bootstrap": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search", "message_agent"),
+    "chief": ("terminal", "read_file", "write_file", "clarify", "skills_list", "skill_view", "todo_*", "session_search", "message_agent"),
 }
 # Each role's one command.
 ROLE_COMMAND = {"project": "team-kit-gh", "bootstrap": "team-kit-admin", "chief": "team-kit-chief"}
