@@ -13,6 +13,9 @@ GitHub tokens.
   status                                           the three-line digest
   report-status --issue N                          the latest report's parsed header, nothing else
   pr-state      --pr N                             state, merged, head SHA, and checks of a pull request
+  merge         --pr N                             merge an open pull request from this repository whose checks passed
+                                                   (the owner or the chief asked)
+  close         --pr N --reason WORDS...           close an open pull request from this repository with a comment
   code                                             the code's real state: the default branch's latest commits and checks,
                                                    and the open pull requests with their checks (untrusted; the guard wraps it)
   read          --issue N | --pr N                 the body and comments (untrusted; the guard wraps it)
@@ -160,6 +163,7 @@ REVIEW_LABEL = "agent:review"
 AUTO_MERGE = ("none", "low")
 APP_MERGE_ATTEMPTS = 3  # merges of an approved unit that GitHub refused before tick leaves it to the owner
 MERGE_METHODS = ("merge", "squash", "rebase")
+CLOSE_REASON_MAX = 500
 HUMAN_LABEL = "agent:needs-human"
 SECURITY_LABEL = "agent:security"
 INCIDENT_LABEL = "agent:incident"
@@ -945,6 +949,40 @@ class Gh:
         # GitHub computes mergeable in the background: null until it knows, false only for a real conflict.
         return {"pr": pr, "state": str(data.get("state", "")).lower(), "merged": bool(data.get("mergedAt")),
                 "head": head if SHA.match(head) else None, "checks": checks, "conflicts": data.get("mergeable") is False}
+
+    def own_open_pull(self, pr: int) -> dict:
+        data = self.pull(pr)
+        if data.get("isCrossRepository") is not False:
+            raise Refused(f"#{pr} comes from a fork; only the owner merges or closes it on GitHub")
+        if str(data.get("state") or "").upper() != "OPEN":
+            raise Refused(f"#{pr} is already {str(data.get('state') or 'closed').lower()}")
+        return data
+
+    def merge_pr(self, pr: int) -> dict:
+        data = self.own_open_pull(pr)
+        head = str(data.get("headRefOid") or "")
+        if not SHA.match(head):
+            raise Refused(f"#{pr} has no head commit GitHub reports")
+        checks = checks_state(self.check_rollup(head))
+        if checks != "passed":
+            raise Refused(f"#{pr}'s checks are {checks}; a pull request merges only once its checks pass")
+        if data.get("mergeable") is False:
+            raise Refused(f"#{pr} conflicts with its base branch; its author must update it first")
+        if data.get("mergeable") is not True:
+            raise Refused(f"GitHub is still checking #{pr} for conflicts; run merge again in a minute")
+        if self.cord():
+            raise Refused("the andon cord is pulled; nothing merges until the owner clears it")
+        method = self.dispatch_config().get("auto_merge_method", "merge")
+        self.run(["pr", "merge", str(pr), "-R", self.repo, f"--{method}", "--match-head-commit", head])
+        return {"pr": pr, "merged": True, "head": head, "method": method}
+
+    def close_pr(self, pr: int, reason: str) -> dict:
+        why = " ".join(reason.split())
+        if not why or len(why) > CLOSE_REASON_MAX:
+            raise Refused(f"close needs --reason of 1 to {CLOSE_REASON_MAX} characters, posted on the pull request")
+        self.own_open_pull(pr)
+        self.run(["pr", "close", str(pr), "-R", self.repo, "--comment", f"Closed by Hermes: {why}"])
+        return {"pr": pr, "closed": True}
 
     def unit_branch(self, comments: list[dict]) -> str | None:
         """The branch the unit's agent works on: from its latest trusted report, else its latest launch."""
@@ -2575,7 +2613,7 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
     cmd.add_argument("reason", nargs="*")
-    for name in ("dispatch", "launch", "verify", "report-status", "read", "show", "pr-state", "code", "kit-check"):
+    for name in ("dispatch", "launch", "verify", "report-status", "read", "show", "pr-state", "merge", "close", "code", "kit-check"):
         cmd = sub.add_parser(name)
         if name == "dispatch":
             cmd.add_argument("--unit", required=True)
@@ -2587,8 +2625,10 @@ def parser() -> argparse.ArgumentParser:
             cmd.add_argument("--pr", type=int)
         elif name == "show":
             cmd.add_argument("--path", required=True)
-        elif name == "pr-state":
+        elif name in ("pr-state", "merge", "close"):
             cmd.add_argument("--pr", type=int, required=True)
+            if name == "close":
+                cmd.add_argument("--reason", required=True, nargs="+")
         elif name in ("launch", "verify", "report-status"):
             cmd.add_argument("--issue", type=int, required=True)
     return top
@@ -2659,6 +2699,10 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
                 return 0
             elif args.command == "pr-state":
                 out = gh.pr_state(args.pr)
+            elif args.command == "merge":
+                out = gh.merge_pr(args.pr)
+            elif args.command == "close":
+                out = gh.close_pr(args.pr, " ".join(args.reason))
             elif args.command == "code":
                 out = gh.code_state()
             else:
