@@ -8,7 +8,7 @@ ARG RUNNER_SHA256_X64=af4b794c1bc41d73d40535e3fe092a39f9679cd8d965954c2aca25a05c
 
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential ca-certificates curl git jq lsb-release pkg-config python3 python3-venv sudo tzdata unzip xz-utils zstd \
+      build-essential ca-certificates curl git jq libssl-dev lsb-release pkg-config python3 python3-venv sudo tzdata unzip xz-utils zstd \
  && rm -rf /var/lib/apt/lists/*
 
 # Jobs may use sudo inside their own throwaway container, as on a hosted runner. It reaches nothing outside it.

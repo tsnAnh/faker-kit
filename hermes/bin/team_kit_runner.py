@@ -209,6 +209,11 @@ def up(config: Path, services: Services, run: Runner = subprocess.run, path_env:
             "runs_on": ["self-hosted", LABEL]}
 
 
+def check_slot(repo: str, slot: int) -> None:
+    if not REPO.match(repo) or not 1 <= slot <= 8:
+        raise RunnerError("--repo must be OWNER/REPO and --slot a number from 1 to 8")
+
+
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="team-kit-runner")
     sub = top.add_subparsers(dest="command", required=True)
@@ -225,8 +230,7 @@ def main(argv: list[str] | None = None, run: Runner = subprocess.run) -> int:
     args = parser().parse_args(argv)
     try:
         if args.command == "slot":
-            if not REPO.match(args.repo) or not 1 <= args.slot <= 8:
-                raise RunnerError("--repo must be OWNER/REPO and --slot a number from 1 to 8")  # noqa: TRY301
+            check_slot(args.repo, args.slot)
             Slot(args.repo, args.slot, run).forever()
             return 0
         out = {"image": build(run)} if args.command == "build" else up(args.config, Services(Path.home(), platform.system(), run), run)
