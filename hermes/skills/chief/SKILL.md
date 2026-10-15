@@ -62,6 +62,9 @@ Only for a project that is not on this Hermes machine, write a block the owner s
 
 ## New projects
 
+To set up every repository in a folder (the owner names a folder, not repositories), message the bootstrap bot: "Set up every repository in <folder>". It finds them with `team-kit-admin discover` and sets each up; relay its report. Never ask the owner for a list of repositories.
+
+
 When the owner wants a repository set up that `team-kit-chief projects` does not list:
 
 1. Take the repository as `OWNER/REPO` from the owner's words. The project slug and the bot's name default to the repository's name in lowercase, with anything but letters, digits, `-` and `_` turned into `-`, unless the owner named them. Ask with `clarify` only if the repository is unclear.

@@ -374,6 +374,8 @@ def test_a_project_bot_writes_only_its_own_briefs():
     ("command", "verdict"),
     both_spellings([
         ("team-kit-admin status", None),
+        ("team-kit-admin discover --dir ~/AIProjects/Titonium", None),
+        ("team-kit-admin adopt --repo acme/blog --project blog --bot blog", "approve"),
         ("~/.hermes/bin/team-kit-admin status", None),
         ("team-kit-admin add-project --bot meo-beo --project shop --repo acme/shop", "approve"),
         ("team-kit-admin setup-repo --project shop --backend claude", "approve"),

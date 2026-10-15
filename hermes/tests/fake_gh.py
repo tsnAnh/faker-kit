@@ -161,7 +161,11 @@ elif args[0] == "api":
             missing()
         print(json.dumps({"content": base64.b64encode(content.encode()).decode()}))
     elif rest == "":
-        print(json.dumps({"default_branch": "main"}))
+        # Like GitHub: any letter case finds a repository, which answers with its own spelling; one this login cannot see is a 404.
+        known = {r.lower(): r for r in load("repos.json", [])}
+        if known and repo.lower() not in known:
+            missing()
+        print(json.dumps({"default_branch": "main", "full_name": known.get(repo.lower(), repo)}))
     elif rest == "/git/ref/heads/main":
         print(json.dumps({"object": {"sha": "base0"}}))
     elif rest.startswith("/git/ref/heads/") or rest.startswith("/git/refs/heads/"):

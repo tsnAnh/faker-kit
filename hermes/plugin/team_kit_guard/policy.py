@@ -63,8 +63,8 @@ SLACK_CHANNEL_ID = re.compile(r"\A[CG][A-Z0-9]{2,}\Z")
 SLACK_CHANNEL_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,79}\Z")
 
 PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "code", "kit-check")  # noqa: E501
-BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon", "setup-request")
-BOOTSTRAP_READ_ONLY = ("status",)
+BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon", "setup-request", "discover", "adopt")
+BOOTSTRAP_READ_ONLY = ("status", "discover")
 # The chief of staff reads every project and hands work over by message. Its one write is `new-project`;
 # unless ask_owner is off, the guard asks the owner to approve it every time.
 CHIEF_COMMANDS = ("projects", "status", "show", "new-project", "andon")
