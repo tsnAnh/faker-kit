@@ -18,6 +18,7 @@ import html
 import json
 import os
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -78,16 +79,40 @@ SECRET_SEGMENTS = re.compile(
     r"\A(?:gh auth token\b|gh auth status\b.*(?:\s-t\b|--show-token)|security (?:find-|dump-keychain|export)|git credential\b"
     r"|printenv\b|env\Z|export\Z|export -p\b|set\Z|declare -[a-z]*[px]|compgen -[ve]\b)"
 )
-GIT_PUSH = re.compile(r"\bgit((?:\s+-[Cc]\s+\S+|\s+--[\w-]+=\S+)*)\s+push\b([^;&|\n]*)")
-GH_API = re.compile(r"\bgh\s+api\b([^;&|\n]*)")
-GH_METHOD = re.compile(r"(?:-X\s*|--method[=\s]+)['\"]?([A-Za-z]+)")
-WIPE = re.compile(r"""\brm\s+(?:-\S+\s+)*-[a-zA-Z]*[rR][a-zA-Z]*\s+(?:-\S+\s+)*["']?(?:/|~|\$HOME|\$\{HOME\})/?\*?["']?(?=$|[\s;&|)])""")
-HARD_TEXT = (
-    (re.compile(r"\bgh\s+pr\s+merge\b"), "raw gh pr merge skips team-kit-gh merge's checks gate"),
-    (re.compile(r"\bgh\s+repo\s+delete\b"), "it deletes a repository"),
+WIPE = re.compile(r"""\brm\s+(?:-\S+\s+)*-[a-zA-Z]*[rR][a-zA-Z]*\s+(?:-\S+\s+)*["']?(?:/|~|\$HOME|\$\{HOME\})/?\*?["']?(?=$|[\s;&|)'"])""")
+CODE_BLOCKS = (
+    (re.compile(r"\bgh\W+pr\W+merge\b"), "raw gh pr merge skips team-kit-gh merge's checks gate"),
+    (re.compile(r"\bgh\W+repo\W+delete\b"), "it deletes a repository"),
     (re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch)\b"), "it merges or deletes through GraphQL"),
+    (re.compile(r"\bgit\b[^\n]{0,80}?\bpush\b"), "push from the terminal with a named branch, not from code or a delegated task"),
+    (re.compile(r"(?<![\w.-])hermes(?![\w.-])"), "a bot never runs the default Hermes agent"),
     (WIPE, "it wipes / or the home folder"),
 )
+GRAPHQL_BLOCKS = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch)\b")
+WRAPPERS = ("env", "command", "exec", "nohup", "sudo", "xargs", "time", "nice", "stdbuf", "caffeinate")
+SHELLS = ("sh", "bash", "zsh", "dash", "fish")
+GIT_VALUE_OPTIONS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env")
+PUSH_VALUE_OPTIONS = ("-o", "--push-option", "--repo", "--receive-pack", "--exec")
+GH_API_VALUE_OPTIONS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field", "--raw-field", "--input", "-q", "--jq", "-t",
+                        "--template", "--hostname", "-p", "--preview", "--cache")
+GH_API_BODY_OPTIONS = ("-f", "-F", "--field", "--raw-field", "--input")
+KIT_READERS = ("cat", "ls", "head", "tail", "grep", "rg", "wc", "less", "file", "stat", "diff", "realpath", "readlink")
+KIT_GIT_READS = ("log", "show", "status", "diff", "rev-parse", "describe", "ls-files", "blame")
+PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|team-kit/kit)(?![\w-])", re.I)
+CLEAN_TURN_TEXT = re.compile(r"\b(?:team|faker)-kit-gh\W+(merge|close)\b")
+TAINTED_TURN_SECONDS = 3600
+TAINT_BLOCKED_TOOLS = ("delegate_task", "cronjob*")
+
+
+def team_kit_program(word: str) -> bool:
+    name = Path(word).name
+    installed = (name, f"~/.hermes/bin/{name}", str(Path.home() / ".hermes" / "bin" / name))
+    return canonical_program(name) in TEAM_KIT_PROGRAMS and word in installed
+
+
+def tainted_turn_marker(home: Path, profile: str) -> Path:
+    return home / "tainted-turns" / profile
+
 
 MIGRATE_V1 = (
     "guard.yaml is version 1. team-kit now keeps bots in bots.yaml: set `version: 2` in guard.yaml, "
@@ -398,14 +423,62 @@ def scanned_text(tool_name: str, args: dict) -> list[str]:
     return strings(args)
 
 
-def git_push_problem(rest: str) -> str | None:
-    words = rest.split()
-    if any(w in ("--all", "--mirror", "--delete", "-d") or w.startswith(("--force", "-f", "--mirror")) for w in words):
-        return "force, mirror, and delete pushes are blocked"
-    plain = [w for w in words if not w.startswith("-")]
-    refspecs = plain[1:]
+def shell_words(segment: str, keep_path: bool = False) -> list[str]:
+    try:
+        words = shlex.split(segment, comments=False)
+    except ValueError:
+        words = [w.strip("'\"") for w in segment.split()]
+    while words:
+        program = Path(words[0]).name
+        if ENV_ASSIGN.match(words[0]):
+            words.pop(0)
+        elif program in WRAPPERS or program == "timeout":
+            if all(w.startswith("-") or ENV_ASSIGN.match(w) for w in words[1:]):
+                break
+            words.pop(0)
+            while words and (words[0].startswith("-") or ENV_ASSIGN.match(words[0])):
+                words.pop(0)
+            if program == "timeout" and words:
+                words.pop(0)
+        else:
+            break
+    if words and not keep_path:
+        words[0] = canonical_program(Path(words[0]).name)
+    return words
+
+
+def shell_commands(text: str, depth: int = 0, keep_path: bool = False) -> list[list[str]]:
+    out: list[list[str]] = []
+    for raw in SEGMENT_SPLIT.split(text or ""):
+        words = shell_words(raw.strip(), keep_path)
+        if not words:
+            continue
+        if Path(words[0]).name in SHELLS and "-c" in words[:-1] and depth < 3:
+            out += shell_commands(words[words.index("-c") + 1], depth + 1, keep_path)
+            continue
+        out.append(words)
+    return out
+
+
+def git_push_problem(args: list[str]) -> str | None:
+    positional, i = [], 0
+    while i < len(args):
+        word = args[i]
+        if word in PUSH_VALUE_OPTIONS:
+            i += 2
+            continue
+        if word.startswith("--"):
+            if word.split("=", 1)[0] in ("--force", "--force-with-lease", "--force-if-includes", "--mirror", "--all", "--delete", "--prune"):
+                return "force, mirror, all, prune, and delete pushes are blocked"
+        elif word.startswith("-") and len(word) > 1:
+            if set(word[1:]) & {"f", "d"}:
+                return "force and delete pushes are blocked"
+        else:
+            positional.append(word)
+        i += 1
+    refspecs = positional[1:]
     if not refspecs:
-        return "name the branch: git push origin <branch>, never a bare push that could reach main"
+        return "name the branch: git push origin <branch>, never a push that could reach main"
     for spec in refspecs:
         if spec.startswith("+"):
             return "a + refspec force-pushes"
@@ -415,50 +488,110 @@ def git_push_problem(rest: str) -> str | None:
     return None
 
 
-def gh_api_problem(rest: str) -> str | None:
-    found = GH_METHOD.search(rest)
-    method = found.group(1).upper() if found else ""
-    path = next((w.strip("'\"") for w in rest.split() if w.strip("'\"").lstrip("/").startswith("repos/")), "").split("?")[0].strip("/")
+def gh_api_problem(args: list[str]) -> str | None:
+    method, path, body, i = "", "", False, 0
+    while i < len(args):
+        word = args[i]
+        name, eq, value = word.partition("=")
+        if word.startswith("-X") and len(word) > 2:
+            method = word[2:]
+        elif eq and name in ("--method",):
+            method = value
+        elif word in GH_API_VALUE_OPTIONS:
+            if word in ("-X", "--method") and i + 1 < len(args):
+                method = args[i + 1]
+            body = body or word in GH_API_BODY_OPTIONS
+            i += 2
+            continue
+        elif eq and name in GH_API_VALUE_OPTIONS:
+            body = body or name in GH_API_BODY_OPTIONS
+        elif not word.startswith("-") and not path:
+            path = word
+        i += 1
+    method = (method or ("POST" if body else "GET")).upper()
+    path = re.sub(r"\Ahttps?://[^/]+/", "", path).split("?")[0].strip("/")
+    if path == "graphql" and any(GRAPHQL_BLOCKS.search(w) for w in args):
+        return "it merges or deletes through GraphQL"
     parts = path.split("/")
+    if parts[:1] != ["repos"]:
+        return None
     if method == "DELETE" and len(parts) == 3:
         return "it deletes a repository"
-    if parts[-1:] == ["merge"] and method in ("PUT", "POST", ""):
+    if parts[-1:] == ["merge"] and method != "GET":
         return "a raw merge skips team-kit-gh merge's checks gate"
-    if parts[-1:] == ["merges"]:
+    if parts[-1:] == ["merges"] and method != "GET":
         return "it merges branches straight into a base branch"
     return None
 
 
-def hard_block(tool_name: str, args: dict) -> str | None:
+def wipes_home_or_root(words: list[str]) -> bool:
+    if words[0] != "rm" or not any((w.startswith("-") and not w.startswith("--") and set(w[1:]) & {"r", "R"}) or w == "--recursive" for w in words):
+        return False
+    home = str(Path.home())
+    for target in (w for w in words[1:] if not w.startswith("-")):
+        bare = target.rstrip("*").rstrip("/")
+        if bare in ("", "~", "$HOME", "${HOME}") or str(Path(bare).expanduser()) == home:
+            return True
+    return False
+
+
+def command_problem(policy: Policy, words: list[str]) -> str | None:
+    program = words[0]
+    if program == "gh" and words[1:3] == ["pr", "merge"]:
+        return "raw gh pr merge skips team-kit-gh merge's checks gate"
+    if program == "gh" and words[1:3] == ["repo", "delete"]:
+        return "it deletes a repository"
+    if program == "gh" and words[1:2] == ["api"]:
+        return gh_api_problem(words[2:])
+    if program == "git":
+        i = 1
+        while i < len(words) and words[i].startswith("-"):
+            i += 2 if words[i] in GIT_VALUE_OPTIONS else 1
+        if words[i:i + 1] == ["push"]:
+            return git_push_problem(words[i + 1:])
+    if wipes_home_or_root(words):
+        return "it wipes / or the home folder"
+    if program == "hermes":
+        chosen = next((words[j + 1] for j, w in enumerate(words[:-1]) if w in ("-p", "--profile")), None)
+        chosen = chosen or next((w.split("=", 1)[1] for w in words if w.startswith("--profile=")), None)
+        if chosen not in policy.bots or chosen == "default":
+            return "a bot runs hermes only with -p naming a team-kit bot, never the default Hermes agent"
+    if any(PROTECTED_KIT.search(w) for w in words[1:]) and program not in (*KIT_READERS, *TEAM_KIT_PROGRAMS):
+        reading = program == "git" and any(w in KIT_GIT_READS for w in words[1:4])
+        reading = reading or (program == "find" and not {"-delete", "-exec", "-execdir", "-ok"} & set(words))
+        if not reading:
+            return "bots never change the kit or ~/.hermes/bin"
+    return None
+
+
+def hard_block(policy: Policy, tool_name: str, args: dict) -> str | None:
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
         return None
+    if tool_name in ("terminal", "process_manage"):
+        command = str(args.get("command", ""))
+        if re.search(r">\s*\S*" + PROTECTED_KIT.pattern, command, re.I):
+            return "bots never change the kit or ~/.hermes/bin"
+        for words in shell_commands(command):
+            why = command_problem(policy, words)
+            if why:
+                return why
+        return None
     for text in strings(args):
-        for pattern, why in HARD_TEXT:
+        for pattern, why in CODE_BLOCKS:
             if pattern.search(text):
                 return why
-        problems = [git_push_problem(m.group(2)) for m in GIT_PUSH.finditer(text)] + [gh_api_problem(m.group(1)) for m in GH_API.finditer(text)]
-        found = next((p for p in problems if p), None)
-        if found:
-            return found
+        if PROTECTED_KIT.search(text):
+            return "bots never change the kit or ~/.hermes/bin from code or a delegated task"
     return None
 
 
 def default_agent_use(policy: Policy, profile: str, tool_name: str, args: dict) -> str | None:
-    if tool_name == "message_agent":
-        target = str(args.get("target", "")).strip().lstrip("@")
-        if target == profile or target not in policy.bots:
-            others = ", ".join(sorted(name for name in policy.bots if name != profile)) or "none"
-            return f"{profile} may message only this machine's team-kit bots ({others}), never the default Hermes agent"
+    if tool_name != "message_agent":
         return None
-    for text in strings(args) if tool_name not in PATH_ARGS and not any(fnmatch.fnmatchcase(tool_name, p) for p in CHAT_TOOLS) else []:
-        for segment in command_segments(text):
-            words = segment.split()
-            if words[0] != "hermes":
-                continue
-            chosen = next((words[i + 1] for i, w in enumerate(words[:-1]) if w in ("-p", "--profile")), None)
-            chosen = chosen or next((w.split("=", 1)[1] for w in words if w.startswith("--profile=")), None)
-            if chosen not in policy.bots or chosen == "default":
-                return "a bot runs hermes only with -p naming a team-kit bot, never the default Hermes agent"
+    target = str(args.get("target", "")).strip().lstrip("@")
+    if target == profile or target not in policy.bots:
+        others = ", ".join(sorted(name for name in policy.bots if name != profile)) or "none"
+        return f"{profile} may message only this machine's team-kit bots ({others}), never the default Hermes agent"
     return None
 
 
@@ -467,9 +600,9 @@ def secret_reference(tool_name: str, args: dict) -> str | None:
         return None
     for text in scanned_text(tool_name, args):
         if tool_name not in PATH_ARGS:
-            for segment in command_segments(text):
-                if SECRET_SEGMENTS.match(segment):
-                    return segment[:60]
+            for words in shell_commands(text):
+                if SECRET_SEGMENTS.match(" ".join(words)):
+                    return " ".join(words)[:60]
         found = SECRET_TEXT.search(text)
         if found:
             return found.group(0)
@@ -478,27 +611,29 @@ def secret_reference(tool_name: str, args: dict) -> str | None:
             if WRITE_PROTECTED.search(text):
                 return "the Hermes home, the kit, or its commands"
     if tool_name == "search_files":
-        where = os.path.abspath(os.path.expanduser(str(args.get("path") or ".")))  # noqa: PTH100, PTH111
-        if where in ("/", "/Users", "/home", os.path.expanduser("~")):  # noqa: PTH111
+        where = str(Path(str(args.get("path") or ".")).expanduser().resolve())
+        if where in ("/", "/Users", "/home", str(Path.home())):
             return "the whole home folder; search a project folder"
     return None
 
 
 def clean_turn_command(tool_name: str, args: dict) -> str | None:
+    if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in TAINT_BLOCKED_TOOLS):
+        return tool_name
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
         return None
-    for text in strings(args):
-        found = re.search(r"\b(?:team|faker)-kit-gh\s+(merge|close)\b", text)
-        if found:
-            return found.group(1)
-    return None
+    if tool_name in ("terminal", "process_manage"):
+        found = [w[1] for w in shell_commands(str(args.get("command", ""))) if w[0] == "team-kit-gh" and w[1:2] and w[1] in CLEAN_TURN_COMMANDS]
+        return found[0] if found else None
+    found_text = next((m for t in strings(args) for m in [CLEAN_TURN_TEXT.search(t)] if m), None)
+    return found_text.group(1) if found_text else None
 
 
 def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bool) -> dict | None:
     """The pre_tool_call verdict. Every bot may use every tool and the shell; the blocks are the hard blocks, guard.yaml's
     deny rules, secrets, the default Hermes agent, and merge or close in a tainted turn. Unless ask_owner is off,
     bootstrap and chief approval and taint then ask the owner."""
-    why = hard_block(tool_name, args)
+    why = hard_block(policy, tool_name, args)
     if why:
         return block(f"{tool_name} is blocked for every bot: {why}")
     for rule in policy.deny:
@@ -513,8 +648,8 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
     default = default_agent_use(policy, profile, tool_name, args)
     if default:
         return block(default)
-    gated = clean_turn_command(tool_name, args)
-    if tainted and gated:
+    gated = clean_turn_command(tool_name, args) if tainted else None
+    if gated:
         return block(f"{gated} runs only in a turn that read nothing untrusted; the owner or the chief of staff must ask for it in a new message")
     read_only = tool_name in policy.read_only_tools
     if not policy.ask_owner:
@@ -546,7 +681,9 @@ def reader_source(policy: Policy, tool_name: str, args: dict) -> str | None:
     if any(rule.matches(tool_name, args) for rule in policy.untrusted_readers):
         return source
     if tool_name in ("terminal", "process_manage"):
-        return None if segments and all(s.split()[0] in TEAM_KIT_PROGRAMS for s in segments) else source
+        commands = shell_commands(str(args.get("command", "")), keep_path=True)
+        trusted = commands and all(team_kit_program(w[0]) for w in commands)
+        return None if trusted else source
     return None if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in TRUSTED_RESULTS) else source
 
 

@@ -13,6 +13,7 @@ import collections
 import concurrent.futures
 import contextvars
 import hashlib
+import json
 import logging
 import os
 import re
@@ -21,7 +22,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from .policy import Policy, PolicyError, block, decide, load_policy, reader_source, wrap_untrusted
+from .policy import Policy, PolicyError, block, decide, load_policy, reader_source, tainted_turn_marker, wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -81,12 +82,14 @@ def kit_skill_digest(policy: Policy, skill: str) -> str | None:
 
 class Guard:
     def __init__(self, load: Callable[[], Policy], profile: Callable[[], str], timeout: float = DECISION_TIMEOUT_SECONDS,  # noqa: ANN204
-                 skill_digest: Callable[[Policy, str], str | None] | None = None, now: Callable[[], float] = time.time):
+                 skill_digest: Callable[[Policy, str], str | None] | None = None, now: Callable[[], float] = time.time,
+                 markers: bool = False):
         self._load = load
         self._profile = profile
         self._timeout = timeout
         self._skill_digest = skill_digest
         self._now = now
+        self._markers = markers
         self._skills: collections.OrderedDict[str, str] = collections.OrderedDict()
         self._tainted: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
@@ -103,6 +106,26 @@ class Guard:
     def taint(self, session_id, turn_id) -> None:  # noqa: ANN001
         with self._lock:
             self._tainted.add(self._turn(session_id, turn_id))
+        if self._markers:
+            try:
+                self._bounded(self._write_turn_marker, str(session_id or ""))
+            except Exception:
+                logger.exception("team-kit guard could not record the tainted turn for team-kit-gh")
+
+    def _write_turn_marker(self, session: str) -> None:
+        marker = tainted_turn_marker(self._load().home, self._profile())
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        tmp = marker.with_name(f".{marker.name}.{os.getpid()}.{threading.get_ident()}")
+        tmp.write_text(json.dumps({"session": session, "at": self._now()}))
+        tmp.replace(marker)
+
+    def _clear_turn_marker(self, session: str) -> None:
+        marker = tainted_turn_marker(self._load().home, self._profile())
+        try:
+            if json.loads(marker.read_text()).get("session") == session:
+                marker.unlink()
+        except (OSError, ValueError, AttributeError):
+            return
 
     def _bounded(self, fn, *args):  # noqa: ANN001, ANN002, ANN202
         # Run in the caller's context: a gateway serving several profiles names the routed one in a
@@ -113,7 +136,7 @@ class Guard:
         try:
             tainted = self.is_tainted(session_id, turn_id)
             verdict = self._bounded(lambda: decide(self._load(), self._profile(), tool_name, args or {}, tainted))
-            if verdict is None and tainted and tool_name == "message_agent":
+            if verdict is None and tainted and tool_name == "message_agent" and self._markers:
                 self._bounded(self._mark_tainted_message, str((args or {}).get("target", "")).strip().lstrip("@"))
         except concurrent.futures.TimeoutError:
             return block(f"policy check for {tool_name} timed out; blocked")
@@ -137,6 +160,11 @@ class Guard:
 
     def check_message(self, user_message="", session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
         out = self._message_verdict(str(user_message or ""), session_id, turn_id)
+        if self._markers and not self.is_tainted(session_id, turn_id):
+            try:
+                self._bounded(self._clear_turn_marker, str(session_id or ""))
+            except Exception:
+                logger.exception("team-kit guard could not clear the tainted-turn record")
         reload = self._skill_reload(session_id)
         if reload is None:
             return out
@@ -168,7 +196,7 @@ class Guard:
         ask_owner off a chief project request to the bootstrap bot, or the chief's work message to a project bot, is the
         owner's standing go-ahead. Text inside <untrusted> never counts."""
         relayed = RELAYED.match(text)
-        if relayed and self._sent_by_chief(relayed.group(1)) and self._bounded(self._relayed_from_a_tainted_turn):
+        if relayed and self._sent_by_chief(relayed.group(1)) and self._relayed_safely():
             self.taint(session_id, turn_id)
             return None
         work = CHIEF_WORK.match(text)
@@ -210,6 +238,15 @@ class Guard:
         tmp.write_text(str(self._now() + TAINTED_MESSAGE_SECONDS))
         tmp.replace(folder / target)
 
+    def _relayed_safely(self) -> bool:
+        if not self._markers:
+            return False
+        try:
+            return bool(self._bounded(self._relayed_from_a_tainted_turn))
+        except Exception:
+            logger.exception("team-kit guard could not check the chief's message; it counts as untrusted")
+            return True
+
     def _relayed_from_a_tainted_turn(self) -> bool:
         try:
             marker = self._tainted_messages() / self._profile()
@@ -240,10 +277,15 @@ class Guard:
     def end_turn(self, session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
         with self._lock:
             self._tainted.discard(self._turn(session_id, turn_id))
+        if self._markers:
+            try:
+                self._bounded(self._clear_turn_marker, str(session_id or ""))
+            except Exception:
+                logger.exception("team-kit guard could not clear the tainted-turn record")
 
 
 def register(ctx) -> None:  # noqa: ANN001
-    guard = Guard(load=load_policy, profile=current_profile, skill_digest=kit_skill_digest)
+    guard = Guard(load=load_policy, profile=current_profile, skill_digest=kit_skill_digest, markers=True)
     ctx.register_hook("pre_tool_call", guard.pre_tool_call)
     ctx.register_hook("transform_tool_result", guard.transform_tool_result)
     ctx.register_hook("pre_llm_call", guard.check_message)
