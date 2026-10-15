@@ -330,7 +330,7 @@
   "plugins/trust-ladder/packs/swift-ios/merge/Package.swift": "1907a3ed017b6708d75ab4c585dba86310ad1b89da23e7fafe2fb4e2fd6882fd",
   "plugins/trust-ladder/packs/swift-ios/pack.json": "8eb5527f01db0f9e3ed2f137f3c7885cd72605e9d276613b04bb13a2dcbc999f",
   "plugins/trust-ladder/packs/swift-ios/test.sh": "3be3e92e0efb6b5c99ddc440e93b0738a7c9692d85f9d1bc5e9b943469fc39bb",
-  "plugins/trust-ladder/packs/tools.sh": "91b563f2f14a8672987bc2d9e58902466cb5152eaeb1575e62f0afac6181055a",
+  "plugins/trust-ladder/packs/tools.sh": "a4801e5d2a06b45f7fc6614ac1d5916c9ebac1667462f32850114c31ab4362a0",
   "plugins/trust-ladder/pi/team-kit.ts": "34b257f47cb5b8c8426af03aaf514d307effc58ce138f7b6e727337849cc7e38",
   "plugins/trust-ladder/references/agent-friendly-architecture.md": "c7d11f8e7375ff5f1e8dcc3c61294fc8687f9c969a3070056940c322b87925e0",
   "plugins/trust-ladder/references/compat.md": "3d12a61ee3f1b766bcaeb111d77d7698937f069bbf58d502f03c87247129d85a",
@@ -505,7 +505,7 @@
   "plugins/trust-ladder/templates/routines/weekly-review.md": "9180d5f01a5f6139e56db31cfc4040e426e13b27b2bc05bfd5cc9bad453c6089",
   "vendor_kit.py": "5c1b99b8924e874183a8a8448e67b6f4b6f5b943a88f54982ca13a33a64408e9"
  },
- "kit_ref": "00cf47828122a6edb12520a160bdce94251aef78",
+ "kit_ref": "757379e6817e35e5aa0f79d4e2ab1fa1e410e5ba",
  "links": {
   ".agents/skills/advisor": "../../.agents/team-kit/plugins/advisor/skills/advisor",
   ".agents/skills/architect": "../../.agents/team-kit/plugins/pstack/skills/architect",
