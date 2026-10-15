@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 from conftest import BOTS, GUARD_TEMPLATE, SHOP, guard_text
-from team_kit_guard import Guard, current_profile, register
+from team_kit_guard import NOTICE_CONTEXT, REMEMBERED_CHATS, Guard, current_profile, register
 from team_kit_guard.policy import MIGRATE_V1, PolicyError, load_policy, parse_policy
 from team_kit_requests import ProjectRequest, format_request_notice
 
@@ -605,6 +605,51 @@ def test_an_owner_message_is_not_tainted():
     g = guard("meo-beo")
     assert g.check_message(user_message="Add CSV export to orders", session_id="s1", turn_id="t1") is None
     assert not g.is_tainted("s1", "t1")
+
+
+def test_a_chat_is_told_once_to_reload_its_skill_and_again_when_the_skill_changes():
+    skills = {"dispatch": "v1"}
+    g = Guard(load=quiet_policy, profile=lambda: "meo-beo", skill_digest=lambda policy, skill: skills.get(skill))
+    first = g.check_message(user_message="Merge #17", session_id="s1", turn_id="t1")
+    assert "Load the dispatch skill again now" in first["context"], "a chat from before the restart may hold an old copy"
+    assert g.check_message(user_message="Merge #18", session_id="s1", turn_id="t2") is None
+    skills["dispatch"] = "v2"
+    assert "the new text wins" in g.check_message(user_message="Merge #18", session_id="s1", turn_id="t3")["context"]
+    assert g.check_message(user_message="x", session_id="s1", turn_id="t4") is None
+    notice = g.check_message(user_message="team-kit notice: In flight: 1.", session_id="s2", turn_id="t1")["context"]
+    assert "not a request from the owner" in notice and "Load the dispatch skill again now" in notice, "both contexts reach the bot"
+
+
+def test_a_go_ahead_keeps_its_context_and_its_untainted_turn_when_the_reminder_joins_it():
+    g = Guard(load=quiet_policy, profile=lambda: "meo-beo", skill_digest=lambda policy, skill: "v1")
+    out = g.check_message(user_message=WORK, session_id="s1", turn_id="t1")
+    assert "load the dispatch skill again and follow its Messages" in out["context"] and "the new text wins" in out["context"]
+    assert not g.is_tainted("s1", "t1")
+
+
+def test_a_skill_that_cannot_be_read_leaves_the_verdict_and_taint_as_they_were():
+    def broken(policy, skill):
+        raise RuntimeError("disk")
+    g = Guard(load=quiet_policy, profile=lambda: "meo-beo", skill_digest=broken)
+    assert g.check_message(user_message="Merge #12", session_id="s1", turn_id="t1") is None
+    out = g.check_message(user_message="team-kit notice: In flight: 1.", session_id="s1", turn_id="t2")
+    assert out == {"context": NOTICE_CONTEXT} and g.is_tainted("s1", "t2")
+
+
+def test_the_reminder_skips_a_chat_without_an_id_and_forgets_the_oldest_chats():
+    g = Guard(load=quiet_policy, profile=lambda: "meo-beo", skill_digest=lambda policy, skill: "v1")
+    assert g.check_message(user_message="x", session_id="", turn_id="t1") is None
+    for n in range(REMEMBERED_CHATS + 1):
+        g.check_message(user_message="x", session_id=f"s{n}", turn_id="t1")
+    assert g.check_message(user_message="x", session_id=f"s{REMEMBERED_CHATS}", turn_id="t2") is None
+    assert g.check_message(user_message="x", session_id="s0", turn_id="t2") is not None, "the oldest chat was forgotten"
+
+
+def test_the_chief_reloads_the_chief_skill_and_a_missing_skill_says_nothing():
+    chief = Guard(load=quiet_policy, profile=lambda: "chanh-van", skill_digest=lambda policy, skill: "v1" if skill == "chief" else None)
+    assert "Load the chief skill again now" in chief.check_message(user_message="merge it", session_id="s1", turn_id="t1")["context"]
+    quiet = Guard(load=quiet_policy, profile=lambda: "meo-beo", skill_digest=lambda policy, skill: None)
+    assert quiet.check_message(user_message="hi", session_id="s1", turn_id="t1") is None
 
 
 def test_register_wires_the_hooks(team_kit_home):
