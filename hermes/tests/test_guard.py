@@ -609,6 +609,11 @@ def test_with_ask_owner_on_the_bootstrap_and_chief_changes_still_need_the_owner(
     "chmod +w ~/.hermes/team-kit/kit", "git -C ~/.hermes/team-kit/kit reset --hard HEAD~1",
     'bash -lc "gh pr merge 5"', "sh -ec 'git push origin main'", "env -u FOO git push origin main", "nice -n 10 git push origin main",
     "timeout -s KILL 30 gh pr merge 5", "sudo -u x gh pr merge 5",
+    "bash -c -- 'gh pr merge 5'", "bash -c -e 'gh pr merge 5'", "fish --command 'gh pr merge 5'", "zsh --command='gh pr merge 5'",
+    "env -S 'gh pr merge 5'", "env --split-string='gh pr merge 5'", "env -S'gh pr merge 5'", "exec -a x gh pr merge 5",
+    "echo 5 | xargs -J % gh pr merge %", "sudo --user x gh pr merge 5", "sudo -T 5 gh pr merge 5", "eval 'gh pr merge 5'",
+    "python3 -c 'import os;os.system(\"gh pr merge 5\")'", "node -e 'require(\"child_process\").execSync(\"gh pr merge 5\")'",
+    "/usr/bin/python3.12 -c 'import os; os.system(\"git push origin main\")'",
 ])
 def test_the_second_review_bypasses_are_blocked(command):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal(command))["action"] == "block", command
@@ -619,6 +624,7 @@ def test_the_second_review_bypasses_are_blocked(command):
     "gh api repos/o/r/pulls/1/merge", "gh api repos/o/r/pulls/1", "git push -u origin feature/x", "git push origin feature/x 2>&1",
     "cat ~/.hermes/team-kit/kit/hermes/skills/dispatch/SKILL.md", "ls ~/.hermes/team-kit/kit", "git -C ~/.hermes/team-kit/kit log -3",
     "~/.hermes/bin/team-kit-gh status", "npm test && cargo build --release", "bash -lc 'npm test'", "env -u CI npm test",
+    "python3 -m pytest hermes/tests -q", "bash -o pipefail -c 'npm test | tee log'", "env -S 'npm test'", "eval \"$(direnv export bash)\"",
 ])
 def test_ordinary_work_is_not_blocked(command):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal(command)) is None, command
@@ -650,8 +656,10 @@ def test_each_tainted_chat_leaves_its_own_record_until_its_turn_ends_or_a_clean_
     g.taint("s2", "u1")
     g.end_turn(session_id="s2", turn_id="u1")
     assert (folder / "s1").exists() and not (folder / "s2").exists(), "another chat's turn ending leaves this chat's record"
-    g.check_message(user_message="merge #12 now", session_id="s1b", turn_id="t2", parent_session_id="s1")
-    assert not (folder / "s1").exists(), "a clean message clears the record, also after compaction renamed the session"
+    g.check_message(user_message="look into this", session_id="child", turn_id="c1", parent_session_id="s1")
+    assert (folder / "s1").exists(), "a clean delegated child never clears its parent chat's record"
+    g.check_message(user_message="merge #12 now", session_id="s1", turn_id="t2")
+    assert not (folder / "s1").exists(), "the chat's next clean message clears its record"
     g.taint("s3", "t3")
     g.end_turn(session_id="s3-renamed", turn_id="t3")
     assert not (folder / "s3").exists(), "the turn's end clears its record by turn id"
@@ -688,6 +696,8 @@ def test_mentioning_hermes_or_git_push_in_text_is_not_blocked(tool, args):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name=tool, args=args) is None
 
 
-@pytest.mark.parametrize("code", ["subprocess.run(['hermes', 'chat'])", "os.system('hermes chat -q x')", "subprocess.run('gh pr merge 1', shell=True)"])
+@pytest.mark.parametrize("code", ["subprocess.run(['hermes', 'chat'])", "os.system('hermes chat -q x')", "subprocess.run('gh pr merge 1', shell=True)",
+                                  "os.system('/usr/local/bin/hermes chat -q hi')", "subprocess.run(['/opt/homebrew/bin/hermes','chat'])",
+                                  "os.system('hermes -p default chat -q hi')", "os.system('hermes --profile default chat')"])
 def test_code_that_runs_the_default_agent_or_a_raw_merge_is_blocked(code):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name="execute_code", args={"code": code})["action"] == "block"

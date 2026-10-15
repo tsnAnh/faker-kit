@@ -170,12 +170,11 @@ class Guard:
         self.taint(session_id, turn_id)
         return wrap_untrusted(source, result)
 
-    def check_message(self, user_message="", session_id="", turn_id="", parent_session_id="", **_):  # noqa: ANN001, ANN003, ANN201
+    def check_message(self, user_message="", session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
         out = self._message_verdict(str(user_message or ""), session_id, turn_id)
         if self._markers and not self.is_tainted(session_id, turn_id):
             try:
-                sessions = tuple(str(s) for s in (session_id, parent_session_id) if s)
-                self._bounded(self._clear_turn_marker, sessions)
+                self._bounded(self._clear_turn_marker, tuple(str(s) for s in (session_id,) if s))
             except Exception:
                 logger.exception("team-kit guard could not clear the tainted-turn record")
         reload = self._skill_reload(session_id)
