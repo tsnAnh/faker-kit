@@ -24,6 +24,16 @@ def seed_config(root, profile, config):
     (home / "config.yaml").write_text(yaml.safe_dump(config))
 
 
+def test_a_folder_a_deleted_profile_left_behind_is_created_again(kit_source, machine):
+    root, _ = machine
+    ghost = root / "profiles" / "ong-xay" / "runtime"
+    ghost.mkdir(parents=True)  # what Hermes leaves when it deletes a profile: no identity, and every command refused
+    done = install(kit_source, machine, "--no-gateway", "--bootstrap-bot", "ong-xay")
+    assert done.returncode == 0, done.stderr
+    assert ["-p", "default", "profile", "create", "ong-xay"] in hermes_calls(root)
+    assert read_config(root, "ong-xay")["toolsets"] == ["terminal", "clarify", "skills"]
+
+
 def test_installs_the_module_and_the_bootstrap_bot_pinned_to_the_commit(kit_source, machine):
     root, _ = machine
     done = install(kit_source, machine, "--bootstrap-bot", "ong-xay", "--model", "strong-model")

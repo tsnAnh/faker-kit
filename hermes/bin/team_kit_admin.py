@@ -193,12 +193,21 @@ class Admin:
     # files from the pinned kit -----------------------------------------------------------------------
 
     def ensure_profile(self, bot: str, role: str) -> Path:  # noqa: ARG002
+        """Create the profile unless Hermes already serves it. A folder alone is not a profile: Hermes leaves one behind
+        when it deletes a profile, and refuses every command for it."""
         home = profile_home(self.root, bot)
-        if not home.is_dir():
+        if not self.profile_live(bot):
             hermes("-p", "default", "profile", "create", bot)
-            if not home.is_dir():
-                raise Refused(f"hermes profile create {bot} did not create {home}")
+            if not self.profile_live(bot):
+                raise Refused(f"hermes profile create {bot} did not create a profile Hermes serves at {home}")
         return home
+
+    def profile_live(self, bot: str) -> bool:
+        try:
+            hermes("profile", "show", bot)
+        except InstallError:
+            return False
+        return True
 
     def link_skill(self, home: Path, name: str) -> None:
         dest = home / "skills"

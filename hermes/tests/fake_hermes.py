@@ -19,7 +19,15 @@ home = root if profile == "default" else root / "profiles" / profile
 if args[:2] == ["profile", "create"]:
     if os.environ.get("FAKE_PROFILE_CREATE_FAIL"):
         sys.exit(1)
-    (root / "profiles" / args[2]).mkdir(parents=True)
+    # Like Hermes, create also revives a folder a deleted profile left behind; the marker is its identity.
+    (root / "profiles" / args[2]).mkdir(parents=True, exist_ok=True)
+    (root / "profiles" / args[2] / ".profile-identity").write_text(args[2])
+elif args[:2] == ["profile", "show"]:
+    # Like Hermes, a folder without a profile's identity is not a profile.
+    if not (root / "profiles" / args[2] / ".profile-identity").is_file():
+        print(f"Error: Profile '{args[2]}' does not exist.")
+        sys.exit(1)
+    print(f"Profile: {args[2]}")
 elif args[:2] == ["config", "set"]:
     key, value = args[2:4]
     if os.environ.get("FAKE_CONFIG_FAIL") == key:
