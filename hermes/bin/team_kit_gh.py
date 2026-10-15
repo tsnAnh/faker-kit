@@ -13,6 +13,8 @@ GitHub tokens.
   status                                           the three-line digest
   report-status --issue N                          the latest report's parsed header, nothing else
   pr-state      --pr N                             state, merged, head SHA, and checks of a pull request
+  code                                             the code's real state: the default branch's latest commits and checks,
+                                                   and the open pull requests with their checks (untrusted; the guard wraps it)
   read          --issue N | --pr N                 the body and comments (untrusted; the guard wraps it)
   show          --path P                           a file from the default branch (the owner's repo; trusted)
   chief-proposals [--id ID]                        chief proposals waiting for this project bot, or only ID
@@ -284,7 +286,9 @@ def checks_state(rollup) -> str:  # noqa: ANN001
 # counting to labelling. A count older than this is ignored: no cloud session runs that long.
 IN_FLIGHT_FRESH_SECONDS = 24 * 3600
 UNIT_STATE_FRESH_SECONDS = 24 * 3600
-MAX_WANTED = 200  # issues other bots may make this bot look up and publish per tick
+MAX_WANTED = 200
+CODE_COMMITS = 10  # `code` shows this many default-branch commits
+CODE_PULL_CHECKS = 10  # and reads checks for this many of the most recently updated open pull requests  # issues other bots may make this bot look up and publish per tick
 
 
 def included_response(text: str) -> tuple[int, dict[str, str], str]:
@@ -547,6 +551,11 @@ class Gh:
             config = json.loads(self.file(".agents/dispatch.json"))
         except ValueError:
             raise Refused(".agents/dispatch.json is not valid JSON") from None
+        except Refused as err:
+            if "404" in str(err) or "Not Found" in str(err):
+                raise Refused(f"{self.repo} has no .agents/dispatch.json yet: the setup pull request adds it, "
+                              "so ask the bootstrap bot to run team-kit-admin setup-repo and merge that pull request") from None
+            raise
         if not isinstance(config, dict) or config.get("backend") not in ("claude", "codex"):
             raise Refused(".agents/dispatch.json backend must be claude or codex")
         verifier = config.get("verifier_backend", config["backend"])
@@ -886,6 +895,31 @@ class Gh:
         statuses = self.api_pages(f"repos/{self.repo}/commits/{head}/status", key="statuses")
         return [{"status": r.get("status"), "conclusion": r.get("conclusion")} for r in runs if isinstance(r, dict)] \
             + [{"state": s.get("state")} for s in statuses if isinstance(s, dict)]
+
+    def code_state(self) -> dict:
+        """What a "how is the code going" question needs, read from GitHub, not from AGENTS.md: the default branch's
+        latest commits and their checks, and the open pull requests with theirs. Titles are anyone's text."""
+        branch = str(self.api_json(f"repos/{self.repo}").get("default_branch") or "")
+        query = urllib.parse.urlencode({"sha": branch, "per_page": str(CODE_COMMITS)})
+        commits = [c for c in self.api_json(f"repos/{self.repo}/commits?{query}") if isinstance(c, dict)]
+        head = str(commits[0].get("sha") or "") if commits else ""
+        pulls = [p for p in self.api_pages(f"repos/{self.repo}/pulls", {"state": "open"}) if isinstance(p, dict)]
+
+        def line(text: object) -> str:
+            return " ".join(str(text or "").splitlines()[:1])[:120]
+
+        return {
+            "default_branch": branch,
+            "head_checks": checks_state(self.check_rollup(head)) if SHA.match(head) else "none",
+            "commits": [{"sha": str(c.get("sha") or "")[:12], "date": ((c.get("commit") or {}).get("author") or {}).get("date"),
+                         "author": (c.get("author") or {}).get("login") or ((c.get("commit") or {}).get("author") or {}).get("name"),
+                         "title": line((c.get("commit") or {}).get("message"))} for c in commits],
+            "open_pull_requests": [
+                {"pr": int(p["number"]), "title": line(p.get("title")), "author": (p.get("user") or {}).get("login"), "draft": bool(p.get("draft")),
+                 "updated": p.get("updated_at"),
+                 "checks": checks_state(self.check_rollup(str((p.get("head") or {}).get("sha") or ""))) if i < CODE_PULL_CHECKS else "not read"}
+                for i, p in enumerate(sorted(pulls, key=lambda p: str(p.get("updated_at") or ""), reverse=True))],
+        }
 
     def pr_state(self, pr: int) -> dict:
         data = self.pull(pr)
@@ -2527,7 +2561,7 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
     cmd.add_argument("reason", nargs="*")
-    for name in ("dispatch", "launch", "verify", "report-status", "read", "show", "pr-state", "kit-check"):
+    for name in ("dispatch", "launch", "verify", "report-status", "read", "show", "pr-state", "code", "kit-check"):
         cmd = sub.add_parser(name)
         if name == "dispatch":
             cmd.add_argument("--unit", required=True)
@@ -2614,6 +2648,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
                 return 0
             elif args.command == "pr-state":
                 out = gh.pr_state(args.pr)
+            elif args.command == "code":
+                out = gh.code_state()
             else:
                 out = gh.kit_check(commit(policy))
     except (Refused, ContractError, PolicyError, AndonError) as err:

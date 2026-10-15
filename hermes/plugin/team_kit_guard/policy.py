@@ -62,7 +62,7 @@ REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SLACK_CHANNEL_ID = re.compile(r"\A[CG][A-Z0-9]{2,}\Z")
 SLACK_CHANNEL_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,79}\Z")
 
-PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "chief-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")  # noqa: E501
+PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "chief-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "code", "kit-check")  # noqa: E501
 BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon", "setup-request")
 BOOTSTRAP_READ_ONLY = ("status",)
 # The chief of staff reads every project. Its writes are a draft under drafts/<bot>/, `propose`, and `new-project`;
@@ -123,6 +123,10 @@ class ToolRule:
     def label(self) -> str:
         return self.tool if self.command is None else f"{self.tool}:{self.command}"
 
+
+# Readers whose output anyone can write, wrapped whatever guard.yaml says, so a machine with an older guard.yaml
+# still marks them: `code` prints commit and pull request titles.
+ALWAYS_UNTRUSTED = (ToolRule(tool="terminal", command="team-kit-gh code*"),)
 
 @dataclass(frozen=True)
 class Bot:
@@ -340,7 +344,7 @@ def parse_policy(data, bots=None, home: Path | None = None) -> Policy:  # noqa: 
     parsed_bots = parse_bots(bots)
     return Policy(
         deny=tuple(_rule(e, "deny") for e in data.get("deny") or []),
-        untrusted_readers=tuple(_rule(e, "untrusted_readers") for e in data.get("untrusted_readers") or []),
+        untrusted_readers=tuple(_rule(e, "untrusted_readers") for e in data.get("untrusted_readers") or []) + ALWAYS_UNTRUSTED,
         read_only_tools=frozenset(data.get("read_only_tools") or DEFAULT_READ_ONLY_TOOLS),
         trusted_authors=frozenset(str(a).lower() for a in data.get("trusted_authors") or []),
         max_in_flight_total=total,
