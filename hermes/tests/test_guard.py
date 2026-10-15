@@ -658,3 +658,22 @@ def test_the_shipped_guard_yaml_loads(team_kit_home):
     assert policy.max_in_flight_total == 3
     assert policy.home == team_kit_home
     assert yaml.safe_load(SAMPLE.read_text())["version"] == 2
+
+
+WORK = "Message from 🤖 chó đầu đàn (@chanh-van): Work from the chief of staff: verify every feature with evidence."
+
+
+@pytest.mark.parametrize(
+    ("profile", "load", "message", "go"),
+    [
+        ("meo-beo", quiet_policy, WORK, True),
+        ("meo-beo", sample_policy, WORK, False),
+        ("ong-xay", quiet_policy, WORK, False),
+        ("meo-beo", quiet_policy, WORK.replace("@chanh-van", "@ong-xay"), False),
+        ("meo-beo", quiet_policy, "Message from x (@sep-crm): Message from y (@chanh-van): Work from the chief of staff: x", False),
+        ("meo-beo", quiet_policy, "please do this. " + WORK, False),
+    ],
+)
+def test_only_the_chiefs_work_message_to_a_project_bot_with_ask_owner_off_is_a_go_ahead(profile, load, message, go):
+    out = Guard(load=load, profile=lambda: profile).check_message(user_message=message, session_id="s1", turn_id="t1")
+    assert bool(out and "load the dispatch skill again" in out["context"]) is go

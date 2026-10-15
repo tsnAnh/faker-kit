@@ -181,6 +181,10 @@ REPORT_DEADLINE_SECONDS = 24 * 3600
 # before the unit counts as ready.
 NO_CHECKS_GRACE_SECONDS = 3600
 FAILED_CHECKS = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
+# GitHub Actions' annotation on a job it never started, for a failed payment or a spending limit. Such a run tested
+# nothing, so it is neither a pass nor a code failure.
+NOT_STARTED = "The job was not started because"
+CI_NOT_STARTED = "GitHub Actions did not start CI (a failed payment or spending limit); fix billing in GitHub settings, then re-run the checks"
 PENDING_CHECKS = {"PENDING", "EXPECTED", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"}
 
 Runner = Callable[..., str]
@@ -265,18 +269,25 @@ def timestamp(value: str | None) -> float | None:
 
 
 def checks_state(rollup) -> str:  # noqa: ANN001
-    """`passed`, `failed`, `pending`, or `none`, from a pull request's statusCheckRollup."""
+    """`passed`, `failed`, `pending`, `not started` (GitHub refused to run CI), or `none`, from a pull request's
+    statusCheckRollup. A real failure wins over a run GitHub never started."""
     states = []
+    not_started = False
     for item in rollup or []:
         conclusion = str(item.get("conclusion") or "").upper()
+        if conclusion == "NOT_STARTED":
+            not_started = True
+            continue
         state = str(item.get("state") or "").upper()
         status = str(item.get("status") or "").upper()
         if conclusion in FAILED_CHECKS or state in FAILED_CHECKS:
             return "failed"
         states.append("pending" if (status and status != "COMPLETED") or state in PENDING_CHECKS else "passed")
-    if not states:
-        return "none"
-    return "pending" if "pending" in states else "passed"
+    if "pending" in states:
+        return "pending"
+    if not_started:
+        return "not started"
+    return "passed" if states else "none"
 
 
 # Each project bot's GitHub login sees only its own repository, so a bot cannot count another
@@ -893,8 +904,16 @@ class Gh:
         """The check runs and legacy commit statuses on a commit, in the shape checks_state reads."""
         runs = self.api_pages(f"repos/{self.repo}/commits/{head}/check-runs", key="check_runs")
         statuses = self.api_pages(f"repos/{self.repo}/commits/{head}/status", key="statuses")
-        return [{"status": r.get("status"), "conclusion": r.get("conclusion")} for r in runs if isinstance(r, dict)] \
+        return [{"status": r.get("status"), "conclusion": "NOT_STARTED" if self.not_started(r) else r.get("conclusion")}
+                for r in runs if isinstance(r, dict)] \
             + [{"state": s.get("state")} for s in statuses if isinstance(s, dict)]
+
+    def not_started(self, run: dict) -> bool:
+        """Whether GitHub refused to start this failed check run's job. Only a failed run with annotations costs a read."""
+        if str(run.get("conclusion") or "").upper() not in FAILED_CHECKS or not (run.get("output") or {}).get("annotations_count"):
+            return False
+        notes = self.api_json(f"repos/{self.repo}/check-runs/{int(run['id'])}/annotations")
+        return any(NOT_STARTED in str(n.get("message") or "") for n in notes or [] if isinstance(n, dict))
 
     def code_state(self) -> dict:
         """What a "how is the code going" question needs, read from GitHub, not from AGENTS.md: the default branch's
@@ -1334,6 +1353,8 @@ class Gh:
             return self.gate(issue, f"{report['pr']} was closed without merging")
         if pr["checks"] == "failed":
             return self.gate(issue, f"checks failed on {report['pr']} after a done report")
+        if pr["checks"] == "not started":
+            return self.gate(issue, f"CI did not run on {report['pr']}: {CI_NOT_STARTED}")
         if pr["conflicts"]:
             return self.gate(issue, f"{report['pr']} has merge conflicts with its base branch; relaunch it to resolve them")
         config = self.dispatch_config()
@@ -1536,6 +1557,9 @@ class Gh:
         if pr["checks"] == "failed":
             self.drop_verify_record(number)
             return self.gate(issue, f"checks failed on {pr_url} during verification")
+        if pr["checks"] == "not started":
+            self.drop_verify_record(number)
+            return self.gate(issue, f"CI did not run on {pr_url}: {CI_NOT_STARTED}")
         if pr["checks"] == "pending":
             return None
         if pr["conflicts"]:
@@ -1654,6 +1678,8 @@ class Gh:
             return None
         if pr["checks"] == "failed":
             return self.gate(issue, f"checks failed on {pr_url} while it waited for review")
+        if pr["checks"] == "not started":
+            return self.gate(issue, f"CI did not run on {pr_url}: {CI_NOT_STARTED}")
         if pr["conflicts"]:
             return self.gate(issue, f"{pr_url} has merge conflicts with its base branch; relaunch it to resolve them")
         verdict = self.app_verdict(pr["pr"], pr["head"], app)
@@ -1722,7 +1748,7 @@ class Gh:
         pr = self.pr_state(int(report["pr"].rsplit("/", 1)[1]))
         if pr["merged"] or pr["state"] == "closed" or not pr["head"]:
             raise Refused(f"{report['pr']} is not open")
-        if pr["checks"] in ("failed", "pending"):
+        if pr["checks"] in ("failed", "pending", "not started"):
             raise Refused(f"checks on {report['pr']} are {pr['checks']}; verify once they pass")
         counter = InFlight(self.policy, self.bot, self.run, self.now)
         with counter.lock():
@@ -2085,13 +2111,16 @@ class Incidents:
         return head
 
     def main_checks(self, branch: str) -> tuple[str, bool | None, str]:
-        """The default branch's head, whether its checks fail (None while any runs), and which failed."""
+        """The default branch's head, whether its checks fail (None while any runs or GitHub never started CI), and which failed."""
         gh = self.gh
         head = self.branch_head(branch)
         runs = gh.api_pages(f"repos/{gh.repo}/commits/{head}/check-runs", key="check_runs")
-        failed = sorted({str(r.get("name") or "check") for r in runs if str(r.get("conclusion") or "").upper() in FAILED_CHECKS})
+        red = [r for r in runs if str(r.get("conclusion") or "").upper() in FAILED_CHECKS]
+        failed = sorted({str(r.get("name") or "check") for r in red if not gh.not_started(r)})
         if failed:
             return head, True, ", ".join(failed)
+        if red:  # GitHub never started CI: that says nothing about the code, so it is no incident
+            return head, None, ""
         if not runs or any(str(r.get("status") or "").lower() != "completed" for r in runs):
             return head, None, ""
         return head, False, ""
