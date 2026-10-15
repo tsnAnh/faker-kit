@@ -108,7 +108,7 @@ Then tell the owner to add the bot in Hermes Desktop Bot Mode and ask it for one
 
 ## Moving to a new kit commit
 
-After the owner reruns `install.sh` with a new `--ref`, every project bot refuses to launch until its repository's vendored kit and `kit_ref` match the new commit. Run `team-kit-admin vendor --project <project>` for each project. Its pull request moves both; once the owner merges it, the project bot launches again.
+When a bot or `team-kit-gh kit-check` says a kit commit differs from `kit_ref`, run `vendor` for that project at once; never ask anyone to edit `.agents/dispatch.json` by hand. After the owner reruns `install.sh` with a new `--ref`, every project bot refuses to launch until its repository's vendored kit and `kit_ref` match the new commit. Run `team-kit-admin vendor --project <project>` for each project. Its pull request moves both; once the owner merges it, the project bot launches again.
 
 ## A chief of staff
 
