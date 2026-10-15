@@ -625,7 +625,9 @@ def test_with_ask_owner_on_the_bootstrap_and_chief_changes_still_need_the_owner(
     "echo 'hermes chat -q hi' | bash -", "echo 'hermes chat -q hi' | bash /dev/stdin", "bash <<<'hermes chat -q hi'",
     "bash 0<<< 'hermes chat -q hi'", "bash < <(echo hermes chat -q hi)", "bash <(echo 'hermes chat -q hi')", "echo x | sudo bash",
     "bash -euo pipefail -c 'gh pr merge 1'", "bash -euo pipefail -c 'hermes chat -q hi'", "git -calias.x=!sh x", "git -c Alias.X='!sh' x",
-    "git config alias.x '!hermes chat'",
+    "git config alias.x '!hermes chat'", "echo 'gh api -X PUT repos/o/r/pulls/1/merge' | bash\necho done",
+    "printf 'gh pr merge 1' | sh\ntrue", "echo '-c \"gh pr merge 1\"' | xargs bash", "echo 'gh pr merge 1' | bash; echo $'\\''",
+    "x | " + "env " * 40 + "bash",
 ])
 def test_the_second_review_bypasses_are_blocked(command):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal(command))["action"] == "block", command
@@ -641,6 +643,11 @@ def test_the_second_review_bypasses_are_blocked(command):
     "python3 scripts/release.py --notes 'after review run git push'", "bash scripts/setup.sh --fast", "fish -C 'set x 1' -c 'npm test'",
     "git commit -m \"fix(hermes): block curl | bash\"", "grep -E \"fish|bash\" -r .", "find . -name '*.sh' | xargs -n1 bash -n",
     "echo \"run: make && bash\"", "bash -s -- arg < script.sh", "bash", "cat <<EOF > notes.txt\nhello\nEOF", "bash <<EOF\nnpm test\nEOF",
+    "gh pr create --title \"fix: tests\" --body-file - <<'EOF'\nRan python3 -m pytest. The git hook no longer blocks push.\nEOF",
+    "git commit -F - <<'EOF'\nfix(ci): run node scripts/check.mjs before git push\nEOF",
+    "gh issue comment 5 --body-file - <<'EOF'\nInstall with python3 -m pip, then run hermes doctor.\nEOF",
+    "cat > notes.md <<'X'\nRun python3 app.py, then hermes chat\nX", "python3 gen.py <<'X'\ndata\nX\ngit push origin feature-x",
+    "python3 -c \"print('hermes setup done')\"", "node -e \"console.log('hermes model')\"", "echo x |\n  grep x",
 ])
 def test_ordinary_work_is_not_blocked(command):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal(command)) is None, command
@@ -720,6 +727,13 @@ def test_code_that_only_names_the_hermes_folder_is_not_blocked(tool, args):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name=tool, args=args) is None
 
 
+@pytest.mark.parametrize("code", ["cfg['hermes']['model']", 'bots = load("hermes")', "x = {'hermes': 1}\nprint(x['hermes'])", "log('hermes -- started')",
+                                  "print(f'hermes model: {m}')", "cfg = ['hermes', 'config']"])
+def test_code_that_mentions_hermes_as_data_is_not_blocked(code):
+    tool, args = "execute_code", {"code": code}
+    assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name=tool, args=args) is None
+
+
 @pytest.mark.parametrize(("tool", "args"), [
     ("cronjob_create", {"script": "#!/bin/sh\nhermes chat -q hi"}),
     ("execute_code", {"code": "subprocess.run(['hermes', '-p', 'default', 'chat'])"}),
@@ -734,6 +748,16 @@ def test_delegated_scheduled_or_code_runs_of_the_default_agent_are_blocked(tool,
 ])
 def test_prose_about_hermes_in_delegated_or_scheduled_tasks_is_not_blocked(tool, args):
     assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(tool_name=tool, args=args) is None
+
+
+def test_a_command_too_long_to_check_is_blocked():
+    assert Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal("echo " + "a" * 100_001))["action"] == "block"
+
+
+def test_the_git_alias_check_stays_fast_on_long_crafted_commands():
+    started = time.monotonic()
+    Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal("git " + "alias." * 16666))
+    assert time.monotonic() - started < 1
 
 
 def test_the_hermes_scan_stays_fast_on_long_crafted_code():
