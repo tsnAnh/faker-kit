@@ -103,7 +103,7 @@ LABELS = (
     ("agent:verifying", "5319e7", "A separate verifier session is checking this unit's pull request"),
     ("agent:review", "0e8a16", "Verified and the checks passed; the owner merges"),
     ("agent:needs-human", "d93f0b", "A dispatched unit needs the owner"),
-    ("agent:security", "0052cc", "The tracking issue where Hermes's security reviews of each push to the default branch post their results"),
+    ("agent:security", "0052cc", "The tracking issue for Hermes's security reviews of each push to the default branch"),
     ("agent:incident", "e11d21", "An incident Hermes opened from polling: the default branch is red, or a health check fails"),
     ("risk:low", "c2e0c6", "Hermes's risk score for this pull request, from rules in code: small change in ordinary paths"),
     ("risk:medium", "fbca04", "Hermes's risk score for this pull request, from rules in code: read it with care"),
