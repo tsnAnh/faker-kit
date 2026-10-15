@@ -85,6 +85,16 @@ def test_one_run_builds_the_machine_and_a_second_run_changes_nothing(linux):
     assert json.loads((root / "profiles" / "meo-beo" / "jobs.json").read_text()) == jobs
 
 
+def test_pressing_enter_keeps_the_shared_gh_login_and_writes_no_token(linux):
+    root = linux[0]
+    done = setup(linux, token="\n")
+    assert done.returncode == 0, done.stdout + done.stderr
+    env = root / "profiles" / "meo-beo" / ".env"
+    assert not env.exists() or "GH_TOKEN" not in env.read_text(), "every bot shares this machine's gh login"
+    jobs = json.loads((root / "profiles" / "meo-beo" / "jobs.json").read_text())
+    assert jobs and all(job["enabled"] for job in jobs)
+
+
 def test_an_unfilled_config_stops_before_anything_is_installed(linux):
     root, _env, _src, _sha, config = linux
     data = yaml.safe_load(config.read_text())

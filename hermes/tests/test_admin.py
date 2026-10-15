@@ -29,9 +29,9 @@ def ready(kit_source, machine):
     return root, env
 
 
-def admin(ready, *args, profile=None):
+def admin(ready, *args, profile=None, logged_out=False):
     root, env = ready
-    env = dict(env)
+    env = dict(env, **({"FAKE_GH_LOGGED_OUT": "1"} if logged_out else {}))
     if profile:
         env["HERMES_HOME"] = str(root / "profiles" / profile)
     done = subprocess.run([str(root / "bin" / "team-kit-admin"), *args], env=env, capture_output=True, text=True)
@@ -474,17 +474,27 @@ def test_protect_requires_the_checks_for_admins_too(ready):
     assert code == 1 and "at least one --check" in err
 
 
-def test_activate_waits_for_the_bots_github_token_then_resumes_its_jobs(ready):
+def test_activate_waits_for_a_github_login_then_resumes_its_jobs(ready):
     root, _ = ready
     add_shop(ready)
-    code, err = admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay")
-    assert code == 1 and "no GH_TOKEN" in err
+    code, err = admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay", logged_out=True)
+    assert code == 1 and "gh is not signed in on this machine" in err
     (root / "profiles" / "meo-beo" / ".env").write_text("GH_TOKEN=github_pat_secret\n")
-    code, out = admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay")
+    code, out = admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay", logged_out=True)  # a token of its own is enough
     assert code == 0, out
     assert sorted(out["resumed"]) == ["team-kit-incidents", "team-kit-security", "team-kit-status", "team-kit-tick", "team-kit-upstream"]
     assert all(job["enabled"] for job in jobs(root, "meo-beo"))
     assert "github_pat_secret" not in json.dumps(out)
+
+
+def test_every_bot_shares_the_machines_gh_login_so_no_bot_needs_a_token(ready):
+    root, _ = ready
+    out = add_shop(ready)
+    assert not any("GH_TOKEN" in step or "token" in step for step in out["next"]), "no token step for the owner"
+    code, out = admin(ready, "activate", "--bot", "meo-beo", profile="ong-xay")
+    assert code == 0, out
+    assert all(job["enabled"] for job in jobs(root, "meo-beo"))
+    assert not (root / "profiles" / "meo-beo" / ".env").exists() or "GH_TOKEN" not in (root / "profiles" / "meo-beo" / ".env").read_text()
 
 
 def test_status_lists_kit_update_pull_requests_and_whether_they_conflict(ready, kit_source):
@@ -505,11 +515,11 @@ def test_status_lists_kit_update_pull_requests_and_whether_they_conflict(ready, 
 def test_status_reports_every_bot_and_repository_and_refreshes_counts(ready):
     root, _ = ready
     add_shop(ready)
-    code, out = admin(ready, "status", profile="ong-xay")
+    code, out = admin(ready, "status", profile="ong-xay", logged_out=True)
     assert code == 0, out
     assert out["trusted_authors"] == ["codertocat", "meo-beo-gh"]
     shop = next(b for b in out["bots"] if b["bot"] == "meo-beo")
-    assert shop["github_login"] is False
+    assert shop["github_login"] is False, "no token, and gh is not signed in on this machine"
     assert shop["jobs"] == {"team-kit-tick": False, "team-kit-status": False, "team-kit-security": False, "team-kit-incidents": False, "team-kit-upstream": False}
     assert shop["repo"] == {"repo": "acme/shop", "labels_missing": [], "running": 0, "dispatch_json": False, "kit_prs": []}
     assert {"bot": "ong-xay", "role": "bootstrap", "project_requests": []} in out["bots"]
@@ -614,7 +624,10 @@ def test_add_chief_creates_a_read_only_bot_with_the_chief_skill_and_no_jobs(read
     add_shop(ready)
     code, out = admin(ready, "add-chief", "--bot", "chanh-van", profile="ong-xay")
     assert code == 0, out
-    assert out["role"] == "chief" and "acme/shop" in out["next"][0] and "read" in out["next"][0]
+    assert out["role"] == "chief" and out["next"] == ["Add the bot in Hermes Desktop Bot Mode"], "it shares the machine's gh login"
+    code, out = admin(ready, "add-chief", "--bot", "chanh-van", profile="ong-xay", logged_out=True)
+    assert code == 0, out
+    assert "gh auth login" in out["next"][0] and "acme/shop" in out["next"][0], "without one, the owner signs gh in once"
     assert bots(root)["chanh-van"] == {"role": "chief"}
     home = root / "profiles" / "chanh-van"
     assert sorted(p.name for p in (home / "skills").iterdir()) == ["chief"]
@@ -825,10 +838,10 @@ def test_the_tunnel_publishes_only_this_machines_routes_by_exact_path():
 def test_machine_sets_up_bots_and_signed_webhooks_and_keeps_secrets_out_of_argv_and_config(ready):
     root, _ = ready
     path = machine_config(root)
-    code, out = admin(ready, "machine", "--config", str(path))
+    code, out = admin(ready, "machine", "--config", str(path), logged_out=True)
     assert code == 0, out
     assert bots(root)["meo-beo"]["tick_every"] == "10m" and bots(root)["chanh-van"]["role"] == "chief"
-    assert out["projects"][0]["active"] is False and "GH_TOKEN" in out["pending"][0], "no token yet, so the jobs stay paused"
+    assert out["projects"][0]["active"] is False and "gh auth login" in out["pending"][0], "no GitHub login yet, so the jobs stay paused"
     assert all(not job["enabled"] for job in jobs(root, "meo-beo"))
 
     env = root / ".env"
@@ -850,8 +863,7 @@ def test_machine_sets_up_bots_and_signed_webhooks_and_keeps_secrets_out_of_argv_
     assert all(secret not in json.dumps(c["args"]) for c in gh_calls(root)), "the secret reaches GitHub on stdin only"
     assert all(secret not in json.dumps(c) for c in hermes_calls(root))
 
-    (root / "profiles" / "meo-beo" / ".env").write_text("GH_TOKEN=x\n")
-    code, out = admin(ready, "machine", "--config", str(path))
+    code, out = admin(ready, "machine", "--config", str(path))  # gh signed in: every bot shares that login
     assert code == 0, out
     assert out["projects"][0]["active"] and not out["pending"]
     assert all(job["enabled"] for job in jobs(root, "meo-beo"))

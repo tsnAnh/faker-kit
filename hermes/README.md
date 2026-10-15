@@ -97,7 +97,7 @@ Under `~/.hermes/team-kit/`:
 ## What only you do
 
 - Merge pull requests, including each project's kit-vendoring pull request.
-- Put each bot's GitHub token in its profile's `.env`. No bot ever sees a token in chat.
+- Sign `gh` in on the machine once (`gh auth login`); every bot shares that login. Only a bot that should act as another GitHub account gets a `GH_TOKEN` in its profile's `.env`. No bot ever sees a token in chat.
 - If you enable Slack, put the Slack app-level and bot tokens in the configured bot profile's `.env` under the variable names in `guard.yaml`. Token values never go in `guard.yaml`, chat, argv, or service unit files.
 - Sign the coding agent in on the machine.
 - Approve each `team-kit-admin` command the bootstrap bot runs.
