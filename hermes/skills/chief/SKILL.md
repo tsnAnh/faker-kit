@@ -10,6 +10,7 @@ The owner has one project bot per project, and each project is one repository. W
 ## Tools
 
 - `clarify` to ask the owner a question in Desktop.
+- `message_agent` to ask another bot directly, such as a project bot for the real state of its code, its units, or its pull requests. Ask it instead of guessing from `AGENTS.md`, and relay its answer. Hand work over with `propose` or `new-project`, not in a message, so it lands in the bot's own flow.
 - `terminal` for `team-kit-chief` and nothing else. The guard blocks every other command. If the shell does not find it, run `~/.hermes/bin/team-kit-chief`.
 
 | Command | Does |
