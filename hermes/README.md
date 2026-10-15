@@ -1,6 +1,6 @@
 # faker-kit for Hermes
 
-This module runs team-kit dispatch on a [Hermes Agent](https://github.com/NousResearch/hermes-agent) machine: one bootstrap bot that sets projects up, one project bot per project that briefs cloud coding agents (Claude Code or Codex), one pull request per unit, until the owner merges, and an optional chief of staff that routes the owner's intent across projects. The chief reads by default and has one approved write: a local proposal for a project bot. How to use it is in [Dispatch work with Hermes](../docs/how-to/dispatch-with-hermes.md).
+This module runs team-kit dispatch on a [Hermes Agent](https://github.com/NousResearch/hermes-agent) machine: one bootstrap bot that sets projects up, one project bot per project that briefs cloud coding agents (Claude Code or Codex), one pull request per unit, until the owner merges, and an optional chief of staff that routes the owner's intent across projects. The chief reads by default and has two approved writes: a local proposal for a project bot, and a request that the bootstrap bot set up a new project. How to use it is in [Dispatch work with Hermes](../docs/how-to/dispatch-with-hermes.md).
 
 It lives outside `plugins/` on purpose. Nothing here loads in a coding agent: plugins are what coding agents load, and this is what the Hermes bots load. The coding agents keep using the `trust-ladder` skills `setup-dispatch` and `follow-brief`, and the brief templates in `plugins/trust-ladder/templates/dispatch/`.
 
@@ -54,7 +54,7 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `install.sh` | Fetches the kit at a commit, writes the wrappers, refreshes every bot | — |
 | `bin/team_kit_admin.py` | `team-kit-admin`: the bootstrap bot's only command, and the installer's helper | `~/.hermes/bin/faker-kit-admin` and `~/.hermes/bin/team-kit-admin` (the same wrapper) |
 | `bin/team_kit_gh.py` | `team-kit-gh`: a project bot's only GitHub access, and what its jobs run | `~/.hermes/bin/faker-kit-gh` and `~/.hermes/bin/team-kit-gh` (the same wrapper) |
-| `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and, with approval, hands one hashed draft to one project bot | `~/.hermes/bin/faker-kit-chief` and `~/.hermes/bin/team-kit-chief` (the same wrapper) |
+| `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and, with approval, hands one hashed draft to one project bot, or a new-project request to the bootstrap bot | `~/.hermes/bin/faker-kit-chief` and `~/.hermes/bin/team-kit-chief` (the same wrapper) |
 | `bin/team_kit_slack.py` | `team-kit-slack`: the optional outbound-only Slack Socket Mode relay | `~/.hermes/bin/faker-kit-slack` and `~/.hermes/bin/team-kit-slack` (the same wrapper) |
 | `lib/team_kit_contracts.py` | The brief, size, report, and launch markers, and the cloud command lines | read from the kit checkout |
 | `lib/team_kit_cloud.py` | Starts a `claude --cloud` session (created with its task as the first message; a signing key follows on stdin) or a `codex cloud exec` task, and returns its id | read from the kit checkout |
@@ -67,6 +67,7 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `profiles/bootstrap/`, `profiles/project/`, `profiles/chief/` | `SOUL.md` and the config merged into each bot's profile | each bot's profile |
 | `skills/bootstrap/`, `skills/dispatch/`, `skills/chief/` | The bots' skills | linked into each bot's `skills/` |
 | `cron/project-jobs.md` | `team-kit-tick`, `team-kit-status`, `team-kit-security`, `team-kit-incidents`, and `team-kit-upstream`, created paused per project bot | each project bot's scheduled jobs |
+| `cron/bootstrap-jobs.md` | `team-kit-inbox`, created active, which delivers the chief's new-project requests | the bootstrap bot's scheduled job |
 | `templates/guard.yaml` | The machine's policy, written once | `~/.hermes/team-kit/guard.yaml` |
 | `templates/machine.yaml` | A machine config to copy and fill in | `.agents/hermes-machine.yaml` in your kit clone |
 | `tests/` | `python -m pytest hermes` | — |
@@ -79,6 +80,7 @@ Under `~/.hermes/team-kit/`:
 - `briefs/<bot>/`, the only place a project bot may write.
 - `drafts/<chief bot>/`, the only place the chief may write, and the only place `propose` reads from: plain `.md` files of at most 20,000 bytes, no symlinks.
 - `proposals/<bot>/`, chief-of-staff handoffs for a project bot. Proposal records expire after 7 days; `team-kit-gh chief-proposals` and `team-kit-gh tick` delete expired and corrupt records.
+- `project-requests/<bootstrap bot>/`, the chief's new-project requests: a repository, a project slug, and a bot name. They expire after 7 days; `team-kit-admin setup-request` removes one once the project is set up.
 - `andon/`, the pulled cords: `_machine.json` and one file per project bot.
 - `verify/<bot>/`, one private record per verifier: its commit and the key that signs its verdict.
 - `reviews/<bot>/`, one private record per unit pull request review: its pull request, head, and the key that signs its finding summary.

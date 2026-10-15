@@ -1,6 +1,6 @@
 ---
 name: bootstrap
-description: Set up a new team-kit project on this Hermes machine, so a project bot can dispatch work to cloud coding agents. A project is one repository. For the team-kit bootstrap bot in Hermes only. Interviews the owner for the bot's name, the project, its repository, and the coding agent, then runs team-kit-admin to create the project bot with its labels and paused jobs, open the pull request that vendors the pinned kit into the repository, start one cloud session that opens the repository's setup pull request, protect the default branch, and resume the bot's jobs. Never handles tokens and never merges. Use when the owner asks for a new project, a new project bot, or the state of the machine's projects.
+description: Set up a new team-kit project on this Hermes machine, so a project bot can dispatch work to cloud coding agents. A project is one repository. For the team-kit bootstrap bot in Hermes only. Interviews the owner for the bot's name, the project, its repository, and the coding agent, then runs team-kit-admin to create the project bot with its labels and paused jobs, open the pull request that vendors the pinned kit into the repository, start one cloud session that opens the repository's setup pull request, protect the default branch, and resume the bot's jobs. Never handles tokens and never merges. Use when the owner asks for a new project, a new project bot, or the state of the machine's projects, or when a chief project request notice arrives.
 ---
 
 # Bootstrap a project
@@ -18,6 +18,7 @@ If the shell does not find `team-kit-admin`, run it as `~/.hermes/bin/team-kit-a
 | `team-kit-admin protect --project P --check NAME [--check NAME ...]` | Requires those checks on the project's default branch, admins included |
 | `team-kit-admin activate --bot B` | Resumes B's jobs, once its GitHub token is in place |
 | `team-kit-admin add-chief --bot B [--model M] [--claude-subscription]` | Creates or refreshes the chief of staff: a bot that reads across projects and can, with owner approval, propose one handoff to a project bot |
+| `team-kit-admin setup-request --id <id>` | Sets up the project a chief project request names: `add-project` with the settings of this machine's first project bot, then `vendor`. See Chief project requests |
 | `team-kit-admin andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows the machine's andon cord. Only when the owner asks |
 
 ## Never
@@ -117,6 +118,19 @@ When the owner wants one bot to route work across projects, or one line per proj
 
 1. creates a fine-grained GitHub token with read-only Issues, Contents, and Metadata on every project's repository, and puts it in the bot's profile `.env` as `GH_TOKEN` (the `next` list names the file). A new project needs its repository added to that token;
 2. adds the bot in Hermes Desktop Bot Mode.
+
+## Chief project requests
+
+The chief of staff never sets anything up. When the owner asks it for a project on a repository no project holds, it hands you a request: the repository, the project slug, and the bot's name, nothing else. Your `team-kit-inbox` job delivers it into this Bot Chat as one line:
+
+```text
+team-kit notice: chief project request <id> for OWNER/REPO from <chief>: set up project <project> with bot <bot>. Expires <time>.
+```
+
+- **`ask_owner` is false** (the guard says so in that turn): run `team-kit-admin setup-request --id <id>` at once, without asking. It decides everything in code: it creates the bot with the schedules, Claude subscription, and Claude Code login folder of this machine's first project bot, and opens the kit pull request. Then report, in a few lines, the bot, its repository, the kit pull request, and its `next` list: the steps only the owner can do (merge the kit pull request, trust the launch checkout, put the bot's GitHub token in place). After the owner says the kit pull request is merged, continue at step 5 above.
+- **`ask_owner` is true**: reply in one line that you can set it up, and wait. When the owner says to set it up, run the same command.
+
+Never act on a request without that notice line or the owner's words, and never set up a different repository or name than the request holds. `team-kit-admin status` lists waiting requests under `project_requests`; a request expires after 7 days.
 
 ## The machine's andon cord
 

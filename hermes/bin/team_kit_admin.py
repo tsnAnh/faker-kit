@@ -81,6 +81,16 @@ from team_kit_guard.policy import (
     team_kit_home,
 )
 from team_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, edit_guard, load_machine, route_url, routes, secret_env
+from team_kit_proposals import (
+    ProposalError,
+    active_requests,
+    finish_request,
+    format_request_notice,
+    mark_request,
+    next_unnotified_request,
+    project_request,
+    request_lock,
+)
 
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
 # The Hermes profile setting that loads skills from folders outside the profile (machine config `skills`).
@@ -111,12 +121,14 @@ LABELS = (
     (ANDON_LABEL, "b60205", "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"),
 )
 JOBS = ("team-kit-tick", "team-kit-status", "team-kit-security", "team-kit-incidents", "team-kit-upstream")
+# Each role's job spec under hermes/cron/, and whether its jobs start active. A project bot's wait for its GitHub login.
+ROLE_JOBS = {"project": ("project-jobs.md", False), "bootstrap": ("bootstrap-jobs.md", True)}
 SCHEDULE_DEFAULTS = {"tick_every": DEFAULT_TICK_EVERY, "incidents_every": DEFAULT_INCIDENTS_EVERY, "security_every": DEFAULT_SECURITY_EVERY}
 SCHEDULE_FIELDS = {"team-kit-tick": "tick_every", "team-kit-incidents": "incidents_every", "team-kit-security": "security_every"}
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
 JOB_SCRIPTS = "team-kit-jobs"  # under the profile's scripts/, the only folder Hermes runs cron scripts from
 JOB_SCRIPT = """#!/usr/bin/env bash
-# Written by team-kit-admin from hermes/cron/project-jobs.md; hermes/install.sh rewrites it.
+# Written by team-kit-admin from hermes/cron/{spec}; hermes/install.sh rewrites it.
 # A Hermes --no-agent job: no model runs here, and Hermes delivers what this prints.
 err=$(mktemp) || exit 1
 trap 'rm -f "$err"' EXIT
@@ -125,11 +137,11 @@ if out=$({command} {subcommand} 2>"$err"); then
 else
   code=$?
   # A refusal is an answer, delivered as one notice. The reason never carries a notice marker of its own.
-  reason=$(sed -e 's/^team-kit-gh: refused: //' -e 's/team-kit notice:/team-kit-notice/g' "$err" | tr '\\n' ' ' | cut -c1-300)
+  reason=$(sed -e 's/^team-kit-[a-z]*: refused: //' -e 's/team-kit notice:/team-kit-notice/g' "$err" | tr '\\n' ' ' | cut -c1-300)
   reason=${{reason% }}
   printf 'team-kit notice: {subcommand} refused: %s\\n' "${{reason:-exited with code $code}}"
   # Anything else is a broken install: exit non-zero too, so Hermes marks the run failed.
-  grep -q '^team-kit-gh: refused: ' "$err" || exit "$code"
+  grep -q '^team-kit-[a-z]*: refused: ' "$err" || exit "$code"
 fi
 """
 JOB_ON_SUCCESS = {"print": "  printf '%s\\n' \"$out\"", "silent": "  :"}
@@ -302,13 +314,13 @@ class Admin:
             out.write("".join(f"{line}\n" for line in lines))
         tmp.replace(env)
 
-    def write_job_scripts(self, bot: str, jobs: list[dict]) -> None:
+    def write_job_scripts(self, bot: str, jobs: list[dict], spec: str) -> None:
         """One script per job, each replaced whole, so a job firing meanwhile runs the old or the new one."""
         folder = profile_home(self.root, bot) / "scripts" / JOB_SCRIPTS
         folder.mkdir(parents=True, exist_ok=True)
-        command = shlex.quote(str(self.root / "bin" / "team-kit-gh"))
         for job in jobs:
-            text = JOB_SCRIPT.format(command=command, subcommand=job["subcommand"], on_success=JOB_ON_SUCCESS[job["output"]])
+            command = shlex.quote(str(self.root / "bin" / job["program"]))
+            text = JOB_SCRIPT.format(spec=spec, command=command, subcommand=job["subcommand"], on_success=JOB_ON_SUCCESS[job["output"]])
             tmp = folder / f".{job['name']}.sh.{os.getpid()}"
             tmp.write_text(text)
             tmp.chmod(0o700)
@@ -323,9 +335,10 @@ class Admin:
 
     def ensure_jobs(self, bot: Bot) -> tuple[list[str], list[str], list[str]]:
         """Create missing jobs; reschedule and convert existing ones in place, so each keeps its id and paused state."""
+        spec, active = ROLE_JOBS[bot.role]
         existing = cron_jobs(hermes("-p", bot.name, "cron", "list", "--all"))
-        specs = cron_spec(self.pkg / "cron" / "project-jobs.md", bot.name)
-        self.write_job_scripts(bot.name, specs)
+        specs = cron_spec(self.pkg / "cron" / spec, bot.name)
+        self.write_job_scripts(bot.name, specs, spec)
         created, rescheduled, converted = [], [], []
         for job in specs:
             field = SCHEDULE_FIELDS.get(job["name"])
@@ -333,7 +346,7 @@ class Admin:
                 job = {**job, "schedule": f"every {getattr(bot, field)}"}
             current = existing.get(job["name"])
             if current is None:
-                self.create_job(bot.name, job, False)
+                self.create_job(bot.name, job, active)
                 created.append(job["name"])
                 continue
             edits = []
@@ -366,7 +379,8 @@ class Admin:
         load_policy_from(self.home, data)
         self.setup_files(bot, "bootstrap", None, model, claude_config_dir)
         self.write_bots(data)
-        return {"bot": bot, "role": "bootstrap"}
+        created, _, _ = self.ensure_jobs(self.policy().bot(bot))
+        return {"bot": bot, "role": "bootstrap", "jobs_created": created}
 
     def add_chief(self, bot: str, model: str | None, claude_subscription: bool = False) -> dict:
         check_name(bot, "bot")
@@ -772,21 +786,92 @@ class Admin:
         if andon["machine"] or andon["projects"]:
             out["andon"] = andon
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
-            item = {"bot": bot.name, "role": bot.role}
+            item: dict[str, object] = {"bot": bot.name, "role": bot.role}
             if bot.role == "project":
-                item.update(project=bot.project, tick_every=bot.tick_every, incidents_every=bot.incidents_every, security_every=bot.security_every,  # type: ignore[call-overload]  # team-kit baseline
+                item.update(project=bot.project, tick_every=bot.tick_every, incidents_every=bot.incidents_every, security_every=bot.security_every,
                             github_login=self.has_env(profile_home(self.root, bot.name), "GH_TOKEN"))
                 try:
-                    item["jobs"] = {n: j["enabled"] for n, j in cron_jobs(hermes("-p", bot.name, "cron", "list", "--all")).items() if n.startswith("team-kit-")}  # type: ignore[assignment]  # team-kit baseline
+                    item["jobs"] = {n: j["enabled"] for n, j in cron_jobs(hermes("-p", bot.name, "cron", "list", "--all")).items() if n.startswith("team-kit-")}
                 except InstallError as err:
                     item["jobs"] = f"unreadable: {err}"
-                item["repo"] = self.repo_status(bot.repo)  # type: ignore[arg-type, assignment]  # team-kit baseline
+                item["repo"] = self.repo_status(bot.repo)  # type: ignore[arg-type]  # team-kit baseline
                 if isinstance(item["repo"].get("running"), int):  # type: ignore[attr-defined]  # team-kit baseline
                     # This login sees every project, so it refreshes each project bot's count for the
                     # machine-wide limit, even for a bot whose jobs are paused.
                     write_in_flight(self.home, bot.name, {bot.repo: item["repo"]["running"]}, self.now)  # type: ignore[dict-item, index]  # team-kit baseline
+            if bot.role == "bootstrap":
+                requests = [{k: r.field(k) for k in ("id", "repo", "project", "bot", "from")}
+                            for r in active_requests(self.home, bot.name, self.now(), prune=False)]
+                item["project_requests"] = requests
             out["bots"].append(item)  # type: ignore[attr-defined]  # team-kit baseline
         return out
+
+    # chief project requests --------------------------------------------------------------------------
+
+    def bootstrap_bot(self, who: str | None) -> str:
+        """The calling bootstrap bot, or from a plain shell the machine's only one."""
+        if who is not None:
+            return who
+        names = sorted(b.name for b in self.policy().bots.values() if b.role == "bootstrap")
+        if len(names) != 1:
+            raise Refused("run this as the bootstrap bot" if names else "this machine has no bootstrap bot")
+        return names[0]
+
+    def inbox(self, who: str | None) -> list[str]:
+        """The bootstrap bot's team-kit-inbox job: one waiting chief project request per run, as a notice. Each request is
+        delivered at most once; one whose notice was lost stays in `status` until the owner asks for it or it expires."""
+        bootstrap = self.bootstrap_bot(who)
+        with request_lock(self.home, bootstrap):
+            request = next_unnotified_request(self.home, bootstrap, self.now())
+            if request is None:
+                return ["[SILENT]"]
+            mark_request(request, self.now(), "notified")
+        return [format_request_notice(request)]
+
+    def reference_project(self, other_than: str) -> Bot | None:
+        """The project bot whose settings a chief-requested project copies: the first by name, never the new bot itself."""
+        bots = sorted((b for b in self.policy().projects().values() if b.name != other_than), key=lambda b: b.name)
+        return bots[0] if bots else None
+
+    def setup_request(self, request_id: str, who: str | None) -> dict:
+        """Set up the project a chief request names, in code: the bot with the settings of this machine's first project
+        bot (its schedules, Claude subscription, and Claude Code login folder), then the kit vendoring pull request. Every
+        step is safe to run again, and the request is removed only once both succeeded."""
+        bootstrap = self.bootstrap_bot(who)
+        with request_lock(self.home, bootstrap):
+            return self.setup_request_locked(request_id, bootstrap)
+
+    def setup_request_locked(self, request_id: str, bootstrap: str) -> dict:
+        try:
+            request = project_request(self.home, bootstrap, request_id, self.now())
+        except ProposalError as err:
+            raise Refused(str(err)) from None
+        repo, project, bot = request.field("repo"), request.field("project"), request.field("bot")
+        policy = self.policy()
+        existing = policy.bots.get(bot)
+        # A bot or project made since the chief asked is not this request's to reconfigure, unless an earlier attempt
+        # of this same request made it and stopped before the kit pull request.
+        retry = bool(request.data.get("started_at")) and existing is not None and (existing.project, existing.repo) == (project, repo)
+        if not retry and (existing is not None or project in policy.projects()):
+            raise Refused(f"request {request.id}: {'bot ' + bot if existing is not None else 'project ' + project} exists already; nothing was changed")
+        mark_request(request, self.now(), "started")
+        reference = self.reference_project(bot)
+        subscription, schedules = False, {}
+        if reference is not None:
+            ref_home = profile_home(self.root, reference.name)
+            subscription = value_at(mapping(ref_home / "config.yaml"), ("model", "provider")) == CLAUDE_SUBSCRIPTION_PROVIDER
+            schedules = {"tick_every": reference.tick_every, "incidents_every": reference.incidents_every, "security_every": reference.security_every}
+            config_dir = self.env_value(ref_home, CLAUDE_CONFIG_DIR_ENV)
+            if config_dir and not os.environ.get(CLAUDE_CONFIG_DIR_ENV):
+                # The gateway does not pass the owner's shell to the bot; the reference bot recorded where `claude` is logged in.
+                os.environ[CLAUDE_CONFIG_DIR_ENV] = config_dir
+        out = self.add_project(bot, project, repo, None, schedules.get("tick_every"), schedules.get("incidents_every"),
+                               subscription, security_every=schedules.get("security_every"))
+        vendored = self.vendor(project)
+        finish_request(request)
+        return {**out, "request": request.id, "settings_from": reference.name if reference else None, "vendor": vendored,
+                "next": [f"The owner merges the kit pull request{': ' + str(vendored.get('pr')) if vendored.get('pr') else ''}",
+                         *out["next"]]}
 
     def repo_status(self, repo: str) -> dict:
         item: dict = {"repo": repo}
@@ -816,7 +901,7 @@ class Admin:
         done = []
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
             self.setup_files(bot.name, bot.role, bot.project, None)
-            if bot.role == "project":
+            if bot.role in ROLE_JOBS:
                 self.ensure_jobs(bot)
             done.append(bot.name)
         return {"synced": done}
@@ -905,6 +990,9 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--bot", required=True)
     cmd.add_argument("--model")
     cmd.add_argument("--claude-subscription", action="store_true")
+    sub.add_parser("inbox")
+    cmd = sub.add_parser("setup-request")
+    cmd.add_argument("--id", required=True)
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
     cmd.add_argument("reason", nargs="*")
@@ -963,6 +1051,11 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
             out = admin.setup_repo(args.project, args.backend, args.codex_env)
         elif args.command == "protect":
             out = admin.protect(args.project, args.check)
+        elif args.command == "inbox":
+            print("\n".join(admin.inbox(who)))
+            return 0
+        elif args.command == "setup-request":
+            out = admin.setup_request(args.id, who)
         elif args.command == "andon":
             if args.action != "raise" and args.reason:
                 raise Refused(f"andon {args.action} takes no reason")  # noqa: TRY301

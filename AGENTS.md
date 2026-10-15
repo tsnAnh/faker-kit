@@ -101,12 +101,13 @@ Codex code review reads this section. The Claude review routine reads it with RE
 ## Learned User Preferences
 
 - The owner wants Hermes bots to act without asking (guard.yaml `ask_owner: false`, Hermes approvals off); keep new bot flows free of owner confirmation steps unless a Hermes invariant requires one.
-- The chief hands work straight to project bots; never give the owner a prompt to paste into another bot's chat.
+- Hermes bots hand work to each other directly: the chief passes a new project to the bootstrap bot with `team-kit-chief new-project` and other work straight to project bots; never give the owner a prompt to paste into another bot's chat.
 - The owner wants Hermes dispatch event-driven: a GitHub event such as a new issue should launch Claude Code as soon as possible, with polling only as a fallback.
 - The owner wants code review done by an outside service (the Claude GitHub app, `.github/workflows/claude-review.yml`), not Hermes review or verifier sessions, and low-risk PRs merged automatically once that app approves (`.agents/dispatch.json`: review and verifier backends `none`, `review_app` `claude[bot]`, `auto_merge` `low`, `security_backend` `none`); no Claude Code cloud session reviews changes.
 - The owner wants a dispatched Claude Code session's first message to be its task, with no placeholder "wait for the task" message; a signing key still goes only on stdin as a later message.
 - The owner wants faker-mode's code delegates on Claude Sonnet 5.5 (`sonnet`) for features, fixes, refactors, and hard changes, and Claude Haiku 5.5 (`haiku`) for trivial mechanical edits, set through `upstream/model-map.json` rules; Claude Code's agent tool accepts only the aliases `sonnet`/`opus`/`haiku`, not version slugs.
 - The owner wants pstack and trust-ladder skills available in every Hermes profile, the chief and project bots included, set up by the kit's machine config.
+- Interactive Claude Code sessions may merge their own PRs on passing local checks without GitHub CI, but Hermes bots never skip CI: their merge gate keeps requiring GitHub checks to pass.
 
 ## Learned Workspace Facts
 
@@ -122,3 +123,4 @@ Codex code review reads this section. The Claude review routine reads it with RE
 - claude-code-action skips with "workflow validation" on a PR that adds or changes its own workflow file; it runs only once the workflow matches the default branch. In it, Claude Code refuses a `gh api ... -f body='<long multi-line text>'` command even when it matches an allowed `:*` prefix rule; write the body to a file and pass `-F body=@<file>` with an exact allowed command.
 - The kit's bot commands run on any Python 3.9+ using the vendored pure-Python PyYAML in `hermes/vendor` (a Homebrew `python3` upgrade once broke every bot command). Homebrew's default `python3` on this Mac is 3.14 without ruff, mypy, or pytest; run `scripts/check.sh` with a Python 3.12 environment that has the check tools on `PATH`.
 - GitHub's pull request `mergeable` is null until GitHub computes it, so a just-read PR can show no conflict that appears on a later read; treat null as unknown and recheck.
+- GitHub caps a label description at 100 characters and rejects a longer one with HTTP 422, which fails `team-kit-admin add-project`'s label creation.
