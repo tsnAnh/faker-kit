@@ -28,7 +28,6 @@ from team_kit_contracts import (
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, PROPOSAL_LABEL, REPORT_DEADLINE_SECONDS, UNIT_STATE_FRESH_SECONDS, Gh, Refused, checks_state, main, run_gh
 from team_kit_guard.policy import load_policy
 from team_kit_incident_sources import IncidentSourceError
-from team_kit_proposals import PROPOSAL_TTL_SECONDS, write_proposal
 
 STANDING = (TEMPLATES / "dispatch.md").read_text()
 REPO = SHOP
@@ -630,14 +629,6 @@ def tick(gh, capsys, cloud=None):
     return lines(capsys)
 
 
-def chief_proposal(team_kit_home, tmp_path, name="handoff.md", body="# Add export\n\nBuild it from the chief handoff.\n", bot="meo-beo", project="shop", at=NOW):
-    source = team_kit_home / "drafts" / "chanh-van" / name
-    source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_text(body)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    return write_proposal(team_kit_home, bot, project, REPO, str(source), "chanh-van", at, digest)
-
-
 def test_tick_is_silent_with_nothing_to_report(team_kit_home, gh, capsys):
     assert tick(gh, capsys) == ["[SILENT]"]
 
@@ -779,99 +770,6 @@ def test_run_gh_returns_a_304_but_raises_on_any_other_failure(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake("HTTP/2.0 304 Not Modified\r\n\r\n", 1, "boom"))
     with pytest.raises(Refused):
         run_gh(["api", "repos/acme/shop/issues"])
-
-
-def test_proposals_prints_active_chief_proposals_without_dispatching(team_kit_home, tmp_path, gh, capsys):
-    saved = chief_proposal(team_kit_home, tmp_path)
-    cloud = FakeCloud()
-    assert run(gh, "chief-proposals", cloud=cloud) == 0
-    found = lines(capsys)
-    assert found[0] == f"team-kit notice: chief proposal {saved['id']} from chanh-van for shop expires {saved['expires_at_iso']}"
-    assert found[1:] == ["# Add export", "", "Build it from the chief handoff."]
-    assert gh.calls == []
-    assert cloud.started == []
-
-
-def test_chief_proposals_id_shows_only_the_proposal_a_notice_names(team_kit_home, tmp_path, gh, capsys):
-    first = chief_proposal(team_kit_home, tmp_path, name="one.md", body="# First\n")
-    second = chief_proposal(team_kit_home, tmp_path, name="two.md", body="# Second\n", at=NOW + 1)
-    assert run(gh, "chief-proposals", "--id", second["id"]) == 0
-    found = lines(capsys)
-    assert found[0].startswith(f"team-kit notice: chief proposal {second['id']} ") and found[1:] == ["# Second"]
-    assert run(gh, "chief-proposals", "--id", "nope") == 0
-    assert lines(capsys) == ["[SILENT]"]
-    assert first["id"] != second["id"]
-
-
-def test_tick_delivers_one_chief_proposal_notice_once(team_kit_home, tmp_path, gh, capsys):
-    saved = chief_proposal(team_kit_home, tmp_path)
-    [notice] = tick(gh, capsys)
-    assert notice.startswith(f"team-kit notice: chief proposal {saved['id']} for shop from chanh-van: Add export.")
-    assert "Ask me in this Bot Chat to brief it" in notice
-    record = json.loads(next((team_kit_home / "proposals" / "meo-beo").glob("*.json")).read_text())
-    assert record["notified_at"] == NOW
-    assert tick(gh, capsys) == ["[SILENT]"]
-
-
-def test_expired_chief_proposals_are_pruned_deterministically(team_kit_home, tmp_path, gh, capsys):
-    old = chief_proposal(team_kit_home, tmp_path, "old.md", "# Old\n", at=NOW - PROPOSAL_TTL_SECONDS - 1)
-    fresh = chief_proposal(team_kit_home, tmp_path, "fresh.md", "# Fresh\n", at=NOW - PROPOSAL_TTL_SECONDS + 1)
-    assert run(gh, "chief-proposals") == 0
-    found = lines(capsys)
-    assert old["id"] not in "\n".join(found)
-    assert fresh["id"] in found[0]
-    files = sorted(p.name for p in (team_kit_home / "proposals" / "meo-beo").glob("*.json"))
-    assert files == [f"{fresh['id']}.json"]
-
-
-def corrupt_records(team_kit_home, saved):
-    folder = team_kit_home / "proposals" / "meo-beo"
-    good = json.loads((folder / f"{saved['id']}.json").read_text())
-    bad = {
-        "garbage": "{not json",
-        "empty": "",
-        "list": "[1, 2]",
-        "no-body": json.dumps({k: v for k, v in good.items() if k != "body"}),
-        "wrong-version": json.dumps({**good, "version": 2}),
-        "body-not-text": json.dumps({**good, "body": ["x"]}),
-        "blank-body": json.dumps({**good, "body": " \n"}),
-        "bad-time": json.dumps({**good, "expires_at": "soon"}),
-        "no-expiry-window": json.dumps({**good, "expires_at": good["created_at"] + 10 * PROPOSAL_TTL_SECONDS}),
-        "id-mismatch": json.dumps({**good, "id": "other"}),
-        "other-bot": json.dumps({**good, "bot": "ong-xay"}),
-        "huge": json.dumps({**good, "body": "x" * 500_000}),
-    }
-    for name, text in bad.items():
-        (folder / f"{name}.json").write_text(text)
-    (folder / "dir.json").mkdir()
-    return sorted(bad)
-
-
-def test_corrupt_chief_proposals_are_pruned_and_never_shown(team_kit_home, tmp_path, gh, capsys):
-    saved = chief_proposal(team_kit_home, tmp_path)
-    names = corrupt_records(team_kit_home, saved)
-    assert run(gh, "chief-proposals") == 0
-    found = lines(capsys)
-    assert found[0].startswith(f"team-kit notice: chief proposal {saved['id']} ")
-    assert sum(1 for line in found if line.startswith("team-kit notice:")) == 1
-    left = sorted(p.name for p in (team_kit_home / "proposals" / "meo-beo").iterdir())
-    assert left == [f"{saved['id']}.json"], (left, names)
-
-
-def test_tick_prunes_corrupt_and_expired_proposals_and_notices_only_the_good_one(team_kit_home, tmp_path, gh, capsys):
-    chief_proposal(team_kit_home, tmp_path, "old.md", "# Old\n", at=NOW - PROPOSAL_TTL_SECONDS - 5)
-    saved = chief_proposal(team_kit_home, tmp_path, "new.md", "# New\n")
-    corrupt_records(team_kit_home, saved)
-    [notice] = tick(gh, capsys)
-    assert f"chief proposal {saved['id']} " in notice
-    assert sorted(p.name for p in (team_kit_home / "proposals" / "meo-beo").iterdir()) == [f"{saved['id']}.json"]
-
-
-def test_a_notified_proposal_stays_valid_until_it_expires(team_kit_home, tmp_path, gh, capsys):
-    saved = chief_proposal(team_kit_home, tmp_path)
-    tick(gh, capsys)
-    assert run(gh, "chief-proposals") == 0
-    assert saved["id"] in lines(capsys)[0]
 
 
 def test_tick_launches_a_queued_unit_once_its_dependency_merged(team_kit_home, gh, capsys):

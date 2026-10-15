@@ -16,7 +16,7 @@ The bootstrap bot may run these, and the guard asks the owner to approve each on
   protect       --project P --check NAME [--check NAME ...]  require those checks on the default branch
   activate      --bot B                                      resume a project bot's jobs once its GitHub login is set
   add-chief     --bot B [--model M]                          create or refresh the chief of staff: reads across
-                                                             projects and can propose a handoff with approval
+                                                             projects and hands work to project bots by message
   andon         [raise REASON... | clear]                    show, pull, or clear the machine's andon cord: nothing
                                                              new starts in any project, and agents at work stop
 
@@ -81,8 +81,8 @@ from team_kit_guard.policy import (
     team_kit_home,
 )
 from team_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, edit_guard, load_machine, route_url, routes, secret_env
-from team_kit_proposals import (
-    ProposalError,
+from team_kit_requests import (
+    RequestError,
     active_requests,
     finish_request,
     format_request_notice,
@@ -265,12 +265,10 @@ class Admin:
         shutil.rmtree(plugin, ignore_errors=True)
         shutil.copytree(self.pkg / "plugin" / "team_kit_guard", plugin, ignore=shutil.ignore_patterns("__pycache__"))
         self.link_skill(home, {"project": "dispatch", "bootstrap": "bootstrap", "chief": "chief"}[role])
-        if role == "chief":
-            (self.home / "drafts" / bot).mkdir(parents=True, exist_ok=True)
-            (self.home / "drafts" / bot).chmod(0o700)
+        # An earlier version handed chief work over as files here; bots message each other now.
+        shutil.rmtree(self.home / {"chief": "drafts", "project": "proposals"}.get(role, "proposals") / bot, ignore_errors=True)
         if role == "project":
             (self.home / "briefs" / bot).mkdir(parents=True, exist_ok=True)
-            (self.home / "proposals" / bot).mkdir(parents=True, exist_ok=True)
             # An earlier version kept webhook triage scripts here; nothing uses them now.
             shutil.rmtree(home / "scripts" / "team-kit", ignore_errors=True)
 
@@ -871,7 +869,7 @@ class Admin:
     def setup_request_locked(self, request_id: str, bootstrap: str) -> dict:
         try:
             request = project_request(self.home, bootstrap, request_id, self.now())
-        except ProposalError as err:
+        except RequestError as err:
             raise Refused(str(err)) from None
         repo, project, bot = request.field("repo"), request.field("project"), request.field("bot")
         policy = self.policy()

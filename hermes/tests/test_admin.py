@@ -13,7 +13,7 @@ from install_config import InstallError, cron_spec
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, InFlight
 from team_kit_guard.policy import load_policy
 from team_kit_machine import MachineError, cloudflared_config, edit_guard, parse_machine
-from team_kit_proposals import write_project_request
+from team_kit_requests import write_project_request
 
 SHOP = "acme/shop"
 LABELS = ["agent-task", "agent:proposal", "agent:running", "agent:verifying", "agent:review", "agent:needs-human", "agent:security", "agent:incident", "risk:low", "risk:medium", "risk:high", "agent:andon"]  # noqa: E501
@@ -90,10 +90,11 @@ def test_add_project_creates_the_project_bot_its_labels_and_paused_jobs(ready):
     assert (root / "team-kit" / "briefs" / "meo-beo").is_dir()
     assert not (home / ".env").exists(), "team-kit writes no .env; the owner puts the token there"
 
-    created = {c[4]: c for c in hermes_calls(root) if c[2:4] == ["cron", "create"]}
-    assert sorted(created) == ["0 9 * * 1", "0 9,13,17 * * *", "every 10m", "every 15m", "every 30m"]
-    tick = created["every 30m"]
-    assert tick[:2] == ["-p", "meo-beo"]
+    calls = [c for c in hermes_calls(root) if c[2:4] == ["cron", "create"] and c[:2] == ["-p", "meo-beo"]]
+    schedules = {c[c.index("--name") + 1]: c[4] for c in calls}
+    assert schedules == {"team-kit-tick": "every 30m", "team-kit-status": "0 9 * * 1", "team-kit-security": "every 15m",
+                         "team-kit-incidents": "every 10m", "team-kit-upstream": "0 9 * * 1"}, "status is a weekly summary"
+    tick = next(c for c in calls if c[c.index("--name") + 1] == "team-kit-tick")
     assert tick[tick.index("--name") + 1] == "team-kit-tick"
     assert tick[tick.index("--deliver") + 1] == "bot-chat:meo-beo"
     assert all(not job["enabled"] and job["paused_reason"] for job in jobs(root, "meo-beo"))
@@ -633,8 +634,11 @@ def test_add_chief_creates_a_read_only_bot_with_the_chief_skill_and_no_jobs(read
     assert sorted(p.name for p in (home / "skills").iterdir()) == ["chief"]
     assert (home / "SOUL.md").read_text().startswith("You are this machine's team-kit chief of staff.")
     assert (home / "plugins" / "team_kit_guard" / "plugin.yaml").exists()
-    drafts = root / "team-kit" / "drafts" / "chanh-van"
-    assert drafts.is_dir() and (drafts.stat().st_mode & 0o777) == 0o700, "the chief's drafts folder exists and is private"
+    assert not (root / "team-kit" / "drafts").exists(), "the chief hands work over by message and writes no drafts"
+    (root / "team-kit" / "drafts" / "chanh-van").mkdir(parents=True)
+    (root / "team-kit" / "drafts" / "chanh-van" / "old.md").write_text("# old handoff")
+    assert admin(ready, "add-chief", "--bot", "chanh-van", profile="ong-xay")[0] == 0
+    assert not (root / "team-kit" / "drafts" / "chanh-van").exists(), "a refresh removes an earlier version's drafts"
     assert not any(c[:2] == ["-p", "chanh-van"] and c[2:4] == ["cron", "create"] for c in hermes_calls(root)), "the chief has no jobs"
     code, err = admin(ready, "add-chief", "--bot", "meo-beo", profile="ong-xay")
     assert code == 1 and "already a project bot" in err

@@ -12,4 +12,4 @@ ruff check
 mypy
 bun test plugins/trust-ladder
 bun test upstream/agent-hooks
-python3 -m pytest hermes -q
+python3 -m pytest hermes -q -n auto
