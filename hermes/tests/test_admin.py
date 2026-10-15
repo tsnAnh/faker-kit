@@ -998,3 +998,66 @@ def test_setup_request_leaves_a_bot_made_since_the_chief_asked_alone_but_finishe
     code, out = admin(ready, "setup-request", "--id", request["id"], profile="ong-xay")
     assert code == 0, out
     assert out["vendor"]["pr"] and not path.exists()
+
+
+def git_repo(path, remote=None):
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    if remote:
+        subprocess.run(["git", "-C", str(path), "remote", "add", "origin", remote], check=True)
+    return path
+
+
+def test_discover_lists_a_folders_github_repositories_with_their_project_or_the_adopt_command(ready):
+    root, _ = ready
+    add_shop(ready)
+    folder = root.parent / "work"
+    git_repo(folder / "shop", "git@github.com:acme/shop.git")
+    git_repo(folder / "Blog", "https://github.com/acme/BLOG")
+    git_repo(folder / "clients" / "blog-copy", "ssh://git@github.com/Acme/blog.git")
+    git_repo(folder / "local-only")
+    git_repo(folder / "gitlab", "git@gitlab.com:acme/x.git")
+    git_repo(folder / "secret", "git@github.com:other/secret.git")
+    git_repo(folder / "token", "https://user:ghp_secret@github.com/acme/shop.git")
+    git_repo(folder / "dots", "https://github.com/../user")
+    (folder / "linked").symlink_to(folder / "shop")
+    (root / "profiles" / "blog").mkdir(parents=True)
+    (root.parent / ".fake-gh" / "repos.json").write_text(json.dumps(["acme/shop", "acme/Blog"]))
+    code, out = admin(ready, "discover", "--dir", str(folder), profile="ong-xay")
+    assert code == 0, out
+    assert out["repos"] == [
+        {"repo": "acme/Blog", "path": str((folder / "Blog").resolve()), "project": None,
+         "adopt": "team-kit-admin adopt --repo acme/Blog --project blog-2 --bot blog-2"},
+        {"repo": "acme/shop", "path": str((folder / "shop").resolve()), "project": "shop"},
+    ], "one entry per repository, spelled as GitHub spells it, never named after a Hermes profile that exists"
+    assert (out["new"], out["truncated"]) == (1, False)
+    assert sorted(s["why"] for s in out["skipped"]) == ["no readable GitHub remote named origin"] * 4 + [
+        "other/secret is not readable with this machine's gh login"]
+    assert "ghp_secret" not in json.dumps(out), "a remote's credentials are never printed"
+    calls = (root.parent / ".fake-gh" / "calls.log").read_text()
+    assert "repos/../user" not in calls and "ghp_secret" not in calls
+
+
+@pytest.mark.parametrize("folder", ["/etc", "~/../.."])
+def test_discover_reads_only_inside_the_owners_home(ready, folder):
+    code, err = admin(ready, "discover", "--dir", folder, profile="ong-xay")
+    assert code == 1 and "outside the owner's home folder" in err
+
+
+def test_adopt_sets_a_repository_up_like_the_first_project_bot(ready, kit_source):
+    root, _ = ready
+    admin(ready, "add-project", "--bot", "meo-beo", "--project", "shop", "--repo", SHOP, "--tick-every", "1m", profile="ong-xay")
+    code, out = admin(ready, "adopt", "--repo", "acme/blog", "--project", "blog", "--bot", "blog", profile="ong-xay")
+    assert code == 0, out
+    assert bots(root)["blog"] == {"role": "project", "project": "blog", "repo": "acme/blog", "tick_every": "1m"}
+    assert out["settings_from"] == "meo-beo" and out["vendor"]["pr"]
+    code, out = admin(ready, "adopt", "--repo", "acme/blog", "--project", "blog", "--bot", "blog", profile="ong-xay")
+    assert code == 0, "running it again converges"
+    (root / "profiles" / "chanh-van").mkdir(parents=True, exist_ok=True)
+    for args, why in ((["--repo", SHOP, "--project", "shop2", "--bot", "shop2"], "already project shop"),
+                      (["--repo", "acme/new", "--project", "x", "--bot", "meo-beo"], "bot meo-beo exists"),
+                      (["--repo", "acme/new", "--project", "shop", "--bot", "x"], "project shop exists"),
+                      (["--repo", "acme/new", "--project", "x", "--bot", "chanh-van"], "Hermes profile named chanh-van exists"),
+                      (["--repo", "acme/new", "--project", "default", "--bot", "x"], "not default")):
+        code, err = admin(ready, "adopt", *args, profile="ong-xay")
+        assert code == 1 and why in err, args

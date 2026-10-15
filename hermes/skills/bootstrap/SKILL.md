@@ -21,6 +21,8 @@ If the shell does not find `team-kit-admin`, run it as `~/.hermes/bin/team-kit-a
 | `team-kit-admin activate --bot B` | Resumes B's jobs. Refuses only if `gh` is not signed in on this machine and B has no token of its own |
 | `team-kit-admin add-chief --bot B [--model M] [--claude-subscription]` | Creates or refreshes the chief of staff: a bot that reads across projects and hands work to project bots by message |
 | `team-kit-admin setup-request --id <id>` | Sets up the project a chief project request names: `add-project` with the settings of this machine's first project bot, then `vendor`. See Chief project requests |
+| `team-kit-admin discover --dir <folder>` | Every GitHub repository cloned under that folder (two levels deep, inside the owner's home), each with its project or the exact `adopt` command that sets it up. Read-only |
+| `team-kit-admin adopt --repo R --project P --bot B` | Sets up one repository with the settings of this machine's first project bot, then `vendor`. Safe to run again |
 | `team-kit-admin andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows the machine's andon cord. Only when the owner asks |
 
 ## Never
@@ -115,6 +117,14 @@ When a bot or `team-kit-gh kit-check` says a kit commit differs from `kit_ref`, 
 When the owner wants one bot to route work across projects, or one line per project on what is going on, run `team-kit-admin add-chief --bot <name>`. It creates a bot whose only command, `team-kit-chief`, reads every project and hands work to project bots with `message_agent`; for a project on another machine it writes the message the owner sends. It has no jobs. Then the owner:
 
 1. adds the bot in Hermes Desktop Bot Mode. It reads GitHub with this machine's shared `gh` login, like every bot, so it needs no token.
+
+## Set up every repository in a folder
+
+When the owner or the chief asks to set up the projects in a folder, such as `~/AIProjects/Titonium`:
+
+1. Run `team-kit-admin discover --dir <folder>`. Never read the folder any other way.
+2. Run the `adopt` command each new repository's entry gives, one at a time. With `ask_owner` false, run them all without asking. Repositories with a `project` are set up already: skip them.
+3. Report one line per repository: its project and kit pull request, or why it was skipped or refused. The owner then trusts each launch checkout once.
 
 ## Chief project requests
 
