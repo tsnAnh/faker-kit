@@ -23,6 +23,7 @@ from team_kit_contracts import (
     review_signed,
     security_signature,
     size_marker,
+    vendor_record,
     verdict_signature,
 )
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, PROPOSAL_LABEL, REPORT_DEADLINE_SECONDS, UNIT_STATE_FRESH_SECONDS, Gh, Refused, checks_state, main, run_gh
@@ -3250,6 +3251,70 @@ def test_a_conflicting_kit_update_pull_request_is_told_once_per_head(team_kit_ho
     assert tick(gh, capsys) == ["[SILENT]"]
     gh.prs[(REPO, 7)]["headRefOid"] = "f" * 40
     assert len(tick(gh, capsys)) == 1, "a rebuilt head that still conflicts is told again"
+
+
+KIT_HEAD = "d" * 40
+
+
+def kit_update(gh, team_kit_home, kit, made=KIT_HEAD, **change):
+    """An open kit update pull request on this machine's kit, whose head is the commit team-kit-admin vendor made."""
+    branch = change.pop("branch", f"team-kit/kit-{kit[:12]}")
+    pr(gh, 9, branch=branch, head=KIT_HEAD, fork=change.pop("fork", False), checks=change.pop("checks", ("SUCCESS",)))
+    gh.prs[(REPO, 9)].update(mergeable=change.pop("mergeable", True), baseRefName=change.pop("base", "main"))
+    if made:
+        record = vendor_record(team_kit_home, REPO)
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"branch": f"team-kit/kit-{kit[:12]}", "commit": made}))
+    assert not change
+
+
+def test_tick_merges_the_kit_update_whose_head_is_the_commit_vendor_made(team_kit_home, kit, capsys):
+    gh = app_gh(kit)
+    kit_update(gh, team_kit_home, kit)
+    out = tick(gh, capsys)
+    assert out[0] == (f"team-kit notice: merged the kit update https://github.com/{REPO}/pull/9 automatically (kit {kit[:12]}, "
+                      "the commit team-kit-admin vendor made, checks passed)")
+    assert gh.merges == [["pr", "merge", "9", "-R", REPO, "--merge", "--match-head-commit", KIT_HEAD]]
+    assert not any("kit update" in line for line in tick(gh, capsys)), "merged once"
+
+
+@pytest.mark.parametrize(
+    ("config", "change"),
+    [
+        ({"auto_merge": "none"}, {}),
+        ({}, {"made": "e" * 40}),
+        ({}, {"made": None}),
+        ({}, {"branch": "team-kit/kit-0123456789ab"}),
+        ({}, {"checks": ("PENDING",)}),
+        ({}, {"checks": ()}),
+        ({}, {"fork": True}),
+        ({}, {"mergeable": None}),
+        ({}, {"base": "release"}),
+    ],
+)
+def test_a_kit_update_that_is_not_the_vendor_commit_ready_to_merge_waits_for_the_owner(team_kit_home, kit, capsys, config, change):
+    gh = app_gh(kit, **config)
+    kit_update(gh, team_kit_home, kit, **change)
+    out = tick(gh, capsys)
+    assert gh.merges == [] and not any("merged the kit update" in line for line in out)
+
+
+def test_a_kit_update_github_refuses_to_merge_is_told_once_per_head(team_kit_home, kit, capsys):
+    gh = app_gh(kit)
+    kit_update(gh, team_kit_home, kit)
+    gh.merge_error = "gh pr merge failed: Base branch was modified (HTTP 405)"
+    assert tick(gh, capsys)[0] == (f"team-kit notice: the kit update https://github.com/{REPO}/pull/9 could not merge: "
+                                   "gh pr merge failed: Base branch was modified (HTTP 405)")
+    assert not any("kit update" in line for line in tick(gh, capsys))
+
+
+def test_no_kit_update_merges_while_the_andon_cord_is_pulled(team_kit_home, kit, capsys):
+    gh = app_gh(kit)
+    kit_update(gh, team_kit_home, kit)
+    assert run(gh, "andon", "raise", "stop") == 0
+    capsys.readouterr()
+    tick(gh, capsys)
+    assert gh.merges == []
 
 
 @pytest.mark.parametrize("config", [

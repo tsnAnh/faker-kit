@@ -64,7 +64,7 @@ import yaml
 from install_config import InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, mapping, profile_home, value_at
 from team_kit_andon import ANDON_LABEL, MACHINE, Andon, AndonError, clean_reason, issue_body
 from team_kit_cloud import CLAUDE_CHECKOUT, Cloud, CloudError
-from team_kit_contracts import KIT_BRANCH_PREFIX, ContractError, bootstrap_prompt, cloud_argv
+from team_kit_contracts import KIT_BRANCH_PREFIX, ContractError, bootstrap_prompt, cloud_argv, vendor_record
 from team_kit_guard.policy import (
     DEFAULT_INCIDENTS_EVERY,
     DEFAULT_SECURITY_EVERY,
@@ -564,21 +564,20 @@ class Admin:
         tree = self.api(f"repos/{repo}/git/trees", "POST", {"base_tree": base_tree, "tree": entries})["sha"]
         result = {"project": project, "repo": repo, "kit_ref": kit_ref, "files": len(plan.files), "links": len(linked),
                   "kept_repository_own": skipped, "removed": sorted(stale)}
-        if tree == base_tree:
-            return {**result, "pr": None, "note": f"{default} already has the kit at {kit_ref[:12]}"}
         short = kit_ref[:12]
+        branch = f"{KIT_BRANCH_PREFIX}{short}"
+        if tree == base_tree:
+            superseded = self.close_kit_prs(repo, ref_query, branch, f"{default} already has team-kit {short}")
+            return {**result, "pr": None, "note": f"{default} already has the kit at {short}", "superseded": superseded}
         commit = self.api(f"repos/{repo}/git/commits", "POST",
                           {"message": f"chore(agents): vendor team-kit {short}", "tree": tree, "parents": [base]})["sha"]
-        branch = f"{KIT_BRANCH_PREFIX}{short}"
         try:
             self.api(f"repos/{repo}/git/ref/heads/{quote(branch, safe='/')}")
             self.api(f"repos/{repo}/git/refs/heads/{quote(branch, safe='/')}", "PATCH", {"sha": commit, "force": True})
         except Refused:
             self.api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": commit})
-        open_prs = [pr for pr in self.api(f"repos/{repo}/pulls?state=open&base={ref_query}&per_page=100") or []
-                    if str((pr.get("head") or {}).get("ref", "")).startswith(KIT_BRANCH_PREFIX)]
-        mine = [pr["html_url"] for pr in open_prs if pr["head"]["ref"] == branch]
-        superseded = sorted(pr["html_url"] for pr in open_prs if pr["head"]["ref"] != branch)
+        self.record_vendor_commit(repo, branch, commit)
+        mine = [pr["html_url"] for pr in self.kit_pulls(repo, ref_query) if pr["head"]["ref"] == branch]
         if mine:
             url = mine[0]
         else:
@@ -589,7 +588,28 @@ class Admin:
                     f"{', '.join(skipped) or 'none'}. Removed: {', '.join(sorted(stale)) or 'nothing'}.")
             url = self.api(f"repos/{repo}/pulls", "POST", {"title": f"chore(agents): vendor team-kit {short}", "head": branch,
                                                          "base": default, "body": body})["html_url"]
+        superseded = self.close_kit_prs(repo, ref_query, branch, f"{url} vendors team-kit {short}")
         return {**result, "branch": branch, "pr": url, "superseded": superseded}
+
+    def kit_pulls(self, repo: str, ref_query: str) -> list[dict]:
+        return [pr for pr in self.api(f"repos/{repo}/pulls?state=open&base={ref_query}&per_page=100") or []
+                if str((pr.get("head") or {}).get("ref", "")).startswith(KIT_BRANCH_PREFIX)
+                and str(((pr["head"].get("repo") or {}).get("full_name")) or "").lower() == repo.lower()]
+
+    def close_kit_prs(self, repo: str, ref_query: str, keep: str, why: str) -> list[str]:
+        older = [pr for pr in self.kit_pulls(repo, ref_query) if pr["head"]["ref"] != keep]
+        for pr in older:
+            number = int(pr["number"])
+            self.api(f"repos/{repo}/pulls/{number}", "PATCH", {"state": "closed"})
+            self.api(f"repos/{repo}/issues/{number}/comments", "POST", {"body": f"Superseded: {why}."})
+        return sorted(pr["html_url"] for pr in older)
+
+    def record_vendor_commit(self, repo: str, branch: str, commit: str) -> None:
+        path = vendor_record(self.home, repo)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.write_text(json.dumps({"branch": branch, "commit": commit}))
+        tmp.replace(path)
 
     def setup_repo(self, project: str, backend: str, codex_env: str | None) -> dict:
         policy = self.policy()

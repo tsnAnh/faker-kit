@@ -409,9 +409,12 @@ def test_vendor_with_nothing_to_change_opens_no_pull_request(ready, kit_source):
     root, env = ready
     add_shop(ready)
     env["FAKE_TREE_UNCHANGED"] = "1"
+    seed(root, "pulls.json", {SHOP: [{"html_url": "https://github.com/acme/shop/pull/2", "head": "team-kit/kit-000000000000"}]})
     code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
     assert code == 0 and out["pr"] is None and "already has the kit" in out["note"]
     assert "commits" not in posted(root)
+    assert out["superseded"] == ["https://github.com/acme/shop/pull/2"], "an older kit update would roll the kit back"
+    assert posted(root)["pull_edits"] == [{"pr": 7, "state": "closed"}]
 
 
 def test_vendor_again_updates_its_branch_and_reuses_the_open_pull_request(ready, kit_source):
@@ -433,6 +436,10 @@ def test_vendor_lists_older_kit_pull_requests_it_supersedes(ready, kit_source):
                                      {"html_url": "https://github.com/acme/shop/pull/4", "head": "feature/other"}]})
     code, out = admin(ready, "vendor", "--project", "shop", profile="ong-xay")
     assert code == 0 and out["superseded"] == ["https://github.com/acme/shop/pull/2"]
+    assert posted(root)["pull_edits"] == [{"pr": 7, "state": "closed"}], "only the older kit update closes"
+    assert posted(root)["comments"] == [{"issue": 7, "body": f"Superseded: {out['pr']} vendors team-kit {kit_source[1][:12]}."}]
+    record = json.loads((root / "team-kit" / "kit-commits" / "acme-shop.json").read_text())
+    assert record == {"branch": out["branch"], "commit": "commit1"}, "the one commit a project bot's tick may merge"
 
 
 @pytest.mark.parametrize("problem", ["symlinked skills folder", "invalid dispatch.json", "dirty kit"])

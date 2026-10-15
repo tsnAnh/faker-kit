@@ -237,6 +237,19 @@ elif args[0] == "api":
         emit({"sha": load("heads.json", {}).get(rest.split("/")[2], "c" * 40), "parents": []})
     elif rest.startswith("/collaborators/") and rest.endswith("/permission"):
         emit({"permission": load("permissions.json", {}).get(rest.split("/")[2], "none")})
+    elif rest.startswith("/issues/") and rest.endswith("/comments") and method == "POST":
+        record("comments", {"issue": int(rest.split("/")[2]), **json.loads(body)})
+        emit({"id": 1})
+    elif rest.startswith("/pulls/") and method == "PATCH":
+        number = int(rest.split("/")[2])
+        pulls = load("pulls.json", {})
+        listed = pulls.get(repo, [])
+        if not 7 <= number < 7 + len(listed):
+            missing()
+        listed[number - 7].update(json.loads(body))
+        save("pulls.json", pulls)
+        record("pull_edits", {"pr": number, **json.loads(body)})
+        emit(pull_row(number, listed[number - 7]))
     elif rest == "/pulls" and method == "POST":
         pull = json.loads(body)
         pulls = load("pulls.json", {})

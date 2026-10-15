@@ -114,6 +114,7 @@ from team_kit_contracts import (
     security_signed,
     size_marker,
     triage_argv,
+    vendor_record,
     verdict_signed,
     verify_argv,
 )
@@ -768,10 +769,7 @@ class Gh:
             raise Refused(".agents/dispatch.json pr_comment_trigger must be an @mention of letters, digits, and hyphens")
         return trigger
 
-    def kit_pr_notices(self) -> list[str]:
-        """One notice per head when an open kit update pull request (team-kit-admin vendor's team-kit/kit-* branch)
-        conflicts with its base. `team-kit-admin vendor` rebuilds it on the current branch, which only the bootstrap
-        bot may run, so the notice names that command."""
+    def kit_prs(self, local_commit: str) -> list[str]:
         record = self.policy.home / "kit-prs" / f"{self.bot.name}.json"
         try:
             told = json.loads(record.read_text())
@@ -785,7 +783,21 @@ class Gh:
                 continue
             number = int(item["number"])
             state = self.pr_state(number)
-            if not state["conflicts"] or not state["head"]:
+            if not state["head"]:
+                continue
+            if not state["conflicts"]:
+                if item["head"]["ref"] != f"{KIT_BRANCH_PREFIX}{local_commit[:12]}":
+                    continue
+                try:
+                    landed = self.land_kit_pr(number)
+                except Refused as err:
+                    now_told[str(number)] = state["head"]
+                    if told.get(str(number)) != state["head"]:
+                        notices.append(f"{NOTICE} the kit update {item.get('html_url')} could not merge: {str(err)[:160]}")
+                    continue
+                if landed:
+                    notices.append(f"{NOTICE} merged the kit update {item.get('html_url')} automatically (kit {local_commit[:12]}, "
+                                   "the commit team-kit-admin vendor made, checks passed)")
                 continue
             now_told[str(number)] = state["head"]
             if told.get(str(number)) != state["head"]:
@@ -797,6 +809,28 @@ class Gh:
             tmp.write_text(json.dumps(now_told))
             tmp.replace(record)
         return notices
+
+    def land_kit_pr(self, number: int) -> bool:
+        try:
+            config = self.dispatch_config()
+        except Refused:
+            return False
+        if config.get("auto_merge", "none") != "low" or self.cord():
+            return False
+        data = self.pull(number)
+        head = str(data.get("headRefOid") or "")
+        try:
+            made = json.loads(vendor_record(self.policy.home, self.repo).read_text())
+        except (OSError, ValueError):
+            return False
+        if not isinstance(made, dict) or made.get("commit") != head or not SHA.match(head):
+            return False
+        default = str(self.api_json(f"repos/{self.repo}").get("default_branch") or "")
+        if (data.get("isCrossRepository") is not False or data.get("baseRefName") != default or data.get("mergeable") is not True
+                or checks_state(self.check_rollup(head)) != "passed"):
+            return False
+        self.run(["pr", "merge", str(number), "-R", self.repo, f"--{config.get('auto_merge_method', 'merge')}", "--match-head-commit", head])
+        return True
 
     def pr_comment_notices(self) -> list[str]:
         """One notice per new pull request comment from a collaborator that mentions this bot: the pull request,
@@ -2461,7 +2495,7 @@ class Project:
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
             problems["pr-comments"] = reason(err)
         try:
-            notices.extend(gh.kit_pr_notices())
+            notices.extend(gh.kit_prs(local_commit))
         except (Refused, ValueError, KeyError, TypeError) as err:
             problems["kit-prs"] = reason(err)
         try:

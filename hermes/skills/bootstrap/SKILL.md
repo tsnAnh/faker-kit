@@ -64,7 +64,7 @@ Intervals are positive minutes or hours, such as `10m` or `1h`. It prints the la
 team-kit-admin vendor --project <project>
 ```
 
-Cloud sessions start from a clone of the repository and cannot fetch the kit, so the repository carries a copy of the kit at this machine's commit. The command commits that copy on a `team-kit/kit-<first 12 characters of the commit>` branch through the GitHub API and prints the pull request. When the repository already has its own skill of a kit skill's name, the kit's is left out, and `kept_repository_own` lists it. If it prints `"pr": null`, the copy is already current. If `superseded` lists older kit pull requests, tell the owner to close them unmerged: merging one would move the repository back to an older kit.
+Cloud sessions start from a clone of the repository and cannot fetch the kit, so the repository carries a copy of the kit at this machine's commit. The command commits that copy on a `team-kit/kit-<first 12 characters of the commit>` branch through the GitHub API and prints the pull request. When the repository already has its own skill of a kit skill's name, the kit's is left out, and `kept_repository_own` lists it. If it prints `"pr": null`, the copy is already current. If `superseded` lists older kit pull requests, the command already closed them with a comment: merging one would move the repository back to an older kit.
 
 Tell the owner the pull request is theirs to review and merge, and wait until they say it is merged. `setup-repo` refuses until then.
 
@@ -110,7 +110,7 @@ Then tell the owner to add the bot in Hermes Desktop Bot Mode and ask it for one
 
 ## Moving to a new kit commit
 
-When a bot or `team-kit-gh kit-check` says a kit commit differs from `kit_ref`, run `vendor` for that project at once; never ask anyone to edit `.agents/dispatch.json` by hand. After the owner reruns `install.sh` with a new `--ref`, every project bot refuses to launch until its repository's vendored kit and `kit_ref` match the new commit. Run `team-kit-admin vendor --project <project>` for each project. Its pull request moves both; once the owner merges it, the project bot launches again.
+When a bot or `team-kit-gh kit-check` says a kit commit differs from `kit_ref`, run `vendor` for that project at once; never ask anyone to edit `.agents/dispatch.json` by hand. After the owner reruns `install.sh` with a new `--ref`, every project bot refuses to launch until its repository's vendored kit and `kit_ref` match the new commit. Run `team-kit-admin vendor --project <project>` for each project. Its pull request moves both. When the repository's `.agents/dispatch.json` sets `auto_merge` to `low`, the project bot's tick merges it once its checks pass and its head is still the commit `vendor` made; otherwise the owner merges it. Then the project bot launches again.
 
 ## A chief of staff
 
