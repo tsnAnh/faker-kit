@@ -249,6 +249,7 @@ def pull_fields(data: dict, repo: str) -> dict:
         "mergedAt": merged,
         "headRefOid": head.get("sha"),
         "headRefName": head.get("ref"),
+        "baseRefName": base.get("ref"),
         "isCrossRepository": not head_repo or str(head_repo.get("full_name") or "").lower() != base_name,
         "headRepository": {"name": head_repo.get("name")} if head_repo else None,
         "headRepositoryOwner": {"login": (head_repo.get("owner") or {}).get("login")} if head_repo else None,
@@ -966,6 +967,9 @@ class Gh:
         checks = checks_state(self.check_rollup(head))
         if checks != "passed":
             raise Refused(f"#{pr}'s checks are {checks}; a pull request merges only once its checks pass")
+        default = str(self.api_json(f"repos/{self.repo}").get("default_branch") or "")
+        if data.get("baseRefName") != default:
+            raise Refused(f"#{pr} targets {data.get('baseRefName')}, not the default branch {default}; only the owner merges it on GitHub")
         if data.get("mergeable") is False:
             raise Refused(f"#{pr} conflicts with its base branch; its author must update it first")
         if data.get("mergeable") is not True:
