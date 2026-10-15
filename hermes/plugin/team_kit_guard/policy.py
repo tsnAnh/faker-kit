@@ -62,12 +62,15 @@ SLACK_CHANNEL_ID = re.compile(r"\A[CG][A-Z0-9]{2,}\Z")
 SLACK_CHANNEL_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,79}\Z")
 
 PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "chief-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "kit-check")  # noqa: E501
-BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon")
+BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon", "setup-request")
 BOOTSTRAP_READ_ONLY = ("status",)
-# The chief of staff reads every project. Its writes are a draft under drafts/<bot>/ and `propose`;
-# the guard asks the owner to approve both every time.
-CHIEF_COMMANDS = ("projects", "status", "show", "digest", "propose", "andon")
-CHIEF_NEEDS_APPROVAL = ("propose",)
+# The chief of staff reads every project. Its writes are a draft under drafts/<bot>/, `propose`, and `new-project`;
+# unless ask_owner is off, the guard asks the owner to approve each one every time.
+CHIEF_COMMANDS = ("projects", "status", "show", "digest", "propose", "new-project", "andon")
+CHIEF_APPROVALS = {
+    "propose": "The chief bot hands one draft, identified by its SHA-256, to a project bot. Approve only if you asked it to hand this work over.",
+    "new-project": "The chief bot asks the bootstrap bot to set up a new project for this repository. Approve only if you asked for that project.",
+}
 ARG = r"[A-Za-z0-9_./:#=@~,+-]+"
 
 MIGRATE_V1 = (
@@ -423,11 +426,8 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
                 "The chief bot writes a draft proposal. Approve only if you asked it to draft this; read it first.",
                 tool_name, args, "chief",
             )
-        if tool_name == "terminal" and len(words) > 1 and words[1] in CHIEF_NEEDS_APPROVAL:
-            return approve(
-                "The chief bot hands one draft, identified by its SHA-256, to a project bot. Approve only if you asked it to hand this work over.",
-                tool_name, args, "chief",
-            )
+        if tool_name == "terminal" and len(words) > 1 and words[1] in CHIEF_APPROVALS:
+            return approve(CHIEF_APPROVALS[words[1]], tool_name, args, "chief")
     if tainted and not read_only:
         return approve(f"This turn read untrusted content. Approve {tool_name} only if you asked for it.", tool_name, args, "taint")
     return None

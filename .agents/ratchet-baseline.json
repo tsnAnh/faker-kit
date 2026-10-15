@@ -30,9 +30,9 @@
     }
   },
   "python-type-baseline": {
-    "total": 58,
+    "total": 56,
     "perFile": {
-      "hermes/bin/team_kit_admin.py": 17,
+      "hermes/bin/team_kit_admin.py": 15,
       "hermes/bin/team_kit_chief.py": 2,
       "hermes/bin/team_kit_gh.py": 24,
       "hermes/lib/install_config.py": 2,

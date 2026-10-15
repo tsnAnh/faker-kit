@@ -53,7 +53,11 @@ def test_installs_the_module_and_the_bootstrap_bot_pinned_to_the_commit(kit_sour
         assert str(kit / "hermes" / "bin") in wrapper and "TEAM_KIT_HOME" in wrapper
     log = hermes_calls(root)
     assert ["-p", "default", "gateway", "install"] in log
-    assert not any(c[2:4] == ["cron", "create"] for c in log), "the bootstrap bot has no jobs"
+    created = [c for c in log if c[2:4] == ["cron", "create"]]
+    assert [(c[1], c[c.index("--name") + 1]) for c in created] == [("ong-xay", "team-kit-inbox")], "the bootstrap bot's one job"
+    assert "--paused" not in created[0] and "--no-agent" in created[0], "it needs no token, so it starts active, and runs no model"
+    inbox = (home / "scripts" / "team-kit-jobs" / "team-kit-inbox.sh").read_text()
+    assert f"{root / 'bin' / 'team-kit-admin'} inbox" in inbox
     assert not (root / "config.yaml").exists(), "the host profile's config is never touched"
 
 
@@ -188,7 +192,7 @@ def test_a_python_without_pyyaml_runs_every_command_with_the_vendored_copy(kit_s
         assert f"py='{bare}'" in (root / "bin" / f"team-kit-{name}").read_text()
     command = subprocess.run([str(root / "bin" / "team-kit-admin"), "status"], env=env, capture_output=True, text=True)
     assert command.returncode == 0, command.stderr
-    assert {"bot": "ong-xay", "role": "bootstrap"} in json.loads(command.stdout)["bots"], "it read bots.yaml and guard.yaml"
+    assert {"bot": "ong-xay", "role": "bootstrap", "project_requests": []} in json.loads(command.stdout)["bots"], "it read bots.yaml and guard.yaml"
 
 
 def test_a_wrapper_whose_python_was_removed_falls_back_to_python3_on_path(kit_source, machine):

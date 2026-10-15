@@ -7,8 +7,9 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 from conftest import SHOP, executable, hermes_calls
-from team_kit_chief import Refused, main, wake_tick
+from team_kit_chief import Refused, main, wake_job
 
 NOW = 1_800_000_000.0
 CRM = "acme/crm"
@@ -53,13 +54,14 @@ def chief_home(team_kit_home):
 
 
 class Waker:
-    """Stands in for waking a project bot's tick; wake_tick itself is tested against the Hermes double."""
+    """Stands in for waking a bot's job; wake_job itself is tested against the Hermes double."""
 
     def __init__(self, ok=True):
-        self.ok, self.bots = ok, []
+        self.ok, self.bots, self.jobs = ok, [], []
 
-    def __call__(self, bot):
+    def __call__(self, bot, job):
         self.bots.append(bot)
+        self.jobs.append(job)
         return self.ok
 
 
@@ -155,7 +157,7 @@ def test_propose_writes_one_proposal_for_the_target_project_bot_only(chief_home,
 def test_propose_wakes_only_the_target_bots_tick_so_the_notice_arrives_now(chief_home, capsys):
     waker = Waker()
     assert propose(FakeGh(), draft(chief_home), wake=waker) == 0
-    assert waker.bots == ["meo-beo"]
+    assert (waker.bots, waker.jobs) == (["meo-beo"], ["team-kit-tick"])
     delivery = json.loads(capsys.readouterr().out)["delivery"]
     assert "within about a minute" in delivery and 'the owner says "brief it"' in delivery
 
@@ -181,7 +183,7 @@ def test_a_refused_proposal_wakes_nobody(chief_home, capsys):
 
 
 @pytest.mark.parametrize(("enabled", "woken"), [(True, True), (False, False)])
-def test_wake_tick_queues_the_bots_tick_through_the_hermes_cli(tmp_path, monkeypatch, enabled, woken):
+def test_wake_job_queues_the_bots_tick_through_the_hermes_cli(tmp_path, monkeypatch, enabled, woken):
     root = tmp_path / ".hermes"
     profile = root / "profiles" / "meo-beo"
     profile.mkdir(parents=True)
@@ -194,7 +196,7 @@ def test_wake_tick_queues_the_bots_tick_through_the_hermes_cli(tmp_path, monkeyp
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("HERMES_HOME", str(root / "profiles" / "chanh-van"))
     monkeypatch.setenv("GH_TOKEN", "chief-token")
-    assert wake_tick("meo-beo") is woken
+    assert wake_job("meo-beo", "team-kit-tick") is woken
     deadline = time.monotonic() + 10
     runs = []
     while time.monotonic() < deadline:
@@ -205,9 +207,9 @@ def test_wake_tick_queues_the_bots_tick_through_the_hermes_cli(tmp_path, monkeyp
     assert runs == ([["-p", "meo-beo", "cron", "run", "job-1"]] if woken else [])
 
 
-def test_wake_tick_is_false_when_hermes_is_missing(tmp_path, monkeypatch):
+def test_wake_job_is_false_when_hermes_is_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
-    assert wake_tick("meo-beo") is False
+    assert wake_job("meo-beo", "team-kit-tick") is False
 
 
 def test_propose_accepts_the_tilde_form_of_the_drafts_path(chief_home, capsys, monkeypatch):
@@ -328,3 +330,61 @@ def test_a_github_error_reads_as_one_line_for_that_project(chief_home, capsys):
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == f"crm (sep-crm, {CRM}): unreadable: gh issue failed: HTTP 502"
     assert lines[1].startswith("shop (meo-beo")
+
+
+def new_project(*args, wake=None):
+    return run(FakeGh(), "new-project", *args, wake=wake)
+
+
+def test_new_project_hands_the_bootstrap_bot_a_request_and_wakes_its_inbox(chief_home, capsys):
+    waker = Waker()
+    assert new_project("--repo", "acme/blog", "--project", "blog", "--bot", "blog", wake=waker) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert (waker.bots, waker.jobs) == (["ong-xay"], ["team-kit-inbox"])
+    assert "within about a minute" in out["delivery"] and 'the owner says "set it up" in ong-xay' in out["delivery"]
+    [path] = (chief_home / "project-requests" / "ong-xay").glob("*.json")
+    record = json.loads(path.read_text())
+    assert {k: record[k] for k in ("id", "bootstrap", "repo", "project", "bot", "from")} == {
+        "id": path.stem, "bootstrap": "ong-xay", "repo": "acme/blog", "project": "blog", "bot": "blog", "from": "chanh-van"}
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert record["expires_at"] - record["created_at"] == 7 * 24 * 3600
+
+
+def test_with_ask_owner_off_new_project_says_the_bootstrap_bot_sets_it_up_by_itself(chief_home, capsys):
+    guard = chief_home / "guard.yaml"
+    guard.write_text(guard.read_text().replace("\nask_owner: true\n", "\nask_owner: false\n"))
+    assert new_project("--repo", "acme/blog", "--project", "blog", "--bot", "blog") == 0
+    assert "ong-xay sets it up by itself" in json.loads(capsys.readouterr().out)["delivery"]
+
+
+@pytest.mark.parametrize(("args", "why"), [
+    (("--repo", "ACME/Shop", "--project", "shop2", "--bot", "shop2"), "already project shop"),
+    (("--repo", "acme/blog", "--project", "shop", "--bot", "blog"), "project shop already exists"),
+    (("--repo", "acme/blog", "--project", "blog", "--bot", "meo-beo"), "bot meo-beo already exists"),
+    (("--repo", "acme/blog", "--project", "blog", "--bot", "default"), "not default"),
+    (("--repo", "acme/blog;rm", "--project", "blog", "--bot", "blog"), "must be OWNER/REPO"),
+    (("--repo", "acme/blog", "--project", "Blog", "--bot", "blog"), "lowercase"),
+])
+def test_new_project_refuses_what_exists_or_is_malformed_and_wakes_nobody(chief_home, capsys, args, why):
+    waker = Waker()
+    assert new_project(*args, wake=waker) == 1
+    assert why in capsys.readouterr().err
+    assert waker.bots == [] and not (chief_home / "project-requests").exists()
+
+
+def test_a_second_request_for_the_same_repository_is_refused(chief_home, capsys):
+    assert new_project("--repo", "acme/blog", "--project", "blog", "--bot", "blog") == 0
+    assert new_project("--repo", "Acme/Blog", "--project", "blog2", "--bot", "blog2") == 1
+    assert "already names repo acme/blog" in capsys.readouterr().err
+    assert new_project("--repo", "acme/notes", "--project", "blog", "--bot", "notes") == 1
+    assert "already names project blog" in capsys.readouterr().err
+    assert new_project("--repo", "acme/notes", "--project", "notes", "--bot", "blog") == 1
+    assert "already names bot blog" in capsys.readouterr().err
+
+
+def test_without_a_bootstrap_bot_new_project_names_the_one_command_the_owner_runs(chief_home, capsys):
+    bots = yaml.safe_load((chief_home / "bots.yaml").read_text())
+    del bots["bots"]["ong-xay"]
+    (chief_home / "bots.yaml").write_text(yaml.safe_dump(bots))
+    assert new_project("--repo", "acme/blog", "--project", "blog", "--bot", "blog") == 1
+    assert "hermes/install.sh --bootstrap-bot" in capsys.readouterr().err

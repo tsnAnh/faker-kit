@@ -8,13 +8,17 @@
   propose       --project P --file F --sha256 H
                                             copy one draft into that project bot's inbox; H must be F's digest now,
                                             then start that bot's team-kit-tick so the notice arrives in about a minute
+  new-project   --repo R --project P --bot B
+                                            ask the bootstrap bot to set up repository R as project P with bot B,
+                                            then start its team-kit-inbox job so the request arrives in about a minute
   andon                                     the machine's and every project's andon cord
 
 The chief of staff routes the owner's intent: it says which project bot gets which part, and
-can hand one proposal to that bot. The proposal is a .md file of at most 20,000 bytes that the chief
+can hand one proposal to that bot. For a repository no project holds yet, it hands the bootstrap bot a
+project request: the repository and two names, nothing else. The proposal is a .md file of at most 20,000 bytes that the chief
 wrote under ~/.hermes/team-kit/drafts/<chief bot>/ (symlinks are refused). Each owner approval of
 `propose` names the file's SHA-256, so it covers exactly that content. It never opens an issue,
-launches, or writes anywhere else.
+launches, sets anything up itself, or writes anywhere else.
 Its GitHub token needs read access to every project's repository and nothing more.
 
 Only what trusted logins wrote reaches the chief: unit titles from issues a trusted author
@@ -47,7 +51,7 @@ from install_config import cron_jobs
 from team_kit_andon import Andon
 from team_kit_env import EnvFileError, use_bot_env
 from team_kit_guard.policy import Bot, Policy, PolicyError, load_policy
-from team_kit_proposals import ProposalError, file_digest, write_proposal
+from team_kit_proposals import ProposalError, file_digest, write_project_request, write_proposal
 
 REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
@@ -58,8 +62,9 @@ MAX_FILE = 60_000
 STATES = (("agent:running", "running"), ("agent:verifying", "verifying"), ("agent:needs-human", "gate"), ("agent:review", "merge"))
 
 Runner = Callable[..., str]
-Waker = Callable[[str], bool]
+Waker = Callable[[str, str], bool]
 TICK_JOB = "team-kit-tick"
+INBOX_JOB = "team-kit-inbox"
 WAKE_TIMEOUT_SECONDS = 30
 # All the detached tick inherits: no token, no session, and no HERMES_HOME of the chief.
 WAKE_ENV = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR")
@@ -76,15 +81,16 @@ def run_gh(args: list[str], input: str | None = None) -> str:
     return done.stdout
 
 
-def wake_tick(bot: str) -> bool:
-    """Start the bot's tick now, detached. False when its tick is missing or paused, or Hermes cannot start.
+def wake_job(bot: str, name: str) -> bool:
+    """Start one of the bot's jobs now, detached: a project bot's tick, or the bootstrap bot's inbox. False when the job is
+    missing or paused, or Hermes cannot start.
 
     `hermes cron run` runs the job inline, and a tick that launches units can take minutes, so the chief does not wait
     for it. The run gets no secret from the chief: Hermes loads the target profile's own .env.
     """
     try:
         listed = subprocess.run(["hermes", "-p", bot, "cron", "list", "--all"], capture_output=True, text=True, timeout=WAKE_TIMEOUT_SECONDS)
-        job = cron_jobs(listed.stdout).get(TICK_JOB) if listed.returncode == 0 else None
+        job = cron_jobs(listed.stdout).get(name) if listed.returncode == 0 else None
         if not job or not job["enabled"]:
             return False
         env = {k: v for k, v in os.environ.items() if k in WAKE_ENV}
@@ -110,7 +116,7 @@ def timestamp(value: str | None) -> float | None:
 
 
 class Chief:
-    def __init__(self, policy: Policy, run: Runner, now: Callable[[], float] = time.time, wake: Waker = wake_tick):  # noqa: ANN204
+    def __init__(self, policy: Policy, run: Runner, now: Callable[[], float] = time.time, wake: Waker = wake_job):  # noqa: ANN204
         self.policy, self.run, self.now, self.wake = policy, run, now, wake
         self.andon = Andon(policy.home, now)
 
@@ -198,11 +204,36 @@ class Chief:
             raise Refused(str(err)) from None
         then = (f"{bot.name} briefs and dispatches it by itself (ask_owner is false)" if not self.policy.ask_owner
                 else f"the owner says \"brief it\" in {bot.name}'s Bot Chat")
-        if self.wake(bot.name):
+        if self.wake(bot.name, TICK_JOB):
             out["delivery"] = f"{bot.name}'s {TICK_JOB} started now; the notice reaches its Bot Chat within about a minute; then {then}"
         else:
             out["delivery"] = (f"{bot.name}'s {TICK_JOB} could not be started now (paused or missing); the notice arrives at its next tick; then {then}. "
                                f"If the bot is not active yet: team-kit-admin activate --bot {bot.name}")
+        return out
+
+    def new_project(self, repo: str, slug: str, name: str, from_bot: str) -> dict:
+        """Hand the bootstrap bot a request to set up a repository no project holds yet. The chief sets nothing up."""
+        bootstrap = next((b for b in sorted(self.policy.bots.values(), key=lambda b: b.name) if b.role == "bootstrap"), None)
+        if bootstrap is None:
+            raise Refused("this machine has no bootstrap bot to set the project up; the owner runs hermes/install.sh --bootstrap-bot <name> once")
+        taken = next((b for b in self.project_bots() if str(b.repo).lower() == repo.lower()), None)
+        if taken is not None:
+            raise Refused(f"{repo} is already project {taken.project} ({taken.name}); hand work to it with propose")
+        if slug in self.policy.projects():
+            raise Refused(f"project {slug} already exists; pick another --project")
+        if name in self.policy.bots:
+            raise Refused(f"bot {name} already exists; pick another --bot")
+        try:
+            out = write_project_request(self.policy.home, bootstrap.name, repo, slug, name, from_bot, self.now())
+        except ProposalError as err:
+            raise Refused(str(err)) from None
+        then = (f"{bootstrap.name} sets it up by itself (ask_owner is false)" if not self.policy.ask_owner
+                else f"the owner says \"set it up\" in {bootstrap.name}'s Bot Chat")
+        if self.wake(bootstrap.name, INBOX_JOB):
+            out["delivery"] = f"{bootstrap.name}'s {INBOX_JOB} started now; the request reaches its Bot Chat within about a minute; then {then}"
+        else:
+            out["delivery"] = (f"{bootstrap.name}'s {INBOX_JOB} could not be started now (paused or missing); the request waits until it runs; "
+                               f"then {then}. To add the job: hermes/install.sh again")
         return out
 
     def digest(self, path: str, from_bot: str) -> dict:
@@ -231,6 +262,10 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--project", required=True)
     cmd.add_argument("--file", required=True)
     cmd.add_argument("--sha256", required=True)
+    cmd = sub.add_parser("new-project")
+    cmd.add_argument("--repo", required=True)
+    cmd.add_argument("--project", required=True)
+    cmd.add_argument("--bot", required=True)
     return top
 
 
@@ -242,7 +277,7 @@ def bot_env(policy: Policy, me: Bot) -> None:
 
 
 def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = None, now: Callable[[], float] = time.time,
-         wake: Waker = wake_tick) -> int:
+         wake: Waker = wake_job) -> int:
     args = parser().parse_args(argv)
     try:
         policy = load_policy()
@@ -259,6 +294,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
             return 0
         if args.command == "propose":
             out = chief.propose(args.project, args.file, args.sha256, me.name)
+        elif args.command == "new-project":
+            out = chief.new_project(args.repo, args.project, args.bot, me.name)
         elif args.command == "digest":
             out = chief.digest(args.file, me.name)
         else:

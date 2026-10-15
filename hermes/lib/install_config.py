@@ -127,13 +127,13 @@ def cron_jobs(text: str) -> dict[str, dict]:
 
 
 JOB_NAME = re.compile(r"\Ateam-kit-[a-z][a-z0-9-]*\Z")
-JOB_COMMAND = re.compile(r"\Ateam-kit-gh ([a-z][a-z-]*)\Z")
+JOB_COMMAND = re.compile(r"\A(team-kit-(?:gh|admin)) ([a-z][a-z-]*)\Z")
 JOB_OUTPUTS = ("print", "silent")
 
 
 def cron_spec(source: Path, bot: str) -> list[dict]:
     """The jobs in a cron spec file: each `##` heading is a job, with Schedule, Deliver, Command, and Output.
-    A Command is one team-kit-gh subcommand with no arguments, so a script can run it without quoting."""
+    A Command is one team-kit-gh or team-kit-admin subcommand with no arguments, so a script can run it without quoting."""
     out = []
     for block in re.split(r"^## ", source.read_text(), flags=re.M)[1:]:
         name = block.split("\n", 1)[0].strip()
@@ -148,9 +148,9 @@ def cron_spec(source: Path, bot: str) -> list[dict]:
 
         command = JOB_COMMAND.match(field("Command"))
         if command is None:
-            raise InstallError(f"cron Command for {name} must be `team-kit-gh <subcommand>`")
+            raise InstallError(f"cron Command for {name} must be `team-kit-gh <subcommand>` or `team-kit-admin <subcommand>`")
         output = field("Output")
         if output not in JOB_OUTPUTS:
             raise InstallError(f"cron Output for {name} must be one of {', '.join(JOB_OUTPUTS)}")
-        out.append({"name": name, "schedule": field("Schedule"), "deliver": field("Deliver"), "subcommand": command.group(1), "output": output})
+        out.append({"name": name, "schedule": field("Schedule"), "deliver": field("Deliver"), "program": command.group(1), "subcommand": command.group(2), "output": output})
     return out
