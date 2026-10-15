@@ -1,17 +1,16 @@
 {
   "python-noqa": {
-    "total": 209,
+    "total": 202,
     "perFile": {
       "hermes/bin/team_kit_admin.py": 15,
-      "hermes/bin/team_kit_chief.py": 5,
-      "hermes/bin/team_kit_gh.py": 76,
+      "hermes/bin/team_kit_chief.py": 4,
+      "hermes/bin/team_kit_gh.py": 75,
       "hermes/bin/team_kit_slack.py": 2,
       "hermes/e2e/run_dispatch_e2e.py": 4,
       "hermes/lib/install_config.py": 7,
       "hermes/lib/team_kit_andon.py": 1,
       "hermes/lib/team_kit_cloud.py": 5,
       "hermes/lib/team_kit_incident_sources.py": 10,
-      "hermes/lib/team_kit_proposals.py": 4,
       "hermes/lib/team_kit_risk.py": 3,
       "hermes/lib/team_kit_slack_relay.py": 8,
       "hermes/plugin/team_kit_guard/__init__.py": 12,
@@ -19,7 +18,6 @@
       "hermes/tests/conftest.py": 3,
       "hermes/tests/fake_hermes.py": 1,
       "hermes/tests/test_admin.py": 3,
-      "hermes/tests/test_chief.py": 1,
       "hermes/tests/test_contracts.py": 1,
       "hermes/tests/test_gh.py": 11,
       "hermes/tests/test_launch.py": 5,

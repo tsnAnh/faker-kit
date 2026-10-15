@@ -4,20 +4,14 @@
   projects                                  every project: its bot, its repository, and any andon cord
   status                                    one line per project: in flight, waiting on the owner, done today
   show          --project P --path F        a file from a project's default branch, such as AGENTS.md
-  digest        --file F                    the SHA-256 of a draft in this bot's drafts folder
-  propose       --project P --file F --sha256 H
-                                            copy one draft into that project bot's inbox; H must be F's digest now,
-                                            then start that bot's team-kit-tick so the notice arrives in about a minute
   new-project   --repo R --project P --bot B
                                             ask the bootstrap bot to set up repository R as project P with bot B,
                                             then start its team-kit-inbox job so the request arrives in about a minute
   andon                                     the machine's and every project's andon cord
 
-The chief of staff routes the owner's intent: it says which project bot gets which part, and
-can hand one proposal to that bot. For a repository no project holds yet, it hands the bootstrap bot a
-project request: the repository and two names, nothing else. The proposal is a .md file of at most 20,000 bytes that the chief
-wrote under ~/.hermes/team-kit/drafts/<chief bot>/ (symlinks are refused). Each owner approval of
-`propose` names the file's SHA-256, so it covers exactly that content. It never opens an issue,
+The chief of staff routes the owner's intent: it says which project bot gets which part and hands it
+over with Hermes Bot Mode's message_agent, not with this command. For a repository no project holds yet, it hands
+the bootstrap bot a project request: the repository and two names, nothing else. It never opens an issue,
 launches, sets anything up itself, or writes anywhere else.
 Its GitHub token needs read access to every project's repository and nothing more.
 
@@ -51,7 +45,7 @@ from install_config import cron_jobs
 from team_kit_andon import Andon
 from team_kit_env import EnvFileError, use_bot_env
 from team_kit_guard.policy import Bot, Policy, PolicyError, load_policy
-from team_kit_proposals import ProposalError, file_digest, write_project_request, write_proposal
+from team_kit_requests import RequestError, write_project_request
 
 REPO_PATH = re.compile(r"\A(?!.*(?:^|/)\.\.?(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
 TASK_LABEL = "agent-task"
@@ -196,21 +190,6 @@ class Chief:
             raise Refused(f"{path} is not a readable file in {bot.repo}") from None
         return text if len(text) <= MAX_FILE else text[:MAX_FILE] + f"\n[cut at {MAX_FILE} characters]\n"
 
-    def propose(self, slug: str, path: str, sha256: str, from_bot: str) -> dict:
-        bot = self.project(slug)
-        try:
-            out = write_proposal(self.policy.home, bot.name, slug, bot.repo or "", path, from_bot, self.now(), sha256)
-        except ProposalError as err:
-            raise Refused(str(err)) from None
-        then = (f"{bot.name} briefs and dispatches it by itself (ask_owner is false)" if not self.policy.ask_owner
-                else f"the owner says \"brief it\" in {bot.name}'s Bot Chat")
-        if self.wake(bot.name, TICK_JOB):
-            out["delivery"] = f"{bot.name}'s {TICK_JOB} started now; the notice reaches its Bot Chat within about a minute; then {then}"
-        else:
-            out["delivery"] = (f"{bot.name}'s {TICK_JOB} could not be started now (paused or missing); the notice arrives at its next tick; then {then}. "
-                               f"If the bot is not active yet: team-kit-admin activate --bot {bot.name}")
-        return out
-
     def new_project(self, repo: str, slug: str, name: str, from_bot: str) -> dict:
         """Hand the bootstrap bot a request to set up a repository no project holds yet. The chief sets nothing up."""
         bootstrap = next((b for b in sorted(self.policy.bots.values(), key=lambda b: b.name) if b.role == "bootstrap"), None)
@@ -218,14 +197,14 @@ class Chief:
             raise Refused("this machine has no bootstrap bot to set the project up; the owner runs hermes/install.sh --bootstrap-bot <name> once")
         taken = next((b for b in self.project_bots() if str(b.repo).lower() == repo.lower()), None)
         if taken is not None:
-            raise Refused(f"{repo} is already project {taken.project} ({taken.name}); hand work to it with propose")
+            raise Refused(f"{repo} is already project {taken.project} ({taken.name}); message {taken.name} the work instead")
         if slug in self.policy.projects():
             raise Refused(f"project {slug} already exists; pick another --project")
         if name in self.policy.bots:
             raise Refused(f"bot {name} already exists; pick another --bot")
         try:
             out = write_project_request(self.policy.home, bootstrap.name, repo, slug, name, from_bot, self.now())
-        except ProposalError as err:
+        except RequestError as err:
             raise Refused(str(err)) from None
         then = (f"{bootstrap.name} sets it up by itself (ask_owner is false)" if not self.policy.ask_owner
                 else f"the owner says \"set it up\" in {bootstrap.name}'s Bot Chat")
@@ -235,12 +214,6 @@ class Chief:
             out["delivery"] = (f"{bootstrap.name}'s {INBOX_JOB} could not be started now (paused or missing); the request waits until it runs; "
                                f"then {then}. To add the job: hermes/install.sh again")
         return out
-
-    def digest(self, path: str, from_bot: str) -> dict:
-        try:
-            return {"file": os.path.basename(path), "sha256": file_digest(self.policy.home, from_bot, path)}  # noqa: PTH119
-        except ProposalError as err:
-            raise Refused(str(err)) from None
 
     def andon_state(self) -> dict:
         machine = self.andon.machine()
@@ -256,12 +229,6 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("show")
     cmd.add_argument("--project", required=True)
     cmd.add_argument("--path", required=True)
-    cmd = sub.add_parser("digest")
-    cmd.add_argument("--file", required=True)
-    cmd = sub.add_parser("propose")
-    cmd.add_argument("--project", required=True)
-    cmd.add_argument("--file", required=True)
-    cmd.add_argument("--sha256", required=True)
     cmd = sub.add_parser("new-project")
     cmd.add_argument("--repo", required=True)
     cmd.add_argument("--project", required=True)
@@ -292,14 +259,9 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
         if args.command == "show":
             print(chief.show(args.project, args.path), end="")
             return 0
-        if args.command == "propose":
-            out = chief.propose(args.project, args.file, args.sha256, me.name)
-        elif args.command == "new-project":
-            out = chief.new_project(args.repo, args.project, args.bot, me.name)
-        elif args.command == "digest":
-            out = chief.digest(args.file, me.name)
-        else:
-            out = chief.projects() if args.command == "projects" else chief.andon_state()
+        commands = {"new-project": lambda: chief.new_project(args.repo, args.project, args.bot, me.name),
+                    "projects": chief.projects, "andon": chief.andon_state}
+        out = commands[args.command]()
     except (Refused, PolicyError) as err:
         print(f"team-kit-chief: refused: {err}", file=sys.stderr)
         return 1

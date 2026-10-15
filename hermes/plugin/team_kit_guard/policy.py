@@ -44,7 +44,7 @@ ROLE_TOOLS = {
     "project": ("terminal", "read_file", "search_files", "write_file", "patch", "clarify",
                 "skills_list", "skill_view", "todo_*", "session_search", "message_agent"),
     "bootstrap": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search", "message_agent"),
-    "chief": ("terminal", "read_file", "write_file", "clarify", "skills_list", "skill_view", "todo_*", "session_search", "message_agent"),
+    "chief": ("terminal", "clarify", "skills_list", "skill_view", "todo_*", "session_search", "message_agent"),
 }
 # Each role's one command.
 ROLE_COMMAND = {"project": "team-kit-gh", "bootstrap": "team-kit-admin", "chief": "team-kit-chief"}
@@ -62,14 +62,13 @@ REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SLACK_CHANNEL_ID = re.compile(r"\A[CG][A-Z0-9]{2,}\Z")
 SLACK_CHANNEL_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,79}\Z")
 
-PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "chief-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "code", "kit-check")  # noqa: E501
+PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "code", "kit-check")  # noqa: E501
 BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon", "setup-request")
 BOOTSTRAP_READ_ONLY = ("status",)
-# The chief of staff reads every project. Its writes are a draft under drafts/<bot>/, `propose`, and `new-project`;
-# unless ask_owner is off, the guard asks the owner to approve each one every time.
-CHIEF_COMMANDS = ("projects", "status", "show", "digest", "propose", "new-project", "andon")
+# The chief of staff reads every project and hands work over by message. Its one write is `new-project`;
+# unless ask_owner is off, the guard asks the owner to approve it every time.
+CHIEF_COMMANDS = ("projects", "status", "show", "new-project", "andon")
 CHIEF_APPROVALS = {
-    "propose": "The chief bot hands one draft, identified by its SHA-256, to a project bot. Approve only if you asked it to hand this work over.",
     "new-project": "The chief bot asks the bootstrap bot to set up a new project for this repository. Approve only if you asked for that project.",
 }
 ARG = r"[A-Za-z0-9_./:#=@~,+-]+"
@@ -152,15 +151,10 @@ class Bot:
         return re.compile(rf"(~/\.hermes/bin/)?(?:{prefixes}){rest} ({'|'.join(commands)})( {ARG})*")
 
     def write_paths(self, home: Path) -> tuple[str, ...]:
-        if self.role == "chief":
-            return (str(home / "drafts" / self.name / "*.md"),)
         return (str(home / "briefs" / self.name / "*"),) if self.role == "project" else ()
 
     def read_paths(self, home: Path) -> tuple[str, ...]:
-        """Its own briefs (a chief: its own drafts) and the pinned kit (templates, skills). Never secrets, configs, or other bots' files."""
-        if self.role == "chief":
-            drafts = str(home / "drafts" / self.name)
-            return (drafts, drafts + "/*.md")
+        """A project bot's own briefs and the pinned kit (templates, skills). Never secrets, configs, or other bots' files."""
         if self.role != "project":
             return ()
         briefs, kit = str(home / "briefs" / self.name), str(home / "kit")
@@ -413,7 +407,7 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
         target = os.path.abspath(os.path.expanduser(str(raw))) if raw else ""  # noqa: PTH100, PTH111
         allowed = bot.read_paths(policy.home)
         if not target or not any(fnmatch.fnmatchcase(target, p) for p in allowed):
-            return block(f"{bot.role} bot {profile} may only read its {'drafts' if bot.role == 'chief' else 'briefs and the kit'}")
+            return block(f"{bot.role} bot {profile} may only read its briefs and the kit")
     if tool_name in WRITE_TOOLS:
         target = os.path.abspath(os.path.expanduser(str(args.get(WRITE_TOOLS[tool_name], ""))))  # noqa: PTH100, PTH111
         allowed = bot.write_paths(policy.home)
@@ -432,11 +426,6 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
             )
     if bot.role == "chief" and not read_only:
         words = command.split()
-        if tool_name == "write_file":
-            return approve(
-                "The chief bot writes a draft proposal. Approve only if you asked it to draft this; read it first.",
-                tool_name, args, "chief",
-            )
         if tool_name == "terminal" and len(words) > 1 and words[1] in CHIEF_APPROVALS:
             return approve(CHIEF_APPROVALS[words[1]], tool_name, args, "chief")
     if tainted and not read_only:

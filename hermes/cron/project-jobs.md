@@ -17,7 +17,7 @@ Launches queued units whose dependencies merged and that fit under the limits, s
 
 ## team-kit-status
 
-Schedule: `0 9,13,17 * * *`
+Schedule: `0 9 * * 1`
 Deliver: `bot-chat:{bot}`
 Command: `team-kit-gh status`
 Output: `print`

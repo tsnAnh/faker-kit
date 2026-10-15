@@ -19,7 +19,7 @@ If the shell does not find `team-kit-admin`, run it as `~/.hermes/bin/team-kit-a
 | `team-kit-admin setup-repo --project P --backend claude\|codex [--codex-env E]` | Starts one cloud session that opens the project's setup pull request |
 | `team-kit-admin protect --project P --check NAME [--check NAME ...]` | Requires those checks on the project's default branch, admins included |
 | `team-kit-admin activate --bot B` | Resumes B's jobs. Refuses only if `gh` is not signed in on this machine and B has no token of its own |
-| `team-kit-admin add-chief --bot B [--model M] [--claude-subscription]` | Creates or refreshes the chief of staff: a bot that reads across projects and can, with owner approval, propose one handoff to a project bot |
+| `team-kit-admin add-chief --bot B [--model M] [--claude-subscription]` | Creates or refreshes the chief of staff: a bot that reads across projects and hands work to project bots by message |
 | `team-kit-admin setup-request --id <id>` | Sets up the project a chief project request names: `add-project` with the settings of this machine's first project bot, then `vendor`. See Chief project requests |
 | `team-kit-admin andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows the machine's andon cord. Only when the owner asks |
 
@@ -112,7 +112,7 @@ When a bot or `team-kit-gh kit-check` says a kit commit differs from `kit_ref`, 
 
 ## A chief of staff
 
-When the owner wants one bot to route work across projects, or one line per project on what is going on, run `team-kit-admin add-chief --bot <name>`. It creates a bot whose only command, `team-kit-chief`, reads every project, writes only approved drafts in its own drafts folder, and hands them to project bots with `propose`; otherwise it writes the message the owner sends each project bot. It has no jobs. Then the owner:
+When the owner wants one bot to route work across projects, or one line per project on what is going on, run `team-kit-admin add-chief --bot <name>`. It creates a bot whose only command, `team-kit-chief`, reads every project and hands work to project bots with `message_agent`; for a project on another machine it writes the message the owner sends. It has no jobs. Then the owner:
 
 1. adds the bot in Hermes Desktop Bot Mode. It reads GitHub with this machine's shared `gh` login, like every bot, so it needs no token.
 

@@ -43,7 +43,7 @@ slack:
   mirror_notices: false
 
 # Whether the guard and Hermes ask the owner in Desktop before a bot acts: every bootstrap bot
-# change, each chief draft and handoff, and any tool after a turn read untrusted content.
+# change, each chief new-project request, and any tool after a turn read untrusted content.
 # false stops every question. Deny rules, each role's tool and path limits, and the wrapping of
 # untrusted output still apply, but a prompt injection in an issue, a web page, or a teammate's
 # proposal can then make a bot act within those limits without you seeing it first.
@@ -54,7 +54,6 @@ ask_owner: true
 # Tool results from these are wrapped in <untrusted source=...> and taint the turn.
 # After that, every tool not in read_only_tools needs the owner's approval in Desktop.
 # team-kit-gh report-status is not here: it prints only the parsed status line.
-# team-kit-gh chief-proposals is: it prints a chief proposal's body, which is text the owner has not read.
 untrusted_readers:
   - tool: web_*
   - tool: browser_*
@@ -63,8 +62,6 @@ untrusted_readers:
     command: "team-kit-gh teammate-proposals*"
   - tool: terminal
     command: "team-kit-gh read *"
-  - tool: terminal
-    command: "team-kit-gh chief-proposals*"
 
 # Tool calls blocked outright, for every bot. A plain string is a glob over each simple
 # command in a terminal call. {tool, command} matches other tools.

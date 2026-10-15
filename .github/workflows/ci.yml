@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Python lint, type, and test tools
-        run: pip install ruff mypy types-PyYAML pytest pyyaml
+        run: pip install ruff mypy types-PyYAML pytest pytest-xdist pyyaml
       - name: Single check command
         run: scripts/check.sh
 
