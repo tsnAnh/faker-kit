@@ -833,7 +833,7 @@ def test_the_guard_takes_linear_time_on_one_long_word():
     def fastest(repeats):
         command = "git " + "alias." * repeats
         times = []
-        for _ in range(5):
+        for _ in range(9):
             started = time.perf_counter()
             decide(policy, "meo-beo", "terminal", {"command": command}, False)
             times.append(time.perf_counter() - started)

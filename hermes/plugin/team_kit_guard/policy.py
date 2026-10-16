@@ -13,6 +13,7 @@ part of the machine reads the same policy.
 from __future__ import annotations
 
 import fnmatch
+import functools
 import hashlib
 import html
 import json
@@ -448,8 +449,13 @@ def scanned_text(tool_name: str, args: dict) -> list[str]:
 QUOTES = "'\""
 
 
-def run_end(text: str, start: int, stops: str) -> int:
-    found = re.compile("[" + re.escape(stops) + "]").search(text, start)
+@functools.cache
+def any_of(chars: str) -> re.Pattern[str]:
+    return re.compile("[" + re.escape(chars) + "]")
+
+
+def run_end(text: str, start: int, stops: re.Pattern[str]) -> int:
+    found = stops.search(text, start)
     return found.start() if found else len(text)
 
 
@@ -457,6 +463,7 @@ def shell_split(text: str, whitespace: str, punctuation: str = "", commenters: s
     """The tokens of shlex.shlex(text, posix=True, punctuation_chars=punctuation) with whitespace_split on, and the same
     ValueError on an unclosed quote or a trailing escape. shlex adds a token's characters one at a time to a string
     attribute, which copies the token each time and takes quadratic time on one long word; this reads runs at once."""
+    word_end = any_of(whitespace + punctuation + commenters + QUOTES + "\\")
     tokens: list[str] = []
     token: list[str] = []
     quoted, state, escaped, i = False, " ", "a", 0
@@ -472,7 +479,7 @@ def shell_split(text: str, whitespace: str, punctuation: str = "", commenters: s
             elif c == "\\" and state == '"':
                 escaped, state = state, "\\"
             else:
-                stop = run_end(text, i, state + ("\\" if state == '"' else ""))
+                stop = run_end(text, i, any_of(state + ("\\" if state == '"' else "")))
                 token.append(text[i - 1:stop])
                 i = stop
             continue
@@ -490,7 +497,7 @@ def shell_split(text: str, whitespace: str, punctuation: str = "", commenters: s
         if c in whitespace:
             state, emit = " ", True
         elif c in commenters:
-            i = run_end(text, i, "\n") + 1
+            i = run_end(text, i, any_of("\n")) + 1
             state, emit = " ", True
         elif state == "c" and c in punctuation:
             token.append(c)
@@ -505,7 +512,7 @@ def shell_split(text: str, whitespace: str, punctuation: str = "", commenters: s
             token.append(c)
             state = "c"
         else:
-            stop = run_end(text, i, whitespace + punctuation + commenters + QUOTES + "\\")
+            stop = run_end(text, i, word_end)
             token.append(text[i - 1:stop])
             i, state = stop, "a"
         if emit and (token or quoted):
