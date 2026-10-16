@@ -92,6 +92,7 @@
               "explanation/verification-is-all-you-need",
               "explanation/plan-with-code",
               "explanation/scaling-agents",
+              "explanation/event-receiver",
               "explanation/why-non-engineers-can-ship-safely"
             ]
           }
