@@ -375,6 +375,30 @@ def test_a_recovery_whose_comment_cannot_be_posted_is_said_once_and_the_unit_goe
     assert gh.labels(REPO, n) == REVIEW and record(team_kit_home, n) is None
     assert tick(gh, capsys) == ["[SILENT]"]
 
+
+def test_an_older_report_of_a_third_head_never_ends_a_rework_without_its_launch_comment(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, verifier_backend="none")
+    n = reviewed(gh)
+    gh.comments[(REPO, n)].insert(1, {**gh.comments[(REPO, n)][1], "body": gh.comments[(REPO, n)][1]["body"].replace(HEAD[:7], "ccccccc"),
+                                      "created_at": iso(NOW - 800)})
+    assert rework(no_comments(gh), n, cloud=FakeCloud()) == 0
+    capsys.readouterr()
+    assert tick(gh, capsys) == ["[SILENT]"] and gh.labels(REPO, n) == RUNNING
+    gh.prs[(REPO, 7)]["headRefOid"] = NEW
+    stale_report(gh, n, NEW)
+    tick(gh, capsys)
+    assert gh.labels(REPO, n) == REVIEW, "the new agent's report still ends it"
+
+
+def test_a_plain_launch_drops_an_earlier_reworks_record(team_kit_home, gh, capsys):
+    n = reviewed(gh)
+    assert rework(no_comments(gh), n, cloud=FakeCloud()) == 0
+    gh.labels(REPO, n).clear()
+    gh.labels(REPO, n).update({"agent-task", "agent:needs-human"})
+    capsys.readouterr()
+    assert run(gh, "launch", "--issue", str(n)) == 0
+    assert record(team_kit_home, n) is None
+
 # F4 and F7 stay fail-closed.
 
 

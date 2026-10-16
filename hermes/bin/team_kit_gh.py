@@ -936,7 +936,12 @@ class Gh:
         if since_launch:
             launch = self.last_launch(comments)
             barred = self.rework_barred(issue, comments[launch] if launch >= 0 else None)
+            unposted = self.unposted_rework(issue, comments[launch] if launch >= 0 else None)
             comments = comments[launch + 1:]
+            if unposted:
+                # Without its launch comment, the rework's record is the generation boundary: earlier reports are the previous agent's.
+                since = int(float(unposted.get("started") or 0))
+                comments = [c for c in comments if (timestamp(c.get("created_at")) or 0) >= since]
         reports = [c for c in comments if (c.get("body") or "").lstrip().startswith(REPORT_MARKER) and self.trusted(c)]
         if barred:
             # A rework is judged only by a report of new work: one naming the head it started from is the previous agent's.
@@ -1054,7 +1059,8 @@ class Gh:
                 self.restore_review(number)
                 counter.count_own()
         body = (f"{REWORK_RECOVERED_MARKER}\nhead: {record['head']}\npr: {record.get('pr')}\nstate: {record['state']}\n\n"
-                f"No rework session started, so the unit is back in {REVIEW_LABEL} and its slot is free. This head may be sent to rework again.\n")
+                f"No rework session was recorded, so the unit is back in {REVIEW_LABEL} and its slot is free. "
+                "A rework of this head may be requested again. If a session for it does appear, stop it first.\n")
         posted = self.post_comment(number, body)
         self.rework_record_path(number).unlink(missing_ok=True)
         unaudited = "" if posted else "; the recovery comment could not be posted on the issue"
@@ -1493,6 +1499,7 @@ class Gh:
             with contextlib.suppress(OSError):  # the launch comment rework_started posts records the start too
                 self.write_rework_record(number, {**(self.rework_record(number) or {}), "state": "started", "session": session})
             return self.rework_started(number, brief.card, config, claim, session, rework["reason"])  # type: ignore[index]
+        self.rework_record_path(number).unlink(missing_ok=True)  # a newer launch replaces any earlier rework's record
         try:  # noqa: SIM105
             self.run(["issue", "comment", str(number), "-R", self.repo, "--body", f"{LAUNCHED_MARKER}\nsession: {session}\nbackend: {config['backend']}\nbranch: dispatch/{brief.card}\n"])
         except Exception:  # noqa: BLE001, S110
