@@ -59,3 +59,7 @@ Open a throwaway pull request that breaks one REVIEW.md rule, for example a user
 ## Report
 
 Files added, who owns each bot and what it draws on (the Codex workspace, the Claude routine owner's account), the branch-protection settings to turn on, and links to the two bot reviews from step 6.
+
+## Reviewing a finished unit with `/code-review`
+
+A fresh Claude Code process can review a dispatched unit's exact pull request head with `/code-review`. It yields findings text only, so it is not a review-app approval and changes no gate. See `docs/how-to/code-review-after-implementation.md`.

@@ -49,3 +49,5 @@ Output: `print`
 
 Only for a repository whose `.agents/dispatch.json` sets `upstream_sync: true`, such as the kit itself. When the upstream repository named in `upstream/source.json` has moved past its pinned commit and no sync unit is open, it dispatches one unit from a fixed brief: a cloud agent runs `scripts/sync-upstream.mjs` and opens the pull request, which is verified and reviewed like any unit. Every other repository stays silent.
 
+
+No job runs `/code-review`. Reviewing a finished unit with it is a manual step that changes no gate: [docs/how-to/code-review-after-implementation.md](../../docs/how-to/code-review-after-implementation.md).

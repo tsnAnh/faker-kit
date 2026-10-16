@@ -61,7 +61,8 @@
               "how-to/capture-lessons",
               "how-to/garden-the-codebase",
               "how-to/run-many-agents",
-              "how-to/dispatch-with-hermes"
+              "how-to/dispatch-with-hermes",
+              "how-to/code-review-after-implementation"
             ]
           }
         ]
