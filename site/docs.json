@@ -92,7 +92,8 @@
               "explanation/verification-is-all-you-need",
               "explanation/plan-with-code",
               "explanation/scaling-agents",
-              "explanation/why-non-engineers-can-ship-safely"
+              "explanation/why-non-engineers-can-ship-safely",
+              "explanation/event-driven-migration"
             ]
           }
         ]

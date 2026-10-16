@@ -40,6 +40,8 @@ With `webhooks` in the machine config, GitHub calls the machine when an issue, c
 - A Cloudflare Tunnel (`~/.cloudflared/<tunnel>.yml`) that publishes only `/p/<bot>/webhooks/<route>` on the configured hostname and answers 404 for everything else.
 - One repository webhook per route, created or updated in place by `team-kit-admin machine`.
 
+The inventory of every scheduled, polling and timer-driven trigger, which of them have an event, and the design for moving them is in [Moving Hermes from polling to events](../docs/explanation/event-driven-migration.md). Six timers stay by design.
+
 ## CI on this machine
 
 `team-kit-runner up --config <machine.yaml>` (also step 7 of `setup-machine.sh`) runs the GitHub Actions jobs of every repository under `ci_runners` here, one fresh Ubuntu container per job, so CI needs no GitHub-hosted minutes. Workflows ask for them with `runs-on: [self-hosted, team-kit]`. The image is `hermes/ci-runner/`; the services are `team-kit-ci-<repo>-<slot>`. See [CI on this machine](../docs/how-to/dispatch-with-hermes.md#optional-ci-on-this-machine).
