@@ -1,6 +1,8 @@
 import contextvars
 import json
+import random
 import re
+import shlex
 import sys
 import time
 import types
@@ -10,7 +12,8 @@ import pytest
 import yaml
 from conftest import BOTS, GUARD_TEMPLATE, SHOP, guard_text
 from team_kit_guard import NOTICE_CONTEXT, REMEMBERED_CHATS, Guard, current_profile, register
-from team_kit_guard.policy import MIGRATE_V1, PolicyError, load_policy, parse_policy
+from team_kit_guard import policy as guard_policy
+from team_kit_guard.policy import MIGRATE_V1, PolicyError, decide, load_policy, parse_policy, shell_split
 from team_kit_requests import ProjectRequest, format_request_notice
 
 SAMPLE = GUARD_TEMPLATE
@@ -759,6 +762,84 @@ def test_the_git_alias_check_stays_fast_on_long_crafted_commands():
     started = time.monotonic()
     Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal("git " + "alias." * 16666))
     assert time.monotonic() - started < 1
+
+
+def shlex_split_words(text):
+    return shlex.split(text, comments=False)
+
+
+def shlex_shell_tokens(command):
+    lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    return list(lexer)
+
+
+def shlex_shell_split(text, whitespace, punctuation="", commenters=""):
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=punctuation)
+    lexer.whitespace, lexer.whitespace_split, lexer.commenters = whitespace, True, commenters
+    return list(lexer)
+
+
+SHELL_PIECES = ["git", "alias.x", "!sh", "gh", "pr", "merge", "-c", "-e", "bash", "python3", "env", "-S", "x=1", "rm", "-rf",
+                "~", "$HOME", "é", "*.py", "a/b", "--force", " ", "  ", "\t", "\r", "\n", "'", '"', "\\", "\\\n", "#", ";", ";;",
+                "|", "||", "|&", "&", "&&", "(", ")", "<", ">", ">>", "<<", "<<<", "2>&1", "$(", "`", "EOF", "'it''s'",
+                '"a \\" b"', "'a \\ b'", "\\'", '\\"', "\\\\"]
+
+
+def shell_corpus(count, seed=178):
+    rng = random.Random(seed)
+    return ["".join(rng.choice(SHELL_PIECES) for _ in range(rng.randint(0, 24))) for _ in range(count)]
+
+
+FIXED_SHELL = [
+    "", "   ", "echo 'a b' \"c d\" e\\ f", "echo \"x \\$y \\\\ \\\" \\z\"", "echo 'single \\ stays'", "echo a#b # comment\necho c",
+    "cat <<EOF | sh\ngh pr merge 1\nEOF\n", "python3 - <<'PY'\nimport os\nPY", "echo $(gh pr merge 1) `id`", "a;b|c&d&&e||f|&g;;h",
+    "bash -c 'git push origin main'", "env -S 'gh pr merge 1'", "git -c alias.x='!sh' x", "echo 'open", 'echo "open', "echo end\\",
+    "(cd x && make) > out 2>&1 < in", "echo é ß 'ü'", "\"\"", "''", "a''b", "x='' y=\"\"", "git " + "alias." * 2000,
+]
+
+
+@pytest.mark.parametrize("command", [*FIXED_SHELL, *shell_corpus(4000)], ids=lambda c: f"{len(c)}-chars")
+def test_the_tokenizer_returns_what_shlex_returns(command):
+    for ours, theirs in ((lambda t: shell_split(t, " \t\r\n"), shlex_split_words),
+                         (lambda t: shell_split(t, " \t\r", "();<>|&\n", "#"), shlex_shell_tokens)):
+        try:
+            expected = theirs(command)
+        except ValueError as err:
+            with pytest.raises(ValueError, match=str(err)):
+                ours(command)
+        else:
+            assert ours(command) == expected
+
+
+def test_the_guard_decides_every_command_the_way_it_did_with_shlex(monkeypatch):
+    policy = bare_policy()
+    commands = [*FIXED_SHELL, *shell_corpus(3000, seed=175)]
+
+    def verdicts():
+        return [decide(policy, profile, "terminal", {"command": c}, tainted) for c in commands for profile, tainted in
+                (("meo-beo", False), ("ong-xay", True))]
+
+    ours = verdicts()
+    monkeypatch.setattr(guard_policy, "shell_split", shlex_shell_split)
+    assert verdicts() == ours
+    assert sum(v is not None and v["action"] == "block" for v in ours) > 100
+
+
+def test_the_guard_takes_linear_time_on_one_long_word():
+    policy = bare_policy()
+
+    def fastest(repeats):
+        command = "git " + "alias." * repeats
+        times = []
+        for _ in range(5):
+            started = time.perf_counter()
+            decide(policy, "meo-beo", "terminal", {"command": command}, False)
+            times.append(time.perf_counter() - started)
+        return min(times)
+
+    assert fastest(16000) / fastest(4000) < 8
 
 
 def test_the_hermes_scan_stays_fast_on_long_crafted_code():

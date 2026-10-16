@@ -18,7 +18,6 @@ import html
 import json
 import os
 import re
-import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -446,9 +445,80 @@ def scanned_text(tool_name: str, args: dict) -> list[str]:
     return strings(args)
 
 
+QUOTES = "'\""
+
+
+def run_end(text: str, start: int, stops: str) -> int:
+    found = re.compile("[" + re.escape(stops) + "]").search(text, start)
+    return found.start() if found else len(text)
+
+
+def shell_split(text: str, whitespace: str, punctuation: str = "", commenters: str = "") -> list[str]:
+    """The tokens of shlex.shlex(text, posix=True, punctuation_chars=punctuation) with whitespace_split on, and the same
+    ValueError on an unclosed quote or a trailing escape. shlex adds a token's characters one at a time to a string
+    attribute, which copies the token each time and takes quadratic time on one long word; this reads runs at once."""
+    tokens: list[str] = []
+    token: list[str] = []
+    quoted, state, escaped, i = False, " ", "a", 0
+    while True:
+        c = text[i] if i < len(text) else ""
+        i += 1
+        if state in QUOTES:
+            quoted = True
+            if not c:
+                raise ValueError("No closing quotation")
+            if c == state:
+                state = "a"
+            elif c == "\\" and state == '"':
+                escaped, state = state, "\\"
+            else:
+                stop = run_end(text, i, state + ("\\" if state == '"' else ""))
+                token.append(text[i - 1:stop])
+                i = stop
+            continue
+        if state == "\\":
+            if not c:
+                raise ValueError("No escaped character")
+            if escaped in QUOTES and c not in ("\\", escaped):
+                token.append("\\")
+            token.append(c)
+            state = escaped
+            continue
+        if not c:
+            break
+        emit = False
+        if c in whitespace:
+            state, emit = " ", True
+        elif c in commenters:
+            i = run_end(text, i, "\n") + 1
+            state, emit = " ", True
+        elif state == "c" and c in punctuation:
+            token.append(c)
+        elif state == "c" or (state == "a" and c in punctuation):
+            i -= 1
+            state, emit = " ", True
+        elif c in QUOTES:
+            state = c
+        elif c == "\\":
+            escaped, state = "a", "\\"
+        elif c in punctuation:
+            token.append(c)
+            state = "c"
+        else:
+            stop = run_end(text, i, whitespace + punctuation + commenters + QUOTES + "\\")
+            token.append(text[i - 1:stop])
+            i, state = stop, "a"
+        if emit and (token or quoted):
+            tokens.append("".join(token))
+            token, quoted = [], False
+    if token or quoted:
+        tokens.append("".join(token))
+    return tokens
+
+
 def split_words(text: str) -> list[str]:
     try:
-        return shlex.split(text, comments=False)
+        return shell_split(text, " \t\r\n")
     except ValueError:
         return [w.strip("'\"") for w in text.split()]
 
@@ -554,11 +624,8 @@ def shell_commands(text: str, depth: int = 0, keep_path: bool = False) -> list[l
 
 
 def shell_tokens(command: str) -> list[str] | None:
-    lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n")
-    lexer.whitespace = " \t\r"
-    lexer.whitespace_split = True
     try:
-        return list(lexer)
+        return shell_split(command, " \t\r", "();<>|&\n", "#")
     except ValueError:
         return None
 
