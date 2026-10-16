@@ -35,6 +35,8 @@ concurrency:
 
 jobs:
   build:
+    # main and manual runs: unchanged, GitHub-hosted build and push.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -71,6 +73,27 @@ jobs:
             ${{ steps.name.outputs.repo }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  build-pr:
+    # Same-repository pull requests only, on the disposable self-hosted ARM64 runner. Builds the real
+    # image without pushing. Forks never reach this runner. The image is arm64 and is never deployed.
+    name: build
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, ARM64, team-kit]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Export the static site
+        run: bash scripts/export-site.sh
+      - name: Require the unprivileged image builder
+        run: |
+          command -v buildah >/dev/null || { echo "buildah is not installed in the runner image (issue 160)"; exit 1; }
+      - name: Build the image without pushing
+        run: buildah --storage-driver vfs --isolation chroot bud -f deploy/docs/Dockerfile -t team-kit-docs:pr .
 
   deploy:
     # Skipped until the DOCS_HOST variable is set, so forks and unconfigured repos only build.
