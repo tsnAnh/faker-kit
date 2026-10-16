@@ -2,7 +2,7 @@
 
 Hermes bots learn about GitHub mostly by polling: each project bot's `team-kit-tick` job reads labels and reports on a schedule. The owner wants them to run on events instead, as far as that is practical. The first piece is a receiver that can take a GitHub webhook delivery and keep it safely, so nothing it is told is lost between the request and the work. This page explains what that receiver does, what its tests prove, and what it does not do yet.
 
-It is a library (`hermes/lib/team_kit_event_queue.py`) and a command (`hermes/bin/team_kit_events.py`). It runs in shadow mode only, it registers no listener, and it deploys nothing.
+It is a library (`hermes/lib/team_kit_event_queue.py`), a loopback HTTP ingress (`hermes/lib/team_kit_ingress.py`), and a command (`hermes/bin/team_kit_events.py`). It runs in shadow mode only. The ingress listens on a loopback address only, and nothing here deploys it: no public listener, no tunnel, no registered webhook, and no installed service. The system is not event-driven end to end yet; see [What bootstrap must still do](#what-bootstrap-must-still-do).
 
 ## One request, in a fixed order
 
@@ -58,15 +58,63 @@ A claim belongs to one consumer and returns a lease: a random token, a generatio
 
 Each delivery is recorded durably once and handled logically once per consumer. That is not exactly-once for side effects on GitHub. A crash after a side effect and before `complete` handles the row again. So every transition must check the live state first and skip what already happened: `handle_next` asks `Transition.done` before it calls `apply`.
 
+## The loopback ingress
+
+`team-kit-events serve` is the piece that accepts a real HTTP request. It is the Python standard library's threading HTTP server, with no framework and no new dependency. For each request it reads the body exactly as sent, as bytes, and hands those bytes and the original headers to the receiver above. It writes the receiver's answer back as the HTTP status with a small JSON body: `{"status": 202, "reason": "recorded", "delivery": "<id>"}`. The success answer is written only after the receiver returns, which is after the commit. If the queue cannot be opened or the commit fails, the answer is 503, so GitHub redelivers.
+
+It binds to a loopback address only (127.0.0.0/8 or `::1`, written as a literal address). It refuses to start on any other address, `0.0.0.0` and `localhost` included, and says why. Something else must put HTTPS in front of it.
+
+### Routes
+
+The operator writes one JSON configuration file. One process serves every project from it: one route per project, each with its own path, repository, and secret, so the registered projects need not share a key and one process is all the owner runs.
+
+```json
+{
+  "bind": "127.0.0.1",
+  "port": 8650,
+  "routes": [
+    {"path": "/github/shop", "repository": "acme/shop", "secret_file": "secrets/shop.secret"},
+    {"path": "/github/crm", "repository": "acme/crm", "secret_file": "secrets/crm.secret"}
+  ],
+  "limits": {"max_body": 1048576}
+}
+```
+
+- `secret_file` is a path to the file holding that route's webhook secret, never the secret itself. A relative path resolves against the configuration file's folder.
+- `repository` must be a project in `bots.yaml`. The route binds to it: the receiver is given only that one repository as a known project, so a correctly signed payload that names any other repository is refused with 403 and nothing is written. That is what stops one project's route from recording another project's events.
+- A request to a path with no route answers 404.
+
+Startup fails closed on any configuration problem, and lists all of them: a non-loopback bind, a missing port, no routes, a duplicate path or repository, a route with no repository or one that is not a project in `bots.yaml`, an unknown key, and a secret file that is missing, unreadable, empty, or group or world accessible. A message names the file and its mode, never the secret.
+
+The secret file is read again for every request, with the same checks. Rotating a secret means rewriting its file, with no restart. If the file has become unreadable or too open, the request answers 503 and nothing is recorded.
+
+### Limits
+
+| Limit | Value | Answer when exceeded |
+|---|---|---|
+| Body size | 1 MiB (`max_body`). GitHub caps a payload at 25 MiB, but the events the kit takes are far smaller, and a smaller cap bounds memory per connection. | 413, before any body byte is read |
+| `Content-Length` | Required, digits only, given once. No `Transfer-Encoding`, so no chunked bodies | 411 when missing or chunked, 400 when malformed or repeated |
+| Request line and headers | 16 KiB together (`max_header_bytes`), at most 64 headers (`max_headers`) | 431 |
+| Time | 10 seconds (`read_timeout`), both for each read and for the whole request | 408, and the connection is closed |
+| Connections | 16 handled at once (`max_connections`), each on its own thread | 503 with `Retry-After` |
+
+Each connection carries one request and is closed after the answer. A slow client holds only its own thread, until the timeout. SQLite serializes the writes, through the store's immediate transactions. Any other method than POST answers 405 with `Allow: POST`.
+
+### Logs
+
+One line per answered request, on stderr: the time, the route's project, the status, the delivery id, and the body length. Headers, the body, the signature, and the secret are never logged, and no answer echoes request input.
+
 ## Commands
 
 ```bash
 python3 hermes/bin/team_kit_events.py receive --request request.http --secret-env TEAM_KIT_WEBHOOK_SECRET
 python3 hermes/bin/team_kit_events.py status [--project shop]
 python3 hermes/bin/team_kit_events.py dead-letters [--project shop]
+python3 hermes/bin/team_kit_events.py check-config --config ingress.json
+python3 hermes/bin/team_kit_events.py serve --config ingress.json [--db PATH]
 ```
 
-`receive` reads one HTTP request from a file or stdin (`-`): header lines, a blank line, then the raw body bytes. It prints the answer it would give GitHub as JSON. It reads the signing secret from the environment variable or the file you name (`--secret-env NAME` or `--secret-file PATH`), never from an argument value. `status` and `dead-letters` open the database read-only and print no secret and no lease token.
+`receive` reads one HTTP request from a file or stdin (`-`): header lines, a blank line, then the raw body bytes. It prints the answer it would give GitHub as JSON. It reads the signing secret from the environment variable or the file you name (`--secret-env NAME` or `--secret-file PATH`), never from an argument value. `status` and `dead-letters` open the database read-only and print no secret and no lease token. `check-config` validates the ingress configuration and every secret file's permissions without printing a secret, and exits non-zero on any problem. `serve` runs the ingress in the foreground until it is stopped.
 
 ## Safety
 
@@ -87,6 +135,15 @@ python3 hermes/bin/team_kit_events.py dead-letters [--project shop]
 - With an injected fetcher, a transient failure retries, a confirmed not-found ends `gone`, and a moved head ends `superseded`, and none of these is recorded as done. A crash after a side effect and before `complete` is handled again with no second effect.
 - The command never prints the secret, never puts it in argv, and calls no `gh`, `hermes`, `git`, `claude`, or `codex`. `status` and `dead-letters` leave the database unchanged and print no lease token.
 
+`hermes/tests/test_ingress.py` proves the ingress over real sockets on 127.0.0.1, with an ephemeral port and a temporary database:
+
+- A signed request answers 202, and a second database connection sees the row the moment the 202 arrives. A failing commit answers 503 and leaves no row. A queue that cannot be opened answers 503.
+- A duplicate answers 202 and stays one row. The same delivery id with another body answers 409 and keeps the first. A wrong or missing signature answers 401 and records nothing. The signature is checked over the exact bytes sent: a body with unusual whitespace and key order verifies, and one changed byte does not.
+- A payload for another repository on a route answers 403 and records nothing. Two routes with different secrets do not accept each other's signatures. A rotated secret file takes effect on the next request.
+- An unknown path answers 404, and GET, PUT, and DELETE answer 405. An oversize body answers 413 without being sent. A missing, malformed, or chunked length is refused, and a length longer than the body times out. Too many or too large headers answer 431. A slow client is dropped at the timeout while another request is served, and a connection over the limit answers 503.
+- Startup and `check-config` refuse a non-loopback bind, a group- or world-readable secret file, a missing or empty secret file, a duplicate path, a route with no repository, and a repository outside `bots.yaml`.
+- A restarted process on the same database keeps earlier deliveries and still dedupes. No log line, stdout, or stderr holds a secret or the payload.
+
 ## Not verified against Hermes 0.21.7
 
 What follows was read from the public upstream Hermes main branch. None of it was checked against the Hermes 0.21.7 installed on the owner's machine. Treat every point as version-unverified.
@@ -99,8 +156,19 @@ What follows was read from the public upstream Hermes main branch. None of it wa
 
 What was observed on the owner's machine is that Hermes 0.21.7 is installed, that port 8644 is a shared default-profile multiplexer serving profile-bound `/p/<bot>/webhooks` routes, and that the repository has no repository webhooks configured.
 
+## What bootstrap must still do
+
+The ingress is built and tested; nothing is deployed. Before any GitHub delivery reaches it, the bootstrap bot (or the owner) must:
+
+1. Create one secret file per project, mode 600 and owned by the user that runs the ingress, and write the routes file. Run `check-config` until it passes.
+2. Run `serve` as a long-running process on a loopback address, and put HTTPS in front of it (the existing tunnel or a reverse proxy), forwarding each route's path unchanged.
+3. Register a repository webhook for each project, with content type `application/json`, the route's public URL, and the same secret as its file.
+4. Verify with a real delivery while `team-kit-tick` is not running, by reading the row back with `status`, then redeliver it from GitHub and see one row with a 202.
+
+Until all of that is done and a consumer drives work from the queue, the bots stay poll-driven.
+
 ## Limits
 
 - A webhook cannot detect an outage that produces no GitHub event. A check that stalls, a runner that never starts, or a health URL that fails sends nothing, so polling (`team-kit-tick`, `team-kit-incidents`) stays necessary.
-- This unit registers no listener, enables no route, changes no tunnel, and edits no cron job.
-- Wiring the receiver behind a Hermes route or the tunnel is a separate later unit, done through the bootstrap workflow. So is any cutover that lets the queue drive work instead of `team-kit-tick`.
+- Nothing here installs a service, binds a public address, opens a firewall, changes a tunnel, registers a webhook, or edits a cron job.
+- Deploying the ingress behind HTTPS is a separate later unit, done through the bootstrap workflow. So is any cutover that lets the queue drive work instead of `team-kit-tick`.
