@@ -220,7 +220,8 @@ elif args[0] == "api":
         found = [i for i in load("issues.json", {}).get(repo, []) if label in (i.get("labels") or [i["label"]]) and i["state"] == want
                  and (not since or (i.get("closed_at") or i.get("created_at", "2026-10-01T00:00:00Z")) >= since)]
         paged([issue_row(i) for i in sorted(found, key=lambda i: i["number"])])
-    elif rest.startswith("/pulls/") and method == "GET" and rest.endswith("/reviews"):
+    elif rest.startswith("/pulls/") and method == "GET" and (rest.endswith("/reviews") or "/comments" in rest) or (
+            rest.startswith("/issues/") and method == "GET" and "/reactions" in rest):
         paged([])
     elif rest.startswith("/issues/") and method == "GET" and rest.endswith("/comments"):
         paged(load("comments.json", {}).get(f"{repo}#{rest.split('/')[2]}", []))
