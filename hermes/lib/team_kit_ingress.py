@@ -31,6 +31,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from team_kit_event_queue import EventStore, receive
 
@@ -247,7 +248,9 @@ def load_config(path: Path, projects: Mapping[str, str]) -> IngressConfig:
 # server -----------------------------------------------------------------------------------------------
 
 
-Request = socket.socket | tuple[bytes, socket.socket]
+if TYPE_CHECKING:
+    # Only for annotations: evaluated at import, `|` between these types fails on the Python 3.9 the bot commands support.
+    Request = socket.socket | tuple[bytes, socket.socket]
 
 
 def stderr_log(line: str) -> None:
@@ -325,9 +328,9 @@ class IngressServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         body = json.dumps({"status": 503, "reason": REASONS[503], "delivery": None}).encode()
         head = f"HTTP/1.0 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n"
         with contextlib.suppress(OSError):
-            sock.settimeout(1.0)
+            sock.settimeout(0.2)
             sock.sendall(head.encode() + body)
-        socketserver.TCPServer.shutdown_request(self, request)
+        self.shutdown_request(request)
 
     def shutdown_request(self, request: Request) -> None:
         """Close after one answer, first draining what the client still sends so the close never resets a reply it has not read."""
@@ -439,7 +442,7 @@ def _handler_for(services: _Services) -> type[http.server.BaseHTTPRequestHandler
                         return None
                     chunks.append(chunk)
                     remaining -= len(chunk)
-            except TimeoutError:
+            except OSError:  # socket.timeout is not TimeoutError before Python 3.10
                 self.answer(408)
                 return None
             return b"".join(chunks)
