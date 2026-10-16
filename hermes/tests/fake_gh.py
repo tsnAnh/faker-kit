@@ -153,7 +153,7 @@ elif args[0] == "api":
                 "merged_at": pull.get("merged_at"), "body": pull.get("body", ""), "user": {"login": pull.get("author", "verify-bot")}, "labels": pull.get("labels", []),
                 "head": {"sha": head.get("sha", "a" * 40), "ref": head["ref"],
                          "repo": {"full_name": repo, "name": repo.split("/")[1], "owner": {"login": repo.split("/")[0]}}},
-                "base": {"repo": {"full_name": repo}}}
+                "base": {**(pull["base"] if isinstance(pull.get("base"), dict) else {}), "repo": {"full_name": repo}}}
 
     if rest == "/hooks" and method == "GET":
         # Like GitHub, a listed hook never shows its secret.
@@ -276,6 +276,13 @@ elif args[0] == "api":
         save("pulls.json", pulls)
         record("pull_edits", {"pr": number, **json.loads(body)})
         emit(pull_row(number, listed[number - 7]))
+    elif rest.startswith("/actions/workflows/") and rest.endswith("/dispatches") and method == "POST":
+        # Like GitHub: ref and inputs[...] come as -f fields, the answer is 204 with no body, and a workflow without a
+        # workflow_dispatch trigger is refused with HTTP 422.
+        if os.environ.get("FAKE_NO_WORKFLOW_DISPATCH"):
+            print("gh: Workflow does not have 'workflow_dispatch' trigger (HTTP 422)", file=sys.stderr)
+            sys.exit(1)
+        record("workflow_dispatches", {"workflow": rest.split("/")[3], **dict(args[i + 1].split("=", 1) for i, a in enumerate(args) if a == "-f")})
     elif rest == "/pulls" and method == "POST":
         pull = json.loads(body)
         pulls = load("pulls.json", {})

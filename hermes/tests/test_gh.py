@@ -64,6 +64,7 @@ class FakeGh:
         self.fail_paths = {}  # substring of a request path -> the failure it raises
         self.pr_comments_inline = {}  # pull request number -> its inline review comments, as repos/<repo>/pulls/<n>/comments lists them
         self.reviews = {}  # pull request number -> its reviews, oldest first, as repos/<repo>/pulls/<n>/reviews lists them
+        self.workflow_runs, self.workflow_error = [], None  # workflow_dispatch calls GitHub accepted, and the refusal it gives instead
 
     def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small", association="NONE", pull_request=False):  # noqa: E501
         self.next += 1
@@ -97,10 +98,10 @@ class FakeGh:
                 "mergeable": pull.get("mergeable"),
                 "state": "open" if pull["state"] == "OPEN" else "closed",
                 "merged_at": pull.get("mergedAt"), "body": pull.get("body", ""), "user": {"login": pull.get("author", BOT_LOGIN)},
-                "labels": pull.get("labels", []),
+                "labels": pull.get("labels", []), "draft": pull.get("draft", False),
                 "head": {"sha": pull["headRefOid"], "ref": pull.get("headRefName"),
                          "repo": {"full_name": head_repo, "name": head_repo.split("/")[1], "owner": {"login": head_repo.split("/")[0]}}},
-                "base": {"ref": pull.get("baseRefName", "main"), "repo": {"full_name": repo}}}
+                "base": {"ref": pull.get("baseRefName", "main"), "sha": pull.get("baseRefOid", BASE), "repo": {"full_name": repo}}}
 
     def check_runs(self, sha):
         if sha in self.runs:
@@ -145,6 +146,14 @@ class FakeGh:
                 chunk = rows[(page - 1) * per_page:page * per_page]
                 return finish(json.dumps({key: chunk, "total_count": len(rows)} if key else chunk), link)
 
+            if "/actions/workflows/" in path and path.endswith("/dispatches"):
+                # Like GitHub: POST with ref and inputs; 204 and an empty body, or a refusal such as a workflow without workflow_dispatch.
+                assert args[args.index("-X") + 1] == "POST"
+                if self.workflow_error:
+                    raise Refused(self.workflow_error)
+                fields = dict(args[i + 1].split("=", 1) for i, word in enumerate(args) if word == "-f")
+                self.workflow_runs.append({"workflow": path.split("/actions/workflows/")[1].split("/")[0], **fields})
+                return ""
             if "/contents/" in path:
                 name = path.split("/contents/", 1)[1]
                 if name not in self.files:
@@ -993,6 +1002,7 @@ def pr(gh, number, state="OPEN", merged=False, checks=("SUCCESS",), issue=None, 
 
 
 HEAD = "a" * 40
+BASE = "0" * 39 + "1"
 
 
 def test_tick_starts_one_pr_review_for_a_new_unit_pr_head(team_kit_home, kit, capsys):

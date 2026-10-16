@@ -132,6 +132,7 @@ from team_kit_incident_sources import (
 from team_kit_incident_sources import (
     fetch_json as fetch_incident_json,
 )
+from team_kit_review_request import REQUEST_ATTEMPTS, REVIEW_WORKFLOW, Key, Pull, Report, key_of, step, unready
 from team_kit_risk import (
     CODEOWNERS_PATHS,
     REPAIR_HISTORY_FILES,
@@ -260,6 +261,8 @@ def pull_fields(data: dict, repo: str) -> dict:
         "headRefOid": head.get("sha"),
         "headRefName": head.get("ref"),
         "baseRefName": base.get("ref"),
+        "baseRefOid": base.get("sha"),
+        "isDraft": bool(data.get("draft")),
         "isCrossRepository": not head_repo or str(head_repo.get("full_name") or "").lower() != base_name,
         "headRepository": {"name": head_repo.get("name")} if head_repo else None,
         "headRepositoryOwner": {"login": (head_repo.get("owner") or {}).get("login")} if head_repo else None,
@@ -959,6 +962,7 @@ class Gh:
             "pr": report.pr if report.pr and pr_url.match(report.pr) else None,
             "head": report.head if report.head and SHORT_SHA.match(report.head) else None,
             "at": reports[-1].get("created_at"),
+            "by": str((reports[-1].get("user") or {}).get("login") or ""),
         }
 
     @staticmethod
@@ -2084,6 +2088,104 @@ class Gh:
         tmp.write_text(json.dumps(data))
         tmp.replace(path)
 
+    # Final-head review request ------------------------------------------------------------------
+    # The review app reviews a unit's final head once: after a trusted done report on the exact current head, team-kit-gh
+    # starts the app's review workflow for that head itself (team_kit_review_request decides). Requesting never needs the
+    # review gate to have passed, and check_app_review still waits for the app's own review of the current head.
+
+    def request_record_path(self, number: int) -> Path:
+        return self.policy.home / "review-requests" / self.bot.name / f"{int(number)}.json"
+
+    def request_final_review(self, issue: dict) -> str | None:
+        """Request the review app's review of a unit's final head, at most once per pull request, head, and base.
+        Returns a notice only when a request fails or may have been lost."""
+        number = int(issue["number"])
+        path = self.request_record_path(number)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with path.with_suffix(".lock").open("w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            return self.request_final_review_locked(number, path)
+
+    def request_final_review_locked(self, number: int, path: Path) -> str | None:
+        issue = self.issue(number)
+        labels = labels_of(issue)
+        if issue.get("state") != "open" or REVIEW_LABEL not in labels or HUMAN_LABEL in labels:
+            return None
+        config = self.dispatch_config()
+        app = self.review_app(config)
+        if not app:
+            return None
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            record = None
+        record = record if isinstance(record, dict) else None
+        comments = self.comments(number)
+        found = self.report_status(number, comments, since_launch=True)
+        report = Report(by=str(found.get("by") or ""), status=str(found["status"]), head=found.get("head"),
+                        pr=int(found["pr"].rsplit("/", 1)[1]) if found.get("pr") else None, at=timestamp(found.get("at")))
+        pull = self.request_pull(report.pr) if report.pr else None
+        default = str(self.api_json(f"repos/{self.repo}").get("default_branch") or "")
+        checks = checks_state(self.check_rollup(pull.head)) if pull and SHA.match(pull.head) else "none"
+        trusted = frozenset(str(d).lower() for d in config.get("trusted_dispatchers") or [])
+        why = unready(number, report, pull, self.unit_branch(comments), default, checks, self.cord() is not None, trusted, self.now(),
+                      NO_CHECKS_GRACE_SECONDS)
+        if why or pull is None:
+            self.skip_request(path, record, why or "no pull request")
+            return None
+        key = Key(pull.number, pull.head, pull.base)
+        pr_url = f"https://github.com/{self.repo}/pull/{pull.number}"
+        action = step(record, key, self.now())
+        if action == "hold":
+            return None
+        fields = {"pr": key.pr, "head": key.head, "base": key.base}
+        if action == "lost":
+            self.write_app_record(path, {**fields, "state": "lost", "at": self.now()})
+            return (f"{NOTICE} #{number}: a request for {app} to review {pr_url} at {key.head[:12]} may not have reached GitHub "
+                    "(team-kit-gh stopped mid-request), so it is not repeated; if no review appears, run the review workflow for that head from GitHub")
+        # GitHub may have moved the head since it was read; a request is only ever for the head GitHub has now.
+        now_pull = self.request_pull(pull.number)
+        if now_pull is None or now_pull.state != "open" or now_pull.head != key.head:
+            self.skip_request(path, record, f"#{pull.number} moved before the request")
+            return None
+        retried = record and record.get("state") == "failed" and key_of(record) == key
+        attempts = int(record.get("attempts") or 0) if record and retried else 0
+        self.write_app_record(path, {**fields, "state": "sending", "at": self.now(), "attempts": attempts})
+        try:
+            self.run(["api", "-X", "POST", "-f", f"ref={default}", "-f", f"inputs[pr]={key.pr}", "-f", f"inputs[head]={key.head}",
+                      f"repos/{self.repo}/actions/workflows/{REVIEW_WORKFLOW}/dispatches"])
+        except Refused as err:
+            attempts += 1
+            self.write_app_record(path, {**fields, "state": "failed", "at": self.now(), "attempts": attempts, "error": reason(err)})
+            if attempts >= REQUEST_ATTEMPTS:
+                return (f"{NOTICE} #{number}: gave up asking {app} to review {pr_url} at {key.head[:12]} after {attempts} refusals ({reason(err)}); "
+                        f"it stays in {REVIEW_LABEL} and never merges without that review; run the review workflow for that head from GitHub")
+            if attempts == 1:
+                return (f"{NOTICE} #{number}: GitHub refused to start {app}'s review of {pr_url} at {key.head[:12]} ({reason(err)}); "
+                        f"retrying up to {REQUEST_ATTEMPTS - attempts} more times, and it stays in {REVIEW_LABEL} meanwhile")
+            return None
+        self.write_app_record(path, {**fields, "state": "requested", "at": self.now(), "attempts": attempts + 1})
+        return None
+
+    def request_pull(self, pr: int) -> Pull | None:
+        try:
+            data = self.pull(pr)
+        except Refused:
+            return None
+        marker = PR_MARKER.search(str(data.get("body") or ""))
+        owner = str((data.get("headRepositoryOwner") or {}).get("login") or "")
+        name = str((data.get("headRepository") or {}).get("name") or "")
+        return Pull(number=int(data.get("number") or pr), state=str(data.get("state") or "").lower(), head=str(data.get("headRefOid") or ""),
+                    base=str(data.get("baseRefOid") or ""), base_ref=str(data.get("baseRefName") or ""), branch=str(data.get("headRefName") or ""),
+                    same_repo=data.get("isCrossRepository") is False and f"{owner}/{name}".lower() == self.repo.lower(),
+                    draft=bool(data.get("isDraft")), mergeable=data.get("mergeable"),
+                    marker_issue=int(marker.group("issue")) if marker else None)
+
+    def skip_request(self, path: Path, record: dict | None, why: str) -> None:
+        """Nothing is requested; the reason is kept with the unit's record, written only when it changes."""
+        if (record or {}).get("skipped") != why:
+            self.write_app_record(path, {**(record or {}), "skipped": why, "skipped_at": self.now()})
+
     def verify(self, number: int, local_commit: str, cloud: Cloud) -> dict:
         """Start a new verifier on a unit's current pull request head, without redoing the coding work."""
         config = self.dispatch_config()
@@ -2812,8 +2914,13 @@ class Project:
                         notice = gh.check_verifying(issue, cloud)
                     elif RUNNING_LABEL in labels:
                         notice = gh.check_running(issue, cloud)
+                    elif gh.review_app():
+                        requested = gh.request_final_review(issue)
+                        if requested:
+                            notices.append(requested)
+                        notice = gh.check_app_review(issue)
                     else:
-                        notice = gh.check_app_review(issue) if gh.review_app() else None
+                        notice = None
                 except Exception as err:  # noqa: BLE001 - one broken unit never stops the others
                     problems[f"{gh.repo}#{issue['number']}"] = reason(err)
                     continue
@@ -3025,7 +3132,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
             elif args.command == "verify":
                 out = gh.verify(args.issue, commit(policy), cloud)
             elif args.command == "report-status":
-                out = {k: v for k, v in gh.report_status(args.issue).items() if k != "at"}
+                out = {k: v for k, v in gh.report_status(args.issue).items() if k not in ("at", "by")}
             elif args.command == "read":
                 if not (args.issue or args.pr):
                     raise Refused("read needs --issue or --pr")  # noqa: TRY301

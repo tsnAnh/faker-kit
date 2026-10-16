@@ -57,7 +57,7 @@ On its GitHub issue, as labels. `team-kit-gh` sets them; you never do.
 | `agent-task` only | Queued: waiting for its dependencies or a free slot. `team-kit-tick` launches it |
 | `agent:running` | A cloud agent is working it |
 | `agent:verifying` | The agent reported done and the checks passed. A separate verifier session is checking the pull request |
-| `agent:review` | Verified (or `verifier_backend` is `none`) and the checks passed. The owner merges, or, with `review_app` set, tick merges a low-risk unit once that app approves its head |
+| `agent:review` | Verified (or `verifier_backend` is `none`) and the checks passed. The owner merges, or, with `review_app` set, tick merges a low-risk unit once that app approves its head. With `review_app` set, tick also asks that app's review workflow, once, to review the head a trusted done report names when it is still the pull request's current head with passing checks; a notice says so only when GitHub refuses (retried up to three times) |
 | `agent:needs-human` | A gate. The agent stopped and needs the owner |
 | closed as completed | Done: its pull request merged |
 
