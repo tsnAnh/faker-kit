@@ -9,7 +9,7 @@ A repository that names a `review_app` in `.agents/dispatch.json` (this one name
 
 ## What Hermes does now
 
-Every tick, for each unit waiting in `agent:review` with no gate, `team-kit-gh` holds the unit's lock and checks, in code, that all of these hold:
+Every tick, for each unit waiting in `agent:review` with no gate, `team-kit-gh` runs `check_app_review` first. Then it takes the same per-unit lock `check_app_review` takes, and checks, in code, that all of these hold:
 
 - The latest trusted report since the unit's latest launch says `done`. Its author is a login in `trusted_dispatchers`.
 - The report names a full 40-character head and a pull request of this repository.
@@ -21,7 +21,7 @@ Every tick, for each unit waiting in `agent:review` with no gate, `team-kit-gh` 
 
 If any fails, nothing is requested. The reason is kept in `~/.hermes/team-kit/review-requests/<bot>/<n>.json` and no notice is sent, since an intermediate head is normal. If all hold, Hermes reads the pull request again. It calls GitHub only if the head is still the same. The call is `POST repos/OWNER/REPO/actions/workflows/claude-review.yml/dispatches` with `ref` set to the default branch and the inputs `pr` and `head`, made with the credential `team-kit-gh` already uses.
 
-The record holds the pull request, head, base commit, state, attempts, and time, written atomically under the unit's lock. Its states are these:
+The record holds the pull request, head, base commit, state, attempts, and time, written atomically under that lock. Its states are these:
 
 | State | Meaning | Next tick |
 |---|---|---|
@@ -76,7 +76,7 @@ Hermes already makes the call. Until the workflow accepts `workflow_dispatch`, G
 ```diff
 --- a/.github/workflows/claude-review.yml
 +++ b/.github/workflows/claude-review.yml
-@@ -5,46 +5,84 @@
+@@ -5,46 +5,85 @@
  # passing checks merges it; anything else goes to the owner. Needs the Claude GitHub app installed on the
  # repository and the CLAUDE_CODE_OAUTH_TOKEN secret (claude setup-token).
  
@@ -85,6 +85,7 @@ Hermes already makes the call. Until the workflow accepts `workflow_dispatch`, G
  on:
    pull_request:
 -    types: [opened, synchronize, reopened, ready_for_review]
+-
 +    types: [opened, reopened, ready_for_review]
 +  workflow_dispatch:
 +    inputs:
@@ -94,13 +95,14 @@ Hermes already makes the call. Until the workflow accepts `workflow_dispatch`, G
 +      head:
 +        description: The full head commit to review; skipped unless it is the pull request's current head
 +        required: true
- 
-+# Dispatched runs check in on the default branch's head, where a cancelled run reads as a failure: they get their own group
-+# and are never cancelled. A newer pull_request event still cancels an older pull_request run.
++
++# Dispatched runs check in on the default branch's head, where a cancelled run reads as a failure. GitHub cancels a pending run
++# whenever a newer one joins its group, so each dispatched run gets a group of its own. A newer pull_request event still
++# cancels an older pull_request run.
  concurrency:
 -  group: claude-review-${{ github.event.pull_request.number }}
 -  cancel-in-progress: true
-+  group: claude-review-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr }}
++  group: claude-review-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || github.event.pull_request.number }}
 +  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
  
  jobs:
@@ -177,6 +179,6 @@ Three points to settle when the bootstrap bot applies it:
 
 - `anthropics/claude-code-action@v1` must accept a `workflow_dispatch` event with an explicit `prompt`. Check it on the first dispatched run.
 - A unit pull request opened before its final head still gets one review when it opens. Drop `opened` too if that review is not wanted. A person's pull request would then be reviewed only when it is reopened or marked ready.
-- A dispatched run is a run on the default branch, so its check run lands on the default branch's head commit. `team-kit-incidents` reads exactly those check runs (`Incidents.main_checks`). That is why a stale or invalid dispatch skips and succeeds instead of failing, and why dispatched runs have their own concurrency group and are never cancelled. `main_checks` counts a failed or cancelled run as red, which could open an incident, or pull the cord where `andon_on_red` is on. A review job that fails for its own reason (an expired `CLAUDE_CODE_OAUTH_TOKEN`, say) still shows red there. While a review runs, `main_checks` also reads the branch as undecided. Before applying, either accept that, or have `main_checks` ignore the review workflow's runs in its own reviewed change.
+- A dispatched run is a run on the default branch, so its check run lands on the default branch's head commit. `team-kit-incidents` reads exactly those check runs (`Incidents.main_checks`). That is why a stale or invalid dispatch skips and succeeds instead of failing, and why each dispatched run has a concurrency group of its own. GitHub cancels a pending run whenever a newer run joins its group, whatever `cancel-in-progress` says. `main_checks` counts a failed or cancelled run as red, which could open an incident, or pull the cord where `andon_on_red` is on. A review job that fails for its own reason (an expired `CLAUDE_CODE_OAUTH_TOKEN`, say) still shows red there. While a review runs, `main_checks` also reads the branch as undecided. Before applying, either accept that, or have `main_checks` ignore the review workflow's runs in its own reviewed change.
 
 The pull request can move after the skip step and before the review is posted. The review is still posted with `commit_id` set to the requested head, and Hermes counts a review only on the current head, so such a review never approves the newer push.

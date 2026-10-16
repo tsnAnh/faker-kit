@@ -2102,7 +2102,9 @@ class Gh:
         number = int(issue["number"])
         path = self.request_record_path(number)
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with path.with_suffix(".lock").open("w") as handle:
+        lock = self.app_record_path(number).with_suffix(".lock")  # check_app_review's, so the gate and the request never interleave
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with lock.open("w") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
             return self.request_final_review_locked(number, path)
 
