@@ -356,3 +356,12 @@ def test_a_gh_that_never_ran_is_a_refusal_not_a_lost_request(team_kit_home, kit)
     assert saved(team_kit_home, n)["state"] == "failed"
     request(gh, n, now=NOW + RETRY_SECONDS)
     assert gh.workflow_runs == [REQUEST], "retried, since nothing reached GitHub the first time"
+
+
+@pytest.mark.parametrize("state", ["APPROVED", "CHANGES_REQUESTED"])
+def test_a_head_the_app_already_reviewed_is_not_requested_again(team_kit_home, kit, state):
+    gh = app_gh(kit)
+    n = final_unit(gh)
+    gh.reviews[7] = [{"user": {"login": "claude[bot]", "type": "Bot"}, "state": state, "commit_id": HEAD}]
+    request(gh, n)
+    assert gh.workflow_runs == [] and saved(team_kit_home, n)["skipped"] == f"claude[bot] already reviewed {HEAD[:12]}"

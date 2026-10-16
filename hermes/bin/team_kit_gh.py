@@ -2145,6 +2145,9 @@ class Gh:
             self.write_app_record(path, {**fields, "state": "lost", "at": self.now()})
             return (f"{NOTICE} #{number}: a request for {app} to review {pr_url} at {key.head[:12]} may not have reached GitHub "
                     "(team-kit-gh stopped mid-request), so it is not repeated; if no review appears, run the review workflow for that head from GitHub")
+        if self.app_verdict(pull.number, pull.head, app):
+            self.skip_request(path, record, f"{app} already reviewed {key.head[:12]}")
+            return None
         # GitHub may have moved the head since it was read; a request is only ever for the head GitHub has now.
         now_pull = self.request_pull(pull.number)
         if now_pull is None or now_pull.state != "open" or now_pull.head != key.head:
