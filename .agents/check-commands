@@ -12,4 +12,5 @@ ruff check
 mypy
 bun test plugins/trust-ladder
 bun test upstream/agent-hooks
+bun test scripts/claude-review-postcondition.test.mjs
 python3 -m pytest hermes -q -n auto

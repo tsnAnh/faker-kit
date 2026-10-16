@@ -30,6 +30,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false  # no token left in .git/config for the review to read
       - uses: anthropics/claude-code-action@v1
+        id: claude
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Claude may read only the checkout, write only the review body, and run only commands that name this pull
@@ -48,3 +49,15 @@ jobs:
                - otherwise: `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=APPROVE -F body=@review-body.md`
           claude_args: >-
             --allowedTools "Read(./**),Write(./review-body.md),Edit(./review-body.md),Bash(gh pr diff ${{ github.event.pull_request.number }}),Bash(gh pr view ${{ github.event.pull_request.number }}),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=APPROVE -F body=@review-body.md),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=REQUEST_CHANGES -F body=@review-body.md)"
+      # A green job must mean review_app reviewed this exact head. Fails on a permission denial (printing only the
+      # denied tool and command shape) and when no APPROVED or CHANGES_REQUESTED review sits on the head. If the head
+      # moved, the new push's run decides. The script comes from the base checkout, never the pull request.
+      - name: Require a review on the current head
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: node scripts/claude-review-postcondition.mjs
