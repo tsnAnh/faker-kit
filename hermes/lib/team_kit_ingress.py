@@ -29,7 +29,6 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -259,7 +258,7 @@ def stderr_log(line: str) -> None:
 
 
 def _stamp(now: Callable[[], float]) -> str:
-    return datetime.fromtimestamp(now(), tz=timezone.utc).isoformat(timespec="seconds")
+    return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(now()))
 
 
 class _HeaderBudget(io.BufferedIOBase):

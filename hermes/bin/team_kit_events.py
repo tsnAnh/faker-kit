@@ -127,9 +127,9 @@ def run_ingress(args: argparse.Namespace, home: Path, db: Path) -> int:
         print(json.dumps({"ok": True, "routes": [{"path": r.path, "repository": r.repo, "project": r.project} for r in config.routes.values()]}))
         return 0
     server = make_server(config, db)
-    signal.signal(signal.SIGTERM, signal.default_int_handler)
-    print(f"team-kit-events: serving {len(config.routes)} route(s) on {config.bind}:{server.bound_port}", file=sys.stderr, flush=True)
     try:
+        signal.signal(signal.SIGTERM, signal.default_int_handler)
+        print(f"team-kit-events: serving {len(config.routes)} route(s) on {config.bind}:{server.bound_port}", file=sys.stderr, flush=True)
         server.serve_forever()
     except KeyboardInterrupt:
         pass
