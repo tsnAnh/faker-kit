@@ -162,6 +162,9 @@ REVIEW_LABEL = "agent:review"
 # auto_merge in .agents/dispatch.json: "low" merges a unit whose risk is low and whose verifier, review (Hermes's
 # own, or the review_app's approval of the head), and checks are all clean; anything else waits for the owner. "none", the default, leaves every merge to the owner.
 AUTO_MERGE = ("none", "low")
+CODEX_APP = "chatgpt-codex-connector[bot]"  # Codex's managed Code Review; it posts COMMENTED reviews, never APPROVED
+CODEX_SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
+CODEX_BLOCKING = re.compile(r"!\[P[01] Badge\]|\bP[01]\b")
 APP_MERGE_ATTEMPTS = 3  # merges of an approved unit that GitHub refused before tick leaves it to the owner
 MERGE_METHODS = ("merge", "squash", "rebase")
 CLOSE_REASON_MAX = 500
@@ -1710,10 +1713,49 @@ class Gh:
         app = (config or self.dispatch_config()).get("review_app")
         return str(app) if app else None
 
+    def codex_verdict(self, pr: int, head: str, app: str) -> str | None:
+        """Codex's managed Code Review never posts APPROVED, so a pass is read from what it does post: a summary
+        comment whose Code Review row is Completed on this exact head, no P0 or P1 finding in its review comments
+        on that head, and either its thumbs-up (no findings at all) or a review of that head with only lesser
+        findings. Returns approved, changes (a blocking finding), failed (the review errored), or None (missing,
+        stale, pending, or too ambiguous to trust). A login ending in [bot] is an app's, so no HMAC is needed."""
+        mine = app.lower()
+
+        def by_app(row: object) -> bool:
+            return isinstance(row, dict) and str((row.get("user") or {}).get("login") or "").lower() == mine
+
+        reviews = [r for r in self.api_pages(f"repos/{self.repo}/pulls/{int(pr)}/reviews") if by_app(r) and r.get("commit_id") == head]
+        inline = [c for c in self.api_pages(f"repos/{self.repo}/pulls/{int(pr)}/comments") if by_app(c) and c.get("commit_id") == head]
+        if any(r.get("state") == "CHANGES_REQUESTED" for r in reviews) or any(
+                CODEX_BLOCKING.search(str(row.get("body") or "")) for row in [*reviews, *inline]):
+            return "changes"
+        summaries = [c for c in self.api_pages(f"repos/{self.repo}/issues/{int(pr)}/comments")
+                     if by_app(c) and CODEX_SUMMARY_MARKER in str(c.get("body") or "")]
+        if not summaries:
+            return None
+        row = next((line for line in str(summaries[-1].get("body")).splitlines() if "Code Review" in line and line.lstrip().startswith("|")), "")
+        commit = re.search(r"`([0-9a-f]{7,40})`", row)
+        if not commit or not head.startswith(commit.group(1)):
+            return None
+        if re.search(r"fail|error|cancel", row, re.I):
+            return "failed"
+        completed = re.search(r"Completed.*?datetime=\"([^\"]+)\"", row)
+        if not completed:
+            return None
+        if reviews:
+            return "approved"
+        done_at = completed.group(1)[:19]
+        for reaction in self.api_pages(f"repos/{self.repo}/issues/{int(pr)}/reactions"):
+            if by_app(reaction) and reaction.get("content") == "+1" and str(reaction.get("created_at") or "")[:19] >= done_at:
+                return "approved"
+        return None
+
     def app_verdict(self, pr: int, head: str, app: str) -> str | None:
         """approved or changes: the app's latest standing review of this exact head, or None. GitHub records who
         wrote a review, and a login ending in [bot] belongs to an app, which neither a person nor a cloud session
         posting with the owner's token can write as. So, unlike a comment, the review needs no HMAC of its own."""
+        if app.lower() == CODEX_APP:
+            return self.codex_verdict(pr, head, app)
         verdict = None
         for review in self.api_pages(f"repos/{self.repo}/pulls/{int(pr)}/reviews"):
             if not isinstance(review, dict):
@@ -1772,6 +1814,8 @@ class Gh:
         verdict = self.app_verdict(pr["pr"], pr["head"], app)
         if verdict == "changes":
             return self.gate(issue, f"{app} requested changes on {pr_url}; read its review, then relaunch it with its findings")
+        if verdict == "failed":
+            return self.gate(issue, f"{app}'s review of {pr_url} failed; comment @codex review on the pull request, then relaunch the unit")
         outcome = verdict or "waiting"
         key = {"pr": pr_url, "head": pr["head"], "outcome": outcome}
         try:

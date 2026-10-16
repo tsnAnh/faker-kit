@@ -102,6 +102,7 @@ Under `~/.hermes/team-kit/`:
 - Sign `gh` in on the machine once (`gh auth login`); every bot shares that login. Only a bot that should act as another GitHub account gets a `GH_TOKEN` in its profile's `.env`. No bot ever sees a token in chat.
 - If you enable Slack, put the Slack app-level and bot tokens in the configured bot profile's `.env` under the variable names in `guard.yaml`. Token values never go in `guard.yaml`, chat, argv, or service unit files.
 - Sign the coding agent in on the machine.
+- To use Codex's managed Code Review as a project's `review_app` (`chatgpt-codex-connector[bot]`), connect GitHub to Codex, set up Codex cloud for the repository, and turn on Code review and Automatic reviews at chatgpt.com/codex/settings/code-review. Then change `review_app` in that repository's `.agents/dispatch.json`. See [Let Codex's managed Code Review be the review app](../docs/how-to/dispatch-with-hermes.md).
 - Approve each `team-kit-admin` command the bootstrap bot runs.
 - While `ask_owner` is true, confirm the chief's handoff in the target project bot's Bot Chat before that bot briefs or dispatches it.
 

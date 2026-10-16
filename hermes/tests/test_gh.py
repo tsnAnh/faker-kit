@@ -62,6 +62,7 @@ class FakeGh:
         self.statuses = {}  # commit sha -> legacy commit statuses, as repos/<repo>/commits/<sha>/status lists them
         self.page_size = None  # smaller than GitHub's 100, so a test reaches the second page cheaply
         self.fail_paths = {}  # substring of a request path -> the failure it raises
+        self.review_comments, self.reactions = {}, {}  # pull request number -> inline review comments / issue reactions, as GitHub lists them
         self.reviews = {}  # pull request number -> its reviews, oldest first, as repos/<repo>/pulls/<n>/reviews lists them
 
     def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small", association="NONE", pull_request=False):  # noqa: E501
@@ -175,6 +176,10 @@ class FakeGh:
             if "/commits/" in path and path.split("?")[0].endswith("/status"):
                 rows = self.statuses.get(path.split("/commits/")[1].split("/")[0], [])
                 return paged(rows, "statuses")
+            if re.search(r"/pulls/\d+/comments\?", path):
+                return paged(self.review_comments.get(int(re.search(r"/pulls/(\d+)/comments", path).group(1)), []))
+            if re.search(r"/issues/\d+/reactions\?", path):
+                return paged(self.reactions.get(int(re.search(r"/issues/(\d+)/reactions", path).group(1)), []))
             if re.search(r"/pulls/\d+/reviews", path):
                 return paged(self.reviews.get(int(re.search(r"/pulls/(\d+)/reviews", path).group(1)), []))
             if re.search(r"/pulls/\d+(\?|$)", path):
@@ -3152,6 +3157,25 @@ def app_review(gh, state="APPROVED", login="claude[bot]", kind="Bot", head=HEAD,
     gh.reviews.setdefault(pr_number, []).append({"user": {"login": login, "type": kind}, "state": state, "commit_id": head})
 
 
+CODEX = "chatgpt-codex-connector[bot]"
+CODEX_DONE = "2026-10-12T03:03:07.120565Z"
+
+
+def codex_summary(gh, status="✅ **Completed**", head=HEAD, pr_number=7, at=CODEX_DONE):
+    row = f"| 📝 **Code Review** | {status} <relative-time datetime=\"{at}\">{at}</relative-time> | `{head[:7]}` | PR opened |"
+    gh.comment(REPO, pr_number, f"<!-- codex-pull-request-review-summary -->\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n{row}\n", login=CODEX)
+
+
+def codex_thumbs_up(gh, pr_number=7, at="2026-10-12T03:03:12Z", login=CODEX):
+    gh.reactions.setdefault(pr_number, []).append({"user": {"login": login, "type": "User"}, "content": "+1", "created_at": at})
+
+
+def codex_finding(gh, badge, head=HEAD, pr_number=7):
+    body = f"**<sub><sub>![{badge} Badge](https://img.shields.io/badge/{badge}-yellow?style=flat)</sub></sub>  A finding**\n\nDetails."
+    app_review(gh, state="COMMENTED", login=CODEX, head=head, pr_number=pr_number)
+    gh.review_comments.setdefault(pr_number, []).append({"user": {"login": CODEX, "type": "Bot"}, "commit_id": head, "body": body})
+
+
 def app_reviewed_unit(gh, team_kit_home, capsys):
     """A unit with a done report and passing checks, in agent:review and waiting for the review app."""
     n, cloud = reviewing_unit(gh, team_kit_home, capsys)
@@ -3467,3 +3491,92 @@ def test_ci_github_never_started_on_main_opens_no_incident(team_kit_home, gh, ca
     assert not [i for (repo, _), i in gh.issues.items() if repo == REPO and "agent:incident" in i["labels"]]
     red(gh, "3" * 40, "test")
     assert any("main is red: test" in line for line in poll(gh, capsys)), "a real failure still opens one"
+
+
+def codex_review_gh(kit, **config):
+    return FakeGh(kit, **{"verifier_backend": "none", "review_app": CODEX, "auto_merge": "low", **config})
+
+
+def codex_review_unit(gh, team_kit_home, capsys):
+    n, cloud = reviewing_unit(gh, team_kit_home, capsys)
+    gh.report(REPO, n, "done", pr=f"https://github.com/{REPO}/pull/7")
+    assert tick(gh, capsys, cloud=cloud) == [f"team-kit notice: #{n} waits for {CODEX} to review https://github.com/{REPO}/pull/7 (checks passed)"]
+    return n
+
+
+def test_a_completed_codex_review_with_no_findings_merges_a_low_risk_unit(team_kit_home, kit, capsys):
+    gh = codex_review_gh(kit)
+    n = codex_review_unit(gh, team_kit_home, capsys)
+    codex_summary(gh)
+    codex_thumbs_up(gh)
+    assert tick(gh, capsys) == [f"team-kit notice: #{n} merged automatically (low risk, checks passed, approved by {CODEX}): https://github.com/{REPO}/pull/7"]
+    assert gh.merges == [["pr", "merge", "7", "-R", REPO, "--merge", "--match-head-commit", HEAD]]
+
+
+def test_a_completed_codex_review_with_only_lesser_findings_passes(team_kit_home, kit, capsys):
+    gh = codex_review_gh(kit)
+    n = codex_review_unit(gh, team_kit_home, capsys)
+    codex_summary(gh)
+    codex_finding(gh, "P2")
+    assert tick(gh, capsys)[0].startswith(f"team-kit notice: #{n} merged automatically")
+
+
+@pytest.mark.parametrize("badge", ["P0", "P1"])
+def test_a_codex_p0_or_p1_finding_on_the_head_is_a_gate(team_kit_home, kit, capsys, badge):
+    gh = codex_review_gh(kit)
+    n = codex_review_unit(gh, team_kit_home, capsys)
+    codex_summary(gh)
+    codex_thumbs_up(gh)
+    codex_finding(gh, badge)
+    assert tick(gh, capsys) == [f"team-kit notice: #{n} needs you: {CODEX} requested changes on https://github.com/{REPO}/pull/7; "
+                                f"read its review, then relaunch it with its findings. https://github.com/{REPO}/issues/{n}"]
+    assert gh.merges == []
+
+
+def test_a_codex_p1_finding_on_an_older_head_does_not_block_the_new_head(team_kit_home, kit, capsys):
+    gh = codex_review_gh(kit)
+    codex_review_unit(gh, team_kit_home, capsys)
+    codex_finding(gh, "P1", head="b" * 40)
+    codex_summary(gh)
+    codex_thumbs_up(gh)
+    assert tick(gh, capsys)[0].startswith("team-kit notice:") and len(gh.merges) == 1
+
+
+@pytest.mark.parametrize(("setup", "why"), [
+    (lambda gh: None, "no review at all"),
+    (lambda gh: (codex_summary(gh, head="b" * 40), codex_thumbs_up(gh)), "a summary of an older head"),
+    (lambda gh: (codex_summary(gh, status="⏳ **In progress**"), codex_thumbs_up(gh)), "a review still running"),
+    (lambda gh: codex_summary(gh), "completed but no thumbs-up and no review of the head, which cannot be told from a lost one"),
+    (lambda gh: (codex_summary(gh, at="2026-10-12T05:00:00Z"), codex_thumbs_up(gh)), "a thumbs-up from before the latest completed review"),
+    (lambda gh: (codex_summary(gh), codex_thumbs_up(gh, login="tsnAnh")), "a person's thumbs-up"),
+    (lambda gh: (codex_summary(gh), gh.reactions.setdefault(7, []).append({"user": {"login": CODEX}, "content": "eyes", "created_at": "2026-10-12T03:03:12Z"})), "a different reaction"),
+    (lambda gh: app_review(gh, state="COMMENTED", login=CODEX), "a COMMENTED review without a completed summary"),
+    (lambda gh: (codex_summary(gh), app_review(gh, state="COMMENTED", login="claude[bot]")), "another app's review"),
+    (lambda gh: gh.comment(REPO, 7, "<!-- codex-pull-request-review-summary -->\n| **Code Review** | ✅ **Completed** <relative-time datetime=\"2026-10-12T03:03:07Z\"></relative-time> | `aaaaaaa` |", login="tsnAnh"),
+     "a summary a person wrote"),
+])
+def test_a_codex_review_that_is_not_complete_for_the_head_waits(team_kit_home, kit, capsys, setup, why):
+    gh = codex_review_gh(kit)
+    codex_review_unit(gh, team_kit_home, capsys)
+    setup(gh)
+    assert tick(gh, capsys) == ["[SILENT]"], why
+    assert gh.merges == [], why
+
+
+def test_a_failed_codex_review_is_a_gate(team_kit_home, kit, capsys):
+    gh = codex_review_gh(kit)
+    n = codex_review_unit(gh, team_kit_home, capsys)
+    codex_summary(gh, status="❌ **Failed**")
+    codex_thumbs_up(gh)
+    [notice] = tick(gh, capsys)
+    assert f"#{n} needs you" in notice and "review of" in notice and "failed" in notice and gh.merges == []
+
+
+def test_a_codex_pass_still_needs_the_other_gates(team_kit_home, kit, capsys):
+    gh = codex_review_gh(kit, risk_paths_high=["src/"])
+    gh.pr_files[7] = [{"filename": "src/app.py", "additions": 3, "deletions": 1, "status": "modified"}]
+    n = codex_review_unit(gh, team_kit_home, capsys)
+    codex_summary(gh)
+    codex_thumbs_up(gh)
+    [notice] = tick(gh, capsys)
+    assert f"#{n} is ready for you to merge" in notice and "risk high" in notice and gh.merges == []
