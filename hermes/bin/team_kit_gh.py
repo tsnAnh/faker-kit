@@ -2154,7 +2154,7 @@ class Gh:
         try:
             self.run(["api", "-X", "POST", "-f", f"ref={default}", "-f", f"inputs[pr]={key.pr}", "-f", f"inputs[head]={key.head}",
                       f"repos/{self.repo}/actions/workflows/{REVIEW_WORKFLOW}/dispatches"])
-        except Refused as err:
+        except (Refused, OSError) as err:  # OSError: gh never ran, so nothing reached GitHub
             attempts += 1
             self.write_app_record(path, {**fields, "state": "failed", "at": self.now(), "attempts": attempts, "error": reason(err)})
             if attempts >= REQUEST_ATTEMPTS:
@@ -2916,13 +2916,9 @@ class Project:
                         notice = gh.check_running(issue, cloud)
                     elif gh.review_app():
                         notice = gh.check_app_review(issue)
-                        try:
-                            requested = gh.request_final_review(issue)
-                        except (Refused, OSError, ValueError, KeyError, TypeError) as err:  # the gate above already ran; tried again next tick
-                            problems[f"{gh.repo}#{issue['number']} review request"] = reason(err)
-                        else:
-                            if requested:
-                                notices.append(requested)
+                        if notice:
+                            notices.append(notice)  # before the request, so a request error never drops the gate's once-per-head notice
+                        notice = gh.request_final_review(issue)
                     else:
                         notice = None
                 except Exception as err:  # noqa: BLE001 - one broken unit never stops the others

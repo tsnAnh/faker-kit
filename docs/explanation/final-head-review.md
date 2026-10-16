@@ -27,7 +27,7 @@ The record holds the pull request, head, base commit, state, attempts, and time,
 |---|---|---|
 | `sending` | Written just before the call | A record still `sending` means the process stopped mid-call. It becomes `lost`, and the owner gets one notice. It is never sent again, because GitHub may already have it |
 | `requested` | GitHub accepted the call | Nothing for this pull request, head, and base |
-| `failed` | GitHub refused, for example a workflow without `workflow_dispatch` (HTTP 422) | Retried after ten minutes, three calls in all. The owner gets a notice on the first refusal and when Hermes gives up |
+| `failed` | GitHub refused, for example a workflow without `workflow_dispatch` (HTTP 422), or `gh` did not run | Retried after ten minutes, three calls in all. The owner gets a notice on the first refusal and when Hermes gives up |
 | `lost` | See `sending` | Nothing |
 
 A duplicate or replayed report, a second tick, and two ticks at once all find the same key and request nothing more. A new head needs its own `done` report on that head before it gets a request. A report that arrives for an older head, or after the head moved, requests nothing. A new base commit under the same head is a new key and gets a new request, since the change to review is different.
@@ -69,14 +69,14 @@ Hermes already makes the call. Until the workflow accepts `workflow_dispatch`, G
 - It adds `workflow_dispatch` with the inputs `pr` and `head`.
 - A dispatch runs only from the default branch's definition of the file.
 - It checks out the base commit (`github.sha`, the default branch, for a dispatch), never the pull request.
-- Before any secret is used, it reads the inputs only from the environment and refuses unless `pr` is a number, `head` is a full commit, and the pull request is open, not a draft, from this repository, and at exactly that head.
+- Before any secret is used, it reads the inputs only from the environment. It reviews only when `pr` is a number, `head` is a full commit, and the pull request is open, not a draft, from this repository, and at exactly that head. Anything else skips the review with a notice and still succeeds (see below).
 - It stops running on `synchronize`. It keeps `opened`, `reopened`, and `ready_for_review`, so a person's pull request still gets a review.
 - It adds no `pull_request_target` and no other privileged trigger. Only a login with write access can dispatch a workflow.
 
 ```diff
 --- a/.github/workflows/claude-review.yml
 +++ b/.github/workflows/claude-review.yml
-@@ -5,28 +5,55 @@
+@@ -5,46 +5,82 @@
  # passing checks merges it; anything else goes to the owner. Needs the Claude GitHub app installed on the
  # repository and the CLAUDE_CODE_OAUTH_TOKEN secret (claude setup-token).
  
@@ -92,7 +92,7 @@ Hermes already makes the call. Until the workflow accepts `workflow_dispatch`, G
 +        description: The pull request number
 +        required: true
 +      head:
-+        description: The full head commit to review; refused unless it is the pull request's current head
++        description: The full head commit to review; skipped unless it is the pull request's current head
 +        required: true
  
  concurrency:
@@ -117,26 +117,36 @@ Hermes already makes the call. Until the workflow accepts `workflow_dispatch`, G
        pull-requests: write
        id-token: write  # exchanged for the Claude app's token, so the review is written as claude[bot]
      steps:
-+      # Inputs are text anyone who may dispatch can type: read them only from the environment, and refuse unless they name an
-+      # open, non-draft pull request from this repository whose current head is exactly that commit.
-+      - name: Refuse anything but the open pull request's current head
-+        if: github.event_name == 'workflow_dispatch'
++      # Inputs are text anyone who may dispatch can type: read them only from the environment, and review only an open,
++      # non-draft pull request from this repository whose current head is exactly that commit. Anything else skips the review
++      # and still succeeds, because a dispatched run's check lands on the default branch's head, where a failure reads as red main.
++      - name: Review only the open pull request's current head
++        id: target
 +        env:
 +          GH_TOKEN: ${{ github.token }}
 +        run: |
-+          [[ "$PR" =~ ^[0-9]{1,9}$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "pr must be a number and head a full commit"; exit 1; }
-+          read -r state draft repo sha < <(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '[.state, .draft, .head.repo.full_name, .head.sha] | @tsv')
-+          [[ "$state" == open && "$draft" == false && "$repo" == "$GITHUB_REPOSITORY" && "$sha" == "$HEAD_SHA" ]] \
-+            || { echo "#$PR is not open, is a draft, comes from a fork, or moved past $HEAD_SHA"; exit 1; }
++          review=true
++          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
++            review=false
++            if [[ "$PR" =~ ^[0-9]{1,9}$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
++              read -r state draft repo sha < <(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '[.state, .draft, .head.repo.full_name, .head.sha] | @tsv') || true
++              [[ "$state" == open && "$draft" == false && "$repo" == "$GITHUB_REPOSITORY" && "$sha" == "$HEAD_SHA" ]] && review=true
++            fi
++            [[ "$review" == true ]] || echo "::notice::skipped: #$PR is not an open, non-draft pull request from this repository at $HEAD_SHA"
++          fi
++          echo "review=$review" >> "$GITHUB_OUTPUT"
        # The base branch, so the checklist Claude reads is the one already on main, never the pull request's own edit.
        - uses: actions/checkout@v4
++        if: steps.target.outputs.review == 'true'
          with:
 -          ref: ${{ github.event.pull_request.base.sha }}
 +          ref: ${{ github.event.pull_request.base.sha || github.sha }}
            fetch-depth: 1
            persist-credentials: false  # no token left in .git/config for the review to read
        - uses: anthropics/claude-code-action@v1
-@@ -35,16 +62,16 @@
++        if: steps.target.outputs.review == 'true'
+         with:
+           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
            # Claude may read only the checkout, write only the review body, and run only commands that name this pull
            # request and this commit, so a diff that asks for a secret, another pull request, or a newer push cannot be followed.
            prompt: |
@@ -157,11 +167,13 @@ Hermes already makes the call. Until the workflow accepts `workflow_dispatch`, G
 +               - otherwise: `gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/reviews -f commit_id=${{ env.HEAD_SHA }} -f event=APPROVE -F body=@review-body.md`
            claude_args: >-
 -            --allowedTools "Read(./**),Write(./review-body.md),Edit(./review-body.md),Bash(gh pr diff ${{ github.event.pull_request.number }}),Bash(gh pr view ${{ github.event.pull_request.number }}),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=APPROVE -F body=@review-body.md),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=REQUEST_CHANGES -F body=@review-body.md)"
-+            --allowedTools "Read(./**),Write(./review-body.md),Edit(./review-body.md),Bash(gh pr diff ${{ env.PR }}),Bash(gh pr view ${{ env.PR }}),Bash(gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/reviews -f commit_id=${{ env.HEAD_SHA }} -f event=APPROVE -F body=@review-body.md),Bash(gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/reviews -f commit_id=${{ env.HEAD_SHA }} -f event=REQUEST_CHANGES -F body=@review-body.md)"```
++            --allowedTools "Read(./**),Write(./review-body.md),Edit(./review-body.md),Bash(gh pr diff ${{ env.PR }}),Bash(gh pr view ${{ env.PR }}),Bash(gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/reviews -f commit_id=${{ env.HEAD_SHA }} -f event=APPROVE -F body=@review-body.md),Bash(gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/reviews -f commit_id=${{ env.HEAD_SHA }} -f event=REQUEST_CHANGES -F body=@review-body.md)"
+```
 
-Two points to settle when the bootstrap bot applies it:
+Three points to settle when the bootstrap bot applies it:
 
 - `anthropics/claude-code-action@v1` must accept a `workflow_dispatch` event with an explicit `prompt`. Check it on the first dispatched run.
 - A unit pull request opened before its final head still gets one review when it opens. Drop `opened` too if that review is not wanted. A person's pull request would then be reviewed only when it is reopened or marked ready.
+- A dispatched run is a run on the default branch, so its check run lands on the default branch's head commit. `team-kit-incidents` reads exactly those check runs (`Incidents.main_checks`). That is why a stale or invalid dispatch skips and succeeds instead of failing: a failure would read as a red default branch and could open an incident, or pull the cord where `andon_on_red` is on. A review job that fails for its own reason (an expired `CLAUDE_CODE_OAUTH_TOKEN`, say) still shows red there. While a review runs, `main_checks` also reads the branch as undecided. Before applying, either accept that, or have `main_checks` ignore the review workflow's runs in its own reviewed change.
 
-The pull request can move after the check step and before the review is posted. The review is still posted with `commit_id` set to the requested head, and Hermes counts a review only on the current head, so such a review never approves the newer push.
+The pull request can move after the skip step and before the review is posted. The review is still posted with `commit_id` set to the requested head, and Hermes counts a review only on the current head, so such a review never approves the newer push.

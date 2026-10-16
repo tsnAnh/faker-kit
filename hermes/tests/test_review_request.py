@@ -338,3 +338,21 @@ def test_a_broken_request_never_stops_the_review_gate(team_kit_home, kit, capsys
     assert notices[0] == (f"team-kit notice: #{n} needs you: {PR_URL} has merge conflicts with its base branch; relaunch it to resolve them. "
                           f"https://github.com/{REPO}/issues/{n}")
     assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
+
+
+def test_a_gh_that_never_ran_is_a_refusal_not_a_lost_request(team_kit_home, kit):
+    gh = app_gh(kit)
+    n = final_unit(gh)
+
+    class Missing(FakeGh):
+        def __call__(self, args, input=None):
+            if args[0] == "api" and args[-1].endswith("/dispatches"):
+                raise FileNotFoundError("gh")
+            return super().__call__(args, input)
+
+    missing = Missing.__new__(Missing)
+    missing.__dict__ = gh.__dict__
+    assert "GitHub refused to start" in request(missing, n)
+    assert saved(team_kit_home, n)["state"] == "failed"
+    request(gh, n, now=NOW + RETRY_SECONDS)
+    assert gh.workflow_runs == [REQUEST], "retried, since nothing reached GitHub the first time"
