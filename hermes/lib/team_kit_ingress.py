@@ -366,6 +366,7 @@ def _handler_for(services: _Services) -> type[http.server.BaseHTTPRequestHandler
             self.rfile = _HeaderBudget(self.body_reader, limits.max_header_bytes)
             self.expired = threading.Event()
             self.answered = False
+            self.read_complete = False
             self.route_name = "-"
             self.body_length = 0
             self.watchdog = threading.Timer(limits.read_timeout, self.expire)
@@ -406,7 +407,8 @@ def _handler_for(services: _Services) -> type[http.server.BaseHTTPRequestHandler
             if self.answered:
                 return
             self.answered = True
-            if self.expired.is_set():
+            # A timer that fires after the read finished must not turn a committed answer into a 408.
+            if self.expired.is_set() and not self.read_complete:
                 status, reason, delivery = 408, None, None
             payload = json.dumps({"status": status, "reason": reason or REASONS.get(status, "request refused"), "delivery": delivery}).encode()
             self.send_response(status)
@@ -473,6 +475,10 @@ def _handler_for(services: _Services) -> type[http.server.BaseHTTPRequestHandler
                 return
             self.body_length = length
             self.watchdog.cancel()
+            if self.expired.is_set():
+                self.answer(408)
+                return
+            self.read_complete = True
             try:
                 secret = read_secret_file(route.secret_file)
             except ConfigError:
