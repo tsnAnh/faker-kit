@@ -49,9 +49,9 @@ jobs:
                - otherwise: `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=APPROVE -F body=@review-body.md`
           claude_args: >-
             --allowedTools "Read(./**),Write(./review-body.md),Edit(./review-body.md),Bash(gh pr diff ${{ github.event.pull_request.number }}),Bash(gh pr view ${{ github.event.pull_request.number }}),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=APPROVE -F body=@review-body.md),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=REQUEST_CHANGES -F body=@review-body.md)"
-      # A green action is not a review. Fail unless claude[bot] submitted APPROVED or CHANGES_REQUESTED on this exact head,
-      # and print only the sanitized denial count and denied tool names. The script is read from the base checkout above,
-      # never from the pull request, so a pull request cannot edit the check that judges it.
+      # A green action is not a review. Fail unless claude[bot] submitted APPROVED or CHANGES_REQUESTED on this exact head.
+      # The check is defined here, in the workflow the base branch already trusts, so a pull request cannot add a file that
+      # judges itself. It prints fixed tool and command categories only, never model-written argument text.
       - name: Require a terminal claude[bot] review on this head
         if: ${{ !cancelled() }}
         env:
@@ -61,5 +61,77 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
-          gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq '.[]' | jq -s '.' > "$RUNNER_TEMP/reviews.json"
-          python3 -I scripts/claude_review_postcondition.py "$RUNNER_TEMP/reviews.json" "${EXECUTION_FILE:-/nonexistent}" "$HEAD_SHA"
+          gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq '.[]' | jq -s '.' > "$RUNNER_TEMP/reviews.json" || echo '[]' > "$RUNNER_TEMP/reviews.json"
+          REVIEWS_FILE="$RUNNER_TEMP/reviews.json" python3 -I - <<'PY'
+          import json
+          import os
+          import sys
+
+          HEAD = os.environ["HEAD_SHA"]
+          APP = "claude[bot]"
+          TERMINAL = {"APPROVED", "CHANGES_REQUESTED"}
+          TOOLS = {"Bash", "Read", "Write", "Edit"}
+
+
+          def category(name, tool_input):
+              # Only fixed labels are ever printed. Model-written argument text is never echoed.
+              if name != "Bash":
+                  return name if name in TOOLS else "other-tool"
+              cmd = str((tool_input or {}).get("command", ""))
+              if cmd.startswith("gh pr diff "):
+                  return "Bash:gh-pr-diff"
+              if cmd.startswith("gh pr view "):
+                  return "Bash:gh-pr-view"
+              if cmd.startswith("gh api ") and "/reviews" in cmd:
+                  if "event=APPROVE" in cmd:
+                      return "Bash:gh-api-review-approve"
+                  if "event=REQUEST_CHANGES" in cmd:
+                      return "Bash:gh-api-review-request-changes"
+                  return "Bash:gh-api-review-other"
+              if cmd.startswith("gh api "):
+                  return "Bash:gh-api-other"
+              return "Bash:other"
+
+
+          counts = {}
+          readable = True
+          try:
+              with open(os.environ.get("EXECUTION_FILE") or "/nonexistent") as handle:
+                  data = json.load(handle)
+              for item in data if isinstance(data, list) else [data]:
+                  if isinstance(item, dict) and item.get("type") == "result":
+                      for d in item.get("permission_denials") or []:
+                          label = category(str(d.get("tool_name", "?")), d.get("tool_input"))
+                          counts[label] = counts.get(label, 0) + 1
+          except (OSError, ValueError):
+              readable = False
+
+          try:
+              with open(os.environ["REVIEWS_FILE"]) as handle:
+                  reviews = json.load(handle)
+          except (OSError, ValueError):
+              reviews = None
+
+          mine = [r for r in reviews or [] if (r.get("user") or {}).get("login") == APP]
+          on_head = [r for r in mine if r.get("commit_id") == HEAD]
+          terminal = [r for r in on_head if r.get("state") in TERMINAL]
+
+          if terminal:
+              print("review postcondition: %s submitted %s on %s" % (APP, terminal[-1]["state"], HEAD[:12]))
+              sys.exit(0)
+
+          print("review postcondition FAILED: no terminal %s review on head %s" % (APP, HEAD[:12]))
+          if reviews is None:
+              print("  the reviews list could not be read")
+          else:
+              states = ",".join(sorted({r.get("state", "?") for r in on_head})) or "none"
+              print("  %s reviews on any commit: %d; on this head: %d (states: %s)" % (APP, len(mine), len(on_head), states))
+          if not readable:
+              print("  no readable execution log; cannot count tool denials")
+          print("  tool permission denials: %d" % sum(counts.values()))
+          for label in sorted(counts):
+              print("  denied: %s x%d" % (label, counts[label]))
+          print("  Fix: a denied category above means claude_args did not allow a command the review needed."
+                if counts else "  Fix: the action finished without submitting a review; read its summary for the reason.")
+          sys.exit(1)
+          PY
