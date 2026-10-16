@@ -84,16 +84,57 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - name: Export the static site
         run: bash scripts/export-site.sh
+      - name: Runner diagnostics (metadata only, no environment, no arguments)
+        run: |
+          python3 - <<'PY'
+          import os, subprocess
+
+          def first(path, n=1):
+              try:
+                  return open(path).read().splitlines()[:n]
+              except OSError as e:
+                  return ["unreadable: %s" % e.__class__.__name__]
+
+          def status_fields(*names):
+              out = {}
+              for line in first("/proc/self/status", 80):
+                  k, _, v = line.partition(":")
+                  if k in names:
+                      out[k] = v.strip()
+              return out
+
+          print("arch:", os.uname().machine, "kernel:", os.uname().release)
+          print("uid/gid:", os.getuid(), os.getgid())
+          print("status:", status_fields("Seccomp", "NoNewPrivs", "CapEff", "CapBnd"))
+          print("uid_map:", first("/proc/self/uid_map"))
+          print("user ns:", os.readlink("/proc/self/ns/user"))
+          print("cgroup:", first("/proc/1/cgroup"))
+          print("dockerenv:", os.path.exists("/.dockerenv"), "containerenv:", os.path.exists("/run/.containerenv"))
+          print("max_user_namespaces:", first("/proc/sys/user/max_user_namespaces"))
+          print("apparmor_restrict_userns:", first("/proc/sys/kernel/apparmor_restrict_unprivileged_userns"))
+          print("subuid entries for this uid:", sum(1 for l in first("/etc/subuid", 200) if l.split(":")[0] in (str(os.getuid()),)))
+          r = subprocess.run(["unshare", "-Ur", "true"], capture_output=True, text=True)
+          print("unshare -Ur true: exit", r.returncode, "stderr:", r.stderr.strip()[:200])
+          for tool in ("node", "python3", "git", "buildah", "docker", "podman", "newuidmap"):
+              path = subprocess.run(["sh", "-c", "command -v " + tool], capture_output=True, text=True).stdout.strip()
+              ver = ""
+              if path and tool in ("node", "python3", "git", "buildah"):
+                  v = subprocess.run([tool, "--version"], capture_output=True, text=True)
+                  ver = (v.stdout or v.stderr).strip().splitlines()[0][:80]
+              print("tool:", tool, "->", path or "absent", ver)
+          PY
       - name: Require the unprivileged image builder
         run: |
           command -v buildah >/dev/null || { echo "buildah is not installed in the runner image (issue 160)"; exit 1; }
       - name: Build the image without pushing
-        run: buildah --storage-driver vfs --isolation chroot bud -f deploy/docs/Dockerfile -t team-kit-docs:pr .
+        run: buildah --storage-driver vfs bud --isolation chroot -f deploy/docs/Dockerfile -t team-kit-docs:pr .
 
   deploy:
     # Skipped until the DOCS_HOST variable is set, so forks and unconfigured repos only build.
