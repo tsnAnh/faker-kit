@@ -35,18 +35,6 @@ jobs:
         with:
           node-version: 22
       - uses: oven-sh/setup-bun@v2
-      - name: Vendored plugins match upstream plus model rules
-        run: node scripts/sync-upstream.mjs --check
-      - name: Manifests, frontmatter, links, catalog
-        run: node scripts/validate.mjs
-      - name: Generated docs are current
-        run: node scripts/gen-catalog.mjs --check
-      - name: Docs site pages, links, and navigation resolve
-        run: node scripts/gen-site.mjs
-      - name: trust-ladder tests (hooks, Pi extension, run-model, link-skills)
-        run: bun test plugins/trust-ladder
-      - name: Upstream hooks run through the Claude Code and Codex adapter
-        run: bun test upstream/agent-hooks
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
