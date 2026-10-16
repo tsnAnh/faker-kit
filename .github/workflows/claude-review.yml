@@ -17,7 +17,7 @@ jobs:
   review:
     # Forks get no secrets, and drafts are not ready.
     if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
-    runs-on: [self-hosted, team-kit]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
@@ -30,6 +30,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false  # no token left in .git/config for the review to read
       - uses: anthropics/claude-code-action@v1
+        id: claude
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Claude may read only the checkout, write only the review body, and run only commands that name this pull
@@ -48,3 +49,24 @@ jobs:
                - otherwise: `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=APPROVE -F body=@review-body.md`
           claude_args: >-
             --allowedTools "Read(./**),Write(./review-body.md),Edit(./review-body.md),Bash(gh pr diff ${{ github.event.pull_request.number }}),Bash(gh pr view ${{ github.event.pull_request.number }}),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=APPROVE -F body=@review-body.md),Bash(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews -f commit_id=${{ github.event.pull_request.head.sha }} -f event=REQUEST_CHANGES -F body=@review-body.md)"
+      # A green action is not a review. Fail unless claude[bot] submitted APPROVED or CHANGES_REQUESTED on this exact head,
+      # and print only the sanitized denial count and denied tool names. The script comes from the head, after the review,
+      # so a pull request cannot change what the review could read.
+      - uses: actions/checkout@v4
+        if: ${{ !cancelled() }}
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr-head
+          sparse-checkout: scripts/claude_review_postcondition.py
+          persist-credentials: false
+      - name: Require a terminal claude[bot] review on this head
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          gh api --paginate "repos/$REPO/pulls/$PR/reviews" --jq '.[]' | jq -s '.' > "$RUNNER_TEMP/reviews.json"
+          python3 -I pr-head/scripts/claude_review_postcondition.py "$RUNNER_TEMP/reviews.json" "${EXECUTION_FILE:-/nonexistent}" "$HEAD_SHA"
