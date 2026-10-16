@@ -3,7 +3,8 @@ import subprocess
 
 import pytest
 from conftest import gh_calls, git
-from test_admin import SHOP, add_shop, admin, posted, seed
+from team_kit_andon import Andon
+from test_admin import SHOP, add_shop, admin, in_process, posted, seed
 
 CRM = "acme/crm"
 OLD = "1" * 40
@@ -189,10 +190,12 @@ def test_two_projects_one_broken_the_other_still_repaired(ready, shop):
     code, out = admin(ready, "add-project", "--bot", "sep-crm", "--project", "crm", "--repo", CRM, profile="ong-xay")
     assert code == 0, out
     seed(root, "files.json", repo_files(installed, OLD, extra={CRM: {".agents/dispatch.json": "{nope"}}))
-    [notice] = reconcile(ready)
-    assert notice.startswith(f"team-kit notice: kit drift in project crm ({CRM}) needs the owner: could not read {CRM}: ")
+    assert reconcile(ready) == ["[SILENT]"], "one unreadable run may be a GitHub hiccup"
     assert vendor_runs(root) == 1 and posted(root)["pulls"][0]["head"] == KIT_BRANCH.format(short=installed[:12])
     assert drift(ready, "shop")["action"] == "wait"
+    [notice] = reconcile(ready)
+    assert notice.startswith(f"team-kit notice: kit drift in project crm ({CRM}) needs the owner: could not read {CRM}: ")
+    assert reconcile(ready) == ["[SILENT]"]
 
 
 def test_a_kit_pull_request_whose_head_moved_is_not_trusted(ready, shop):
@@ -243,3 +246,78 @@ def test_kit_drift_is_read_only(ready, shop):
     assert all(c["args"][:2] == ["api", c["args"][1]] and "-X" not in c["args"] for c in gh_calls(root)[before:])
     assert not (root / "team-kit" / "kit-drift" / "shop.json").exists()
     assert vendor_runs(root) == 0
+
+
+def test_a_project_bots_own_andon_cord_holds_its_repair(ready, shop):
+    root, installed = shop
+    at(root, installed, OLD)
+    Andon(root / "team-kit").write("meo-beo", {"reason": "stop the shop", "by": "the owner", "at": 1.0})
+    assert reconcile(ready) == ["[SILENT]"]
+    assert vendor_runs(root) == 0
+    assert "held while andon pulled for this project" in drift(ready)["why"]
+
+
+def test_drifting_back_after_a_repair_is_repaired_again(ready, shop):
+    root, installed = shop
+    at(root, installed, OLD)
+    assert reconcile(ready) == ["[SILENT]"]
+    at(root, installed, installed)
+    seed(root, "pulls.json", {SHOP: []})
+    assert reconcile(ready) == ["[SILENT]"]
+    at(root, installed, OLD)  # the kit update was reverted
+    assert reconcile(ready) == ["[SILENT]"]
+    assert vendor_runs(root) == 2
+
+
+def test_a_kit_pull_request_closed_unmerged_goes_to_the_owner(ready, shop):
+    root, installed = shop
+    at(root, installed, OLD)
+    assert reconcile(ready) == ["[SILENT]"]
+    seed(root, "pulls.json", {SHOP: []})  # the owner closed it
+    [notice] = reconcile(ready)
+    assert f"vendor already ran for this state (https://github.com/{SHOP}/pull/7)" in notice
+    assert vendor_runs(root) == 1
+
+
+def clock(start):
+    now = [start]
+    return now, lambda: now[0]
+
+
+def test_a_failed_vendor_run_is_tried_again_hours_later(ready, shop, monkeypatch, capsys):
+    root, installed = shop
+    seed(root, "files.json", repo_files(installed, OLD))
+    seed(root, "tree.json", {SHOP: [{"path": ".claude/skills", "mode": "120000", "type": "blob", "sha": "l"}]})
+    now, tick = clock(1_800_000_000.0)
+    assert in_process(ready, monkeypatch, "kit-reconcile", now=tick) == 0
+    assert "vendor failed" in capsys.readouterr().out
+    seed(root, "tree.json", {SHOP: []})  # GitHub answers again
+    now[0] += 3600
+    assert in_process(ready, monkeypatch, "kit-reconcile", now=tick) == 0
+    assert capsys.readouterr().out.strip() == "[SILENT]" and vendor_runs(root) == 0, "not before the retry time"
+    now[0] += 6 * 3600
+    assert in_process(ready, monkeypatch, "kit-reconcile", now=tick) == 0
+    assert capsys.readouterr().out.strip() == "[SILENT]" and vendor_runs(root) == 1, "retried, and mid-repair is silent"
+
+
+def test_a_kit_pull_request_that_never_goes_green_goes_to_the_owner(ready, shop, monkeypatch, capsys):
+    root, installed = shop
+    at(root, installed, OLD)
+    kit_pr(root, installed)
+    now, tick = clock(1_800_000_000.0)
+    assert in_process(ready, monkeypatch, "kit-reconcile", now=tick) == 0
+    assert capsys.readouterr().out.strip() == "[SILENT]"
+    now[0] += 7 * 3600
+    assert in_process(ready, monkeypatch, "kit-reconcile", now=tick) == 0
+    out = capsys.readouterr().out
+    assert "the kit pull request has waited over 6 hours with checks none" in out and vendor_runs(root) == 0
+
+
+def test_checks_moving_do_not_repeat_a_notice_about_something_else(ready, shop):
+    root, installed = shop
+    at(root, installed, OLD, auto_merge="none")
+    kit_pr(root, installed)
+    seed(root, "checks.json", {"commit9": {"runs": [{"status": "in_progress", "conclusion": None}]}})
+    assert len(reconcile(ready)) == 1
+    seed(root, "checks.json", {"commit9": {"runs": [{"status": "completed", "conclusion": "success"}]}})
+    assert reconcile(ready) == ["[SILENT]"]

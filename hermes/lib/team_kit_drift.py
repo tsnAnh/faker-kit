@@ -46,6 +46,7 @@ class Drift:
     state: State
     action: Action
     why: str
+    unreadable: bool = False  # GitHub could not be read, so the values are not known
 
     def pull(self) -> KitPull | None:
         """The kit pull request this state is about: the one for the installed commit, if any."""
@@ -54,6 +55,11 @@ class Drift:
     def fingerprint(self) -> str:
         """What a vendor attempt or a notice is about. Anything here changing makes it a new state."""
         return json.dumps([self.installed, self.kit_ref, self.vendored, [(p.number, p.head, p.conflicts, p.checks) for p in self.pulls], self.why])
+
+    def told_key(self) -> str:
+        """What a notice is about: the values, the pull request, and why. Checks moving under an unrelated why are no news."""
+        pull = self.pull()
+        return json.dumps([self.installed, self.kit_ref, self.vendored, (pull.number, pull.head) if pull else None, self.why])
 
     def report(self) -> dict[str, object]:
         out = asdict(self)

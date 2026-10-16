@@ -104,6 +104,8 @@ DISPATCH_JSON = ".agents/dispatch.json"
 DRIFT_DIR = "kit-drift"  # one record per project of what kit-reconcile saw, did, and told
 NOTICE = "team-kit notice:"
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
+VENDOR_RETRY_SECONDS = 6 * 3600  # a failed vendor run is tried again for the same state after this
+WAIT_LIMIT_SECONDS = 6 * 3600  # a kit pull request whose checks have not passed by then goes to the owner
 COMPARE_ORDER: dict[str, Order] = {"identical": "same", "ahead": "ahead", "behind": "behind", "diverged": "diverged"}
 # The Hermes profile setting that loads skills from folders outside the profile (machine config `skills`).
 KIT_SKILL_DIRS = ("skills", "external_dirs")
@@ -635,7 +637,7 @@ class Admin:
         projects = []
         for bot in sorted(self.policy().projects().values(), key=lambda b: str(b.project)):
             project = str(bot.project)
-            projects.append(self.drift(project, str(bot.repo), installed, read_json(self.drift_record(project)), self.drift_cord(project)).report())
+            projects.append(self.drift(project, str(bot.repo), installed, read_json(self.drift_record(project)), self.drift_cord(bot.name)).report())
         return {"installed": installed, "projects": projects}
 
     def kit_reconcile(self) -> list[str]:
@@ -648,13 +650,13 @@ class Admin:
             installed = git(self.kit, "rev-parse", "HEAD")
             notices = []
             for bot in sorted(self.policy().projects().values(), key=lambda b: str(b.project)):
-                notices += self.reconcile_project(str(bot.project), str(bot.repo), installed)
+                notices += self.reconcile_project(str(bot.project), str(bot.repo), installed, bot.name)
         return notices or ["[SILENT]"]
 
-    def reconcile_project(self, project: str, repo: str, installed: str) -> list[str]:
+    def reconcile_project(self, project: str, repo: str, installed: str, bot: str) -> list[str]:
         path = self.drift_record(project)
         record = read_json(path)
-        cord = self.drift_cord(project)
+        cord = self.drift_cord(bot)
         drift = self.drift(project, repo, installed, record, cord)
         if drift.action == "vendor" and not cord:
             attempt: dict = {"fingerprint": drift.fingerprint(), "at": self.now(), "installed": installed}
@@ -664,10 +666,20 @@ class Admin:
                 attempt.update(ok=False, error=str(err)[:200])
             record["vendor"] = attempt
             drift = self.drift(project, repo, installed, record, cord)  # read back what the repair left on GitHub
-        told = drift.fingerprint() if drift.state == "needs_human" else None
+        # A GitHub hiccup is said only once it lasts two runs in a row.
+        record["read_errors"] = int(record.get("read_errors") or 0) + 1 if drift.unreadable else 0
+        told = drift.told_key() if drift.state == "needs_human" and record["read_errors"] != 1 else None
         out = [drift_notice(drift, NOTICE)] if told and told != record.get("told") else []
-        if drift.state == "in_sync" and record.get("state") != "in_sync":
-            record["agreed"] = {"at": self.now(), "kit_ref": installed}
+        pull = drift.pull()
+        waiting: dict = record["waiting"] if isinstance(record.get("waiting"), dict) else {}
+        if pull and pull.trusted and (waiting.get("pr"), waiting.get("head")) != (pull.number, pull.head):
+            record["waiting"] = {"pr": pull.number, "head": pull.head, "since": self.now()}
+        elif not (pull and pull.trusted):
+            record.pop("waiting", None)
+        if drift.state == "in_sync":
+            if record.get("state") != "in_sync":
+                record["agreed"] = {"at": self.now(), "kit_ref": installed}
+            record.pop("vendor", None)  # a later drift to the same state is a new repair
         record.update(state=drift.state, action=drift.action, why=drift.why, told=told, checked_at=self.now(),
                       values={"installed": installed, "kit_ref": drift.kit_ref, "vendored": drift.vendored})
         write_json(path, record)
@@ -676,9 +688,9 @@ class Admin:
     def drift_record(self, project: str) -> Path:
         return self.home / DRIFT_DIR / f"{project}.json"
 
-    def drift_cord(self, project: str) -> str | None:
-        andon = Andon(self.home, self.now)
-        cord = andon.machine() or andon.project(project)
+    def drift_cord(self, bot: str) -> str | None:
+        """The machine's cord, or the project bot's own, which is kept under the bot's name."""
+        cord = Andon(self.home, self.now).pulled(bot)
         return cord.describe() if cord else None
 
     def drift(self, project: str, repo: str, installed: str, record: dict, cord: str | None) -> Drift:
@@ -701,14 +713,23 @@ class Admin:
             pulls = self.kit_pull_states(repo, ref_query, installed)
         except DRIFT_ERRORS as err:  # said once to the owner, read again next run
             return Drift(project, repo, installed, kit_ref, vendored, order, pulls, auto_merge, "needs_human", "owner",
-                         f"could not read {repo}: {str(err)[:160]}")
+                         f"could not read {repo}: {str(err)[:160]}", unreadable=True)
         state, action, why = classify(installed, kit_ref, vendored, order, pulls, auto_merge)
         drift = Drift(project, repo, installed, kit_ref, vendored, order, pulls, auto_merge, state, action, why)
         last = record.get("vendor") if isinstance(record.get("vendor"), dict) else None
         if action == "vendor" and last and last.get("fingerprint") == drift.fingerprint():
-            why = (f"team-kit-admin vendor failed: {last.get('error')}" if not last.get("ok")
-                   else "team-kit-admin vendor ran for this state and left it unchanged")
-            drift = dataclasses.replace(drift, state="needs_human", action="owner", why=why)
+            if not last.get("ok") and self.now() - float(last.get("at") or 0) < VENDOR_RETRY_SECONDS:
+                drift = dataclasses.replace(drift, state="needs_human", action="owner", why=f"team-kit-admin vendor failed: {last.get('error')}")
+            elif last.get("ok"):
+                drift = dataclasses.replace(drift, state="needs_human", action="owner", why=(
+                    f"team-kit-admin vendor already ran for this state ({last.get('pr') or 'no pull request'}), and its pull request was "
+                    "closed unmerged or it changed nothing, so it is not run again"))
+        waiting: dict = record["waiting"] if isinstance(record.get("waiting"), dict) else {}
+        pull = drift.pull()
+        if (drift.action == "wait" and pull and (waiting.get("pr"), waiting.get("head")) == (pull.number, pull.head)
+                and self.now() - float(waiting.get("since") or 0) > WAIT_LIMIT_SECONDS):
+            drift = dataclasses.replace(drift, state="needs_human", action="owner", why=(
+                f"the kit pull request has waited over {WAIT_LIMIT_SECONDS // 3600} hours with checks {pull.checks}; tick merges it only once they pass"))
         if drift.action == "vendor" and cord:
             drift = dataclasses.replace(drift, why=f"{drift.why}; held while {cord}")
         return drift

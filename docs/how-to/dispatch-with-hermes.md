@@ -128,7 +128,7 @@ You hear about a project only when it needs you, once per distinct state, in one
 team-kit notice: kit drift in project <p> (OWNER/REPO) needs the owner: <why>. Installed kit <sha>, kit_ref <sha>, vendored kit <sha>; kit pull request <url or none>.
 ```
 
-That happens when this machine's kit is older than `kit_ref` (only a new `install.sh --ref` fixes that), when the order of the two commits cannot be told, when the kit pull request's checks fail, when its head is not the commit `vendor` made, when a `vendor` run failed or changed nothing, or when `auto_merge` is not `low`, so you merge it. The job never installs a kit, merges, or moves `kit_ref` except through `vendor`, and it waits while an andon cord is pulled. To see the report without changing anything, run this from a shell on the machine:
+That happens when this machine's kit is older than `kit_ref` (only a new `install.sh --ref` fixes that), when the order of the two commits cannot be told, when the kit pull request's checks fail or have not passed within 6 hours, when its head is not the commit `vendor` made, when it was closed unmerged, when a `vendor` run failed (it is tried again after 6 hours) or changed nothing, when GitHub could not be read on two runs in a row, or when `auto_merge` is not `low`, so you merge it. The job never installs a kit, merges, or moves `kit_ref` except through `vendor`, and it waits while an andon cord is pulled. To see the report without changing anything, run this from a shell on the machine:
 
 ```bash
 ~/.hermes/bin/team-kit-admin kit-drift
