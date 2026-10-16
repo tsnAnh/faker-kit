@@ -42,7 +42,7 @@ With `webhooks` in the machine config, GitHub calls the machine when an issue, c
 
 ## CI on this machine
 
-`team-kit-runner up --config <machine.yaml>` (also step 7 of `setup-machine.sh`) runs the GitHub Actions jobs of every repository under `ci_runners` here, one fresh Ubuntu container per job, so CI needs no GitHub-hosted minutes. Workflows ask for them with `runs-on: [self-hosted, team-kit]`. The image is `hermes/ci-runner/`; the services are `team-kit-ci-<repo>-<slot>`. See [CI on this machine](../docs/how-to/dispatch-with-hermes.md#optional-ci-on-this-machine).
+`team-kit-runner up --config <machine.yaml>` (also step 7 of `setup-machine.sh`) runs the GitHub Actions jobs of every repository under `ci_runners` here, one fresh Ubuntu container per job, so CI needs no GitHub-hosted minutes. Workflows ask for them with `runs-on: [self-hosted, team-kit]`. The image is `hermes/ci-runner/`; the services are `team-kit-ci-<repo>-<slot>`. See [CI on this machine](../docs/how-to/dispatch-with-hermes.md#optional-ci-on-this-machine). The job container's one relaxation, `ci-runner/seccomp.json`, lets it build images without a daemon: [Build container images on the CI runner](../docs/how-to/ci-runner-image-builds.md).
 
 ## How cloud agents get the kit
 

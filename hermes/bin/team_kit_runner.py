@@ -41,6 +41,7 @@ if (HERE.parent / "vendor").is_dir() and str(HERE.parent / "vendor") not in sys.
 from team_kit_machine import REPO, MachineError, load_machine
 
 IMAGE_DIR = HERE.parent / "ci-runner"
+SECCOMP_PROFILE = IMAGE_DIR / "seccomp.json"  # the one relaxation of the job container; see docs/how-to/ci-runner-image-builds.md
 IMAGE = "team-kit-ci-runner"
 LABEL = "team-kit"
 SERVICE_PREFIX = "team-kit-ci-"
@@ -118,7 +119,7 @@ class Slot:
         self.run(["docker", "rm", "-f", self.container], capture_output=True)  # left behind by a crash or a stop
         runner_id, config = self.register()
         try:
-            done = self.run(["docker", "run", "--rm", "-i", "--name", self.container, tag],
+            done = self.run(["docker", "run", "--rm", "-i", "--security-opt", f"seccomp={SECCOMP_PROFILE}", "--name", self.container, tag],
                             input=config + "\n", text=True, timeout=JOB_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             self.run(["docker", "rm", "-f", self.container], capture_output=True)

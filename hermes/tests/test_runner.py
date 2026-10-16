@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 import yaml
-from team_kit_runner import BACKOFF_SECONDS, Services, Slot, image_tag, main, service_name, up
+from team_kit_runner import BACKOFF_SECONDS, SECCOMP_PROFILE, Services, Slot, image_tag, main, service_name, up
 
 CONFIG = "eyJzZWNyZXQiOiJvbmUtam9iIn0="  # what GitHub returns as encoded_jit_config: the runner's one-job credentials
 
@@ -48,10 +48,24 @@ def test_one_job_gets_a_fresh_container_and_its_config_only_on_stdin():
     assert body["labels"][0] == "self-hosted" and "team-kit" in body["labels"] and body["runner_group_id"] == 1
     assert body["name"] == "ben-s-mac-local-2-1000"
     [(run_argv, stdin)] = [(a, i) for a, i in fake.calls if a[:2] == ["docker", "run"]]
-    assert run_argv == ["docker", "run", "--rm", "-i", "--name", "team-kit-ci-acme-shop-2", image_tag()]
+    assert run_argv == ["docker", "run", "--rm", "-i", "--security-opt", f"seccomp={SECCOMP_PROFILE}", "--name", "team-kit-ci-acme-shop-2", image_tag()]
     assert stdin == CONFIG + "\n"
     assert all(CONFIG not in " ".join(a) for a in fake.argvs()), "the one-job credentials never reach an argv"
     assert fake.argvs()[-1] == ["gh", "api", "-X", "DELETE", "repos/Acme/Shop/actions/runners/42"], "a runner that got no job is removed"
+
+
+def test_the_job_container_gets_one_security_option_and_no_other_privilege():
+    fake = Fake()
+    slot(fake).once()
+    [run_argv] = [a for a in fake.argvs() if a[:2] == ["docker", "run"]]
+    assert [a for a in run_argv if a.startswith("--") or a == "-i"] == ["--rm", "-i", "--security-opt", "--name"]
+    assert run_argv.count("--security-opt") == 1
+    assert run_argv[run_argv.index("--security-opt") + 1] == f"seccomp={SECCOMP_PROFILE}"
+    assert SECCOMP_PROFILE.name == "seccomp.json" and SECCOMP_PROFILE.parent.name == "ci-runner" and SECCOMP_PROFILE.is_file()
+    line = " ".join(run_argv)
+    for forbidden in ("--privileged", "--cap-add", "docker.sock", "unconfined", "apparmor", "--volume", " -v ", "--mount", "--device", "--pid", "--network", "--userns"):
+        assert forbidden not in line, forbidden
+    assert "--rm" in run_argv, "the container is removed after the job"
 
 
 def test_a_leftover_container_is_removed_before_the_next_job():
