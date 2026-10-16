@@ -6,6 +6,13 @@
       receiver gives GitHub as JSON: 202 only after the delivery is committed, 401 for a bad signature, 403 for
       a repository with no project in bots.yaml, 409 for a delivery id seen with a different body, 503 when the
       commit failed. Exit 0 on 202, 1 otherwise.
+  serve --config PATH [--db PATH]
+      Listen on a loopback address and answer GitHub webhook requests with the same receiver. The JSON config names
+      the bind address, the port, and one route per project: a URL path, the repository it accepts, and the path of
+      its secret file. See docs/explanation/event-receiver.md. Stops on SIGTERM or Ctrl-C.
+  check-config --config PATH
+      Validate that config and its secret files' modes without starting a listener; print the routes as JSON and exit
+      0, or print every problem on stderr and exit 1. Neither command prints a secret.
   status [--project P] [--db PATH]          read-only: queue depth, consumer states, retries, conflicts, dead letters
   dead-letters [--project P] [--db PATH]    read-only: rows in the dead state, with their reasons
 
@@ -20,6 +27,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import sqlite3
 import sys
 import time
@@ -35,6 +43,7 @@ if (HERE.parent / "vendor").is_dir() and str(HERE.parent / "vendor") not in sys.
 
 from team_kit_event_queue import EventStore, Response, dead_letters, default_db, open_read_only, receive, status
 from team_kit_guard.policy import PolicyError, load_policy, team_kit_home
+from team_kit_ingress import ConfigError, IngressConfig, load_config, make_server
 
 REQUEST_LINE = re.compile(rb"\A[A-Z]+ \S+ HTTP/\d")
 
@@ -51,6 +60,11 @@ def parser() -> argparse.ArgumentParser:
     secret = rec.add_mutually_exclusive_group(required=True)
     secret.add_argument("--secret-env", metavar="NAME", help="name of the environment variable holding the webhook secret")
     secret.add_argument("--secret-file", metavar="PATH", help="file holding the webhook secret")
+    for name in ("serve", "check-config"):
+        command = sub.add_parser(name)
+        command.add_argument("--config", required=True, help="JSON route configuration")
+        if name == "serve":
+            command.add_argument("--db", help="queue database (default: $TEAM_KIT_HOME/events/events.sqlite3)")
     for name in ("receive", "status", "dead-letters"):
         command = rec if name == "receive" else sub.add_parser(name)
         command.add_argument("--db", help="queue database (default: $TEAM_KIT_HOME/events/events.sqlite3)")
@@ -96,9 +110,39 @@ def projects(home: Path) -> dict[str, str]:
     return {bot.repo.lower(): bot.project for bot in load_policy(home).bots.values() if bot.role == "project" and bot.repo and bot.project}
 
 
+def ingress_config(args: argparse.Namespace, home: Path) -> IngressConfig | None:
+    try:
+        return load_config(Path(args.config), projects(home))
+    except ConfigError as err:
+        for problem in err.problems:
+            print(f"team-kit-events: refused: {problem}", file=sys.stderr)
+        return None
+
+
+def run_ingress(args: argparse.Namespace, home: Path, db: Path) -> int:
+    config = ingress_config(args, home)
+    if config is None:
+        return 1
+    if args.command == "check-config":
+        print(json.dumps({"ok": True, "routes": [{"path": r.path, "repository": r.repo, "project": r.project} for r in config.routes.values()]}))
+        return 0
+    server = make_server(config, db)
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
+    print(f"team-kit-events: serving {len(config.routes)} route(s) on {config.bind}:{server.bound_port}", file=sys.stderr, flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
 def run(args: argparse.Namespace) -> int:
     home = team_kit_home()
-    db = Path(args.db) if args.db else default_db(home)
+    db = Path(args.db) if getattr(args, "db", None) else default_db(home)
+    if args.command in ("serve", "check-config"):
+        return run_ingress(args, home, db)
     if args.command == "status":
         print(json.dumps(status(open_read_only(db), args.project), indent=2, sort_keys=True))
         return 0
