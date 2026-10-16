@@ -60,10 +60,12 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `bin/team_kit_gh.py` | `team-kit-gh`: a project bot's only GitHub access, and what its jobs run | `~/.hermes/bin/faker-kit-gh` and `~/.hermes/bin/team-kit-gh` (the same wrapper) |
 | `bin/team_kit_chief.py` | `team-kit-chief`: the chief of staff's only command; it reads every project and, with approval, hands one hashed draft to one project bot, or a new-project request to the bootstrap bot | `~/.hermes/bin/faker-kit-chief` and `~/.hermes/bin/team-kit-chief` (the same wrapper) |
 | `bin/team_kit_slack.py` | `team-kit-slack`: the optional outbound-only Slack Socket Mode relay | `~/.hermes/bin/faker-kit-slack` and `~/.hermes/bin/team-kit-slack` (the same wrapper) |
+| `bin/team_kit_events.py` | `team-kit-events`: records signed GitHub deliveries in the event queue (`receive`), and shows it read-only (`status`, `dead-letters`). Shadow mode only, with no listener registered; see docs/explanation/event-receiver.md | not installed yet; run it from the kit checkout |
 | `lib/team_kit_contracts.py` | The brief, size, report, and launch markers, and the cloud command lines | read from the kit checkout |
 | `lib/team_kit_cloud.py` | Starts a `claude --cloud` session (created with its task as the first message; a signing key follows on stdin) or a `codex cloud exec` task, and returns its id | read from the kit checkout |
 | `lib/team_kit_andon.py` | The andon cords: the local records, and the `agent:andon` issue body | read from the kit checkout |
 | `lib/team_kit_slack_relay.py` | Slack Socket Mode, Bot Chat delivery, service unit generation, and optional notice mirroring | read from the kit checkout |
+| `lib/team_kit_event_queue.py` | The durable event queue: signature check, typed delivery rows, per-consumer leases with fencing, retries, and dead letters | read from the kit checkout |
 | `lib/team_kit_risk.py` | The risk score of a ready pull request and its suggested reviewers, from rules in code | read from the kit checkout |
 | `lib/install_config.py` | Reads Hermes config, writes it only through `hermes config set` | read from the kit checkout |
 | `lib/team_kit_machine.py` | The machine config: its checks, the guard settings it writes, the webhook routes, and the tunnel config | read from the kit checkout |
@@ -89,6 +91,7 @@ Under `~/.hermes/team-kit/`:
 - `incidents/<bot>.json`, each open incident, its triage session's key, and the last green commit.
 - `security/<bot>.json`, the last commit a security review covered, and the running review's range and key.
 - `etag/<bot>/`, that bot's cached GitHub REST responses and ETags, keyed by endpoint, so idle polling can send conditional requests. Bots never share an entry.
+- `events/events.sqlite3`, the event queue `team-kit-events receive` writes (mode 600): one row per GitHub delivery with its typed identifiers and body digest, never its text, and each consumer's state. Nothing writes it until a later unit wires the receiver behind a route.
 - `slack/`, transient `team-kit-slack` Bot Chat notice files, deleted after delivery.
 - `checkouts/<owner>__<repo>/repo`, the kept launch checkout every Claude Code session for that project starts from, which the owner trusts once; never pruned. Beside it, the empty working directories `codex cloud exec` runs in and each launch's redacted log, pruned after 3 days.
 - `in-flight/<bot>.json`, each project bot's count of running units, for `max_in_flight_total`.

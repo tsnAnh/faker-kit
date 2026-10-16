@@ -93,6 +93,7 @@
               "explanation/plan-with-code",
               "explanation/scaling-agents",
               "explanation/final-head-review",
+              "explanation/event-receiver",
               "explanation/why-non-engineers-can-ship-safely"
             ]
           }
