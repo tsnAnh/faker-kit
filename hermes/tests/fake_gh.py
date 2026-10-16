@@ -151,7 +151,8 @@ elif args[0] == "api":
         return {**pull, "number": number, "title": pull.get("title", ""), "html_url": pull.get("html_url", f"https://github.com/{repo}/pull/{number}"),
                 "state": pull.get("state", "open"),
                 "merged_at": pull.get("merged_at"), "body": pull.get("body", ""), "user": {"login": pull.get("author", "verify-bot")}, "labels": pull.get("labels", []),
-                "head": {"sha": head.get("sha", "a" * 40), "ref": head["ref"],
+                # Like GitHub, a pull request's head is its branch's tip.
+                "head": {"sha": head.get("sha") or load("refs.json", {}).get(head["ref"], "a" * 40), "ref": head["ref"],
                          "repo": {"full_name": repo, "name": repo.split("/")[1], "owner": {"login": repo.split("/")[0]}}},
                 "base": {"repo": {"full_name": repo}}}
 
@@ -261,6 +262,12 @@ elif args[0] == "api":
         paged(load("checks.json", {}).get(rest.split("/")[2], {}).get("statuses", []), "statuses")
     elif rest.startswith("/commits/") and method == "GET":
         emit({"sha": load("heads.json", {}).get(rest.split("/")[2], "c" * 40), "parents": []})
+    elif rest.startswith("/compare/"):
+        # Like GitHub: base...head answers ahead, behind, identical, or diverged; an unknown commit is a 404.
+        status = load("compare.json", {}).get(rest[len("/compare/"):])
+        if status is None:
+            missing()
+        emit({"status": status})
     elif rest.startswith("/collaborators/") and rest.endswith("/permission"):
         emit({"permission": load("permissions.json", {}).get(rest.split("/")[2], "none")})
     elif rest.startswith("/issues/") and rest.endswith("/comments") and method == "POST":

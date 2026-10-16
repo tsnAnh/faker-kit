@@ -112,7 +112,29 @@ To set the machine up by hand instead, from a clone of the kit on that machine:
 bash hermes/install.sh --ref <kit commit> --bootstrap-bot <name>
 ```
 
-`--ref` is a full 40-character kit commit. Every repository's `kit_ref` must equal it. The script fetches the kit at that commit, writes `guard.yaml` once, installs `team-kit-gh`, `team-kit-admin`, `team-kit-chief`, and `team-kit-slack` in `~/.hermes/bin/`, creates the bootstrap bot, refreshes every existing bot from the new kit, and restarts the gateway. Run it again with a new commit to move every bot to it, then ask the bootstrap bot to vendor the new commit into each project's repository (below).
+`--ref` is a full 40-character kit commit. Every repository's `kit_ref` must equal it. The script fetches the kit at that commit, writes `guard.yaml` once, installs `team-kit-gh`, `team-kit-admin`, `team-kit-chief`, and `team-kit-slack` in `~/.hermes/bin/`, creates the bootstrap bot, refreshes every existing bot from the new kit, and restarts the gateway. Run it again with a new commit to move every bot to it. The bootstrap bot then moves every project to it on its own (below).
+
+### Move every project to a new kit commit
+
+Installing a commit is the approval. The bootstrap bot's `team-kit-kit-drift` job runs `team-kit-admin kit-reconcile` every 30 minutes, with no model, and brings each project in `bots.yaml` to the installed commit:
+
+1. For each project it reads three values from the default branch: this machine's kit commit, `kit_ref` in `.agents/dispatch.json`, and `kit_ref` in `.agents/team-kit/KIT.json`, plus the project's open kit pull requests.
+2. A project behind the installed commit, with no kit pull request for it, a kit pull request for an older commit, or one that conflicts, gets one `team-kit-admin vendor` run. It never opens a second pull request while one for the installed commit is open. It reads the repository back afterwards.
+3. With `auto_merge` `low`, the project bot's tick merges the pull request once its checks pass and its head is still the commit `vendor` made. The next run reads back the three values and records success only once they agree, in `~/.hermes/team-kit/kit-drift/<project>.json`.
+
+You hear about a project only when it needs you, once per distinct state, in one line:
+
+```text
+team-kit notice: kit drift in project <p> (OWNER/REPO) needs the owner: <why>. Installed kit <sha>, kit_ref <sha>, vendored kit <sha>; kit pull request <url or none>.
+```
+
+That happens when this machine's kit is older than `kit_ref` (only a new `install.sh --ref` fixes that), when the order of the two commits cannot be told, when the kit pull request's checks fail, when its head is not the commit `vendor` made, when a `vendor` run failed or changed nothing, or when `auto_merge` is not `low`, so you merge it. The job never installs a kit, merges, or moves `kit_ref` except through `vendor`, and it waits while an andon cord is pulled. To see the report without changing anything, run this from a shell on the machine:
+
+```bash
+~/.hermes/bin/team-kit-admin kit-drift
+```
+
+It prints `{"installed": <sha>, "projects": [...]}`. Each project has `project`, `repo`, `installed`, `kit_ref`, `vendored`, `order` (`same`, `ahead`, `behind`, `diverged`, or null), `pulls` (each with `number`, `url`, `branch`, `head`, `for_installed`, `trusted`, `checks`, and `conflicts`), `auto_merge`, `state` (`in_sync`, `repairable`, or `needs_human`), `action` (`none`, `vendor`, `wait`, or `owner`), and `why`. `~/.hermes/bin/team-kit-admin kit-reconcile` runs one repair pass by hand, and prints its notices or `[SILENT]`. Merging a kit change to this repository is not a rollout: the machine runs the new code only after `install.sh --ref` installs it.
 
 Then edit `~/.hermes/team-kit/guard.yaml`:
 
@@ -307,7 +329,7 @@ Each project bot's `team-kit-status` job sends a weekly summary every Monday at 
 
 - **Every tool call is blocked.** `~/.hermes/team-kit/guard.yaml` or `bots.yaml` is missing, does not parse, or `guard.yaml` is not `version: 2`. The block message names the problem. A version 1 file needs migrating: [hermes/README.md](../../hermes/README.md#migrate-from-version-1).
 - **"profile X is not a team-kit bot in bots.yaml".** Bots are created only by `team-kit-admin`. Ask the bootstrap bot, or rerun `install.sh --bootstrap-bot X` for the bootstrap bot.
-- **"kit commit ... differs from kit_ref ..." or "... has no vendored kit".** The machine, `.agents/dispatch.json`, and the vendored `.agents/team-kit/KIT.json` must pin the same kit commit. Ask the bootstrap bot to run `team-kit-admin vendor` for the project and merge its pull request, which moves both, then ask the project bot to run `team-kit-gh kit-check`.
+- **"kit commit ... differs from kit_ref ..." or "... has no vendored kit".** The machine, `.agents/dispatch.json`, and the vendored `.agents/team-kit/KIT.json` must pin the same kit commit. The project bot's tick says so once per distinct mismatch, and the bootstrap bot's `team-kit-kit-drift` job repairs it (see [Move every project to a new kit commit](#move-every-project-to-a-new-kit-commit)), telling you only if it needs you. To repair one project by hand, ask the bootstrap bot to run `team-kit-admin vendor --project <project>` and merge its pull request, then ask the project bot to run `team-kit-gh kit-check`.
 - **A cloud agent says the kit's skills did not load.** The repository's vendored kit is missing or its links are broken. Run `python3 .agents/team-kit/vendor_kit.py --check .` in a clone, then vendor again.
 - **Nothing launches, and `status` starts with "andon pulled".** A cord is pulled. Ask the bot that pulled it to clear it once the cause is fixed. Closing the `agent:andon` issue on GitHub does not clear it.
 - **A unit stays queued.** Its dependencies have not merged, a cross-project dependency's unit-state file is missing or stale, or a limit is full. `team-kit-gh status` lists it; the next tick launches it when it can. Raise `max_in_flight` in a pull request, or `max_in_flight_total` in `guard.yaml`, if you can take more.

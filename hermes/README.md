@@ -48,7 +48,7 @@ With `webhooks` in the machine config, GitHub calls the machine when an issue, c
 
 A cloud session starts from a clone of the project's repository and nothing else: it installs no plugins and cannot fetch the kit while the kit's repository is private. So `team-kit-admin vendor` copies the kit, at this machine's commit, into the repository's `.agents/team-kit/` in a pull request, and links its skills into `.claude/skills/` and `.agents/skills/`. It builds the copy with `vendor_kit.py` from the trust-ladder `setup-cloud-agents` skill, and `python3 .agents/team-kit/vendor_kit.py --check .` in the repository verifies it.
 
-To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the bootstrap bot to run `team-kit-admin vendor` for each project, and merge each pull request. Until then that project's bot refuses to launch, because the machine and the repository would run different kits.
+To move to a new kit commit, rerun `install.sh --ref <commit>`. The bootstrap bot's `team-kit-kit-drift` job (`team-kit-admin kit-reconcile`) then runs `team-kit-admin vendor` once for each project behind it, reads each repository back, and tells you only about a project that needs you: this machine older than `kit_ref`, a red kit pull request, a failed vendor run, or a merge `auto_merge` leaves to you. Until a project's pull request merges, its bot refuses to launch, because the machine and the repository would run different kits, and its tick says so once per distinct mismatch. `team-kit-admin kit-drift` prints the read-only report. See [Move every project to a new kit commit](../docs/how-to/dispatch-with-hermes.md#move-every-project-to-a-new-kit-commit).
 
 ## Layout
 
@@ -71,7 +71,7 @@ To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the boo
 | `profiles/bootstrap/`, `profiles/project/`, `profiles/chief/` | `SOUL.md` and the config merged into each bot's profile | each bot's profile |
 | `skills/bootstrap/`, `skills/dispatch/`, `skills/chief/` | The bots' skills | linked into each bot's `skills/` |
 | `cron/project-jobs.md` | `team-kit-tick`, `team-kit-status`, `team-kit-security`, `team-kit-incidents`, and `team-kit-upstream`, created paused per project bot | each project bot's scheduled jobs |
-| `cron/bootstrap-jobs.md` | `team-kit-inbox`, created active, which delivers the chief's new-project requests | the bootstrap bot's scheduled job |
+| `cron/bootstrap-jobs.md` | `team-kit-inbox`, which delivers the chief's new-project requests, and `team-kit-kit-drift`, which moves every project to the installed kit, both created active | the bootstrap bot's scheduled jobs |
 | `templates/guard.yaml` | The machine's policy, written once | `~/.hermes/team-kit/guard.yaml` |
 | `templates/machine.yaml` | A machine config to copy and fill in | `.agents/hermes-machine.yaml` in your kit clone |
 | `tests/` | `python -m pytest hermes` | — |

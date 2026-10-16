@@ -64,10 +64,12 @@ def test_installs_the_module_and_the_bootstrap_bot_pinned_to_the_commit(kit_sour
     log = hermes_calls(root)
     assert ["-p", "default", "gateway", "install"] in log
     created = [c for c in log if c[2:4] == ["cron", "create"]]
-    assert [(c[1], c[c.index("--name") + 1]) for c in created] == [("ong-xay", "team-kit-inbox")], "the bootstrap bot's one job"
-    assert "--paused" not in created[0] and "--no-agent" in created[0], "it needs no token, so it starts active, and runs no model"
+    assert [(c[1], c[c.index("--name") + 1]) for c in created] == [("ong-xay", "team-kit-inbox"), ("ong-xay", "team-kit-kit-drift")], "the bootstrap bot's jobs"
+    assert all("--paused" not in c and "--no-agent" in c for c in created), "they need no token, so they start active, and run no model"
     inbox = (home / "scripts" / "team-kit-jobs" / "team-kit-inbox.sh").read_text()
     assert f"{root / 'bin' / 'team-kit-admin'} inbox" in inbox
+    drift = (home / "scripts" / "team-kit-jobs" / "team-kit-kit-drift.sh").read_text()
+    assert f"{root / 'bin' / 'team-kit-admin'} kit-reconcile" in drift
     assert not (root / "config.yaml").exists(), "the host profile's config is never touched"
 
 

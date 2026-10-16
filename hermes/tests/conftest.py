@@ -156,5 +156,15 @@ def gh_calls(root):
     return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
+@pytest.fixture
+def ready(kit_source, machine):
+    """install.sh with a bootstrap bot, and guard.yaml filled in."""
+    root, env = machine
+    done = install(kit_source, machine, "--no-gateway", "--bootstrap-bot", "ong-xay")
+    assert done.returncode == 0, done.stderr
+    fill_guard(root)
+    return root, env
+
+
 def fill_guard(root):
     (root / "team-kit" / "guard.yaml").write_text(guard_text())

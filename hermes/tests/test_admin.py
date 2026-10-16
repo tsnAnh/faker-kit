@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import team_kit_admin
 import yaml
-from conftest import ALL_TOOLSETS, FAKE_CLAUDE, fill_guard, gh_calls, guard_text, hermes_calls, install
+from conftest import ALL_TOOLSETS, FAKE_CLAUDE, gh_calls, guard_text, hermes_calls, install
 from install_config import InstallError, cron_spec
 from team_kit_gh import IN_FLIGHT_FRESH_SECONDS, InFlight
 from team_kit_guard.policy import load_policy
@@ -17,16 +17,6 @@ from team_kit_requests import write_project_request
 
 SHOP = "acme/shop"
 LABELS = ["agent-task", "agent:proposal", "agent:running", "agent:verifying", "agent:review", "agent:needs-human", "agent:security", "agent:incident", "risk:low", "risk:medium", "risk:high", "agent:andon"]  # noqa: E501
-
-
-@pytest.fixture
-def ready(kit_source, machine):
-    """install.sh with a bootstrap bot, and guard.yaml filled in."""
-    root, env = machine
-    done = install(kit_source, machine, "--no-gateway", "--bootstrap-bot", "ong-xay")
-    assert done.returncode == 0, done.stderr
-    fill_guard(root)
-    return root, env
 
 
 def admin(ready, *args, profile=None, logged_out=False):

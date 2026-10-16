@@ -19,6 +19,10 @@ The bootstrap bot may run these, and the guard asks the owner to approve each on
                                                              projects and hands work to project bots by message
   andon         [raise REASON... | clear]                    show, pull, or clear the machine's andon cord: nothing
                                                              new starts in any project, and agents at work stop
+  kit-drift                                                  every project's installed kit, kit_ref, and vendored kit,
+                                                             its open kit pull requests, and what reconcile would do
+  kit-reconcile                                              the team-kit-kit-drift job: vendor each repairable project
+                                                             once, read it back, and notice only what needs the owner
 
 A project is one repository. Keep a product's apps (API, web, mobile) in one repository, so one
 cloud agent can carry a feature through all of them in one pull request.
@@ -65,6 +69,9 @@ from install_config import InstallError, apply_profile, config_set, cron_jobs, c
 from team_kit_andon import ANDON_LABEL, MACHINE, Andon, AndonError, clean_reason, issue_body
 from team_kit_cloud import CLAUDE_CHECKOUT, Cloud, CloudError
 from team_kit_contracts import KIT_BRANCH_PREFIX, ContractError, bootstrap_prompt, cloud_argv, vendor_record
+from team_kit_drift import Drift, KitPull, Order, classify
+from team_kit_drift import notice as drift_notice
+from team_kit_gh import checks_state
 from team_kit_guard.policy import (
     DEFAULT_INCIDENTS_EVERY,
     DEFAULT_SECURITY_EVERY,
@@ -93,6 +100,11 @@ from team_kit_requests import (
 )
 
 VENDOR_MANIFEST = ".agents/team-kit/KIT.json"
+DISPATCH_JSON = ".agents/dispatch.json"
+DRIFT_DIR = "kit-drift"  # one record per project of what kit-reconcile saw, did, and told
+NOTICE = "team-kit notice:"
+SHA = re.compile(r"\A[0-9a-f]{40}\Z")
+COMPARE_ORDER: dict[str, Order] = {"identical": "same", "ahead": "ahead", "behind": "behind", "diverged": "diverged"}
 # The Hermes profile setting that loads skills from folders outside the profile (machine config `skills`).
 KIT_SKILL_DIRS = ("skills", "external_dirs")
 # The Hermes provider plugin that runs a bot's model through the owner's logged-in Claude Code CLI,
@@ -151,6 +163,10 @@ Runner = Callable[..., str]
 
 class Refused(Exception):
     pass
+
+
+# What a GitHub read or a vendor run raises: refusals, an unexpected response shape, a file it could not write.
+DRIFT_ERRORS = (Refused, ContractError, InstallError, PolicyError, OSError, ValueError, KeyError, TypeError)
 
 
 def run_gh(args: list[str], input: str | None = None) -> str:
@@ -611,6 +627,139 @@ class Admin:
         tmp.write_text(json.dumps({"branch": branch, "commit": commit}))
         tmp.replace(path)
 
+    # kit drift ---------------------------------------------------------------------------------------
+
+    def kit_drift(self) -> dict:
+        """Read-only: each project's three kit values, open kit pull requests, and what reconcile would do."""
+        installed = git(self.kit, "rev-parse", "HEAD")
+        projects = []
+        for bot in sorted(self.policy().projects().values(), key=lambda b: str(b.project)):
+            project = str(bot.project)
+            projects.append(self.drift(project, str(bot.repo), installed, read_json(self.drift_record(project)), self.drift_cord(project)).report())
+        return {"installed": installed, "projects": projects}
+
+    def kit_reconcile(self) -> list[str]:
+        """The bootstrap bot's team-kit-kit-drift job. Repairs each repairable project with one vendor run, reads it
+        back, and returns a notice only for a state that needs the owner, once per distinct state."""
+        folder = self.home / DRIFT_DIR
+        folder.mkdir(parents=True, exist_ok=True)
+        with (folder / ".lock").open("w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            installed = git(self.kit, "rev-parse", "HEAD")
+            notices = []
+            for bot in sorted(self.policy().projects().values(), key=lambda b: str(b.project)):
+                notices += self.reconcile_project(str(bot.project), str(bot.repo), installed)
+        return notices or ["[SILENT]"]
+
+    def reconcile_project(self, project: str, repo: str, installed: str) -> list[str]:
+        path = self.drift_record(project)
+        record = read_json(path)
+        cord = self.drift_cord(project)
+        drift = self.drift(project, repo, installed, record, cord)
+        if drift.action == "vendor" and not cord:
+            attempt: dict = {"fingerprint": drift.fingerprint(), "at": self.now(), "installed": installed}
+            try:
+                attempt.update(ok=True, pr=self.vendor(project).get("pr"))
+            except DRIFT_ERRORS as err:  # one project's failure never stops the others
+                attempt.update(ok=False, error=str(err)[:200])
+            record["vendor"] = attempt
+            drift = self.drift(project, repo, installed, record, cord)  # read back what the repair left on GitHub
+        told = drift.fingerprint() if drift.state == "needs_human" else None
+        out = [drift_notice(drift, NOTICE)] if told and told != record.get("told") else []
+        if drift.state == "in_sync" and record.get("state") != "in_sync":
+            record["agreed"] = {"at": self.now(), "kit_ref": installed}
+        record.update(state=drift.state, action=drift.action, why=drift.why, told=told, checked_at=self.now(),
+                      values={"installed": installed, "kit_ref": drift.kit_ref, "vendored": drift.vendored})
+        write_json(path, record)
+        return out
+
+    def drift_record(self, project: str) -> Path:
+        return self.home / DRIFT_DIR / f"{project}.json"
+
+    def drift_cord(self, project: str) -> str | None:
+        andon = Andon(self.home, self.now)
+        cord = andon.machine() or andon.project(project)
+        return cord.describe() if cord else None
+
+    def drift(self, project: str, repo: str, installed: str, record: dict, cord: str | None) -> Drift:
+        """Read the project's kit values from its default branch and classify them. A vendor attempt this record holds
+        for the same state turns a repair that did not take into a state for the owner, so vendor never loops."""
+        kit_ref = vendored = None
+        order: Order | None = None
+        pulls: tuple[KitPull, ...] = ()
+        auto_merge = "none"
+        try:
+            default = str(self.api(f"repos/{repo}")["default_branch"])
+            ref_query = quote(default, safe="")
+            config = self.repo_json(repo, DISPATCH_JSON, ref_query) or {}
+            kit_ref = config.get("kit_ref") if isinstance(config.get("kit_ref"), str) else None
+            auto_merge = str(config.get("auto_merge", "none"))
+            manifest = self.repo_json(repo, VENDOR_MANIFEST, ref_query) or {}
+            vendored = manifest.get("kit_ref") if isinstance(manifest.get("kit_ref"), str) else None
+            if kit_ref and kit_ref != installed:
+                order = self.kit_order(kit_ref, installed)
+            pulls = self.kit_pull_states(repo, ref_query, installed)
+        except DRIFT_ERRORS as err:  # said once to the owner, read again next run
+            return Drift(project, repo, installed, kit_ref, vendored, order, pulls, auto_merge, "needs_human", "owner",
+                         f"could not read {repo}: {str(err)[:160]}")
+        state, action, why = classify(installed, kit_ref, vendored, order, pulls, auto_merge)
+        drift = Drift(project, repo, installed, kit_ref, vendored, order, pulls, auto_merge, state, action, why)
+        last = record.get("vendor") if isinstance(record.get("vendor"), dict) else None
+        if action == "vendor" and last and last.get("fingerprint") == drift.fingerprint():
+            why = (f"team-kit-admin vendor failed: {last.get('error')}" if not last.get("ok")
+                   else "team-kit-admin vendor ran for this state and left it unchanged")
+            drift = dataclasses.replace(drift, state="needs_human", action="owner", why=why)
+        if drift.action == "vendor" and cord:
+            drift = dataclasses.replace(drift, why=f"{drift.why}; held while {cord}")
+        return drift
+
+    def repo_json(self, repo: str, path: str, ref_query: str) -> dict | None:
+        """A JSON file on a branch, or None when the branch has no such file. Any other failure raises."""
+        try:
+            data = self.api(f"repos/{repo}/contents/{path}?ref={ref_query}")
+        except Refused as err:
+            if "404" in str(err) or "Not Found" in str(err):
+                return None
+            raise
+        try:
+            value = json.loads(base64.b64decode(data["content"]))
+        except ValueError:
+            raise Refused(f"{path} on {repo} is not valid JSON") from None
+        return value if isinstance(value, dict) else None
+
+    def kit_pull_states(self, repo: str, ref_query: str, installed: str) -> tuple[KitPull, ...]:
+        made = read_json(vendor_record(self.home, repo))
+        out = []
+        for pr in self.kit_pulls(repo, ref_query):
+            number, branch, head = int(pr["number"]), str(pr["head"]["ref"]), str(pr["head"].get("sha") or "")
+            detail = self.api(f"repos/{repo}/pulls/{number}") or {}
+            head = str((detail.get("head") or {}).get("sha") or head)
+            runs = (self.api(f"repos/{repo}/commits/{head}/check-runs?per_page=100") or {}).get("check_runs") or []
+            statuses = (self.api(f"repos/{repo}/commits/{head}/status?per_page=100") or {}).get("statuses") or []
+            rollup = [{"status": r.get("status"), "conclusion": r.get("conclusion")} for r in runs] + [{"state": s.get("state")} for s in statuses]
+            mergeable = detail.get("mergeable")
+            out.append(KitPull(number, str(pr["html_url"]), branch, head, branch == f"{KIT_BRANCH_PREFIX}{installed[:12]}",
+                               bool(head) and made.get("branch") == branch and made.get("commit") == head,
+                               checks_state(rollup), None if mergeable is None else mergeable is False))
+        return tuple(sorted(out, key=lambda p: p.number))
+
+    def kit_order(self, kit_ref: str, installed: str) -> Order | None:
+        """The installed commit against kit_ref, from the kit repository the installer fetched from: a local
+        checkout's own history, or GitHub's compare. None when neither can tell. The installed checkout is shallow."""
+        if not SHA.match(kit_ref):
+            return None
+        source = kit_source(self.kit)
+        if source and Path(source).is_dir():
+            return git_order(Path(source), kit_ref, installed)
+        kit_repo = github_repo(source) if source else None
+        if kit_repo is None:
+            return None
+        try:
+            status = self.api(f"repos/{kit_repo}/compare/{kit_ref}...{installed}")["status"]
+        except (Refused, KeyError, TypeError, ValueError):
+            return None
+        return COMPARE_ORDER.get(status)
+
     def setup_repo(self, project: str, backend: str, codex_env: str | None) -> dict:
         policy = self.policy()
         bot = self.project_bot(policy, project)
@@ -1030,6 +1179,51 @@ def write_in_flight(home: Path, bot: str, counts: dict[str, int], now: Callable[
         tmp.replace(target)
 
 
+def read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}")
+    tmp.write_text(json.dumps(data, sort_keys=True))
+    tmp.replace(path)
+
+
+def kit_source(kit: Path) -> str | None:
+    """Where hermes/install.sh fetched the installed kit from: FETCH_HEAD reads `<sha>\\t\\t'<ref>' of <source>`."""
+    try:
+        line = (kit / ".git" / "FETCH_HEAD").read_text().splitlines()[0]
+    except (OSError, IndexError):
+        return None
+    _, found, source = line.partition("' of ")
+    return (source.strip() or None) if found else None
+
+
+def git_order(source: Path, kit_ref: str, installed: str) -> Order | None:
+    if kit_ref == installed:
+        return "same"
+    newer, older = is_ancestor(source, kit_ref, installed), is_ancestor(source, installed, kit_ref)
+    if newer:
+        return "ahead"
+    if older:
+        return "behind"
+    return "diverged" if newer is False and older is False else None
+
+
+def is_ancestor(source: Path, ancestor: str, commit: str) -> bool | None:
+    """None when git cannot tell, such as for a commit the checkout lacks."""
+    try:
+        done = subprocess.run(["git", "-C", str(source), "merge-base", "--is-ancestor", ancestor, commit], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {0: True, 1: False}.get(done.returncode)
+
+
 def load_policy_from(home: Path, bots: dict) -> Policy:
     """Validate a bots.yaml mapping against guard.yaml before anything is written."""
     import yaml as _yaml  # noqa: PLC0415
@@ -1150,6 +1344,8 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--model")
     cmd.add_argument("--claude-subscription", action="store_true")
     sub.add_parser("inbox")
+    sub.add_parser("kit-drift")
+    sub.add_parser("kit-reconcile")
     cmd = sub.add_parser("setup-request")
     cmd.add_argument("--id", required=True)
     cmd = sub.add_parser("discover")
@@ -1219,6 +1415,11 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
         elif args.command == "inbox":
             print("\n".join(admin.inbox(who)))
             return 0
+        elif args.command == "kit-reconcile":
+            print("\n".join(admin.kit_reconcile()))
+            return 0
+        elif args.command == "kit-drift":
+            out = admin.kit_drift()
         elif args.command == "setup-request":
             out = admin.setup_request(args.id, who)
         elif args.command == "discover":

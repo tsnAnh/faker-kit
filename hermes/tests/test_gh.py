@@ -668,6 +668,8 @@ def test_idle_tick_uses_etags_and_reduces_uncached_github_work(team_kit_home, gh
         f"repos/{REPO}/issues/comments?since={since}&per_page=100&page=1",
         f"repos/{REPO}/pulls/comments?since={since}&per_page=100&page=1",
         f"repos/{REPO}/pulls?state=open&per_page=100&page=1",
+        f"repos/{REPO}/contents/.agents/dispatch.json",
+        f"repos/{REPO}/contents/.agents/team-kit/KIT.json",
         f"repos/{REPO}/issues?state=open&labels=agent-task&per_page=100&page=1",
         f"repos/{REPO}/issues?state=closed&labels=agent-task&per_page=100&page=1",
     ]
@@ -1632,9 +1634,38 @@ def test_a_github_error_is_reported_once_and_gates_nothing(team_kit_home, kit, c
     n = gh.add_issue(REPO)
     gh.files[".agents/dispatch.json"] = json.dumps({"backend": "claude", "kit_ref": "0" * 40, "trusted_dispatchers": [BOT_LOGIN]})
     first = tick(gh, capsys)
-    assert len(first) == 1 and first[0].startswith(f"team-kit notice: tick could not handle {REPO}: kit commit")
+    assert first == [f"team-kit notice: kit pin mismatch in project shop ({REPO}): this machine's kit {kit[:12]}, kit_ref 000000000000, "
+                     f"vendored kit {kit[:12]}. Launches here wait until they agree. The bootstrap bot's team-kit-kit-drift job repairs it "
+                     "with team-kit-admin vendor and tells the owner only what needs them; `team-kit-admin kit-drift` shows its report."]
     assert gh.labels(REPO, n) == {"agent-task"}, "a pin mismatch is not the unit's fault"
     assert tick(gh, capsys) == ["[SILENT]"], "the same problem is not repeated every tick"
+
+
+def test_a_pin_mismatch_is_told_once_per_distinct_mismatch_even_with_no_unit_queued(team_kit_home, kit, capsys):
+    gh = FakeGh(kit)
+    gh.files[".agents/team-kit/KIT.json"] = json.dumps({"version": 1, "kit_ref": "1" * 40})
+    [first] = tick(gh, capsys)
+    assert "kit pin mismatch in project shop" in first and "vendored kit 111111111111" in first
+    assert "ask the" not in first and "relay" not in first, "nobody is asked to pass it on"
+    assert tick(gh, capsys) == ["[SILENT]"]
+    gh.files[".agents/team-kit/KIT.json"] = json.dumps({"version": 1, "kit_ref": "2" * 40})
+    [second] = tick(gh, capsys)
+    assert "vendored kit 222222222222" in second, "a different mismatch is told again"
+    gh.files[".agents/team-kit/KIT.json"] = json.dumps({"version": 1, "kit_ref": kit})
+    assert tick(gh, capsys) == ["[SILENT]"], "in sync is silent"
+    gh.files[".agents/team-kit/KIT.json"] = json.dumps({"version": 1, "kit_ref": "2" * 40})
+    assert len(tick(gh, capsys)) == 1, "a mismatch that comes back after a repair is told again"
+
+
+def test_a_pin_mismatch_still_refuses_every_launch_command_with_its_own_text(team_kit_home, kit, capsys):
+    gh = FakeGh(kit)
+    n = gh.add_issue(REPO)
+    del gh.files[".agents/team-kit/KIT.json"]
+    assert run(gh, "launch", "--issue", str(n)) == 1
+    assert "has no vendored kit, so cloud agents would start without its skills; ask the bootstrap bot to run team-kit-admin vendor" in capsys.readouterr().err
+    assert run(gh, "kit-check") == 1
+    assert "has no vendored kit" in capsys.readouterr().err
+    assert gh.labels(REPO, n) == {"agent-task"}
 
 
 def test_one_broken_unit_does_not_stop_the_others(team_kit_home, gh, capsys):

@@ -218,6 +218,15 @@ class Waiting(Refused):
         self.scope = scope  # "unit", "repo", or "machine"
 
 
+class PinMismatch(Refused):
+    """This machine's kit, kit_ref, and the vendored kit disagree. Not the unit's fault: tick says it once per
+    distinct mismatch, and the bootstrap bot's team-kit-kit-drift job repairs it."""
+
+    def __init__(self, message: str, kit: str, kit_ref: str, vendored: str | None) -> None:
+        super().__init__(message)
+        self.kit, self.kit_ref, self.vendored = kit, kit_ref, vendored
+
+
 def run_gh(args: list[str], input: str | None = None) -> str:
     done = subprocess.run(["gh", *args], capture_output=True, text=True, input=input)
     if done.returncode != 0:
@@ -653,14 +662,17 @@ class Gh:
         if not SHA.match(pinned):
             raise Refused("kit_ref in .agents/dispatch.json must be a full 40-character commit")
         if local_commit != pinned:
-            raise Refused(f"kit commit {local_commit[:12]} differs from kit_ref {pinned[:12]}; ask the bootstrap bot to run team-kit-admin vendor, which moves kit_ref")
+            raise PinMismatch(f"kit commit {local_commit[:12]} differs from kit_ref {pinned[:12]}; ask the bootstrap bot to run team-kit-admin vendor, which moves kit_ref",
+                              local_commit, pinned, None)
         # The cloud agent gets its skills from the copy in the repository, so that copy must be the same kit.
         try:
             vendored = json.loads(self.file(VENDOR_MANIFEST)).get("kit_ref")
         except (Refused, ValueError, AttributeError):
-            raise Refused(f"{self.repo} has no vendored kit, so cloud agents would start without its skills; ask the bootstrap bot to run team-kit-admin vendor") from None
+            raise PinMismatch(f"{self.repo} has no vendored kit, so cloud agents would start without its skills; ask the bootstrap bot to run team-kit-admin vendor",
+                              local_commit, pinned, None) from None
         if vendored != pinned:
-            raise Refused(f"the vendored kit {str(vendored)[:12]} differs from kit_ref {pinned[:12]}; ask the bootstrap bot to run team-kit-admin vendor")
+            raise PinMismatch(f"the vendored kit {str(vendored)[:12]} differs from kit_ref {pinned[:12]}; ask the bootstrap bot to run team-kit-admin vendor",
+                              local_commit, pinned, str(vendored))
         return {"kit": local_commit, "kit_ref": pinned, "vendored": vendored}
 
     def depends(self, brief) -> list[tuple[str, int]]:  # noqa: ANN001
@@ -829,6 +841,40 @@ class Gh:
             tmp.write_text(json.dumps(now_told))
             tmp.replace(record)
         return notices
+
+    def pin_notices(self, local_commit: str) -> list[str]:
+        """One notice per distinct kit pin mismatch, whatever command it refuses. The record clears once the three
+        agree, so a mismatch that comes back is told again. The bootstrap bot repairs it; nobody needs to relay it."""
+        record = self.policy.home / "kit-pin" / f"{self.bot.name}.json"
+        try:
+            told = json.loads(record.read_text()).get("mismatch")
+        except (OSError, ValueError, AttributeError):
+            told = None
+        try:
+            self.kit_check(local_commit)
+            mismatch, values = None, {}
+        except PinMismatch as err:
+            vendored = err.vendored
+            if vendored is None:
+                try:
+                    vendored = json.loads(self.file(VENDOR_MANIFEST)).get("kit_ref")
+                except (Refused, ValueError, AttributeError):
+                    vendored = None
+            values = {"kit": err.kit, "kit_ref": err.kit_ref, "vendored": vendored}
+            mismatch = "|".join(str(v) for v in values.values())
+        except Refused:
+            return []  # no readable kit_ref at all: launch says why, as before
+        if mismatch != told:
+            record.parent.mkdir(parents=True, exist_ok=True)
+            tmp = record.with_name(f".{record.name}.{os.getpid()}")
+            tmp.write_text(json.dumps({"mismatch": mismatch}))
+            tmp.replace(record)
+        if mismatch is None or mismatch == told:
+            return []
+        short = {k: str(v)[:12] if v else "none" for k, v in values.items()}
+        return [f"{NOTICE} kit pin mismatch in project {self.bot.project} ({self.repo}): this machine's kit {short['kit']}, kit_ref {short['kit_ref']}, "
+                f"vendored kit {short['vendored']}. Launches here wait until they agree. The bootstrap bot's team-kit-kit-drift job repairs it "
+                "with team-kit-admin vendor and tells the owner only what needs them; `team-kit-admin kit-drift` shows its report."]
 
     def land_kit_pr(self, number: int) -> bool:
         try:
@@ -2788,6 +2834,10 @@ class Project:
         except (Refused, ValueError, KeyError, TypeError) as err:
             problems["kit-prs"] = reason(err)
         try:
+            notices.extend(gh.pin_notices(local_commit))
+        except (OSError, ValueError, KeyError, TypeError) as err:
+            problems["kit-pin"] = reason(err)
+        try:
             units = gh.units()
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
             units, problems[gh.repo] = [], reason(err)
@@ -2814,6 +2864,8 @@ class Project:
                         notice = gh.check_running(issue, cloud)
                     else:
                         notice = gh.check_app_review(issue) if gh.review_app() else None
+                except PinMismatch:
+                    continue  # told once by pin_notices
                 except Exception as err:  # noqa: BLE001 - one broken unit never stops the others
                     problems[f"{gh.repo}#{issue['number']}"] = reason(err)
                     continue
@@ -2835,7 +2887,9 @@ class Project:
                     break  # the repository or the machine is full
             except Unfit as err:
                 notices.append(gh.gate(issue, f"it could not launch: {err}"))
-            except Exception as err:  # noqa: BLE001 - a pin mismatch or a GitHub hiccup is not the unit's fault
+            except PinMismatch:
+                break  # told once by pin_notices
+            except Exception as err:  # noqa: BLE001 - a GitHub hiccup is not the unit's fault
                 problems[gh.repo] = reason(err)
                 break
         try:
