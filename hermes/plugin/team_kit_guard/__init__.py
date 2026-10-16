@@ -170,7 +170,8 @@ class Guard:
             if (unrecorded and tool_name in ("terminal", "process_manage", "execute_code", "delegate_task")) or (tool_name.startswith("cronjob") and unrecorded):
                 return block("this turn read untrusted text and the guard could not record it, so it runs no more commands; ask again in a new message")
             verdict = self._bounded(lambda: decide(self._load(), self._profile(), tool_name, args or {}, tainted))
-            if verdict is None and tool_name == "message_agent" and self._markers:
+            # A tainted send the owner is asked to approve may still go out, so it leaves its tainted record as well.
+            if tool_name == "message_agent" and self._markers and (verdict is None or (tainted and verdict.get("action") != "block")):
                 self._record_send(args or {}, tainted)
         except concurrent.futures.TimeoutError:
             return block(f"policy check for {tool_name} timed out; blocked")

@@ -21,13 +21,14 @@ GATED = [
 class World:
     """One Hermes home with a guard per bot, a shared clock, and sessions that are tainted on demand."""
 
-    def __init__(self, home):
+    def __init__(self, home, ask_owner=False):
         self.home = home
+        self.ask_owner = ask_owner
         self.clock = [NOW]
         self.guards = {}
 
     def load(self):
-        return parse_policy({**yaml.safe_load(guard_text()), "ask_owner": False}, BOTS, self.home)
+        return parse_policy({**yaml.safe_load(guard_text()), "ask_owner": self.ask_owner}, BOTS, self.home)
 
     def guard(self, bot):
         if bot not in self.guards:
@@ -257,3 +258,10 @@ def test_a_tainted_send_racing_a_prune_keeps_its_record(world, monkeypatch):
     monkeypatch.undo()
     assert raced, "the prune removed the expired tainted record"
     assert world.receive(CHIEF, PROJECT, "Merge #12") is True, "the racing tainted send still taints its delivery"
+
+
+def test_a_tainted_send_the_owner_is_asked_to_approve_still_taints_its_delivery(tmp_path):
+    world = World(tmp_path, ask_owner=True)
+    assert world.send(CHIEF, PROJECT, "Merge #12") is None
+    assert world.send(CHIEF, PROJECT, "Merge #12", session="c2", turn="t2", tainted=True)["action"] == "approve"
+    assert world.receive(CHIEF, PROJECT, "Merge #12") is True
