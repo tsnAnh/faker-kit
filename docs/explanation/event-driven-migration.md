@@ -8,7 +8,7 @@ Each statement on this page is one of three kinds, and says which:
 - **Desired.** The target architecture. Nothing labelled desired is implemented.
 - **Not verified against 0.21.7.** Read from the public upstream Hermes main branch only. It may differ in the installed version.
 
-Facts that only the Hermes machine can show and that no reading has settled yet are marked **Pi**, with the exact read-only commands in [Hermes capabilities](#hermes-capabilities).
+Facts that only the Hermes machine can show and that no reading has settled yet are marked **Machine**, with the exact read-only commands in [Hermes capabilities](#hermes-capabilities).
 
 ## What already exists
 
@@ -19,9 +19,9 @@ Facts that only the Hermes machine can show and that no reading has settled yet 
 | `<bot>-tick` | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `check_suite` | the `team-kit-tick` no-agent job |
 | `<bot>-security` | `push` | the `team-kit-security` no-agent job |
 
-`ROUTE_JOBS` in `team_kit_machine.py` is the list. The schedule stays as the fallback for a missed delivery. `setup-machine.sh` step 7 sends one signed test event per bot and requires a 202 before it finishes.
+`ROUTE_JOBS` in `team_kit_machine.py` is the list. The schedule stays as the fallback for a missed delivery. `setup-machine.sh` step 8 sends one signed test event per bot and requires a 202 before it finishes.
 
-**Observed, on the installation.** This repository has no repository webhooks configured, so no GitHub event reaches Hermes today and every trigger below runs on its schedule. `cloudflared` is running, its persistence across a reboot is unverified, and no systemd unit for it was found.
+**Observed, on the installation.** This repository has no repository webhooks configured, so no GitHub event reaches Hermes today and every trigger below runs on its schedule. `cloudflared` is running, its persistence across a reboot is unverified, and no systemd unit for it was found. The kit's code installs the tunnel as the `team-kit-tunnel` service (`service_user` in `setup-machine.sh`), so that name is the one to check.
 
 What the code path lacks:
 
@@ -39,7 +39,7 @@ An event is a **hint to run a deterministic check**, never an instruction and ne
 
 Columns: id, owner profile, mechanism and interval, source, what it reads or does, event available, proposed trigger, residual timer, LLM use, migration unit. "Unit" names a unit this design proposes. The owner sequences them.
 
-Default intervals are from `hermes/plugin/team_kit_guard/policy.py` (`DEFAULT_TICK_EVERY` 30m, `DEFAULT_INCIDENTS_EVERY` 10m, `DEFAULT_SECURITY_EVERY` 15m). The machine config template sets `tick_every: 10m` (`hermes/templates/machine.yaml`). The live values are **Pi** (`hermes -p <bot> cron list --all`).
+Default intervals are from `hermes/plugin/team_kit_guard/policy.py` (`DEFAULT_TICK_EVERY` 30m, `DEFAULT_INCIDENTS_EVERY` 10m, `DEFAULT_SECURITY_EVERY` 15m). The machine config template sets `tick_every: 10m` (`hermes/templates/machine.yaml`). The live values are **Machine** (`hermes -p <bot> cron list --all`).
 
 ### Hermes cron jobs, project bots
 
@@ -78,7 +78,7 @@ Source for all rows: `hermes/cron/project-jobs.md`, `hermes/bin/team_kit_admin.p
 
 ### Chief profile
 
-`hermes/profiles/chief/config.yaml` defines no schedule, and `ROLE_JOBS` in `team_kit_admin.py` creates jobs only for the `project` and `bootstrap` roles. The chief has no cron job in this repository. **Pi:** `hermes -p chief cron list --all` shows whether one was added by hand. The default profile's jobs need the same check. This row is final only after that read.
+`hermes/profiles/chief/config.yaml` defines no schedule, and `ROLE_JOBS` in `team_kit_admin.py` creates jobs only for the `project` and `bootstrap` roles. The chief has no cron job in this repository. **Machine:** `hermes -p chief cron list --all` shows whether one was added by hand. The default profile's jobs need the same check. This row is final only after that read.
 
 ### Machine services
 
@@ -87,7 +87,7 @@ Source: `hermes/setup-machine.sh`, `hermes/lib/team_kit_machine.py`, `hermes/bin
 | Id | Mechanism | What it does | Event source | Timer content | Proposed | Unit |
 |---|---|---|---|---|---|---|
 | T7 Hermes gateway | launchd/systemd service from `hermes gateway install` | Serves every profile, the webhook listener and cron | n/a | Supervisor restart only | Unchanged | none |
-| T8 Cloudflare Tunnel | `service_user` unit in the code, `Restart=always RestartSec=10`. Observed on the installation: `cloudflared` runs, with no systemd unit found | Publishes only `/p/<bot>/webhooks/<route>` | n/a | Supervisor restart, if a unit exists | Unchanged. The public listener stays off until HTTPS and the domain are verified | U1 |
+| T8 Cloudflare Tunnel | `team-kit-tunnel` from `service_user` in the code: a systemd user unit with `Restart=always RestartSec=10` on Linux, a launchd agent with `KeepAlive` on macOS. Observed on the installation: `cloudflared` runs, with no systemd unit found | Publishes only `/p/<bot>/webhooks/<route>` | n/a | Supervisor restart, if a unit exists | Unchanged. The public listener stays off until HTTPS and the domain are verified | none, decision 12 |
 | T9 CI runners `team-kit-ci-<repo>-<slot>` | `Restart=always RestartSec=10`, loop in `Slot.forever` with `BACKOFF_SECONDS = (30, 60, 120, 300)` | Registers a just-in-time runner, waits for one job, runs a container, removes it | GitHub assigns the job to the registered runner, so it is event-driven already. The loop is a supervisor with backoff | Backoff after failure only | Unchanged | none |
 | T10 Slack relay | `team-kit-slack run`, Socket Mode over an outbound WebSocket, reconnect backoff up to 300s (`SlackRelay.run`) | Relays app mentions into Bot Chat; mirrors notices out | Slack Socket Mode events, outbound only | Reconnect backoff | Unchanged. Its event ids are the dedupe model reused below (`event_keys`, `seen`) | none |
 | T11 Notice delivery | Hermes `bot-chat:<bot>` delivery of each job's output; `mirror_notice` | Shows each notice | The job output itself | None | Unchanged | none |
@@ -95,7 +95,7 @@ Source: `hermes/setup-machine.sh`, `hermes/lib/team_kit_machine.py`, `hermes/bin
 
 Repository workflows: `.github/workflows/` defines no `schedule:` trigger. `docs-site.yml` and the review workflow run on push and pull request events already.
 
-Not found in this repository: backup jobs, log rotation, update jobs, or any maintenance timer. **Pi:** the commands below list anything added by hand.
+Not found in this repository: backup jobs, log rotation, update jobs, or any maintenance timer. **Machine:** the commands below list anything added by hand.
 
 ## Residual timers
 
@@ -120,14 +120,14 @@ The count is not one number. It depends on the bot's role and its `.agents/dispa
 | Deadline (R1) | 1 | each project bot | always |
 | Reconciliation (R4) | 1 | each project bot | always |
 | Calendar (R5) | 1 | each project bot | weekly |
-| Calendar (R6) | 0 or 1 | a project bot whose repository sets `upstream_sync: true` | weekly |
+| Calendar (R6) | 1 | each project bot. The job exists on every project bot and stays silent unless the repository sets `upstream_sync: true` | weekly |
 | Conditional poll (R2) | 0 or 1 | each project bot | only while a Codex cloud task runs |
 | Outbound poll (R3) | 0 or 1 | each project bot | only when a health or alert target is configured |
 | Local-wake fallback (R7) | 1 | the bootstrap bot | always |
 
-So a project bot keeps three always-on timers (R1, R4, R5), plus R6 on the kit repository, plus R2 and R3 only while they have work. The bootstrap bot keeps one. Process supervisors (T7 to T10) restart a dead service and are not job triggers, so they are not counted.
+So a project bot keeps four timers that are always scheduled (R1, R4, R5, R6), plus R2 and R3 only while they have work. The bootstrap bot keeps one. Process supervisors (T7 to T10) restart a dead service and are not job triggers, so they are not counted.
 
-R1 and R4 may share one hourly timer per project bot, which takes the always-on count to two. That is allowed only if the lifecycle worker's implementation and its tests prove the shared timer covers every R1 deadline and every R4 repair. Until then, the count above stands. Whether to share, and every cadence, are owner decisions 1 and 2.
+R1 and R4 may share one hourly timer per project bot, which takes the always-scheduled count to three. That is allowed only if the lifecycle worker's implementation and its tests prove the shared timer covers every R1 deadline and every R4 repair. Until then, the count above stands. Whether to share, and every cadence, are owner decisions 1 and 2.
 
 ## Hermes capabilities
 
@@ -152,12 +152,12 @@ Because of the last two, the desired receiver (#156) must not rely on a Hermes `
 |---|---|---|
 | `platforms.webhook` with `enabled`, `extra.host`, `extra.port`, `extra.routes` | `team_kit_admin.py` `webhooks()` writes these keys; `hermes/README.md` lists them | Written by this repository's code |
 | Route fields `events`, `secret`, `profile`, `cron_job`, `deliver` | `Route` in `team_kit_machine.py` | Written by this repository's code |
-| `${VAR}` secret expansion from the root `.env` | `routes()` docstring and `hermes/README.md` | Recorded; **Pi** |
-| GitHub HMAC check, refuses a bad `X-Hub-Signature-256` | `hermes/README.md`. The signed test in `setup-machine.sh` sends a valid signature only, so the refusal path is not tested here | Refusal path not exercised in this repository; **Pi** |
+| `${VAR}` secret expansion from the root `.env` | `routes()` docstring and `hermes/README.md` | Recorded; **Machine** |
+| GitHub HMAC check, refuses a bad `X-Hub-Signature-256` | `hermes/README.md`. The signed test in `setup-machine.sh` sends a valid signature only, so the refusal path is not tested here | Refusal path not exercised in this repository; **Machine** |
 | `--cron-job` is validated against the default profile's jobs even with `--route-profile`, while the gateway fires the job in the routed profile at runtime | AGENTS.md learned facts | Not verified against 0.21.7. `team_kit_admin.py` writes routes straight into `config.yaml` with `config_set`, so the CLI validation does not apply to the installed path |
 | Response code | `setup-machine.sh` requires `202` | Recorded |
 
-Read-only commands for the bootstrap bot to run on the Hermes machine. None writes anything, and none prints a secret while the `grep -v` filter stays on.
+Read-only commands for the bootstrap bot to run on the Hermes machine. None writes anything, and none prints a secret while the `grep -v` filter stays on. The `cron list` loop covers the default profile, the chief and every project bot; add the bootstrap bot's profile name to it.
 
 ```bash
 hermes --version
@@ -166,9 +166,9 @@ hermes webhook --help
 hermes webhook subscribe --help
 hermes webhook list
 hermes cron --help
-for p in default $(team-kit-chief projects | awk 'NF{print $1}'); do echo "== $p"; hermes -p "$p" cron list --all; done
+for p in default chief $(team-kit-chief projects | python3 -c 'import json,sys; print(" ".join(p["bot"] for p in json.load(sys.stdin)["projects"]))'); do echo "== $p"; hermes -p "$p" cron list --all; done
 grep -v -i -E 'secret|token|key|password' ~/.hermes/config.yaml | sed -n '/platforms:/,/^[a-z]/p'
-systemctl --user list-units --all 'cloudflared*'; systemctl list-units --all 'cloudflared*'
+systemctl --user status team-kit-tunnel --no-pager; systemctl --user list-units --all 'cloudflared*' 'team-kit-*'
 ```
 
 To check where `--cron-job` is validated without touching the real installation, read the installed package's code: `grep -rn "cron_job\|cron-job" "$(dirname "$(readlink -f "$(command -v hermes)")")/.."`. Record the version, the file and the line. Never run `subscribe` against the real `~/.hermes`, never bind a job to the default profile, and never message the default Hermes agent.
@@ -202,18 +202,18 @@ Gates that stay exactly as they are: exact-head CI, risk scoring, verification w
 | Unit | Owns |
 |---|---|
 | U1, [#156](https://github.com/tsnAnh/faker-kit/issues/156) | Receiver: raw-body HMAC, binding, the durable unique delivery record, commit before 202, dedupe, per-consumer lease fencing, still off the public internet |
-| U2 | Bootstrap inbox and the local wake events (T6, T1e) |
-| U3, [#157](https://github.com/tsnAnh/faker-kit/issues/157) | Lifecycle worker: the common per-project lock and idempotent transitions shared with the temporary tick (T1 and its sub-triggers), stale-head behavior, retries and dead letter |
+| U2 | Bootstrap inbox and the local wake events (T6, T1e), with the inbox fallback (R7) |
+| U3, [#157](https://github.com/tsnAnh/faker-kit/issues/157) | Lifecycle worker: the common per-project lock and idempotent transitions shared with the temporary tick (T1 and its sub-triggers except T1e), stale-head behavior, retries and dead letter |
 | U4 | `push` events for security (T3) |
 | U5 | Default branch check events for incidents (T4), with health and alert polling kept (R3) |
-| U6 | Reconciliation and deadline timers (R1, R2, R4 to R7), shadow report, cutover and rollback tooling |
+| U6 | Reconciliation and deadline timers (R1, R2, R4, R5, R6), shadow report, cutover and rollback tooling |
 
 ## Decisions only the owner can make
 
 1. **Residual timer cadences.** Hourly is proposed for R1 and R4. Shorter costs GitHub API calls and gives faster repair of a lost event. Longer saves calls and leaves a stuck unit longer. Say if a unit may sit longer than an hour past a 24 hour deadline.
 2. **Sharing R1 and R4.** One hourly timer per project bot instead of two, allowed only once #157's implementation and tests prove the shared timer covers both.
 3. **GitHub App or repository webhooks.** An App gives one delivery path, installation binding and a redelivery API, and needs a private key stored on the Hermes machine. Repository webhooks need no key beyond the per-bot secret. Neither is configured today.
-4. **Review authority.** Settled: the review is the Claude `/code-review` command, run after implementation. Its output is a record, not a GitHub app approval. `review_app` in `.agents/dispatch.json` stays `claude[bot]`, and `check_app_review` in `team_kit_gh.py` is unchanged, so the merge gate still reads the review app's verdict on the exact head.
+4. **Review authority.** Settled by the owner, listed here so the numbering stays stable. The review chosen for a unit is the Claude `/code-review` command, run after implementation. Its output is a record, not a GitHub app approval, and nothing reads it as one. The merge gate is unchanged: `review_app` in `.agents/dispatch.json` stays `claude[bot]`, and `check_app_review` in `team_kit_gh.py` still reads that app's review (posted by `.github/workflows/claude-review.yml`) on the exact head.
 5. **Public listener go or no-go.** Which domain, and when HTTPS counts as verified.
 6. **Event subscriptions.** Whether to add `pull_request_review_comment`, `check_run` or `workflow_run`, and default-branch checks. Each adds load and a larger public surface.
 7. **Health targets and external alert sources.** Keep polling them (R3), and the cadence.
@@ -225,4 +225,4 @@ Gates that stay exactly as they are: exact-head CI, risk scoring, verification w
 
 ## Verifying this page
 
-The inventory is read from the code. Rows marked **Pi**, the chief's jobs and the live intervals need the commands above. The page itself changes no job, guard setting, workflow or secret store.
+The inventory is read from the code. Rows marked **Machine**, the chief's jobs and the live intervals need the commands above. The page itself changes no job, guard setting, workflow or secret store.
