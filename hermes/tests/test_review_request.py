@@ -230,7 +230,7 @@ def test_two_concurrent_ticks_make_one_request(team_kit_home, kit):
     def tick_once():
         try:
             results.append(request(slow, n))
-        except Exception as err:  # noqa: BLE001
+        except OSError as err:
             results.append(err)
 
     threads = [threading.Thread(target=tick_once) for _ in range(2)]
@@ -260,7 +260,10 @@ def test_a_refused_request_is_retried_a_bounded_number_of_times_and_never_approv
     first = request(gh, n)
     assert first.startswith(f"team-kit notice: #{n}: GitHub refused to start claude[bot]'s review of {PR_URL} at {HEAD[:12]}")
     assert f"retrying up to {REQUEST_ATTEMPTS - 1} more times" in first
-    calls = lambda: [c for c in gh.calls if c[-1].endswith("/dispatches")]  # noqa: E731
+
+    def calls():
+        return [c for c in gh.calls if c[-1].endswith("/dispatches")]
+
     assert request(gh, n, now=NOW + 60) is None and len(calls()) == 1, "a retry waits RETRY_SECONDS"
     assert request(gh, n, now=NOW + RETRY_SECONDS) is None and len(calls()) == 2
     last = request(gh, n, now=NOW + 2 * RETRY_SECONDS)

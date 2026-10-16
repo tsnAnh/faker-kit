@@ -2918,7 +2918,7 @@ class Project:
                         notice = gh.check_app_review(issue)
                         try:
                             requested = gh.request_final_review(issue)
-                        except Exception as err:  # noqa: BLE001 - the review gate above already ran; the request is tried again next tick
+                        except (Refused, OSError, ValueError, KeyError, TypeError) as err:  # the gate above already ran; tried again next tick
                             problems[f"{gh.repo}#{issue['number']} review request"] = reason(err)
                         else:
                             if requested:
