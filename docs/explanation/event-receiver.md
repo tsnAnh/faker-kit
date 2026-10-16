@@ -60,7 +60,7 @@ Each delivery is recorded durably once and handled logically once per consumer. 
 
 ## The loopback ingress
 
-`team-kit-events serve` is the piece that accepts a real HTTP request. It is the Python standard library's threading HTTP server, with no framework and no new dependency. For each request it reads the body exactly as sent, as bytes, and hands those bytes and the original headers to the receiver above. It writes the receiver's answer back as the HTTP status with a small JSON body: `{"status": 202, "reason": "recorded", "delivery": "<id>"}`. The success answer is written only after the receiver returns, which is after the commit. If the queue cannot be opened or the commit fails, the answer is 503, so GitHub redelivers.
+`team-kit-events serve` is the piece that accepts a real HTTP request. It is the Python standard library's threading HTTP server, with no framework and no new dependency. For each request it reads the body exactly as sent, as bytes, and hands those bytes and the original headers to the receiver above. It writes the receiver's answer back as the HTTP status with a small JSON body: `{"status": 202, "reason": "recorded", "delivery": "<id>"}`. The success answer is written only after the receiver returns, which is after the commit. If the queue cannot be opened or the commit fails, the answer is 503. GitHub does not retry a failed delivery by itself: it lists it as failed, and someone (or a later sweep) must redeliver it. Until then the event is missing from the queue, and `team-kit-tick`'s polling is what still notices the change.
 
 It binds to a loopback address only (127.0.0.0/8 or `::1`, written as a literal address). It refuses to start on any other address, `0.0.0.0` and `localhost` included, and says why. Something else must put HTTPS in front of it.
 
@@ -95,7 +95,7 @@ The secret file is read again for every request, with the same checks. Rotating 
 | Body size | 1 MiB (`max_body`). GitHub caps a payload at 25 MiB, but the events the kit takes are far smaller, and a smaller cap bounds memory per connection. | 413, before any body byte is read |
 | `Content-Length` | Required, digits only, given once. No `Transfer-Encoding`, so no chunked bodies | 411 when missing or chunked, 400 when malformed or repeated |
 | Request line and headers | 16 KiB together (`max_header_bytes`), at most 64 headers (`max_headers`) | 431 |
-| Time | 10 seconds (`read_timeout`), both for each read and for the whole request | 408, and the connection is closed |
+| Time | 10 seconds (`read_timeout`), both for each read and for the whole request | 408 once the request line has arrived; before that, the connection is closed with no answer |
 | Connections | 16 handled at once (`max_connections`), each on its own thread | 503 with `Retry-After` |
 
 Each connection carries one request and is closed after the answer. A slow client holds only its own thread, until the timeout. SQLite serializes the writes, through the store's immediate transactions. Any other method than POST answers 405 with `Allow: POST`.
