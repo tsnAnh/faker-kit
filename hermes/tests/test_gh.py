@@ -181,6 +181,8 @@ class FakeGh:
             if re.search(r"/pulls/\d+/reviews", path):
                 return paged(self.reviews.get(int(re.search(r"/pulls/(\d+)/reviews", path).group(1)), []))
             if re.search(r"/pulls/\d+(\?|$)", path):
+                if (path.removeprefix("repos/").split("/pulls/")[0], int(re.search(r"/pulls/(\d+)", path).group(1))) not in self.prs:
+                    raise Refused("gh api failed: gh: Not Found (HTTP 404)")
                 return finish(json.dumps(self.rest_pull(path.removeprefix("repos/").split("/pulls/")[0], int(re.search(r"/pulls/(\d+)", path).group(1)))))
             if path.startswith(f"repos/{REPO}/pulls?") or re.match(r"repos/[^/]+/[^/]+/pulls\?", path):
                 repo = "/".join(path.split("/")[1:3])
@@ -662,12 +664,12 @@ def test_idle_tick_uses_etags_and_reduces_uncached_github_work(team_kit_home, gh
     since = urllib.parse.quote(iso(NOW), safe="")
     first = [c for c in gh.calls if c[0] == "api"]
     assert [c[-1] for c in first] == [
-        f"repos/{REPO}/issues?state=open&labels=agent%3Aandon&per_page=100&page=1",
         f"repos/{REPO}/issues?labels=agent%3Aproposal&state=open&per_page=100&page=1",
         f"repos/{REPO}/contents/.agents/dispatch.json",
         f"repos/{REPO}/issues/comments?since={since}&per_page=100&page=1",
         f"repos/{REPO}/pulls/comments?since={since}&per_page=100&page=1",
         f"repos/{REPO}/pulls?state=open&per_page=100&page=1",
+        f"repos/{REPO}/issues?state=open&labels=agent%3Aandon&per_page=100&page=1",
         f"repos/{REPO}/issues?state=open&labels=agent-task&per_page=100&page=1",
         f"repos/{REPO}/issues?state=closed&labels=agent-task&per_page=100&page=1",
     ]

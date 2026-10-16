@@ -22,6 +22,12 @@ GitHub tokens.
   show          --path P                           a file from the default branch (the owner's repo; trusted)
   kit-check                                        compare this machine's kit commit with kit_ref and the vendored kit
   andon         [raise REASON... | clear]          show, pull, or clear this project's andon cord (the owner asked)
+  work-events   [--sweep]                          run the unit lifecycle steps this project's queued GitHub events ask for;
+                                                   notices only. Read-only unless the authority is event
+  authority     [show | event | rollback]          who drives the unit lifecycle: tick (poll, the default) or work-events
+                                                   (event); rollback sets poll (the owner asked)
+  shadow-compare [--hours H]                       the lifecycle decisions tick and work-events logged in the last H hours
+                                                   (default 24), as matches and mismatches; changes nothing
   security                                         start a security review of the default branch's new commits
   incidents                                        poll checks, health URLs, and alert sources; open, triage, and close incidents
   upstream                                         when the repository opts in with upstream_sync, dispatch one unit that syncs
@@ -50,6 +56,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import dataclasses
 import datetime as dt
 import fcntl
 import hashlib
@@ -57,8 +64,10 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -122,6 +131,7 @@ from team_kit_contracts import (
     verify_argv,
 )
 from team_kit_env import EnvFileError, use_bot_env
+from team_kit_event_queue import Delivery, EventStore, Lease, LeaseLost, NotFound, State, Transient, Unavailable, default_db
 from team_kit_guard.policy import NAME, REPO, TAINTED_TURN_SECONDS, Bot, Policy, PolicyError, load_policy, tainted_turn_marker
 from team_kit_incident_sources import (
     ExternalObservation,
@@ -2761,6 +2771,167 @@ class Upstream:
         return [f"{NOTICE} {upstream} moved from {pinned[:12]} to {head[:12]}; sync unit #{out['issue']} {state}."]
 
 
+# Event authority ----------------------------------------------------------------------------------
+# Who drives the unit lifecycle (launch, gate, verify, merge) is one per-project field in kit state,
+# authority/<bot>.json: `poll` (tick, the default) or `event` (the event worker). Only `team-kit-gh
+# authority` writes it, refused in a turn that read untrusted text like merge; nothing an event carries
+# reaches it. The other side runs the same code read-only and logs what it would have done to
+# events/decisions/<bot>.jsonl, which `shadow-compare` reads.
+
+AUTHORITIES = ("poll", "event")
+SIDE_AUTHORITY = {"tick": "poll", "event": "event"}
+# Not copied into a read-only side's scratch kit state: checkouts and the event queue are large and never written by a
+# lifecycle step, the ETag cache is shared (it only mirrors GitHub), and the authority must not be readable as writable.
+SCRATCH_SKIP = frozenset({"kit", "checkouts", "etag", "events", "authority"})
+# Flags that make `gh api` send something; any other gh command is a write too.
+API_WRITE_FLAGS = ("-X", "--method", "-f", "-F", "--field", "--raw-field", "--input")
+SHADOW_SESSION = "shadow-session-not-started"
+LIFECYCLE_CONSUMER = "lifecycle"
+EVENT_LEASE_SECONDS = 600.0
+EVENT_CLAIM_LIMIT = 500
+
+
+def authority_path(policy: Policy, bot: Bot) -> Path:
+    return policy.home / "authority" / f"{bot.name}.json"
+
+
+def read_authority(policy: Policy, bot: Bot) -> str:
+    """poll unless the file says event; a missing or unreadable file is today's behavior."""
+    try:
+        value = json.loads(authority_path(policy, bot).read_text()).get("authority")
+    except (OSError, ValueError, AttributeError):
+        return "poll"
+    return value if value in AUTHORITIES else "poll"
+
+
+@contextlib.contextmanager
+def authority_lock(policy: Policy, bot: Bot) -> Iterator[None]:
+    path = authority_path(policy, bot).with_suffix(".lock")
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with path.open("w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+def set_authority(policy: Policy, bot: Bot, value: str, now: float) -> dict:
+    if value not in AUTHORITIES:
+        raise Refused(f"authority must be one of {', '.join(AUTHORITIES)}")
+    with authority_lock(policy, bot):
+        before = read_authority(policy, bot)
+        path = authority_path(policy, bot)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.write_text(json.dumps({"project": bot.project, "authority": value, "at": now}))
+        tmp.replace(path)
+    return {"project": bot.project, "authority": value, "was": before}
+
+
+def decisions_path(policy: Policy, bot: Bot) -> Path:
+    return policy.home / "events" / "decisions" / f"{bot.name}.jsonl"
+
+
+def is_read(args: list[str]) -> bool:
+    """A plain `gh api` GET. Every other form, an unknown one included, counts as a write."""
+    return args[:1] == ["api"] and not any(arg.startswith(API_WRITE_FLAGS) for arg in args[1:])
+
+
+def decision(args: list[str]) -> str:
+    """A write as a stable key: the command, its target, labels, merge method and head, and a body's marker line.
+    Never free text, so the log holds nothing a stranger wrote."""
+    if args[:1] == ["api"]:
+        return f"api write {args[-1].split('?', 1)[0]}"
+    words = list(args[:3])
+    for i, word in enumerate(args[:-1]):
+        following = args[i + 1]
+        if word == "--add-label":
+            words.append(f"+{following}")
+        elif word == "--remove-label":
+            words.append(f"-{following}")
+        elif word in ("--body", "--comment"):
+            first = following.splitlines()[0] if following else ""
+            words.append(first if first.startswith("<!-- team-kit:") else "(text)")
+        elif word == "--match-head-commit":
+            words.append(f"head {following}")
+    words.extend(arg for arg in args if arg in ("--merge", "--squash", "--rebase"))
+    return " ".join(words)
+
+
+@contextlib.contextmanager
+def scratch_home(home: Path) -> Iterator[Path]:
+    """A throwaway copy of the kit state for a read-only side, so its records never reach the acting side's."""
+    with tempfile.TemporaryDirectory(prefix="team-kit-shadow-") as tmp:
+        scratch = Path(tmp) / "team-kit"
+        shutil.copytree(home, scratch, symlinks=True, ignore_dangling_symlinks=True,
+                        ignore=lambda folder, names: [n for n in names if Path(folder) == home and n in SCRATCH_SKIP])
+        if (home / "etag").is_dir():
+            (scratch / "etag").symlink_to(home / "etag", target_is_directory=True)
+        yield scratch
+
+
+class Decisions:
+    """Every side effect of the unit lifecycle crosses here: a gh write, a cloud start, a notice. The acting side runs
+    each and logs it; the read-only side logs it and runs nothing."""
+
+    def __init__(self, path: Path, side: str, acting: bool, now: Callable[[], float]) -> None:
+        self.path, self.side, self.acting, self.now = path, side, acting, now
+        self.taken: list[str] = []
+
+    def note(self, action: str) -> None:
+        self.taken.append(action)
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with self.path.open("a") as log:
+            log.write(json.dumps({"at": self.now(), "side": self.side, "acting": self.acting, "action": action}) + "\n")
+
+    def runner(self, run: Runner) -> Runner:
+        def decided(args: list[str], *rest: object, **kwargs: object) -> str:
+            if is_read(args):
+                return run(args, *rest, **kwargs)
+            self.note(decision(args))
+            return run(args, *rest, **kwargs) if self.acting else ""
+
+        return decided
+
+
+class DecidedCloud(Cloud):
+    """The cloud as one side of the lifecycle sees it: status reads pass through, a start is a logged decision."""
+
+    def __init__(self, cloud: Cloud, decisions: Decisions) -> None:
+        self.cloud, self.decisions = cloud, decisions
+
+    def start(self, backend: str, repo: str, command: CloudCommand, workdir: Path) -> str:
+        self.decisions.note(f"cloud start {backend} {Path(workdir).name}")
+        return self.cloud.start(backend, repo, command, workdir) if self.decisions.acting else SHADOW_SESSION
+
+    def task_status(self, backend: str, session: str) -> str:
+        return self.cloud.task_status(backend, session)
+
+
+@dataclasses.dataclass(frozen=True)
+class Side:
+    project: Project
+    cloud: DecidedCloud
+    decisions: Decisions
+
+    @property
+    def acting(self) -> bool:
+        return self.decisions.acting
+
+    def said(self, notices: list[str]) -> list[str]:
+        """The notices this side may send. The read-only side only logs them."""
+        for notice in notices:
+            self.decisions.note(f"notice {notice}")
+        return notices if self.acting else []
+
+
+@dataclasses.dataclass(frozen=True)
+class Lifecycle:
+    units: list[dict]
+    fetched: bool
+    queued: list[dict]
+    notices: list[str]
+    problems: dict[str, str]
+    recovered_any: bool
+
+
 class Project:
     """tick and status for the bot's project."""
 
@@ -2770,10 +2941,6 @@ class Project:
 
     def tick(self, local_commit: str, cloud: Cloud) -> list[str]:
         gh, notices, problems = self.gh, [], {}
-        queued: list[dict] = []
-        recovered_any = False
-        cord, andon_notices = gh.sync_andon()
-        notices.extend(andon_notices)
         closed_units: list[dict] | None
         try:
             notices.extend(gh.proposal_notices())
@@ -2787,6 +2954,48 @@ class Project:
             notices.extend(gh.kit_prs(local_commit))
         except (Refused, ValueError, KeyError, TypeError) as err:
             problems["kit-prs"] = reason(err)
+        with self.side("tick", cloud) as side:
+            done = side.project.lifecycle(local_commit, side.cloud)
+            notices.extend(side.said(done.notices))
+            if side.acting:
+                problems.update(done.problems)
+        units, queued, recovered_any = done.units, done.queued, done.recovered_any
+        try:
+            closed_units = gh.units("closed")
+        except Exception as err:  # noqa: BLE001 - open units still run; the closed list only feeds publishing
+            closed_units, problems[f"{gh.repo} closed units"] = None, reason(err)
+        if done.fetched and closed_units is not None:
+            try:
+                self.publish(units, closed_units, queued, problems)
+            except Exception as err:  # noqa: BLE001 - reported once, retried next tick
+                problems["units"] = reason(err)
+        try:
+            notice = Security(gh).check(cloud)
+            if notice:
+                notices.append(notice)
+        except Exception as err:  # noqa: BLE001 - reported once, retried next tick
+            problems["security"] = reason(err)
+        try:
+            # Refresh this bot's count for the other bots, whatever launched or did not.
+            held = [labels_of(issue) for issue in units]
+            no_launchable = not any(not (each & {RUNNING_LABEL, VERIFYING_LABEL, REVIEW_LABEL, HUMAN_LABEL}) for each in held)
+            if no_launchable and not recovered_any:  # a recovery changed labels after units was read
+                InFlight(self.policy, self.bot, self.run, self.now).write({gh.repo: sum(1 for each in held if each & {RUNNING_LABEL, VERIFYING_LABEL})})
+            else:
+                InFlight(self.policy, self.bot, self.run, self.now).count_own()
+        except Exception as err:  # noqa: BLE001
+            problems["count"] = reason(err)
+        return notices + self.new_problems(problems)
+
+    def lifecycle(self, local_commit: str, cloud: Cloud, only: frozenset[int] | None = None, launch: bool = True) -> Lifecycle:
+        """The unit lifecycle: the andon cord, each in-flight unit's next step (`only` limits which), then launches of
+        queued units. tick runs all of it; the event worker runs the part an event changed. Every step reads GitHub
+        again, so a repeated or stale event finds nothing left to do."""
+        gh, notices, problems = self.gh, [], {}
+        queued: list[dict] = []
+        recovered_any = False
+        cord, andon_notices = gh.sync_andon()
+        notices.extend(andon_notices)
         try:
             units = gh.units()
         except Exception as err:  # noqa: BLE001 - reported once, retried next tick
@@ -2794,16 +3003,14 @@ class Project:
             fetched = False
         else:
             fetched = True
-        try:
-            closed_units = gh.units("closed")
-        except Exception as err:  # noqa: BLE001 - open units still run; the closed list only feeds publishing
-            closed_units, problems[f"{gh.repo} closed units"] = None, reason(err)
         for issue in units:
             labels = labels_of(issue)
             if TASK_LABEL not in labels:
                 continue
             in_review = REVIEW_LABEL in labels and HUMAN_LABEL not in labels
             if RUNNING_LABEL in labels or VERIFYING_LABEL in labels or in_review:
+                if only is not None and int(issue["number"]) not in only:
+                    continue
                 try:
                     notice = gh.recover_rework(int(issue["number"]))
                     if notice:
@@ -2822,12 +3029,7 @@ class Project:
             elif not labels & {REVIEW_LABEL, HUMAN_LABEL}:
                 queued.append(issue)
         queued.sort(key=lambda issue: (issue.get("createdAt") or "", int(issue["number"])))
-        if fetched and closed_units is not None:
-            try:
-                self.publish(units, closed_units, queued, problems)
-            except Exception as err:  # noqa: BLE001 - reported once, retried next tick
-                problems["units"] = reason(err)
-        for issue in [] if cord else queued:
+        for issue in [] if cord or not launch else queued:
             try:
                 gh.launch(int(issue["number"]), local_commit, cloud)
             except Waiting as wait:
@@ -2838,23 +3040,19 @@ class Project:
             except Exception as err:  # noqa: BLE001 - a pin mismatch or a GitHub hiccup is not the unit's fault
                 problems[gh.repo] = reason(err)
                 break
-        try:
-            notice = Security(gh).check(cloud)
-            if notice:
-                notices.append(notice)
-        except Exception as err:  # noqa: BLE001 - reported once, retried next tick
-            problems["security"] = reason(err)
-        try:
-            # Refresh this bot's count for the other bots, whatever launched or did not.
-            labels = [labels_of(issue) for issue in (units or [])]  # type: ignore[assignment]  # team-kit baseline
-            no_launchable = units is not None and not any(not (l & {RUNNING_LABEL, VERIFYING_LABEL, REVIEW_LABEL, HUMAN_LABEL}) for l in labels)  # type: ignore[operator, redundant-expr]  # team-kit baseline  # noqa: E741
-            if no_launchable and not recovered_any:  # a recovery changed labels after units was read
-                InFlight(self.policy, self.bot, self.run, self.now).write({gh.repo: sum(1 for l in labels if l & {RUNNING_LABEL, VERIFYING_LABEL})})  # type: ignore[misc, operator]  # team-kit baseline  # noqa: E741
-            else:
-                InFlight(self.policy, self.bot, self.run, self.now).count_own()
-        except Exception as err:  # noqa: BLE001
-            problems["count"] = reason(err)
-        return notices + self.new_problems(problems)
+        return Lifecycle(units, fetched, queued, notices, problems, recovered_any)
+
+    @contextlib.contextmanager
+    def side(self, name: str, cloud: Cloud) -> Iterator[Side]:
+        """The unit lifecycle as `name` (tick or event) may run it now. The side the project's authority names acts; the
+        other runs the same code against a scratch copy of the kit state, and its writes and launches are only logged.
+        Held under the authority lock, so the authority cannot change during a run and the two sides never both act."""
+        with authority_lock(self.policy, self.bot):
+            acting = read_authority(self.policy, self.bot) == SIDE_AUTHORITY[name]
+            decisions = Decisions(decisions_path(self.policy, self.bot), name, acting, self.now)
+            with contextlib.nullcontext(self.policy.home) if acting else scratch_home(self.policy.home) as home:
+                policy = self.policy if acting else dataclasses.replace(self.policy, home=home)
+                yield Side(Project(policy, self.bot, decisions.runner(self.run), self.now), DecidedCloud(cloud, decisions), decisions)
 
     def publish(self, units: list[dict], closed_units: list[dict], queued: list[dict], problems: dict[str, str]) -> None:
         """Publish unit states for the other project bots: this repository's recent units, every issue another
@@ -2923,6 +3121,131 @@ class Project:
         return stopped + [line("In flight", flight), line("Waiting on you", waiting), line("Done since last", done)]  # noqa: RUF005
 
 
+def unavailable(err: Exception) -> Unavailable:
+    text = reason(err)
+    return NotFound(text) if re.search(r"\b(?:404|410)\b|Not Found", text) else Transient(text)
+
+
+Asked = tuple[frozenset[int] | None, bool]
+
+
+class EventWorker:
+    """Runs the unit lifecycle steps tick would take for this project's queued GitHub events.
+
+    One run takes every due lifecycle row of the project under the queue's project lock, checks each row's pointers
+    against a fresh GitHub read, runs Project.lifecycle once for what they ask, and settles each row. A row holds no
+    event text, and the event's head is only compared with the live one, never used. With authority poll the run is
+    read-only and only logs what it would have done."""
+
+    def __init__(self, project: Project, store: EventStore, holder: str) -> None:
+        self.project, self.store, self.holder = project, store, holder
+
+    def run(self, local_commit: str, cloud: Cloud, sweep: bool = False) -> list[str]:
+        """With sweep, every in-flight unit is stepped and queued units may launch even when no event is due."""
+        name = self.project.bot.project or self.project.bot.name
+        lock = self.store.acquire_project_lock(name, self.holder, self.project.now(), ttl=EVENT_LEASE_SECONDS)
+        if lock is None:
+            return []
+        try:
+            return self.locked(name, local_commit, cloud, sweep)
+        finally:
+            self.store.release_project_lock(name, lock)
+
+    def locked(self, name: str, local_commit: str, cloud: Cloud, sweep: bool) -> list[str]:
+        now = self.project.now
+        leases: list[Lease] = []
+        while len(leases) < EVENT_CLAIM_LIMIT and (lease := self.store.claim(LIFECYCLE_CONSUMER, name, now(), EVENT_LEASE_SECONDS)):
+            leases.append(lease)
+        if not leases and not sweep:
+            return []
+        units: set[int] = set()
+        every, launch, accepted = sweep, sweep, []
+        heads: list[set[str]] = []
+        with self.project.side("event", cloud) as side:
+            for lease in leases:
+                delivery = self.store.delivery(lease.delivery_id)
+                try:
+                    asked = self.triage(side.project.gh, delivery, heads) if delivery else "its delivery row is gone"
+                except NotFound as err:
+                    self.settle(self.store.retry, lease, now(), f"not found: {err}", State.GONE)
+                    continue
+                except Transient as err:
+                    self.settle(self.store.retry, lease, now(), f"transient: {err}")
+                    continue
+                if isinstance(asked, str):
+                    self.settle(self.store.complete, lease, now(), State.SUPERSEDED, asked)
+                    continue
+                scope, may_launch = asked
+                every, launch = every or scope is None, launch or may_launch
+                units |= scope or set()
+                accepted.append(lease)
+            if not (accepted or sweep):
+                return []
+            done = side.project.lifecycle(local_commit, side.cloud, None if every else frozenset(units), launch)
+            notices = side.said(done.notices)
+        why = "; ".join(f"{where}: {text}" for where, text in sorted(done.problems.items()))
+        for lease in accepted:
+            if why:
+                self.settle(self.store.retry, lease, now(), f"lifecycle: {why}")
+            else:
+                self.settle(self.store.complete, lease, now())
+        return notices
+
+    @staticmethod
+    def settle(action: Callable[..., State], *args: object) -> None:
+        with contextlib.suppress(LeaseLost):  # the lease expired and a newer run owns the row; it reads GitHub again
+            action(*args)
+
+    @staticmethod
+    def triage(gh: Gh, delivery: Delivery, heads: list[set[str]]) -> Asked | str:
+        """What one delivery asks of the lifecycle, checked against live GitHub: the units to step (None for every unit
+        in flight) and whether queued units may launch. A string says why it asks nothing any more."""
+        if delivery.event in ("issues", "issue_comment"):
+            if delivery.number is None:
+                return "it names no issue"
+            return frozenset({delivery.number}), delivery.event == "issues"
+        try:
+            if delivery.event.startswith("pull_request") and delivery.number is not None:
+                head = str(gh.pull(delivery.number).get("headRefOid") or "")
+                if delivery.head_sha and head != delivery.head_sha:
+                    return f"head moved from {delivery.head_sha[:12]} to {head[:12]}"
+                return None, delivery.event == "pull_request" and delivery.action == "closed"
+            if delivery.head_sha:
+                if not heads:
+                    pulls = gh.api_pages(f"repos/{gh.repo}/pulls", {"state": "open"})
+                    heads.append({str((p.get("head") or {}).get("sha") or "") for p in pulls if isinstance(p, dict)})
+                if delivery.head_sha not in heads[0]:
+                    return f"no open pull request is at {delivery.head_sha[:12]}"
+        except (Refused, ValueError, KeyError, TypeError) as err:
+            raise unavailable(err) from None
+        return None, False
+
+
+def shadow_compare(policy: Policy, bot: Bot, now: float, hours: float) -> dict:
+    """The lifecycle decisions tick and the event worker logged in the last `hours`, as matches and mismatches.
+    Reads the log only. A decision one side logged alone can be timing: the side that ran second saw it already done."""
+    since = now - hours * 3600
+    seen: dict[str, set[str]] = {"tick": set(), "event": set()}
+    counts = dict.fromkeys(seen, 0)
+    try:
+        text = decisions_path(policy, bot).read_text()
+    except FileNotFoundError:
+        text = ""
+    for line in text.splitlines():
+        try:
+            entry = json.loads(line)
+            at, side, action = float(entry["at"]), str(entry["side"]), str(entry["action"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        if at >= since and side in seen:
+            seen[side].add(action)
+            counts[side] += 1
+    return {"project": bot.project, "authority": read_authority(policy, bot),
+            "since": dt.datetime.fromtimestamp(since, dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "decisions": counts,
+            "matches": sorted(seen["tick"] & seen["event"]), "only_tick": sorted(seen["tick"] - seen["event"]),
+            "only_event": sorted(seen["event"] - seen["tick"])}
+
+
 def brief_text(policy: Policy, bot: Bot, path: str) -> str:
     """A brief is read only from the bot's own briefs directory, so no other file can become an issue body."""
     briefs = (policy.home / "briefs" / bot.name).resolve()
@@ -2943,6 +3266,12 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
     cmd.add_argument("reason", nargs="*")
+    cmd = sub.add_parser("work-events")
+    cmd.add_argument("--sweep", action="store_true", help="step every in-flight unit and launch queued ones even with no event due")
+    cmd = sub.add_parser("authority")
+    cmd.add_argument("action", nargs="?", choices=["show", "event", "rollback"], default="show")
+    cmd = sub.add_parser("shadow-compare")
+    cmd.add_argument("--hours", type=float, default=24.0)
     cmd = sub.add_parser("rework")
     cmd.add_argument("--issue", type=int, required=True)
     cmd.add_argument("--pr", type=int, required=True)
@@ -3009,6 +3338,23 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
             if args.action != "raise" and args.reason:
                 raise Refused(f"andon {args.action} takes no reason")  # noqa: TRY301
             out = gh.andon_raise(args.reason) if args.action == "raise" else gh.andon_clear() if args.action == "clear" else gh.andon_show()
+        elif args.command == "work-events":
+            store = EventStore(default_db(policy.home))
+            try:
+                worker = EventWorker(Project(policy, me, run, now), store, f"team-kit-gh:{me.name}:{os.getpid()}")
+                lines = worker.run(commit(policy), cloud, sweep=args.sweep)
+            finally:
+                store.close()
+            print("\n".join(lines) if lines else SILENT)
+            return 0
+        elif args.command == "authority":
+            if args.action == "show":
+                out = {"project": me.project, "authority": read_authority(policy, me)}
+            else:
+                Gh(policy, me, run, now).refuse_after_untrusted_text("change who drives the unit lifecycle")
+                out = set_authority(policy, me, "event" if args.action == "event" else "poll", now())
+        elif args.command == "shadow-compare":
+            out = shadow_compare(policy, me, now(), args.hours)
         elif args.command in ("tick", "status"):
             project = Project(policy, me, run, now)
             lines = project.tick(commit(policy), cloud) if args.command == "tick" else project.status()

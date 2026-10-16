@@ -35,7 +35,7 @@ Each row also records `shadow_check`, the job its event would trigger today (`te
 
 ## Consumers
 
-Each consumer has its own state row for each delivery. The lifecycle worker takes the events tick takes, plus `pull_request_review_comment`, `check_run`, and `workflow_run`. The security job takes `push`. So one consumer finishing never hides a delivery from another.
+Each consumer has its own state row for each delivery. The lifecycle worker takes the events tick takes, plus `pull_request_review_comment`, `check_run`, and `workflow_run`. That worker is `team-kit-gh work-events` ([The event lifecycle worker](event-worker.md)). The security job takes `push`. So one consumer finishing never hides a delivery from another.
 
 A row moves through these states:
 

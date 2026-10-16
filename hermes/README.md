@@ -92,6 +92,8 @@ Under `~/.hermes/team-kit/`:
 - `security/<bot>.json`, the last commit a security review covered, and the running review's range and key.
 - `etag/<bot>/`, that bot's cached GitHub REST responses and ETags, keyed by endpoint, so idle polling can send conditional requests. Bots never share an entry.
 - `events/events.sqlite3`, the event queue `team-kit-events receive` writes (mode 600): one row per GitHub delivery with its typed identifiers and body digest, never its text, and each consumer's state. Nothing writes it until a later unit wires the receiver behind a route.
+- `authority/<bot>.json`, who drives that project's unit lifecycle: `poll` (tick, the default when the file is missing) or `event` (`team-kit-gh work-events`). Only `team-kit-gh authority` writes it, under `authority/<bot>.lock`, which tick and the worker also hold for each lifecycle run. See docs/explanation/event-worker.md.
+- `events/decisions/<bot>.jsonl`, each lifecycle decision tick and the event worker took or, as the read-only side, would have taken: a write, a cloud start, or a notice, as a key without comment text. `team-kit-gh shadow-compare` reads it.
 - `slack/`, transient `team-kit-slack` Bot Chat notice files, deleted after delivery.
 - `checkouts/<owner>__<repo>/repo`, the kept launch checkout every Claude Code session for that project starts from, which the owner trusts once; never pruned. Beside it, the empty working directories `codex cloud exec` runs in and each launch's redacted log, pruned after 3 days.
 - `in-flight/<bot>.json`, each project bot's count of running units, for `max_in_flight_total`.
