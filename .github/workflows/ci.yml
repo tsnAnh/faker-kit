@@ -38,29 +38,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Hermes module guard, commands, and install
-        run: pip install pytest pyyaml && python -m pytest hermes
-      - name: TEMPORARY collection equivalence on Python 3.12 (removed in the next commit)
-        run: |
-          set -eu
-          python --version
-          python -m venv "$RUNNER_TEMP/va"
-          "$RUNNER_TEMP/va/bin/pip" -q install pytest pyyaml
-          python -m venv "$RUNNER_TEMP/vb"
-          "$RUNNER_TEMP/vb/bin/pip" -q install ruff mypy types-PyYAML pytest pytest-xdist pyyaml
-          for v in va vb; do echo "== $v"; "$RUNNER_TEMP/$v/bin/pip" list --format=freeze | grep -iE '^(pytest|pytest-xdist|pyyaml|execnet)=='; done
-          "$RUNNER_TEMP/va/bin/python" -m pytest hermes --collect-only -q -p no:cacheprovider | grep '::' | sort > "$RUNNER_TEMP/a.ids"
-          "$RUNNER_TEMP/vb/bin/python" -m pytest hermes --collect-only -q -p no:cacheprovider | grep '::' | sort > "$RUNNER_TEMP/b.ids"
-          "$RUNNER_TEMP/vb/bin/python" -m pytest hermes --collect-only -q -p no:cacheprovider -n auto | grep '::' | sort > "$RUNNER_TEMP/n.ids"
-          echo "validate-deps=$(wc -l < "$RUNNER_TEMP/a.ids") check-deps=$(wc -l < "$RUNNER_TEMP/b.ids") check-deps-n-auto=$(wc -l < "$RUNNER_TEMP/n.ids")"
-          echo "sha256 a=$(sha256sum < "$RUNNER_TEMP/a.ids" | cut -c1-16) b=$(sha256sum < "$RUNNER_TEMP/b.ids" | cut -c1-16) n=$(sha256sum < "$RUNNER_TEMP/n.ids" | cut -c1-16)"
-          echo "only in a vs b:"; comm -23 "$RUNNER_TEMP/a.ids" "$RUNNER_TEMP/b.ids" | head -20
-          echo "only in b vs a:"; comm -13 "$RUNNER_TEMP/a.ids" "$RUNNER_TEMP/b.ids" | head -20
-          echo "only in b vs n:"; comm -23 "$RUNNER_TEMP/b.ids" "$RUNNER_TEMP/n.ids" | head -20
-          echo "only in n vs b:"; comm -13 "$RUNNER_TEMP/b.ids" "$RUNNER_TEMP/n.ids" | head -20
-          cmp "$RUNNER_TEMP/a.ids" "$RUNNER_TEMP/b.ids"
-          cmp "$RUNNER_TEMP/b.ids" "$RUNNER_TEMP/n.ids"
-          echo "COLLECTION IDENTICAL on $(python --version)"
       - name: pstack script tests
         working-directory: plugins/pstack/skills/faker-mode/scripts
         run: bun install --frozen-lockfile && bun test orch watch-pr
