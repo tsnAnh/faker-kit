@@ -1,6 +1,6 @@
 # Hermes test suite performance
 
-`python3 -m pytest hermes -q -n auto -p no:cacheprovider` took about 284 s on a 4-CPU machine. It now takes about 142 s. The set of tests is the same, and no test or assertion changed.
+`python3 -m pytest hermes -q -n auto -p no:cacheprovider` took about 284 s on a 4-CPU machine. It now takes about 158 s. The set of tests is the same, and no test or assertion changed.
 
 ## What limited it
 
@@ -12,13 +12,12 @@ The suite does about 470 worker-seconds of test work, and 320 of them are in `he
 ## What changed
 
 - `hermes/tests/conftest.py` implements xdist's `pytest_xdist_make_scheduler` hook. When xdist would use `load`, it uses `worksteal` instead, so an idle worker takes queued tests from a busy one. An explicit `--dist loadfile` or similar still wins. Without xdist the hook never runs, so `python -m pytest hermes` still works where only pytest is installed (CI's `validate` job).
-- `pyproject.toml` sets `tmp_path_retention_policy = "failed"`. A passed test's `tmp_path` is removed when the test finishes, while its files are still cached and on all workers at once. A failed test's directory stays for debugging.
 
 No test was skipped, deleted, or given a timeout. Isolation is unchanged. Each test still gets its own `tmp_path` and its own install, and the suite passes serially and in parallel.
 
 ## Measurements
 
-Commits are `e616be5` (baseline) and `409ebcd` (candidate). `sched` is the baseline plus only the conftest hook, which separates the two changes. The environment was Linux 6.18 x86_64, Intel Xeon at 2.80 GHz, Python 3.13.16, pytest 9.1.1, and pytest-xdist 3.8.0. `nproc` is 4 and `sched_getaffinity` gives 4 CPUs. The cgroup (v1) has no CPU quota (`cpu.cfs_quota_us` is -1) and no memory limit, and the host has 15 GB. Each configuration ran with its own `TMPDIR`, preloaded with earlier runs' directories so that every run pays pytest's cleanup the way a working machine does. The one exception is the first serial run of each commit, which ran in an empty `TMPDIR`. Runs were sequential, with nothing else running.
+Commits are `e616be5` (baseline) and the baseline plus the conftest hook (`sched`, the change as shipped). `cand` (`409ebcd`) also set `tmp_path_retention_policy = "failed"`. That setting was dropped before shipping (see Not changed here), and its rows are kept to show what it bought. The environment was Linux 6.18 x86_64, Intel Xeon at 2.80 GHz, Python 3.13.16, pytest 9.1.1, and pytest-xdist 3.8.0. `nproc` is 4 and `sched_getaffinity` gives 4 CPUs. The cgroup (v1) has no CPU quota (`cpu.cfs_quota_us` is -1) and no memory limit, and the host has 15 GB. Each configuration ran with its own `TMPDIR`, preloaded with earlier runs' directories so that every run pays pytest's cleanup the way a working machine does. The one exception is the first serial run of each commit, which ran in an empty `TMPDIR`. Runs were sequential, with nothing else running.
 
 `--collect-only -q` collects 1191 tests at both commits. Every run passed all 1191.
 
@@ -35,7 +34,7 @@ Commits are `e616be5` (baseline) and `409ebcd` (candidate). `sched` is the basel
 | sched | `-n auto` | 3 | 157.8 | 150.8 to 158.1 | 362.2 | 102.2 | 421 |
 | cand | `-n auto` | 3 | 142.3 | 136.5 to 148.5 | 358.7 | 129.4 | 417 |
 
-`-n auto` started 4 workers. Wall, user, and sys time are for the pytest process and its children. Peak RSS is the largest sampled sum over the process tree. With 4 workers the work-stealing hook alone saves about 126 s. The retention setting saves about 15 s more, and the two ranges do not overlap. Serial runs and `-n 2` gain less, because one or two workers have less to balance. The serial candidate pays its own deletion inline (sys CPU up 38 s) rather than an earlier run's at exit.
+`-n auto` started 4 workers. Wall, user, and sys time are for the pytest process and its children. Peak RSS is the largest sampled sum over the process tree. With 4 workers the work-stealing hook saves about 126 s, and the ranges do not overlap. A serial run never calls the hook, so the shipped change leaves it as it was. `-n 2` was measured only with both settings, where it gained 53 s. The retention setting saved about 15 s more under `-n auto`.
 
 There is no default worker count in the configuration. `-n auto` follows the CPUs the process may use. On a 2-CPU runner it starts 2 workers, and the `-n 2` row is the expected result there. The run needs about 100 MB of memory per worker.
 
@@ -54,3 +53,4 @@ To compare, run the same commands at `e616be5`. Run each command three times in 
 
 - **CI runs the suite twice.** The `check` job runs it through `scripts/check.sh` (`-n auto`), and the `validate` job runs `pip install pytest pyyaml && python -m pytest hermes` serially, without xdist. Here that second run is 506 to 528 s. Removing that step from `.github/workflows/ci.yml` would save it on every push. The rest of `validate` (`sync-upstream.mjs --check`, `validate.mjs`, `gen-catalog.mjs --check`, `gen-site.mjs`, and both `bun test` lines) also repeats `check.sh`. Only the pstack and orchestrate tests are unique to it. Workflows are out of this change's scope, so this is a proposal.
 - **The next limiter is the per-test install in test_admin.py.** Its `ready` fixture runs `install.sh` for each of the 89 tests, about 2 s each and 111 s of setup in total. The install writes absolute paths into wrappers and profile configs, so a cached install cannot be copied into each test's `tmp_path` as it stands. A test-only way to relocate it would be the next change to measure.
+- **pytest's cleanup of earlier runs.** `tmp_path_retention_policy = "failed"` in `pyproject.toml` removes a passed test's `tmp_path` when it finishes, instead of deleting a whole run at exit, and saved a further 15 s under `-n auto`. One full run with it failed once at setup: the `kit` fixture's `git commit` exited 128 in `test_gh.py::test_tick_keeps_waiting_while_a_codex_task_runs_or_its_status_cannot_be_read[unknown]`. That did not happen in 27 other full runs. Under this policy pytest reuses a removed directory's numbered name for the next test with the same prefix. The default policy never reuses one. Whether the reuse caused the failure is unproven, so the setting is left out until it is.
