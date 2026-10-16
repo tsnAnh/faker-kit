@@ -2159,7 +2159,7 @@ class Gh:
             self.write_app_record(path, {**fields, "state": "failed", "at": self.now(), "attempts": attempts, "error": reason(err)})
             if attempts >= REQUEST_ATTEMPTS:
                 return (f"{NOTICE} #{number}: gave up asking {app} to review {pr_url} at {key.head[:12]} after {attempts} refusals ({reason(err)}); "
-                        f"it stays in {REVIEW_LABEL} and never merges without that review; run the review workflow for that head from GitHub")
+                        f"it stays in {REVIEW_LABEL} until {app} reviews its current head, however that review is started")
             if attempts == 1:
                 return (f"{NOTICE} #{number}: GitHub refused to start {app}'s review of {pr_url} at {key.head[:12]} ({reason(err)}); "
                         f"retrying up to {REQUEST_ATTEMPTS - attempts} more times, and it stays in {REVIEW_LABEL} meanwhile")
@@ -2915,10 +2915,14 @@ class Project:
                     elif RUNNING_LABEL in labels:
                         notice = gh.check_running(issue, cloud)
                     elif gh.review_app():
-                        requested = gh.request_final_review(issue)
-                        if requested:
-                            notices.append(requested)
                         notice = gh.check_app_review(issue)
+                        try:
+                            requested = gh.request_final_review(issue)
+                        except Exception as err:  # noqa: BLE001 - the review gate above already ran; the request is tried again next tick
+                            problems[f"{gh.repo}#{issue['number']} review request"] = reason(err)
+                        else:
+                            if requested:
+                                notices.append(requested)
                     else:
                         notice = None
                 except Exception as err:  # noqa: BLE001 - one broken unit never stops the others

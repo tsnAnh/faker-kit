@@ -320,3 +320,18 @@ def test_demonstration_one_review_for_the_final_head_through_tick(team_kit_home,
     done(gh, n, at=NOW - 10)
     tick(gh, capsys, cloud=cloud)
     assert gh.workflow_runs == [REQUEST], "duplicate refused"
+
+
+def test_a_broken_request_never_stops_the_review_gate(team_kit_home, kit, capsys, monkeypatch):
+    gh = app_gh(kit)
+    n = final_unit(gh)
+    gh.prs[(REPO, 7)]["mergeable"] = False
+
+    def broken(self, issue):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Gh, "request_final_review", broken)
+    notices = tick(gh, capsys)
+    assert notices[0] == (f"team-kit notice: #{n} needs you: {PR_URL} has merge conflicts with its base branch; relaunch it to resolve them. "
+                          f"https://github.com/{REPO}/issues/{n}")
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}
