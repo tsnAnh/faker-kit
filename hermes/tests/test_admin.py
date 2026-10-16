@@ -1,4 +1,5 @@
 import json
+import re
 import stat
 import subprocess
 import sys
@@ -170,6 +171,36 @@ def test_a_job_command_must_be_one_team_kit_gh_subcommand(tmp_path):
     spec.write_text("## team-kit-../../x\n\nSchedule: `every 30m`\nDeliver: `bot-chat:{bot}`\nCommand: `team-kit-gh tick`\nOutput: `print`\n")
     with pytest.raises(InstallError, match="names the job's script"):
         cron_spec(spec, "meo-beo")
+
+
+LAST_JOB_DESCRIPTIONS = {
+    "project-jobs.md": (
+        "team-kit-upstream",
+        (
+            "Only for a repository whose `.agents/dispatch.json` sets `upstream_sync: true`, such as the kit itself. When the upstream repository named in "
+            "`upstream/source.json` has moved past its pinned commit and no sync unit is open, it dispatches one unit from a fixed brief: a cloud agent runs "
+            "`scripts/sync-upstream.mjs` and opens the pull request, which is verified and reviewed like any unit. Every other repository stays silent."
+        ),
+    ),
+    "bootstrap-jobs.md": (
+        "team-kit-inbox",
+        (
+            "Delivers one waiting chief project request per run as a notice: `team-kit notice: chief project request <id> for OWNER/REPO ...`. `team-kit-chief "
+            "new-project` starts this job at once, so the request arrives in about a minute; the schedule is the fallback. With `ask_owner: false` in `guard.yaml`,"
+            ' the guard tells the bootstrap bot to run `team-kit-admin setup-request --id <id>` in the notice turn; otherwise the owner says "set it up" in its Bot'
+            " Chat."
+        ),
+    ),
+}
+
+
+@pytest.mark.parametrize("spec", sorted(LAST_JOB_DESCRIPTIONS))
+def test_the_last_job_block_holds_only_its_own_description(spec):
+    name, description = LAST_JOB_DESCRIPTIONS[spec]
+    text = (Path(team_kit_admin.__file__).parents[1] / "cron" / spec).read_text()
+    block = re.split(r"^## ", text, flags=re.M)[-1]
+    assert block.split("\n", 1)[0] == name
+    assert block.split("Output: `print`\n", 1)[1].strip() == description
 
 
 def test_a_second_project_gets_its_own_bot_and_jobs(ready):

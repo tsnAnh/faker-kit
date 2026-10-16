@@ -40,7 +40,7 @@ With `webhooks` in the machine config, GitHub calls the machine when an issue, c
 - A Cloudflare Tunnel (`~/.cloudflared/<tunnel>.yml`) that publishes only `/p/<bot>/webhooks/<route>` on the configured hostname and answers 404 for everything else.
 - One repository webhook per route, created or updated in place by `team-kit-admin machine`.
 
-The inventory of every scheduled, polling and timer-driven trigger, which of them have an event, and the design for moving them is in [Moving Hermes from polling to events](../docs/explanation/event-driven-migration.md). Six timers stay by design.
+The inventory of every scheduled, polling and timer-driven trigger, which of them have an event, and the design for moving them is in [Moving Hermes from polling to events](../docs/explanation/event-driven-migration.md). It covers every job in `cron/project-jobs.md` and `cron/bootstrap-jobs.md`, and counts the timers that stay by kind.
 
 ## CI on this machine
 
