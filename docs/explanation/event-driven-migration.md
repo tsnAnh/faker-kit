@@ -49,24 +49,24 @@ Source for all rows: `hermes/cron/project-jobs.md`, `hermes/bin/team_kit_admin.p
 |---|---|---|---|---|---|---|
 | T1 `team-kit-tick` | cron `every 30m` default, plus webhook route `<bot>-tick` | The umbrella run. Sub-triggers T1a to T1l below | Yes, for most parts | The lifecycle worker runs the check each queued event names | Yes, see R1, R2, R4 | U3 |
 | T2 `team-kit-status` | cron `0 9 * * 1` (Asia/Saigon) | Weekly digest of units in flight, waiting and done (`Project.status`, marker file `status/<bot>.json`) | No, a digest is time-defined | None | Yes, R5 | U6 |
-| T3 `team-kit-security` | cron `every 15m` plus webhook route `<bot>-security` on `push` | Starts one cloud security review when the default branch moved and none is running (`Security`) | Yes, `push` to the default branch | Push event, filtered to the default ref, enqueues the job | No for the start. The 24h no-result deadline is R1 | U4 |
-| T4 `team-kit-incidents` | cron `every 10m`, no route | Default branch checks, health URLs, external alert sources, triage session, auto close (`Incidents`) | Default branch checks: yes (`check_suite`, `workflow_run`). Health URLs: no. External alerts: not from GitHub | Subscribe `check_suite`/`workflow_run` for the default branch. Health and alert sources stay polled | Yes, R3 | U5 |
+| T3 `team-kit-security` | cron `every 15m` plus webhook route `<bot>-security` on `push` | Starts one cloud security review when the default branch moved and none is running (`Security`) | Yes, `push` to the default branch | Push event, filtered to the default ref, enqueues the job | Yes. A push that arrives while a review runs, while the cord is pulled, or when the start fails is not retried by any later event, so R4 starts the deferred review. The 24h no-result deadline is R1 | U4 |
+| T4 `team-kit-incidents` | cron `every 10m`, no route | Default branch checks, health URLs, external alert sources, triage session, auto close (`Incidents`) | Default branch checks: yes (`check_suite`, `workflow_run`). Health URLs: no. External alerts: not from GitHub | Subscribe `check_suite`/`workflow_run` for the default branch. Health and alert sources stay polled | Yes, R3, and R1 for the 24h triage deadline | U5 |
 | T5 `team-kit-upstream` | cron `0 9 * * 1` | Compares the upstream repo head with `upstream/source.json` and dispatches one sync unit (`Upstream`) | No. The upstream repository is not owned here, so no webhook can be added | None | Yes, R6 | U6 |
 
 `team-kit-gh tick` internals, each its own trigger because each has its own event or none. File: `hermes/bin/team_kit_gh.py`, `Project.tick` and the methods named.
 
 | Id | Detects | Event available | Deterministic decision | Residual timer |
 |---|---|---|---|---|
-| T1a andon sync (`sync_andon`) | Open `agent:andon` issue by a trusted login; cord cleared | `issues` (opened, labeled, closed, unlabeled) | Raise or clear the local cord from the trusted-author list | No |
+| T1a andon sync (`sync_andon`) | Open `agent:andon` issue by a trusted login; a recorded cord whose issue is gone | `issues` (opened, labeled, closed, unlabeled) | Raise or adopt the local cord from the trusted-author list. No GitHub event clears it: closing the issue leaves the line stopped, and only the local `team-kit-gh andon clear` lifts it | No for raising. A cleared cord is a local wake, R4 as the fallback |
 | T1b teammate proposals (`proposal_notices`) | New `agent:proposal` issue | `issues` labeled | Collaborator check, one notice per proposal | No |
 | T1c PR comment mentions (`pr_comment_notices`) | A collaborator's PR comment that mentions the bot | `issue_comment` (subscribed). `pull_request_review_comment` is not | Notice with link, never the text. The record `since` time stays as the reconciliation anchor | No, once the event is added |
-| T1d kit PRs (`kit_prs`) | Kit vendoring pull requests that match the local kit commit | `pull_request`, `push` | Compare PR head to the local commit, notify once | No |
+| T1d kit PRs (`kit_prs`, `land_kit_pr`) | Kit vendoring pull requests that match the local kit commit | `pull_request`, `push`, `check_suite` | Compare PR head to the local commit and notify once. With `auto_merge` low, merge it with `--match-head-commit` when checks pass and `mergeable` is true, or send a conflict notice | Yes, R4, for a `mergeable` GitHub has not computed yet |
 | T1e unit-state publish (`publish`, `UnitStates`, `~/.hermes/team-kit/units/<bot>.json`) | Closed or changed units that another project bot's briefs depend on | The close happens in this bot's repository, but the bot whose brief depends on the unit watches its own repository and gets no event | Needs a local event: when bot A publishes, wake the bots whose `wants` list names A | Yes, R4 as the fallback |
 | T1f running units (`check_running`) | A signed done report comment; a stopped cloud task | Report comment: `issue_comment`. Cloud task end (`codex cloud status`): no event | Parse the signed report, gate or advance | Yes, R1 (24h no-report deadline) and R2 (cloud task status) |
 | T1g verifying units (`check_verifying`) | Verifier verdict comment, PR head change | `issue_comment`, `pull_request` (synchronize) | Exact-head verdict, risk score, optional auto merge | Yes, R1 (verifier deadline) |
-| T1h review and auto-merge retries (`check_app_review`, `auto_merge`) | Review app verdict on the exact head; a merge GitHub refused earlier; cord cleared | `pull_request_review`, `check_suite`, andon `issues` event | Merge only when risk is low, checks passed, head matches (`--match-head-commit`) | No for the verdict. A retry after a transient refusal needs R4 |
+| T1h review and auto-merge retries (`check_app_review`, `auto_merge`) | Review app verdict on the exact head; a merge GitHub refused earlier; cord cleared | `pull_request_review`, `check_suite`. A cleared cord is a local wake (T1a) | Merge only when risk is low, checks passed, head matches (`--match-head-commit`) | No for the verdict. A retry after a transient refusal needs R4 |
 | T1i pending checks (`check_running` tail) | Checks passed or failed on the reported head; 1 hour no-checks grace; 24 hour pending deadline | `check_suite` completed | Gate on failure, advance on pass | Yes, R1 (`NO_CHECKS_GRACE_SECONDS`, `REPORT_DEADLINE_SECONDS`) |
-| T1j launch (`launch`) | A queued unit whose dependencies merged and a free slot | `issues` closed (dependency), label changes (slot freed), local `units/` change for cross-project | Dependencies, `max_in_flight`, andon, kit pin checks, all in code | No for same-project. Cross-project is T1e |
+| T1j launch (`launch`) | A queued unit whose dependencies merged and a free slot | `issues` closed (dependency), label changes (slot freed), local `units/` change for cross-project. A slot freed under the machine limit `max_in_flight_total` by another repository, a cleared machine cord, and a reinstalled kit have no event in this repository | Dependencies, `max_in_flight`, `max_in_flight_total`, andon, kit pin checks, all in code | No for same-project events. The machine-wide changes are local wakes, R4 as the fallback. Cross-project dependencies are T1e |
 | T1k security check inside tick (`Security.check`) | Signed security result comment; stopped task; 24h no-result | `issue_comment` on the `agent:security` issue | Verify the HMAC signature, notify only on high or medium | Yes, R1, R2 |
 | T1l in-flight counts (`InFlight`, `IN_FLIGHT_FRESH_SECONDS`, `UNIT_STATE_FRESH_SECONDS`, both 24h) | Staleness of the shared counts and unit states other bots read | No | A stale record stops counting after 24 hours | Hidden dependency: with no tick, counts silently expire. R4 refreshes them |
 
@@ -93,7 +93,7 @@ Source: `hermes/setup-machine.sh`, `hermes/lib/team_kit_machine.py`, `hermes/bin
 | T11 Notice delivery | Hermes `bot-chat:<bot>` delivery of each job's output; `mirror_notice` | Shows each notice | The job output itself | None | Unchanged | none |
 | T12 `setup-machine.sh`, `install.sh` | Run by hand | `sleep` loops wait for the listener and tunnel during setup only | n/a | Setup waits, not runtime triggers | Unchanged | none |
 
-Repository workflows: `.github/workflows/` defines no `schedule:` trigger. `ci.yml` and `docs-site.yml` run on pushes to `main` and on pull requests, and `claude-review.yml` runs on pull requests only.
+Repository workflows: `.github/workflows/` defines no `schedule:` trigger. `ci.yml` runs on pushes to `main` and on pull requests, `docs-site.yml` on those that touch the site paths, and `claude-review.yml` on pull requests only.
 
 Not found in this repository: backup jobs, log rotation, update jobs, or any maintenance timer. **Machine:** the commands below list anything added by hand.
 
@@ -106,7 +106,7 @@ These triggers have no external event or need a deadline, so they stay timers in
 | R1 | Deadline sweep for silence: no agent report in 24h, checks pending 24h, verifier, review, security and triage with no signed result in 24h, the 1 hour no-checks grace | One timer per project bot, hourly proposed. It runs only the deadline checks, read-only except gating. Alternative: schedule a one-shot per unit at launch; the hourly sweep is simpler and survives restarts | A session that dies silently would hold its slot forever. Silence produces no GitHub event |
 | R2 | Cloud task status (`codex cloud status`) | Poll only while at least one Codex task is running, every 5 minutes. No timer when none runs | A finished task with no comment would wait for the 24h deadline instead of being reported in minutes |
 | R3 | Health URLs and external alert sources (Datadog, Sentry, Grafana, PagerDuty in `lib/team_kit_incident_sources.py`) | Outbound poll every 5 to 10 minutes, only when `.agents/dispatch.json` configures a target. Pull-only keeps the outbound-first rule | A target that goes down with no deploy would never open an incident |
-| R4 | Reconciliation: a missed or dropped delivery, listener downtime, a GitHub outage, the cross-project unit-state change (T1e), merge retries (T1h), and the 24h staleness of T1l | One timer per project bot, hourly proposed, plus one run on listener start and on gateway restart. It runs only the targeted checks listed here and a GitHub deliveries cross-check (`GET /repos/{owner}/{repo}/hooks/{id}/deliveries`, then redelivery). A full `tick` every hour is not the target | Any single lost event would leave a unit stuck until a human noticed |
+| R4 | Reconciliation: a missed or dropped delivery, listener downtime, a GitHub outage, the cross-project unit-state change (T1e), a cleared cord (T1a), merge retries (T1d, T1h), a deferred security start (T3), machine-wide slot and cord changes (T1j), and the 24h staleness of T1l | One timer per project bot, hourly proposed, plus one run on listener start and on gateway restart. It runs only the targeted checks listed here and a GitHub deliveries cross-check (`GET /repos/{owner}/{repo}/hooks/{id}/deliveries`, then redelivery). A full `tick` every hour is not the target | Any single lost event would leave a unit stuck until a human noticed |
 | R5 | Weekly status digest (T2) | Keep `0 9 * * 1` | The digest. No event describes "a week passed" |
 | R6 | Weekly upstream sync check (T5) | Keep `0 9 * * 1`. An upstream release webhook would need ownership of that repository | New upstream versions would go unnoticed |
 | R7 | Bootstrap inbox fallback (T6) | Keep a fallback on the bootstrap bot behind the existing local wake | A request whose wake failed would wait until a human noticed |
@@ -162,9 +162,9 @@ Read-only commands for the owner to run in their own terminal on the Hermes mach
 ```bash
 hermes --version
 command -v hermes && readlink -f "$(command -v hermes)"
-hermes webhook --help
-hermes webhook subscribe --help
-hermes webhook list
+hermes -p default webhook --help
+hermes -p default webhook subscribe --help
+hermes -p default webhook list
 hermes cron --help
 for p in default $(ls ~/.hermes/profiles); do echo "== $p"; hermes -p "$p" cron list --all; done
 grep -v -i -E 'secret|token|key|password' ~/.hermes/config.yaml | sed -n '/platforms:/,/^[a-z]/p'
@@ -172,7 +172,7 @@ systemctl --user status team-kit-tunnel --no-pager   # Linux
 launchctl print "gui/$(id -u)/team-kit-tunnel"; ls ~/Library/LaunchAgents/team-kit-tunnel.plist   # macOS
 ```
 
-To check where `--cron-job` is validated without touching the real installation, read the installed package's code: `grep -rn "cron_job\|cron-job" "$(dirname "$(readlink -f "$(command -v hermes)")")/.."`. Record the version, the file and the line. Never run `subscribe` against the real `~/.hermes`, never bind a job to the default profile, and never message the default Hermes agent.
+To check where `--cron-job` is validated without touching the real installation, find the directory that holds the installed Hermes package (the `hermes` entry point names its Python), then `grep -rn "cron_job\|cron-job"` in it. Record the version, the path, the file and the line. Never run `subscribe` against the real `~/.hermes`, never bind a job to the default profile, and never message the default Hermes agent.
 
 ## Event pipeline design
 
