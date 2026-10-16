@@ -190,6 +190,20 @@ def test_invalid_signature_is_401_and_records_nothing(start, signature):
     assert srv.rows() == []
 
 
+def test_an_unsigned_request_never_opens_the_queue(start):
+    opened = []
+
+    def spy(path):
+        opened.append(path)
+        return EventStore(path)
+
+    srv = start(open_store=spy)
+    assert srv.post("shop", payload(), signature="sha256=" + "0" * 64).status == 401
+    assert opened == []
+    assert srv.post("shop", payload()).status == 202
+    assert len(opened) == 1
+
+
 def test_missing_signature_is_401_and_records_nothing(start):
     srv = start()
     body = payload()

@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from team_kit_event_queue import EventStore, receive
+from team_kit_event_queue import EventStore, receive, verify_signature
 
 MAX_BODY_CEILING = 25 << 20
 MAX_HEADER_BYTES_CEILING = 65536
@@ -50,7 +50,6 @@ REASONS = {
     408: "request timed out",
     411: "length required",
     413: "payload too large",
-    414: "request target too long",
     431: "request headers too large",
     503: "service unavailable",
 }
@@ -485,6 +484,10 @@ def _handler_for(services: _Services) -> type[http.server.BaseHTTPRequestHandler
                 secret = read_secret_file(route.secret_file)
             except ConfigError:
                 self.answer(503, "route secret unavailable")
+                return
+            # Checked again inside receive(); checking first keeps unsigned floods off the SQLite write lock.
+            if not verify_signature(body, self.headers.get("X-Hub-Signature-256"), secret):
+                self.answer(401, "missing or invalid X-Hub-Signature-256")
                 return
             try:
                 store = services.open_store(services.db)
