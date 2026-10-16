@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import sqlite3
 import subprocess
 import sys
@@ -23,7 +24,7 @@ from team_kit_event_queue import (
     status,
 )
 
-SECRET = b"s3cret-webhook-value-7f1c"
+SECRET = secrets.token_hex(16).encode()
 PROJECTS = {"acme/shop": "shop", "acme/crm": "crm"}
 HEAD = "a" * 40
 NEW_HEAD = "b" * 40
