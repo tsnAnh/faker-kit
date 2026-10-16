@@ -1,11 +1,19 @@
 import json
+import threading
 
 import pytest
 from team_kit_contracts import LAUNCHED_MARKER
 from team_kit_gh import Refused
-from test_gh import BOT_LOGIN, HEAD, NOW, REPO, FakeCloud, FakeGh, gh, pr, run, tick  # noqa: F401
+from test_gh import BOT_LOGIN, HEAD, NOW, REPO, FakeCloud, FakeGh, pr, run, tick
 
 NEW = "b" * 40
+
+
+@pytest.fixture
+def gh(kit):
+    return FakeGh(kit)
+
+
 BOT_REVIEW = {"user": {"login": "chatgpt-codex-connector[bot]", "type": "Bot"}, "state": "COMMENTED", "commit_id": HEAD, "body": "P1 finding"}
 
 
@@ -39,7 +47,7 @@ def test_one_command_sends_a_reviewed_unit_back_to_its_own_branch_and_pull_reque
     assert result["issue"] == n and result["pr"] == f"https://github.com/{REPO}/pull/7" and result["branch"] == "dispatch/x"
     assert result["rework_of"] == HEAD and result["state"] == "running"
     assert gh.labels(REPO, n) == {"agent-task", "agent:running"}
-    [(backend, _, command, workdir)] = cloud.started
+    [(backend, _, command, _)] = cloud.started
     assert backend == "claude" and command.argv == ("claude", "--cloud")
     assert f"Rework the brief in {REPO}#{n}" in command.prompt and f"pull request https://github.com/{REPO}/pull/7 at commit {HEAD}" in command.prompt
     assert "Continue on branch dispatch/x" in command.prompt and command.prompt not in command.argv
@@ -236,8 +244,6 @@ def test_a_head_that_moves_between_the_first_check_and_the_lock_is_refused(team_
 
 
 def test_two_processes_racing_for_one_unit_start_one_worker(team_kit_home, gh, capsys):
-    import threading
-
     n = reviewed(gh)
     cloud = FakeCloud()
     gate, both = threading.Barrier(2), []
