@@ -756,10 +756,9 @@ def test_a_command_too_long_to_check_is_blocked():
 
 
 def test_the_git_alias_check_stays_fast_on_long_crafted_commands():
-    # CPU time, not wall time: the check takes ~0.65s, and a busy shared runner pushes its wall time past the bound.
-    started = time.process_time()
+    started = time.monotonic()
     Guard(load=bare_policy, profile=lambda: "meo-beo").pre_tool_call(**terminal("git " + "alias." * 16666))
-    assert time.process_time() - started < 1
+    assert time.monotonic() - started < 1
 
 
 def test_the_hermes_scan_stays_fast_on_long_crafted_code():
