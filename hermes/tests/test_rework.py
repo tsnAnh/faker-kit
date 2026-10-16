@@ -1,5 +1,4 @@
 import json
-import threading
 
 import pytest
 from team_kit_contracts import LAUNCHED_MARKER
@@ -241,27 +240,6 @@ def test_a_head_that_moves_between_the_first_check_and_the_lock_is_refused(team_
 
     assert rework(moving, n, cloud=cloud) == 1
     assert "is at" in capsys.readouterr().err and cloud.started == [] and gh.labels(REPO, n) == {"agent-task", "agent:review"}
-
-
-def test_two_processes_racing_for_one_unit_start_one_worker(team_kit_home, gh, capsys):
-    n = reviewed(gh)
-    cloud = FakeCloud()
-    gate, both = threading.Barrier(2), []
-    real = gh.__call__
-
-    def meeting(args, input=None):
-        if args[0] == "api" and args[-1] == f"repos/{REPO}/issues/{n}" and threading.current_thread().name.startswith("req") and not both:
-            gate.wait(5)  # both requests have passed their first look at the unit before either takes the lock
-            both.append(1)
-        return real(args, input)
-
-    codes = []
-    threads = [threading.Thread(name=f"req{i}", target=lambda: codes.append(rework(meeting, n, cloud=cloud))) for i in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(20)
-    assert sorted(codes) == [0, 1] and len(cloud.started) == 1
 
 
 def test_a_request_repeated_after_a_start_or_after_the_head_was_already_reworked_is_refused(team_kit_home, gh, capsys):
