@@ -77,7 +77,8 @@
               "reference/playbooks",
               "reference/lint-packs",
               "reference/models",
-              "reference/coverage"
+              "reference/coverage",
+              "reference/test-suite-performance"
             ]
           }
         ]
