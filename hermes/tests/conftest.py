@@ -26,6 +26,22 @@ BOTS = {
     },
 }
 
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_make_scheduler(config, log):
+    """Under -n, idle workers take queued tests from busy ones.
+
+    xdist's default `load` scheduler hands each worker its first chunk of about a quarter of its share of
+    consecutive tests up front. test_admin.py sorts first and its tests take seconds each, so one worker got
+    74 of them and ran about 250 s while the other three finished in about 80 s. An explicit `--dist`
+    other than load still wins; without xdist this hook never runs.
+    """
+    if config.getoption("dist") != "load":
+        return None
+    from xdist.scheduler import WorkStealingScheduling  # noqa: PLC0415
+
+    return WorkStealingScheduling(config, log)
+
+
 ALL_TOOLSETS = ["web", "browser", "terminal", "file", "code_execution", "vision", "image_gen", "tts", "skills", "todo",
                 "memory", "session_search", "connections", "clarify", "delegation", "cronjob", "computer_use"]
 
