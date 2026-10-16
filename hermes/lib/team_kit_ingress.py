@@ -486,7 +486,7 @@ def _handler_for(services: _Services) -> type[http.server.BaseHTTPRequestHandler
                 self.answer(503, "route secret unavailable")
                 return
             # Checked again inside receive(); checking first keeps unsigned floods off the SQLite write lock.
-            if not verify_signature(body, self.headers.get("X-Hub-Signature-256"), secret):
+            if not verify_signature(body, (self.headers.get("X-Hub-Signature-256") or "").strip(), secret):
                 self.answer(401, "missing or invalid X-Hub-Signature-256")
                 return
             try:

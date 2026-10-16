@@ -204,6 +204,13 @@ def test_an_unsigned_request_never_opens_the_queue(start):
     assert len(opened) == 1
 
 
+def test_a_signature_header_with_trailing_whitespace_verifies_as_receive_would(start):
+    srv = start()
+    body = payload()
+    assert srv.post("shop", body, signature=sign(body, srv.secrets["shop"]) + "  ").status == 202
+    assert len(srv.rows()) == 1
+
+
 def test_missing_signature_is_401_and_records_nothing(start):
     srv = start()
     body = payload()
