@@ -21,7 +21,7 @@ Facts that only the Hermes machine can show and that no reading has settled yet 
 
 `ROUTE_JOBS` in `team_kit_machine.py` is the list. The schedule stays as the fallback for a missed delivery. `setup-machine.sh` step 8 sends one signed test event per bot and requires a 202 before it finishes.
 
-**Observed, on the installation.** This repository has no repository webhooks configured, so no GitHub event reaches Hermes today and every trigger below runs on its schedule. `cloudflared` is running, its persistence across a reboot is unverified, and no systemd unit for it was found. The kit's code installs the tunnel as the `team-kit-tunnel` service (`service_user` in `setup-machine.sh`), so that name is the one to check.
+**Observed, on the installation.** This repository has no repository webhooks configured, so no GitHub event reaches Hermes today and every trigger below runs on its schedule. `cloudflared` is running, its persistence across a reboot is unverified, and no systemd unit for it was found. The kit's code installs the tunnel as the `team-kit-tunnel` service (`service_user` in `setup-machine.sh`): a systemd user unit on Linux, a launchd agent on macOS. So that name, in the form for the machine's OS, is the one to check.
 
 What the code path lacks:
 
@@ -61,7 +61,7 @@ Source for all rows: `hermes/cron/project-jobs.md`, `hermes/bin/team_kit_admin.p
 | T1b teammate proposals (`proposal_notices`) | New `agent:proposal` issue | `issues` labeled | Collaborator check, one notice per proposal | No |
 | T1c PR comment mentions (`pr_comment_notices`) | A collaborator's PR comment that mentions the bot | `issue_comment` (subscribed). `pull_request_review_comment` is not | Notice with link, never the text. The record `since` time stays as the reconciliation anchor | No, once the event is added |
 | T1d kit PRs (`kit_prs`) | Kit vendoring pull requests that match the local kit commit | `pull_request`, `push` | Compare PR head to the local commit, notify once | No |
-| T1e unit-state publish (`publish`, `UnitStates`, `~/.hermes/team-kit/units/<bot>.json`) | Closed or changed units that another project bot's briefs depend on | The closing event happens in the other bot's repository, so this bot's webhook never sees it | Needs a local event: when bot A publishes, wake the bots whose `wants` list names A | Yes, R4 as the fallback |
+| T1e unit-state publish (`publish`, `UnitStates`, `~/.hermes/team-kit/units/<bot>.json`) | Closed or changed units that another project bot's briefs depend on | The close happens in this bot's repository, but the bot whose brief depends on the unit watches its own repository and gets no event | Needs a local event: when bot A publishes, wake the bots whose `wants` list names A | Yes, R4 as the fallback |
 | T1f running units (`check_running`) | A signed done report comment; a stopped cloud task | Report comment: `issue_comment`. Cloud task end (`codex cloud status`): no event | Parse the signed report, gate or advance | Yes, R1 (24h no-report deadline) and R2 (cloud task status) |
 | T1g verifying units (`check_verifying`) | Verifier verdict comment, PR head change | `issue_comment`, `pull_request` (synchronize) | Exact-head verdict, risk score, optional auto merge | Yes, R1 (verifier deadline) |
 | T1h review and auto-merge retries (`check_app_review`, `auto_merge`) | Review app verdict on the exact head; a merge GitHub refused earlier; cord cleared | `pull_request_review`, `check_suite`, andon `issues` event | Merge only when risk is low, checks passed, head matches (`--match-head-commit`) | No for the verdict. A retry after a transient refusal needs R4 |
@@ -93,7 +93,7 @@ Source: `hermes/setup-machine.sh`, `hermes/lib/team_kit_machine.py`, `hermes/bin
 | T11 Notice delivery | Hermes `bot-chat:<bot>` delivery of each job's output; `mirror_notice` | Shows each notice | The job output itself | None | Unchanged | none |
 | T12 `setup-machine.sh`, `install.sh` | Run by hand | `sleep` loops wait for the listener and tunnel during setup only | n/a | Setup waits, not runtime triggers | Unchanged | none |
 
-Repository workflows: `.github/workflows/` defines no `schedule:` trigger. `docs-site.yml` and the review workflow run on push and pull request events already.
+Repository workflows: `.github/workflows/` defines no `schedule:` trigger. `ci.yml` and `docs-site.yml` run on pushes to `main` and on pull requests, and `claude-review.yml` runs on pull requests only.
 
 Not found in this repository: backup jobs, log rotation, update jobs, or any maintenance timer. **Machine:** the commands below list anything added by hand.
 
@@ -157,7 +157,7 @@ Because of the last two, the desired receiver (#156) must not rely on a Hermes `
 | `--cron-job` is validated against the default profile's jobs even with `--route-profile`, while the gateway fires the job in the routed profile at runtime | AGENTS.md learned facts | Not verified against 0.21.7. `team_kit_admin.py` writes routes straight into `config.yaml` with `config_set`, so the CLI validation does not apply to the installed path |
 | Response code | `setup-machine.sh` requires `202` | Recorded |
 
-Read-only commands for the bootstrap bot to run on the Hermes machine. None writes anything, and none prints a secret while the `grep -v` filter stays on. The `cron list` loop covers the default profile, the chief and every project bot; add the bootstrap bot's profile name to it.
+Read-only commands for the owner to run in their own terminal on the Hermes machine. A bot cannot run them: its guard refuses `hermes` without a team-kit bot profile and any read of `~/.hermes`. None writes anything, and none prints a secret while the `grep -v` filter stays on. The `cron list` loop covers the default profile and every profile under `~/.hermes/profiles`, the chief and the bootstrap bot included.
 
 ```bash
 hermes --version
@@ -166,9 +166,10 @@ hermes webhook --help
 hermes webhook subscribe --help
 hermes webhook list
 hermes cron --help
-for p in default chief $(team-kit-chief projects | python3 -c 'import json,sys; print(" ".join(p["bot"] for p in json.load(sys.stdin)["projects"]))'); do echo "== $p"; hermes -p "$p" cron list --all; done
+for p in default $(ls ~/.hermes/profiles); do echo "== $p"; hermes -p "$p" cron list --all; done
 grep -v -i -E 'secret|token|key|password' ~/.hermes/config.yaml | sed -n '/platforms:/,/^[a-z]/p'
-systemctl --user status team-kit-tunnel --no-pager; systemctl --user list-units --all 'cloudflared*' 'team-kit-*'
+systemctl --user status team-kit-tunnel --no-pager   # Linux
+launchctl print "gui/$(id -u)/team-kit-tunnel"; ls ~/Library/LaunchAgents/team-kit-tunnel.plist   # macOS
 ```
 
 To check where `--cron-job` is validated without touching the real installation, read the installed package's code: `grep -rn "cron_job\|cron-job" "$(dirname "$(readlink -f "$(command -v hermes)")")/.."`. Record the version, the file and the line. Never run `subscribe` against the real `~/.hermes`, never bind a job to the default profile, and never message the default Hermes agent.
@@ -182,7 +183,7 @@ Everything in this section is **desired**. None of it is implemented. Each requi
 | Signed receipt (#156) | A GitHub App (or per-repository webhook, decision 3) delivers to one receiver. It verifies `X-Hub-Signature-256` with HMAC-SHA256 over the **raw request bytes**, using a constant-time compare, before parsing JSON and before anything is stored. Anything else gets 401, and nothing from the body is recorded |
 | Binding (#156) | After the signature, require: `repository.full_name` is a repository in `bots.yaml`; for an App, `installation.id` and the App id match the configured values (`X-GitHub-Hook-Installation-Target-ID`); `sender.login` is recorded and, for andon and proposals, only a login in `trusted_authors` counts, as `andon_issues` does today. A bound event only wakes a check. It never carries authorization |
 | Durable delivery record (#156) | A SQLite database in WAL mode at `~/.hermes/team-kit/events/queue.db`, mode 600, standard library only. One row per delivery: `delivery_id` (unique), `repo`, `event`, `action`, `sender`, `head_sha`, `received_at`. The row holds a digest and these fields, not the payload body |
-| Acknowledge after commit (#156) | The order is fixed: raw-body HMAC, then insert the unique delivery record, then COMMIT, then 202. A crash before the commit yields no 2xx, so GitHub redelivers |
+| Acknowledge after commit (#156) | The order is fixed: raw-body HMAC, then insert the unique delivery record, then COMMIT, then 202. A crash before the commit yields no 2xx, so GitHub records the delivery as failed, and the R4 deliveries cross-check requests its redelivery |
 | Dedupe without early coalescing (#156) | `X-GitHub-Delivery` is the unique key. A repeat insert is a success with no new work. Nothing is coalesced before the commit: every delivery gets its own committed row. A consumer may collapse many committed rows for one repository into one run |
 | Per-consumer lease fencing (#156) | Each consumer claims rows under a lease with a fencing token. A consumer whose lease expired cannot commit a result, so a slow or restarted consumer never acts on a row another consumer has taken |
 | Per-project lock and idempotent transitions (#157) | Specification, not implemented. The event worker and the temporary `tick` take one common per-project lock (one `flock` per bot, the pattern `check_app_review` already uses for one unit), so they never run one project at the same time. Different projects run in parallel. Every lifecycle transition (launch, gate, advance, merge, close) is idempotent: it re-reads GitHub, checks the current label state and the live head, and does nothing if the transition already happened. With both, the worker and the tick can run side by side during the cutover and converge on the same state. The lifecycle worker unit #157 owns this |
