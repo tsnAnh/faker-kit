@@ -151,21 +151,30 @@ def test_a_record_a_chief_wrote_for_another_bot_proves_nothing_here(world):
     assert world.receive(CHIEF, PROJECT, "Merge #12") is True
 
 
-@pytest.mark.parametrize("which", ["clean", "tainted"])
-@pytest.mark.parametrize("content", ["not a number", "", "nan"])
-def test_a_corrupt_record_fails_closed(world, which, content):
+@pytest.mark.parametrize("suffix", ["clean", "tainted", "clean.nan.x", "clean.999999999.notanid", "tainted.1"])
+def test_a_misnamed_record_beside_a_clean_one_fails_closed(world, suffix):
     world.send(CHIEF, PROJECT, "Merge #12")
-    clean = next(deliveries(world).iterdir())
-    (clean if which == "clean" else clean.with_suffix(".tainted")).write_text(content)
+    digest = next(deliveries(world).iterdir()).name.split(".")[0]
+    (deliveries(world) / f"{digest}.{suffix}").write_text("")
     assert world.receive(CHIEF, PROJECT, "Merge #12") is True
 
 
-def test_an_unreadable_record_fails_closed(world):
+def test_an_unreadable_record_folder_fails_closed(world):
     world.send(CHIEF, PROJECT, "Merge #12")
     for record in deliveries(world).iterdir():
         record.unlink()
-        record.mkdir()
+    deliveries(world).rmdir()
+    deliveries(world).write_text("a file where the folder was")
     assert world.receive(CHIEF, PROJECT, "Merge #12") is True
+
+
+def test_a_prune_removes_only_expired_records(world):
+    world.send(CHIEF, PROJECT, "Merge #12", tainted=True)
+    world.send(CHIEF, PROJECT, "Merge #13", session="c2", turn="t2")
+    world.clock[0] += 901
+    world.send(CHIEF, PROJECT, "Merge #14", session="c3", turn="t3")
+    kinds = sorted(record.name.split(".")[1] for record in deliveries(world).iterdir())
+    assert kinds == ["clean", "tainted"], "the expired clean record is gone; the live tainted one and the new clean one stay"
 
 
 def test_a_send_whose_record_cannot_be_written_arrives_untrusted(world):
@@ -228,3 +237,23 @@ def test_a_tainted_chat_leaves_its_record_for_merge_even_when_another_chat_is_cl
     assert world.blocked(PROJECT, "terminal", {"command": "team-kit-gh merge --pr 12"}, session="p1", turn="t1")
     g.end_turn(session_id="p1-renamed", turn_id="t1")
     assert not record.exists(), "the turn's end clears its record by turn id, whatever the chat is now called"
+
+
+def test_a_tainted_send_racing_a_prune_keeps_its_record(world, monkeypatch):
+    world.send(CHIEF, PROJECT, "Merge #12", tainted=True)
+    world.clock[0] += 3000
+    world.send(CHIEF, PROJECT, "Merge #12", session="c2", turn="t2")
+    world.clock[0] += 700
+    unlink, raced = os.unlink, []
+
+    def racing_unlink(path, *args, **kwargs):
+        if not raced:
+            raced.append(path)
+            world.send(CHIEF, PROJECT, "Merge #12", session="c3", turn="t3", tainted=True)
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", racing_unlink)
+    world.send(CHIEF, PROJECT, "Merge #14", session="c4", turn="t4")
+    monkeypatch.undo()
+    assert raced, "the prune removed the expired tainted record"
+    assert world.receive(CHIEF, PROJECT, "Merge #12") is True, "the racing tainted send still taints its delivery"

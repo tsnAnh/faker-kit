@@ -13,9 +13,10 @@ Three layers keep a tainted turn from merging or closing, and none replaces anot
   session of the bot, for an hour. It is cleared only by its own chat's next clean message, or by end_turn matching the turn id
   (which also covers a renamed chat). A clean message in another chat or a clean child never clears it.
 - A relayed chief message is clean only when the chief's own guard recorded that exact text for this recipient as clean
-  (deliveries/<recipient>/<sender>/<sha256 of the text>.clean), the record is unexpired, and no .tainted record for the same
-  text is unexpired. A tainted send writes .tainted, a clean send .clean, so writers never overwrite each other. Anything
-  missing, expired, corrupt, unreadable, from another sender or recipient, or slower than the timeout reads as untrusted.
+  (deliveries/<recipient>/<sender>/<sha256 of the text>.<clean|tainted>.<expiry>.<random id>), that record is unexpired,
+  and no unexpired tainted record for the same text exists. Every send creates its own file and nothing rewrites one, so a
+  concurrent send or a prune of expired records can never remove another send's live record. Anything missing, expired,
+  misnamed, unreadable, from another sender or recipient, or slower than the timeout reads as untrusted.
   The recipient-only tainted-messages/<recipient> file of older guards only taints, and only while it is young. The guard's
   hooks see a relayed message's sender handle and text, and no delivery id from message_agent's acknowledgement (no hook
   registered here receives it), so (sender, recipient, text) is the identity both ends share. Identical text sent clean and tainted within an hour is ambiguous and reads as tainted.
@@ -29,10 +30,12 @@ import contextvars
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -70,6 +73,7 @@ CHIEF_WORK_CONTEXT = (
     "words, brief, and dispatch them, then reply to the chief with the issue numbers."
 )
 NAME_SHAPE = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
+DELIVERY_RECORD = re.compile(r"\A([0-9a-f]{64})\.(clean|tainted)\.([0-9]{1,15})\.[0-9a-f]{32}\Z")
 RELAYED = re.compile(r"\A(?:Message from [^\n()]{0,120}\(@([a-z0-9][a-z0-9_-]{0,63})\): |\[IMPORTANT: Background process )")
 ROLE_SKILL = {"project": "dispatch", "chief": "chief", "bootstrap": "bootstrap"}
 SKILL_RELOAD_CONTEXT = (
@@ -281,24 +285,25 @@ class Guard:
         return self._load().home / "deliveries" / recipient / sender
 
     def _write_delivery(self, target: str, text: str, tainted: bool) -> None:
-        # One file per kind: a writer never reads or rewrites the other kind's file, so concurrent sends cannot overwrite each other.
+        # Each send creates its own file, never rewritten, with its expiry in the name. A prune decides from the name alone,
+        # so it can delete only a record that has expired, never one a concurrent send just wrote.
         folder = self._deliveries(self._profile(), target)
         folder.mkdir(parents=True, exist_ok=True)
-        self._prune(folder)
         now = self._now()
-        expires = now + (TAINTED_DELIVERY_SECONDS if tainted else CLEAN_DELIVERY_SECONDS)
-        record = folder / f"{self._delivery_name(text)}.{'tainted' if tainted else 'clean'}"
-        tmp = record.with_name(f".{record.name}.{os.getpid()}.{threading.get_ident()}")
-        tmp.write_text(str(expires))
-        tmp.replace(record)
+        self._prune(folder, now)
+        # Rounding errs toward taint: a tainted record's expiry rounds up, a clean one's down.
+        expires = math.ceil(now + TAINTED_DELIVERY_SECONDS) if tainted else math.floor(now + CLEAN_DELIVERY_SECONDS)
+        (folder / f"{self._delivery_name(text)}.{'tainted' if tainted else 'clean'}.{expires}.{uuid.uuid4().hex}").touch(exist_ok=False)
 
-    def _prune(self, folder: Path) -> None:
+    @staticmethod
+    def _prune(folder: Path, now: float) -> None:
         for record in folder.iterdir():
-            try:
-                if not record.name.startswith(".") and float(record.read_text()) <= self._now():
+            found = DELIVERY_RECORD.match(record.name)
+            if found and int(found.group(3)) <= now:
+                try:
                     record.unlink(missing_ok=True)
-            except (OSError, ValueError):
-                continue  # an unreadable record stays: the receiver reads it as untrusted
+                except OSError:
+                    continue
 
     def _delivery_untrusted(self, sender: str, text: str) -> bool:
         """True unless the sender's guard recorded this exact text as clean, unexpired, and not also as tainted."""
@@ -321,15 +326,16 @@ class Guard:
             pass
         folder, name = self._deliveries(sender, recipient), self._delivery_name(text)
         try:
-            clean = float((folder / f"{name}.clean").read_text())
+            records = [record.name for record in folder.iterdir() if record.name.startswith(f"{name}.")]
         except FileNotFoundError:
             return True
-        try:
-            tainted = float((folder / f"{name}.tainted").read_text())
-        except FileNotFoundError:
-            tainted = 0.0
-        now = self._now()
-        return not (clean > now and tainted <= now)  # nan compares false both ways, so it reads as untrusted
+        now, clean = self._now(), False
+        for record in records:
+            found = DELIVERY_RECORD.match(record)
+            if not found or (found.group(2) == "tainted" and int(found.group(3)) > now):
+                return True  # a live tainted send of this text, or a record no guard wrote, leaves it untrusted
+            clean = clean or int(found.group(3)) > now
+        return not clean
 
     def _sent_by_chief(self, sender: str | None) -> bool:
         try:
