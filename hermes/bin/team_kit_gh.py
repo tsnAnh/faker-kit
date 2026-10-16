@@ -970,8 +970,19 @@ class Gh:
         found = REWORK_OF.search((launch or {}).get("body") or "")
         if found:
             return found.group(1)
+        unposted = self.unposted_rework(number, launch)
+        return str(unposted["head"]) if unposted else None
+
+    def unposted_rework(self, number: int, launch: dict | None) -> dict | None:
+        """A rework that runs, or is starting, without its launch comment on GitHub. Its record stands in for that
+        comment until a newer launch replaces it."""
+        if REWORK_OF.search((launch or {}).get("body") or ""):
+            return None
         record = self.rework_record(number)
-        return str(record["head"]) if record and record.get("state") != "failed" and record.get("comment") is False else None
+        if not record or record.get("state") == "failed" or record.get("comment") is not False:
+            return None
+        launched = timestamp(launch.get("created_at")) if launch else None
+        return record if launched is None or float(record.get("started") or 0) >= launched else None
 
     def rework_record_path(self, number: int) -> Path:
         return self.policy.home / "rework" / self.bot.name / f"{int(number)}.json"
@@ -1031,6 +1042,11 @@ class Gh:
         record = self.rework_record(number)
         if not record or record.get("state") not in REWORK_NO_SESSION:
             return None
+        if any(self.trusted(c) and (c.get("body") or "").startswith(LAUNCHED_MARKER) and (found := REWORK_OF.search(c["body"])) and found.group(1) == record["head"]
+               for c in self.comments(number)):
+            # Its launch comment says the session started; only the record missed it.
+            self.write_rework_record(number, {**record, "state": "started", "comment": True})
+            return None
         self.mark_rework(number, "failed")
         if self.issue(number).get("state") == "open":
             counter = InFlight(self.policy, self.bot, self.run, self.now)
@@ -1039,9 +1055,10 @@ class Gh:
                 counter.count_own()
         body = (f"{REWORK_RECOVERED_MARKER}\nhead: {record['head']}\npr: {record.get('pr')}\nstate: {record['state']}\n\n"
                 f"No rework session started, so the unit is back in {REVIEW_LABEL} and its slot is free. This head may be sent to rework again.\n")
-        if self.post_comment(number, body):
-            self.rework_record_path(number).unlink(missing_ok=True)
-        return f"{self.repo}#{number}: a rework of {str(record['head'])[:12]} started no session; the unit is back in {REVIEW_LABEL}"
+        posted = self.post_comment(number, body)
+        self.rework_record_path(number).unlink(missing_ok=True)
+        unaudited = "" if posted else "; the recovery comment could not be posted on the issue"
+        return f"{self.repo}#{number}: a rework of {str(record['head'])[:12]} started no session; the unit is back in {REVIEW_LABEL}{unaudited}"
 
     def post_comment(self, number: int, body: str) -> bool:
         return attempts(lambda: self.run(["issue", "comment", str(number), "-R", self.repo, "--body", body]))
@@ -1445,7 +1462,7 @@ class Gh:
             if claim:
                 # Written before the first label change, so a crash or a refused relabel from here on is recoverable.
                 self.write_rework_record(number, {"pr": claim["url"], "head": claim["head"], "branch": claim["branch"], "started": self.now(),
-                                                  "state": "starting", "comment": False})
+                                                  "backend": config["backend"], "state": "starting", "comment": False})
             freed = tuple(label for label in (HUMAN_LABEL, REVIEW_LABEL if claim else "") if label and label in labels)
             try:
                 self.relabel(number, add=RUNNING_LABEL, remove=freed)
@@ -1473,7 +1490,8 @@ class Gh:
                 self.mark_rework(number, "failed")
             raise
         if claim:
-            self.write_rework_record(number, {**(self.rework_record(number) or {}), "state": "started", "session": session})
+            with contextlib.suppress(OSError):  # the launch comment rework_started posts records the start too
+                self.write_rework_record(number, {**(self.rework_record(number) or {}), "state": "started", "session": session})
             return self.rework_started(number, brief.card, config, claim, session, rework["reason"])  # type: ignore[index]
         try:  # noqa: SIM105
             self.run(["issue", "comment", str(number), "-R", self.repo, "--body", f"{LAUNCHED_MARKER}\nsession: {session}\nbackend: {config['backend']}\nbranch: dispatch/{brief.card}\n"])
@@ -1493,7 +1511,8 @@ class Gh:
                 f"rework-of: {claim['head']}\npr: {claim['url']}\nreason: {reason}\n")
         posted = self.post_comment(number, body)
         if posted:
-            self.write_rework_record(number, {**(self.rework_record(number) or {}), "comment": True})
+            with contextlib.suppress(OSError):
+                self.write_rework_record(number, {**(self.rework_record(number) or {}), "comment": True})
         self.verify_record_path(number).unlink(missing_ok=True)
         self.app_record_path(number).unlink(missing_ok=True)
         out = {"issue": number, "unit": card, "backend": config["backend"], "session": session, "pr": claim["url"], "branch": claim["branch"],
@@ -1641,8 +1660,10 @@ class Gh:
         report = self.report_status(number, comments, since_launch=True)
         status = report["status"]
         launch = self.last_launch(comments)
-        if status == "none" and launch >= 0:
-            ended = self.task_ended(cloud, *self.launched_task(comments[launch]))
+        unposted = self.unposted_rework(number, comments[launch] if launch >= 0 else None)
+        if status == "none" and (launch >= 0 or unposted):
+            task = (str(unposted.get("backend") or ""), str(unposted.get("session") or "")) if unposted else self.launched_task(comments[launch])
+            ended = self.task_ended(cloud, *task)
             if ended:
                 # A task comments before it finishes, so read the issue again before judging it.
                 comments = self.comments(number)
@@ -1664,7 +1685,10 @@ class Gh:
                     if state == "retry":
                         pending = notice
             launch = self.last_launch(comments)
-            started = timestamp(comments[launch].get("created_at")) if launch >= 0 else timestamp(issue.get("createdAt"))
+            if unposted:
+                started: float | None = float(unposted.get("started") or 0)
+            else:
+                started = timestamp(comments[launch].get("created_at")) if launch >= 0 else timestamp(issue.get("createdAt"))
             if started is not None and self.now() - started > REPORT_DEADLINE_SECONDS:
                 return self.gate(issue, "no report 24 hours after launch; check its session")
             return pending

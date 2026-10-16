@@ -2,9 +2,11 @@ import fcntl
 import json
 
 import pytest
+import team_kit_gh
+from team_kit_contracts import LAUNCHED_MARKER as LAUNCHED
 from team_kit_contracts import REWORK_PROMPTS
-from team_kit_gh import Refused
-from test_gh import HEAD, NOW, REPO, FakeCloud, FakeGh, run, tick
+from team_kit_gh import REPORT_DEADLINE_SECONDS, Refused, main
+from test_gh import HEAD, NOW, REPO, FakeCloud, FakeGh, iso, lines, run, tick
 from test_rework import NEW, finding, reviewed, rework, stale_report, stdout
 
 REVIEW = {"agent-task", "agent:review"}
@@ -72,6 +74,7 @@ def test_an_unrelated_bots_inline_comment_or_changes_request_is_not_a_finding(te
     gh.reviews[7] = [{"user": {"login": "dependabot[bot]", "type": "Bot"}, "state": state, "commit_id": HEAD}]
     cloud = FakeCloud()
     assert rework(gh, n, cloud=cloud) != 0 and not cloud.started
+    assert "nothing to rework" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("login", ["claude[bot]", "chatgpt-codex-connector[bot]", "alice"])
@@ -81,6 +84,7 @@ def test_an_approval_is_never_a_finding_whoever_wrote_it(team_kit_home, kit, cap
     gh.reviews[7] = [{"user": {"login": login, "type": "User" if login == "alice" else "Bot"}, "state": "APPROVED", "commit_id": HEAD, "body": "P1"}]
     cloud = FakeCloud()
     assert rework(gh, n, cloud=cloud) != 0 and not cloud.started
+    assert "nothing to rework" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("login", ["claude[bot]", "chatgpt-codex-connector[bot]"])
@@ -90,6 +94,7 @@ def test_an_authorized_apps_praise_without_an_inline_finding_is_not_a_finding(te
     gh.reviews[7] = [{"user": {"login": login, "type": "Bot"}, "state": "COMMENTED", "commit_id": HEAD, "body": "Looks good, no findings"}]
     cloud = FakeCloud()
     assert rework(gh, n, cloud=cloud) != 0 and not cloud.started
+    assert "nothing to rework" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -120,6 +125,7 @@ def test_an_authorized_finding_first_made_on_an_older_head_is_not_evidence_for_t
     gh.pr_comments_inline[7] = [{"user": {"login": "chatgpt-codex-connector[bot]", "type": "Bot"}, "commit_id": HEAD, "original_commit_id": old, "body": "P1"}]
     cloud = FakeCloud()
     assert rework(gh, n, cloud=cloud) != 0 and not cloud.started
+    assert "nothing to rework" in capsys.readouterr().err
 
 
 # F3 and F2: a rework that started no session never leaves the unit running, holding a slot, or barred from a retry.
@@ -293,6 +299,81 @@ def test_a_rework_whose_session_started_still_refuses_a_duplicate_after_its_labe
     assert rework(gh, n, cloud=cloud) == 1 and "already requested" in capsys.readouterr().err and cloud.started == []
     assert tick(gh, capsys) == ["[SILENT]"] and recoveries(gh, n) == []
 
+
+
+def no_comments(gh):
+    real = gh.__call__
+
+    def refuse(args, input=None):
+        if args[:2] == ["issue", "comment"]:
+            raise RuntimeError("rate limited")
+        return real(args, input)
+
+    return refuse
+
+
+def tick_at(gh, capsys, now, cloud=None):
+    assert main(["tick"], run=gh, bot="meo-beo", cloud=cloud or FakeCloud(), now=lambda: now) == 0
+    return lines(capsys)
+
+
+def test_a_rework_without_its_launch_comment_is_timed_from_its_own_start_not_the_old_launch(team_kit_home, gh, capsys):
+    n = reviewed(gh)
+    gh.comments[(REPO, n)][0]["created_at"] = iso(NOW - 3 * 86400)
+    assert rework(no_comments(gh), n, cloud=FakeCloud()) == 0
+    capsys.readouterr()
+    assert tick(gh, capsys) == ["[SILENT]"] and gh.labels(REPO, n) == RUNNING, "the old launch's deadline does not gate a fresh rework"
+    tick_at(gh, capsys, NOW + REPORT_DEADLINE_SECONDS + 60)
+    assert gh.labels(REPO, n) == {"agent-task", "agent:needs-human"}, "a day after the rework started, the usual gate opens"
+
+
+def test_a_codex_rework_without_its_launch_comment_is_judged_by_its_own_task_not_the_ended_old_one(team_kit_home, kit, capsys):
+    gh = FakeGh(kit, backend="codex", codex_env="env_1")
+    n = reviewed(gh)
+    gh.comments[(REPO, n)][0]["body"] = f"{LAUNCHED}\nsession: https://chatgpt.com/codex/tasks/task_e_old\nbackend: codex\nbranch: dispatch/x\n"
+
+    class Tasks(FakeCloud):
+        def task_status(self, backend, session):
+            self.status_calls.append((backend, session))
+            return "ready" if session.endswith("task_e_old") else "pending"
+
+    cloud = Tasks()
+    assert rework(no_comments(gh), n, cloud=cloud) == 0
+    capsys.readouterr()
+    assert tick(gh, capsys, cloud=cloud) == ["[SILENT]"] and gh.labels(REPO, n) == RUNNING
+    assert cloud.status_calls and all(not s.endswith("task_e_old") for _, s in cloud.status_calls)
+
+
+def test_a_started_record_that_cannot_be_written_is_still_known_started_from_its_launch_comment(team_kit_home, gh, capsys, monkeypatch):
+    n = reviewed(gh)
+    real = team_kit_gh.Gh.write_rework_record
+
+    def full_disk(self, number, data):
+        if data.get("state") == "started":
+            raise OSError(28, "No space left on device")
+        real(self, number, data)
+
+    monkeypatch.setattr(team_kit_gh.Gh, "write_rework_record", full_disk)
+    cloud = FakeCloud()
+    assert rework(gh, n, cloud=cloud) == 0 and len(cloud.started) == 1
+    assert record(team_kit_home, n)["state"] == "starting"
+    monkeypatch.setattr(team_kit_gh.Gh, "write_rework_record", real)
+    capsys.readouterr()
+    assert tick(gh, capsys) == ["[SILENT]"] and gh.labels(REPO, n) == RUNNING and recoveries(gh, n) == []
+    assert record(team_kit_home, n)["state"] == "started"
+    gh.labels(REPO, n).clear()
+    gh.labels(REPO, n).update(REVIEW)
+    assert rework(gh, n, cloud=cloud) == 1 and "already requested" in capsys.readouterr().err and len(cloud.started) == 1
+
+
+def test_a_recovery_whose_comment_cannot_be_posted_is_said_once_and_the_unit_goes_on(team_kit_home, gh, capsys):
+    n = reviewed(gh)
+    with pytest.raises(Crash):
+        rework(gh, n, cloud=CrashingCloud())
+    notices = tick(no_comments(gh), capsys)
+    assert any("back in agent:review" in line and "could not be posted" in line for line in notices)
+    assert gh.labels(REPO, n) == REVIEW and record(team_kit_home, n) is None
+    assert tick(gh, capsys) == ["[SILENT]"]
 
 # F4 and F7 stay fail-closed.
 
