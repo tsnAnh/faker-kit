@@ -56,10 +56,10 @@ REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SLACK_CHANNEL_ID = re.compile(r"\A[CG][A-Z0-9]{2,}\Z")
 SLACK_CHANNEL_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,79}\Z")
 
-PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "merge", "close", "code", "kit-check")  # noqa: E501
+PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "rework", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "merge", "close", "code", "kit-check")  # noqa: E501
 BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon", "setup-request", "discover", "adopt")
 BOOTSTRAP_READ_ONLY = ("status", "discover")
-CLEAN_TURN_COMMANDS = ("merge", "close")
+CLEAN_TURN_COMMANDS = ("merge", "close", "rework")
 # The chief of staff reads every project and hands work over by message. Its one write is `new-project`;
 # unless ask_owner is off, the guard asks the owner to approve it every time.
 CHIEF_COMMANDS = ("projects", "status", "show", "new-project", "andon")
@@ -118,7 +118,7 @@ GH_API_BODY_OPTIONS = ("-f", "-F", "--field", "--raw-field", "--input")
 KIT_READERS = ("cat", "ls", "head", "tail", "grep", "rg", "wc", "less", "file", "stat", "diff", "realpath", "readlink")
 KIT_GIT_READS = ("log", "show", "status", "diff", "rev-parse", "describe", "ls-files", "blame")
 PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|team-kit/kit)(?![\w-])", re.I)
-CLEAN_TURN_TEXT = re.compile(r"\b(?:team|faker)-kit-gh\W+(merge|close)\b")
+CLEAN_TURN_TEXT = re.compile(r"\b(?:team|faker)-kit-gh\W+(merge|close|rework)\b")
 TAINTED_TURN_SECONDS = 3600
 TAINT_BLOCKED_TOOLS = ("delegate_task", "cronjob*")
 
