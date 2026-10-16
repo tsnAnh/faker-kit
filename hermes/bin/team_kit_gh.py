@@ -63,7 +63,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -169,6 +169,11 @@ APP_MERGE_ATTEMPTS = 3  # merges of an approved unit that GitHub refused before 
 MERGE_METHODS = ("merge", "squash", "rebase")
 CLOSE_REASON_MAX = 500
 REWORK_COMMENT_TRIES = 3
+REWORK_RECOVERED_MARKER = "<!-- team-kit:rework-recovered v1 -->"
+# A rework record moves starting -> started, or starting -> failed when no session began. A failed one bars nothing.
+REWORK_NO_SESSION = ("starting", "failed")
+# Besides review_app, the Codex GitHub app that setup-review-bots installs: its findings are inline review comments.
+CODEX_REVIEW_APP = "chatgpt-codex-connector[bot]"
 HUMAN_LABEL = "agent:needs-human"
 SECURITY_LABEL = "agent:security"
 INCIDENT_LABEL = "agent:incident"
@@ -364,6 +369,17 @@ def has_next_page(link: str | None) -> bool:
 
 ISSUE_PAGE_SIZE = 100  # GitHub's maximum per_page
 ISSUE_PAGE_LIMIT = 50  # 5000 issues; past that something is wrong, so refuse instead of looping
+
+
+def attempts(action: Callable[[], object], tries: int = REWORK_COMMENT_TRIES) -> bool:
+    """Run action until it succeeds, at most tries times. Whether it succeeded."""
+    for _ in range(tries):
+        try:
+            action()
+        except Exception:  # noqa: BLE001, S112
+            continue
+        return True
+    return False
 
 
 class InFlight:
@@ -955,7 +971,7 @@ class Gh:
         if found:
             return found.group(1)
         record = self.rework_record(number)
-        return str(record["head"]) if record and record.get("comment") is False else None
+        return str(record["head"]) if record and record.get("state") != "failed" and record.get("comment") is False else None
 
     def rework_record_path(self, number: int) -> Path:
         return self.policy.home / "rework" / self.bot.name / f"{int(number)}.json"
@@ -966,6 +982,69 @@ class Gh:
         except (OSError, ValueError):
             return None
         return data if isinstance(data, dict) and SHA.match(str(data.get("head") or "")) else None
+
+    @contextlib.contextmanager
+    def rework_lock(self, number: int) -> Iterator[bool]:
+        """Held by the one process starting a rework of this unit, from its record to its outcome. Never waits: a busy
+        lock means another rework of the unit is in flight, and the kernel frees it when that process dies."""
+        path = self.rework_record_path(number).with_suffix(".lock")
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with path.open("w") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+                return
+            yield True
+
+    def mark_rework(self, number: int, state: str) -> None:
+        record = self.rework_record(number)
+        if record:
+            self.write_rework_record(number, {**record, "state": state})
+
+    def restore_review(self, number: int) -> None:
+        """Put a unit whose rework started no session back in review, from its labels as they are now."""
+        labels = labels_of(self.issue(number))
+        add = REVIEW_LABEL if REVIEW_LABEL not in labels else None
+        remove = (RUNNING_LABEL,) if RUNNING_LABEL in labels else ()
+        if add or remove:
+            self.relabel(number, add=add, remove=remove)
+
+    def unwind_rework(self, number: int) -> bool:
+        """No session started. Returns whether the unit is back in review; if GitHub refused, the failed record stays
+        for recover_rework."""
+        self.mark_rework(number, "failed")
+        if not attempts(lambda: self.restore_review(number)):
+            return False
+        self.rework_record_path(number).unlink(missing_ok=True)
+        return True
+
+    def recover_rework(self, number: int) -> str | None:
+        """Finish a rework that an earlier process left without a session, unless a live process still starts it."""
+        record = self.rework_record(number)
+        if not record or record.get("state") not in REWORK_NO_SESSION:
+            return None
+        with self.rework_lock(number) as held:
+            return self.recover_rework_locked(number) if held else None
+
+    def recover_rework_locked(self, number: int) -> str | None:
+        record = self.rework_record(number)
+        if not record or record.get("state") not in REWORK_NO_SESSION:
+            return None
+        self.mark_rework(number, "failed")
+        if self.issue(number).get("state") == "open":
+            counter = InFlight(self.policy, self.bot, self.run, self.now)
+            with counter.lock():
+                self.restore_review(number)
+                counter.count_own()
+        body = (f"{REWORK_RECOVERED_MARKER}\nhead: {record['head']}\npr: {record.get('pr')}\nstate: {record['state']}\n\n"
+                f"No rework session started, so the unit is back in {REVIEW_LABEL} and its slot is free. This head may be sent to rework again.\n")
+        if self.post_comment(number, body):
+            self.rework_record_path(number).unlink(missing_ok=True)
+        return f"{self.repo}#{number}: a rework of {str(record['head'])[:12]} started no session; the unit is back in {REVIEW_LABEL}"
+
+    def post_comment(self, number: int, body: str) -> bool:
+        return attempts(lambda: self.run(["issue", "comment", str(number), "-R", self.repo, "--body", body]))
 
     def write_rework_record(self, number: int, data: dict) -> None:
         path = self.rework_record_path(number)
@@ -1323,6 +1402,8 @@ class Gh:
         return str(current.get("html_url") or f"https://github.com/{self.repo}/issues/{number}")
 
     def launch(self, number: int, local_commit: str, cloud: Cloud, rework: dict | None = None) -> dict:
+        if not rework:
+            self.recover_rework(number)
         config = self.dispatch_config()
         self.kit_check(local_commit, config)
         issue = self.launchable(number, config, rework=bool(rework))
@@ -1362,12 +1443,15 @@ class Gh:
             if total >= self.policy.max_in_flight_total:
                 raise Waiting(f"machine limit: {total} unit(s) already running on this machine (max_in_flight_total)", "machine")
             if claim:
-                self.write_rework_record(number, {"pr": claim["url"], "head": claim["head"], "branch": claim["branch"], "started": self.now(), "comment": False})
+                # Written before the first label change, so a crash or a refused relabel from here on is recoverable.
+                self.write_rework_record(number, {"pr": claim["url"], "head": claim["head"], "branch": claim["branch"], "started": self.now(),
+                                                  "state": "starting", "comment": False})
             freed = tuple(label for label in (HUMAN_LABEL, REVIEW_LABEL if claim else "") if label and label in labels)
             try:
                 self.relabel(number, add=RUNNING_LABEL, remove=freed)
             except Exception:
-                self.rework_record_path(number).unlink(missing_ok=True)
+                if claim:
+                    self.unwind_rework(number)
                 raise
             counter.write({**counts, self.repo: counts[self.repo] + 1})
         try:
@@ -1375,12 +1459,21 @@ class Gh:
         except Exception as err:
             # Any failure, a missing `claude` binary included, must free the unit again; a reworked unit goes back to review.
             if claim:
-                self.rework_record_path(number).unlink(missing_ok=True)
-            self.relabel(number, add=REVIEW_LABEL if claim else None, remove=(RUNNING_LABEL,))
-            counter.write(counts)
+                freed_slot = self.unwind_rework(number)
+            else:
+                self.relabel(number, remove=(RUNNING_LABEL,))
+                freed_slot = True
+            if freed_slot:
+                counter.write(counts)
             reason = str(err) if isinstance(err, (CloudError, Refused)) else type(err).__name__ + (f": {err.filename}" if getattr(err, "filename", None) else "")  # type: ignore[attr-defined]  # team-kit baseline
-            raise Refused(f"launch failed: {reason}") from err
+            held = "" if freed_slot else f"; it stays {RUNNING_LABEL} until the next tick or rework puts it back in {REVIEW_LABEL}"
+            raise Refused(f"launch failed: {reason}{held}") from err
+        except BaseException:
+            if claim:
+                self.mark_rework(number, "failed")
+            raise
         if claim:
+            self.write_rework_record(number, {**(self.rework_record(number) or {}), "state": "started", "session": session})
             return self.rework_started(number, brief.card, config, claim, session, rework["reason"])  # type: ignore[index]
         try:  # noqa: SIM105
             self.run(["issue", "comment", str(number), "-R", self.repo, "--body", f"{LAUNCHED_MARKER}\nsession: {session}\nbackend: {config['backend']}\nbranch: dispatch/{brief.card}\n"])
@@ -1398,16 +1491,9 @@ class Gh:
         started from no longer count. Until that comment is posted the local record bars them."""
         body = (f"{LAUNCHED_MARKER}\nsession: {session}\nbackend: {config['backend']}\nbranch: {claim['branch']}\n"
                 f"rework-of: {claim['head']}\npr: {claim['url']}\nreason: {reason}\n")
-        posted = False
-        for _ in range(REWORK_COMMENT_TRIES):
-            try:
-                self.run(["issue", "comment", str(number), "-R", self.repo, "--body", body])
-                posted = True
-                break
-            except Exception:  # noqa: BLE001, S112
-                continue
+        posted = self.post_comment(number, body)
         if posted:
-            self.write_rework_record(number, {"pr": claim["url"], "head": claim["head"], "branch": claim["branch"], "started": self.now(), "comment": True})
+            self.write_rework_record(number, {**(self.rework_record(number) or {}), "comment": True})
         self.verify_record_path(number).unlink(missing_ok=True)
         self.app_record_path(number).unlink(missing_ok=True)
         out = {"issue": number, "unit": card, "backend": config["backend"], "session": session, "pr": claim["url"], "branch": claim["branch"],
@@ -1425,7 +1511,11 @@ class Gh:
         if not SHA.match(head):
             raise Refused("rework needs --head as the full 40-character lowercase commit of the pull request's current head")
         self.refuse_after_untrusted_text("rework")
-        return self.launch(number, local_commit, cloud, rework={"pr": int(pr), "head": head, "reason": why})
+        with self.rework_lock(number) as held:
+            if not held:
+                raise Refused(f"#{number} is already launched: another rework of it is starting")
+            self.recover_rework_locked(number)
+            return self.launch(number, local_commit, cloud, rework={"pr": int(pr), "head": head, "reason": why})
 
     def rework_claim(self, issue: dict, number: int, rework: dict) -> dict:
         """Everything that must hold for this issue to go back to rework, read fresh. Fails closed on anything missing."""
@@ -1441,7 +1531,7 @@ class Gh:
                and (c.get("body") or "").startswith(LAUNCHED_MARKER) and self.trusted(c) for c in comments):
             raise Refused(f"rework of {rework['head'][:12]} was already requested for #{number}")
         record = self.rework_record(number)
-        if record and record["head"] == rework["head"]:
+        if record and record["head"] == rework["head"] and record.get("state") not in REWORK_NO_SESSION:
             raise Refused(f"rework of {rework['head'][:12]} was already requested for #{number}")
         report = self.report_status(number, comments, since_launch=True)
         owned = self.unit_pr(number, comments)
@@ -1452,19 +1542,26 @@ class Gh:
             raise Refused(f"pull request {int(rework['pr'])} is not an open pull request of this repository that carries #{number}'s unit marker on its branch")
         if owned["head"] != rework["head"]:
             raise Refused(f"pull request {int(rework['pr'])} is at {owned['head'][:12]}, not {rework['head'][:12]}; read it again")
-        if not self.review_evidence(int(rework["pr"]), rework["head"]):
+        if not self.review_evidence(int(rework["pr"]), rework["head"], self.dispatch_config()):
             raise Refused(f"no review recorded findings on {rework['head'][:12]} of pull request {int(rework['pr'])}; there is nothing to rework")
         return {"url": owned["url"], "head": owned["head"], "branch": owned["branch"], "pr": owned["pr"]}
 
-    def review_evidence(self, pr: int, head: str) -> bool:
-        """Whether a review recorded findings on this exact head: a changes-requested review from anyone, or a review or
-        inline comment from an app. A comment alone is evidence of a finding, never an approval, and its text is not read."""
+    def review_evidence(self, pr: int, head: str, config: dict) -> bool:
+        """Whether a review recorded findings on this exact head: a changes-requested review from a person or an authorized
+        app (review_app, or the Codex app), or an inline comment an authorized app first made on this head. Any other bot,
+        an approval, and a review with only a body never count, and no text is read."""
+        apps = {str(app).lower() for app in (config.get("review_app"), CODEX_REVIEW_APP) if app}
+
+        def authorized(item: dict) -> bool:
+            user = item.get("user") or {}
+            return user.get("type") == "Bot" and str(user.get("login") or "").lower() in apps
+
         for review in self.api_pages(f"repos/{self.repo}/pulls/{int(pr)}/reviews"):
-            user = review.get("user") or {} if isinstance(review, dict) else {}
-            if isinstance(review, dict) and review.get("commit_id") == head and (
-                    review.get("state") == "CHANGES_REQUESTED" or (user.get("type") == "Bot" and review.get("state") == "COMMENTED")):
+            if isinstance(review, dict) and review.get("commit_id") == head and review.get("state") == "CHANGES_REQUESTED" and (
+                    (review.get("user") or {}).get("type") == "User" or authorized(review)):
                 return True
-        return any(isinstance(c, dict) and (c.get("user") or {}).get("type") == "Bot" and c.get("commit_id") == head
+        # GitHub moves an inline comment's commit_id to later heads while its line is unchanged; original_commit_id stays.
+        return any(isinstance(c, dict) and authorized(c) and (c.get("original_commit_id") or c.get("commit_id")) == head
                    for c in self.api_pages(f"repos/{self.repo}/pulls/{int(pr)}/comments"))
 
     def launchable(self, number: int, config: dict, rework: bool = False) -> dict:
@@ -2643,6 +2740,7 @@ class Project:
     def tick(self, local_commit: str, cloud: Cloud) -> list[str]:
         gh, notices, problems = self.gh, [], {}
         queued: list[dict] = []
+        recovered_any = False
         cord, andon_notices = gh.sync_andon()
         notices.extend(andon_notices)
         closed_units: list[dict] | None
@@ -2676,7 +2774,10 @@ class Project:
             in_review = REVIEW_LABEL in labels and HUMAN_LABEL not in labels
             if RUNNING_LABEL in labels or VERIFYING_LABEL in labels or in_review:
                 try:
-                    if VERIFYING_LABEL in labels:
+                    notice = gh.recover_rework(int(issue["number"]))
+                    if notice:
+                        recovered_any = True
+                    elif VERIFYING_LABEL in labels:
                         notice = gh.check_verifying(issue, cloud)
                     elif RUNNING_LABEL in labels:
                         notice = gh.check_running(issue, cloud)
@@ -2716,7 +2817,7 @@ class Project:
             # Refresh this bot's count for the other bots, whatever launched or did not.
             labels = [labels_of(issue) for issue in (units or [])]  # type: ignore[assignment]  # team-kit baseline
             no_launchable = units is not None and not any(not (l & {RUNNING_LABEL, VERIFYING_LABEL, REVIEW_LABEL, HUMAN_LABEL}) for l in labels)  # type: ignore[operator, redundant-expr]  # team-kit baseline  # noqa: E741
-            if no_launchable:
+            if no_launchable and not recovered_any:  # a recovery changed labels after units was read
                 InFlight(self.policy, self.bot, self.run, self.now).write({gh.repo: sum(1 for l in labels if l & {RUNNING_LABEL, VERIFYING_LABEL})})  # type: ignore[misc, operator]  # team-kit baseline  # noqa: E741
             else:
                 InFlight(self.policy, self.bot, self.run, self.now).count_own()

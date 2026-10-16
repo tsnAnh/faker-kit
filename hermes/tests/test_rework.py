@@ -16,8 +16,10 @@ def gh(kit):
 BOT_REVIEW = {"user": {"login": "chatgpt-codex-connector[bot]", "type": "Bot"}, "state": "COMMENTED", "commit_id": HEAD, "body": "P1 finding"}
 
 
-def finding(gh, number=7, head=HEAD, **extra):
-    gh.reviews.setdefault(number, []).append({**BOT_REVIEW, "commit_id": head, **extra})
+def finding(gh, number=7, head=HEAD):
+    """A Codex finding: its review only says it reviewed; the inline comment carries the finding."""
+    gh.reviews.setdefault(number, []).append({**BOT_REVIEW, "commit_id": head})
+    gh.pr_comments_inline.setdefault(number, []).append({"user": BOT_REVIEW["user"], "commit_id": head, "original_commit_id": head, "body": "P1 finding"})
 
 
 def reviewed(gh, labels=("agent-task", "agent:review"), head=HEAD, with_finding=True, **issue):
@@ -60,7 +62,7 @@ def test_one_command_sends_a_reviewed_unit_back_to_its_own_branch_and_pull_reque
     ("reviews", "inline", "ok"),
     [
         ([{"user": {"login": "alice", "type": "User"}, "state": "CHANGES_REQUESTED", "commit_id": HEAD}], [], True),
-        ([], [{"user": {"login": "x[bot]", "type": "Bot"}, "commit_id": HEAD, "body": "P1"}], True),
+        ([], [{"user": {"login": "chatgpt-codex-connector[bot]", "type": "Bot"}, "commit_id": HEAD, "body": "P1"}], True),
         ([{"user": {"login": "x[bot]", "type": "Bot"}, "state": "APPROVED", "commit_id": HEAD}], [], False),
         ([{"user": {"login": "alice", "type": "User"}, "state": "COMMENTED", "commit_id": HEAD}], [], False),
         ([{**BOT_REVIEW, "commit_id": "c" * 40}], [], False),
