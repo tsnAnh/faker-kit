@@ -86,6 +86,7 @@ from team_kit_contracts import (
     LAUNCHED_MARKER,
     PR_MARKER,
     REPORT_MARKER,
+    REWORK_OF,
     REVIEW_LAUNCHED_MARKER,
     REVIEW_MARKER,
     SECOND_VERIFIER_FOCUS,
@@ -97,6 +98,7 @@ from team_kit_contracts import (
     VERIFICATIONS,
     VERIFIER_BACKENDS,
     VERIFY_LAUNCHED_MARKER,
+    CloudCommand,
     ContractError,
     diagnosis_signed,
     launch_argv,
@@ -110,6 +112,7 @@ from team_kit_contracts import (
     parse_verdict,
     review_argv,
     review_signed,
+    rework_argv,
     security_argv,
     security_signed,
     size_marker,
@@ -165,6 +168,7 @@ AUTO_MERGE = ("none", "low")
 APP_MERGE_ATTEMPTS = 3  # merges of an approved unit that GitHub refused before tick leaves it to the owner
 MERGE_METHODS = ("merge", "squash", "rebase")
 CLOSE_REASON_MAX = 500
+REWORK_COMMENT_TRIES = 3
 HUMAN_LABEL = "agent:needs-human"
 SECURITY_LABEL = "agent:security"
 INCIDENT_LABEL = "agent:incident"
@@ -912,9 +916,15 @@ class Gh:
         """The latest trusted report. With since_launch, only one posted after the latest launch counts,
         so a relaunched unit is never judged by the report its previous agent left."""
         comments = comments if comments is not None else self.comments(issue)
+        barred = None
         if since_launch:
-            comments = comments[self.last_launch(comments) + 1:]
+            launch = self.last_launch(comments)
+            barred = self.rework_barred(issue, comments[launch] if launch >= 0 else None)
+            comments = comments[launch + 1:]
         reports = [c for c in comments if (c.get("body") or "").lstrip().startswith(REPORT_MARKER) and self.trusted(c)]
+        if barred:
+            # A rework is judged only by a report of new work: one naming the head it started from is the previous agent's.
+            reports = [c for c in reports if not self.names_head(c, barred)]
         if not reports:
             return {"issue": issue, "status": "none"}
         try:
@@ -929,6 +939,41 @@ class Gh:
             "head": report.head if report.head and SHORT_SHA.match(report.head) else None,
             "at": reports[-1].get("created_at"),
         }
+
+    @staticmethod
+    def names_head(report: dict, head: str) -> bool:
+        """Whether a report's head is the given head, or names none. An unreadable report is left to report_status."""
+        try:
+            named = parse_report(report["body"]).head
+        except ContractError:
+            return False
+        return not named or not SHORT_SHA.match(named) or head.startswith(named)
+
+    def rework_barred(self, number: int, launch: dict | None) -> str | None:
+        """The head a rework started from, when the latest launch is a rework: reports of that head are stale."""
+        found = REWORK_OF.search((launch or {}).get("body") or "")
+        if found:
+            return found.group(1)
+        record = self.rework_record(number)
+        return str(record["head"]) if record and record.get("comment") is False else None
+
+    def rework_record_path(self, number: int) -> Path:
+        return self.policy.home / "rework" / self.bot.name / f"{int(number)}.json"
+
+    def rework_record(self, number: int) -> dict | None:
+        try:
+            data = json.loads(self.rework_record_path(number).read_text())
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) and SHA.match(str(data.get("head") or "")) else None
+
+    def write_rework_record(self, number: int, data: dict) -> None:
+        path = self.rework_record_path(number)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.touch(mode=0o600)
+        tmp.write_text(json.dumps(data))
+        tmp.replace(path)
 
     def pull(self, number: int) -> dict:
         """A pull request as the CLI's JSON named its fields, read from the REST pulls endpoint."""
@@ -1097,7 +1142,7 @@ class Gh:
             author = str((pr.get("author") or {}).get("login") or "").lower()
             if str(pr.get("headRefName") or "") != branch and author not in trusted:
                 continue
-            accepted.append({"pr": int(pr["number"]), "url": url, "head": head})
+            accepted.append({"pr": int(pr["number"]), "url": url, "head": head, "branch": str(pr.get("headRefName") or "")})
         return sorted(accepted, key=lambda item: item["pr"])[0] if accepted else None  # type: ignore[arg-type, return-value]  # team-kit baseline
 
     def read(self, issue: int | None, pr: int | None) -> str:
@@ -1277,10 +1322,11 @@ class Gh:
             self.run(args)
         return str(current.get("html_url") or f"https://github.com/{self.repo}/issues/{number}")
 
-    def launch(self, number: int, local_commit: str, cloud: Cloud) -> dict:
+    def launch(self, number: int, local_commit: str, cloud: Cloud, rework: dict | None = None) -> dict:
         config = self.dispatch_config()
         self.kit_check(local_commit, config)
-        issue = self.launchable(number, config)
+        issue = self.launchable(number, config, rework=bool(rework))
+        claim = self.rework_claim(issue, number, rework) if rework else None
         cord = self.cord()
         if cord:
             raise Waiting(f"{cord.describe()}; nothing starts until it is cleared", "machine")
@@ -1296,37 +1342,132 @@ class Gh:
             raise Unfit(f"dependency {', '.join(dropped)} was closed without merging; change the brief or reopen it")
         if waiting:
             raise Waiting(f"waiting for dependencies: {', '.join(waiting)} must be closed by a merged pull request", "unit")
-        command = launch_argv(config["backend"], self.repo, number, size, config.get("codex_env"))
+        command = self.launch_command(config, number, size, claim)
         owner, name = self.repo.split("/")
         workdir = self.policy.home / "checkouts" / f"{owner}__{name}" / str(number)
         limit = int(config.get("max_in_flight", 1))
         counter = InFlight(self.policy, self.bot, self.run, self.now)
         with counter.lock():
             # Read the labels again under the lock, so a chat launch and a tick never both start it.
-            labels = labels_of(self.launchable(number, config))
+            current = self.launchable(number, config, rework=bool(rework))
+            labels = labels_of(current)
+            if rework:
+                # The whole claim again under the lock: the head, the pull request and every earlier request may have changed.
+                claim = self.rework_claim(current, number, rework)
+                command = self.launch_command(config, number, size, claim)
             counts = counter.count_own()
             if counts[self.repo] >= limit:
                 raise Waiting(f"repo limit: {limit} unit(s) already running in {self.repo} (max_in_flight)", "repo")
             total = sum(counts.values()) + counter.others()
             if total >= self.policy.max_in_flight_total:
                 raise Waiting(f"machine limit: {total} unit(s) already running on this machine (max_in_flight_total)", "machine")
-            self.relabel(number, add=RUNNING_LABEL, remove=(HUMAN_LABEL,) if HUMAN_LABEL in labels else ())
+            if claim:
+                self.write_rework_record(number, {"pr": claim["url"], "head": claim["head"], "branch": claim["branch"], "started": self.now(), "comment": False})
+            freed = tuple(label for label in (HUMAN_LABEL, REVIEW_LABEL if claim else "") if label and label in labels)
+            try:
+                self.relabel(number, add=RUNNING_LABEL, remove=freed)
+            except Exception:
+                self.rework_record_path(number).unlink(missing_ok=True)
+                raise
             counter.write({**counts, self.repo: counts[self.repo] + 1})
         try:
             session = cloud.start(config["backend"], self.repo, command, workdir)
         except Exception as err:
-            # Any failure, a missing `claude` binary included, must free the unit again.
-            self.relabel(number, remove=(RUNNING_LABEL,))
+            # Any failure, a missing `claude` binary included, must free the unit again; a reworked unit goes back to review.
+            if claim:
+                self.rework_record_path(number).unlink(missing_ok=True)
+            self.relabel(number, add=REVIEW_LABEL if claim else None, remove=(RUNNING_LABEL,))
             counter.write(counts)
             reason = str(err) if isinstance(err, (CloudError, Refused)) else type(err).__name__ + (f": {err.filename}" if getattr(err, "filename", None) else "")  # type: ignore[attr-defined]  # team-kit baseline
             raise Refused(f"launch failed: {reason}") from err
+        if claim:
+            return self.rework_started(number, brief.card, config, claim, session, rework["reason"])  # type: ignore[index]
         try:  # noqa: SIM105
             self.run(["issue", "comment", str(number), "-R", self.repo, "--body", f"{LAUNCHED_MARKER}\nsession: {session}\nbackend: {config['backend']}\nbranch: dispatch/{brief.card}\n"])
         except Exception:  # noqa: BLE001, S110
             pass
         return {"issue": number, "unit": brief.card, "backend": config["backend"], "session": session}
 
-    def launchable(self, number: int, config: dict) -> dict:
+    def launch_command(self, config: dict, number: int, size: str, claim: dict | None) -> CloudCommand:
+        if claim:
+            return rework_argv(config["backend"], self.repo, number, size, claim["url"], claim["head"], claim["branch"], config.get("codex_env"))
+        return launch_argv(config["backend"], self.repo, number, size, config.get("codex_env"))
+
+    def rework_started(self, number: int, card: str, config: dict, claim: dict, session: str, reason: str) -> dict:
+        """The rework agent runs. Its launch comment is the audit record and the generation boundary: reports of the head it
+        started from no longer count. Until that comment is posted the local record bars them."""
+        body = (f"{LAUNCHED_MARKER}\nsession: {session}\nbackend: {config['backend']}\nbranch: {claim['branch']}\n"
+                f"rework-of: {claim['head']}\npr: {claim['url']}\nreason: {reason}\n")
+        posted = False
+        for _ in range(REWORK_COMMENT_TRIES):
+            try:
+                self.run(["issue", "comment", str(number), "-R", self.repo, "--body", body])
+                posted = True
+                break
+            except Exception:  # noqa: BLE001, S112
+                continue
+        if posted:
+            self.write_rework_record(number, {"pr": claim["url"], "head": claim["head"], "branch": claim["branch"], "started": self.now(), "comment": True})
+        self.verify_record_path(number).unlink(missing_ok=True)
+        self.app_record_path(number).unlink(missing_ok=True)
+        out = {"issue": number, "unit": card, "backend": config["backend"], "session": session, "pr": claim["url"], "branch": claim["branch"],
+               "rework_of": claim["head"], "state": "running"}
+        return out if posted else {**out, "audit": "the rework comment could not be posted; the local record still bars reports of the old head"}
+
+    def rework(self, number: int, pr: int, head: str, reason: str, local_commit: str, cloud: Cloud) -> dict:
+        """Send a done unit that waits in review back to its coding agent, on the same issue, pull request, and branch.
+
+        The command is the whole authorization: like merge and close it is refused in a turn that read untrusted text, and
+        the guard allows it only to a project bot. Review findings are evidence checked here, never instructions."""
+        why = " ".join(reason.split())
+        if not why or len(why) > CLOSE_REASON_MAX:
+            raise Refused(f"rework needs --reason of 1 to {CLOSE_REASON_MAX} characters, recorded on the issue")
+        if not SHA.match(head):
+            raise Refused("rework needs --head as the full 40-character lowercase commit of the pull request's current head")
+        self.refuse_after_untrusted_text("rework")
+        return self.launch(number, local_commit, cloud, rework={"pr": int(pr), "head": head, "reason": why})
+
+    def rework_claim(self, issue: dict, number: int, rework: dict) -> dict:
+        """Everything that must hold for this issue to go back to rework, read fresh. Fails closed on anything missing."""
+        labels = labels_of(issue)
+        if labels & {RUNNING_LABEL, VERIFYING_LABEL, HUMAN_LABEL} or REVIEW_LABEL not in labels:
+            raise Refused(f"#{number} is not idle in {REVIEW_LABEL}: a coder or verifier may be active, or it is gated")
+        if not BRIEF_MARKER.match(str(issue.get("body") or "")):
+            raise Refused(f"#{number} has no team-kit brief marker, so it is not a unit")
+        if self.verify_record(number) is not None or self.cord():
+            raise Refused(f"#{number} has a verifier record or the andon cord is pulled; nothing is sent to rework")
+        comments = self.comments(number)
+        if any(REWORK_OF.search(c.get("body") or "") and REWORK_OF.search(c["body"]).group(1) == rework["head"]  # type: ignore[union-attr]
+               and (c.get("body") or "").startswith(LAUNCHED_MARKER) and self.trusted(c) for c in comments):
+            raise Refused(f"rework of {rework['head'][:12]} was already requested for #{number}")
+        record = self.rework_record(number)
+        if record and record["head"] == rework["head"]:
+            raise Refused(f"rework of {rework['head'][:12]} was already requested for #{number}")
+        report = self.report_status(number, comments, since_launch=True)
+        owned = self.unit_pr(number, comments)
+        pr_url = f"https://github.com/{self.repo}/pull/{int(rework['pr'])}"
+        if report["status"] != "done" or str(report.get("pr") or "").lower() != pr_url.lower():
+            raise Refused(f"#{number}'s latest report is not a done report for pull request {int(rework['pr'])}")
+        if not owned or owned["pr"] != int(rework["pr"]) or owned["url"].lower() != pr_url.lower() or not owned["branch"]:
+            raise Refused(f"pull request {int(rework['pr'])} is not an open pull request of this repository that carries #{number}'s unit marker on its branch")
+        if owned["head"] != rework["head"]:
+            raise Refused(f"pull request {int(rework['pr'])} is at {owned['head'][:12]}, not {rework['head'][:12]}; read it again")
+        if not self.review_evidence(int(rework["pr"]), rework["head"]):
+            raise Refused(f"no review recorded findings on {rework['head'][:12]} of pull request {int(rework['pr'])}; there is nothing to rework")
+        return {"url": owned["url"], "head": owned["head"], "branch": owned["branch"], "pr": owned["pr"]}
+
+    def review_evidence(self, pr: int, head: str) -> bool:
+        """Whether a review recorded findings on this exact head: a changes-requested review from anyone, or a review or
+        inline comment from an app. A comment alone is evidence of a finding, never an approval, and its text is not read."""
+        for review in self.api_pages(f"repos/{self.repo}/pulls/{int(pr)}/reviews"):
+            user = review.get("user") or {} if isinstance(review, dict) else {}
+            if isinstance(review, dict) and review.get("commit_id") == head and (
+                    review.get("state") == "CHANGES_REQUESTED" or (user.get("type") == "Bot" and review.get("state") == "COMMENTED")):
+                return True
+        return any(isinstance(c, dict) and (c.get("user") or {}).get("type") == "Bot" and c.get("commit_id") == head
+                   for c in self.api_pages(f"repos/{self.repo}/pulls/{int(pr)}/comments"))
+
+    def launchable(self, number: int, config: dict, rework: bool = False) -> dict:
         issue = self.issue(number)
         labels = labels_of(issue)
         author = str((issue.get("user") or {}).get("login") or "").lower()
@@ -1334,7 +1475,9 @@ class Gh:
             raise Unfit(f"#{number} is not an open {TASK_LABEL} issue")
         if RUNNING_LABEL in labels or VERIFYING_LABEL in labels:
             raise Refused(f"#{number} is already launched ({RUNNING_LABEL} or {VERIFYING_LABEL}); never launch a unit twice")
-        if REVIEW_LABEL in labels:
+        if rework and (REVIEW_LABEL not in labels or HUMAN_LABEL in labels):
+            raise Refused(f"#{number} is not waiting in {REVIEW_LABEL}; only a done unit in review goes back to rework")
+        if REVIEW_LABEL in labels and not rework:
             raise Refused(f"#{number} is done and waits for the owner to merge ({REVIEW_LABEL})")
         if author not in {str(d).lower() for d in config.get("trusted_dispatchers") or []}:
             raise Unfit(f"#{number} was written by {author or 'nobody'}, who is not in trusted_dispatchers")
@@ -2668,6 +2811,11 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
     cmd.add_argument("reason", nargs="*")
+    cmd = sub.add_parser("rework")
+    cmd.add_argument("--issue", type=int, required=True)
+    cmd.add_argument("--pr", type=int, required=True)
+    cmd.add_argument("--head", required=True, help="the pull request's current head, all 40 characters")
+    cmd.add_argument("--reason", required=True, nargs="+")
     for name in ("dispatch", "launch", "verify", "report-status", "read", "show", "pr-state", "merge", "close", "code", "kit-check"):
         cmd = sub.add_parser(name)
         if name == "dispatch":
@@ -2740,6 +2888,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, bot: str | None = 
                 out = gh.dispatch(args.unit, args.size, brief_text(policy, me, args.brief_file), commit(policy), cloud, args.issue)
             elif args.command == "launch":
                 out = gh.launch(args.issue, commit(policy), cloud)
+            elif args.command == "rework":
+                out = gh.rework(args.issue, args.pr, args.head, " ".join(args.reason), commit(policy), cloud)
             elif args.command == "verify":
                 out = gh.verify(args.issue, commit(policy), cloud)
             elif args.command == "report-status":

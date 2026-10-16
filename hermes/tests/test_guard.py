@@ -282,7 +282,7 @@ def test_taint_stays_in_its_turn_and_ends_with_it():
     assert g.pre_tool_call(tool_name="write_file", args={"path": "~/.hermes/team-kit/briefs/meo-beo/t_1.md", "content": "x"}, session_id="s1", turn_id="t1") is None
 
 
-@pytest.mark.parametrize("command", ["team-kit-gh merge --pr 12", "team-kit-gh close --pr 12 --reason stale", "~/.hermes/bin/team-kit-gh merge --pr 12"])
+@pytest.mark.parametrize("command", ["team-kit-gh merge --pr 12", "team-kit-gh close --pr 12 --reason stale", "team-kit-gh rework --issue 3 --pr 12 --head " + "a" * 40 + " --reason r", "~/.hermes/bin/team-kit-gh merge --pr 12"])
 def test_merge_and_close_never_run_in_a_turn_that_read_untrusted_content_even_with_ask_owner_off(command):
     g = Guard(load=quiet_policy, profile=lambda: "meo-beo")
     assert g.pre_tool_call(**terminal(command)) is None

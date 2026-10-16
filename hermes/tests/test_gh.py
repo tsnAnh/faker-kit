@@ -62,6 +62,7 @@ class FakeGh:
         self.statuses = {}  # commit sha -> legacy commit statuses, as repos/<repo>/commits/<sha>/status lists them
         self.page_size = None  # smaller than GitHub's 100, so a test reaches the second page cheaply
         self.fail_paths = {}  # substring of a request path -> the failure it raises
+        self.pr_comments_inline = {}  # pull request number -> its inline review comments, as repos/<repo>/pulls/<n>/comments lists them
         self.reviews = {}  # pull request number -> its reviews, oldest first, as repos/<repo>/pulls/<n>/reviews lists them
 
     def add_issue(self, repo, labels=("agent-task",), body=None, state="open", state_reason=None, author=BOT_LOGIN, title="A unit", closed_at=None, depends=None, size="small", association="NONE", pull_request=False):  # noqa: E501
@@ -175,6 +176,8 @@ class FakeGh:
             if "/commits/" in path and path.split("?")[0].endswith("/status"):
                 rows = self.statuses.get(path.split("/commits/")[1].split("/")[0], [])
                 return paged(rows, "statuses")
+            if re.search(r"/pulls/\d+/comments", path):
+                return paged(self.pr_comments_inline.get(int(re.search(r"/pulls/(\d+)/comments", path).group(1)), []))
             if re.search(r"/pulls/\d+/reviews", path):
                 return paged(self.reviews.get(int(re.search(r"/pulls/(\d+)/reviews", path).group(1)), []))
             if re.search(r"/pulls/\d+(\?|$)", path):

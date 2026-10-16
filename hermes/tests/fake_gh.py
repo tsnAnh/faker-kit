@@ -66,6 +66,30 @@ elif args[:2] == ["issue", "create"]:
                                         "label": args[args.index("--label") + 1], "state": "open"})
     save("issues.json", issues)
     print(f"https://github.com/{repo}/issues/{number}")
+elif args[:2] == ["issue", "edit"]:
+    # Like gh: --add-label and --remove-label change the issue's labels; removing one it lacks is an error.
+    repo = args[args.index("-R") + 1]
+    issues = load("issues.json", {})
+    for issue in issues.get(repo, []):
+        if issue["number"] == int(args[2]):
+            names = list(issue.get("labels") or [issue["label"]])
+            for i, word in enumerate(args):
+                if word == "--add-label" and args[i + 1] not in names:
+                    names.append(args[i + 1])
+                elif word == "--remove-label":
+                    if args[i + 1] not in names:
+                        print(f"gh: label {args[i + 1]} is not on the issue", file=sys.stderr)
+                        sys.exit(1)
+                    names.remove(args[i + 1])
+                elif word in ("--title", "--body"):
+                    issue[word[2:]] = args[i + 1]
+            issue["labels"] = names
+    save("issues.json", issues)
+elif args[:2] == ["issue", "comment"]:
+    repo = args[args.index("-R") + 1]
+    comments = load("comments.json", {})
+    comments.setdefault(f"{repo}#{args[2]}", []).append({"user": {"login": "verify-bot"}, "body": args[args.index("--body") + 1], "created_at": "2026-10-16T00:00:00Z"})
+    save("comments.json", comments)
 elif args[:2] == ["issue", "close"]:
     repo = args[args.index("-R") + 1]
     issues = load("issues.json", {})
@@ -221,7 +245,9 @@ elif args[0] == "api":
                  and (not since or (i.get("closed_at") or i.get("created_at", "2026-10-01T00:00:00Z")) >= since)]
         paged([issue_row(i) for i in sorted(found, key=lambda i: i["number"])])
     elif rest.startswith("/pulls/") and method == "GET" and rest.endswith("/reviews"):
-        paged([])
+        paged(load("reviews.json", {}).get(f"{repo}#{rest.split('/')[2]}", []))
+    elif rest.startswith("/pulls/") and method == "GET" and rest.endswith("/comments"):
+        paged(load("pull-comments.json", {}).get(f"{repo}#{rest.split('/')[2]}", []))
     elif rest.startswith("/issues/") and method == "GET" and rest.endswith("/comments"):
         paged(load("comments.json", {}).get(f"{repo}#{rest.split('/')[2]}", []))
     elif rest.startswith("/issues/") and method == "GET" and rest.split("/")[2].isdigit():
