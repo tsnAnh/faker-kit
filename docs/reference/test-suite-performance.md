@@ -1,56 +1,54 @@
 # Hermes test suite performance
 
-`python3 -m pytest hermes -q -n auto -p no:cacheprovider` took about 284 s on a 4-CPU machine. It now takes about 158 s. The set of tests is the same, and no test or assertion changed.
+`python3 -m pytest hermes -q -n auto -p no:cacheprovider` took a median 212 s on a 4-CPU machine. With the change it takes a median 106 s. The same 1277 tests run, and no test or assertion changed.
 
 ## What limited it
 
-The suite does about 470 worker-seconds of test work, and 320 of them are in `hermes/tests/test_admin.py`. Each of its 89 tests runs `hermes/install.sh` in its `ready` fixture (111 s of setup in total), then starts `team-kit-admin` and the fake `hermes` and `gh` as subprocesses. That makes them 2 to 17 s each.
+Most of the suite's time is in `hermes/tests/test_admin.py`. Each of its 89 tests runs `hermes/install.sh` in its `ready` fixture, about 2 s each, then starts `team-kit-admin` and the fake `hermes` and `gh` as subprocesses. That makes them 2 to 17 s each.
 
-1. **One worker got most of test_admin.py.** xdist's default `load` scheduler first gives each worker a chunk of consecutive tests, a quarter of its share. Here that is 1191 / 4 / 4 = 74 tests. `test_admin.py` collects first, so worker 0 got 74 of its 89 tests. Under `-n auto`, three workers finished in 70 to 82 s and worker 0 ran for 250 s. The gap shows in the CPU too. The run used about 450 CPU-seconds over 284 s of wall time on 4 CPUs.
-2. **pytest deleted an earlier run at exit.** pytest keeps the last three runs' temporary directories and deletes the oldest when the session finishes. A full run leaves 678 MB there, mostly the kit copies the install tests make. Deleting it cold took up to 22 s at the end of a run. It took 21 s at the end of a one-test run, and 65 s at the end of a serial run (462 s with no earlier run against 528 s in steady state).
+xdist's default `load` scheduler first gives each worker a chunk of consecutive tests, a quarter of its share. With 1277 tests and 4 workers that is 1277 // 4 // 4 = 79 tests. `test_admin.py` collects first, so worker 0 gets 79 of its 89 tests, while the other workers take the fast tests and then sit idle. In a profile at `e616be5` (1191 tests, chunk 74), three workers finished in 70 to 82 s and worker 0 ran for 250 s.
 
 ## What changed
 
-- `hermes/tests/conftest.py` implements xdist's `pytest_xdist_make_scheduler` hook. When xdist would use `load`, it uses `worksteal` instead, so an idle worker takes queued tests from a busy one. An explicit `--dist loadfile` or similar still wins. Without xdist the hook never runs, so `python -m pytest hermes` still works where only pytest is installed (CI's `validate` job).
+`hermes/tests/conftest.py` implements xdist's `pytest_xdist_make_scheduler` hook. When xdist would use `load`, it uses `worksteal` instead, so an idle worker takes queued tests from a busy one. An explicit `--dist loadfile` or similar still wins. Without xdist the hook never runs, so `python -m pytest hermes` still works where only pytest is installed (CI's `validate` job).
 
 No test was skipped, deleted, or given a timeout. Isolation is unchanged. Each test still gets its own `tmp_path` and its own install, and the suite passes serially and in parallel.
 
 ## Measurements
 
-Commits are `e616be5` (baseline) and the baseline plus the conftest hook (`sched`, the change as shipped). `cand` (`409ebcd`) also set `tmp_path_retention_policy = "failed"`. That setting was dropped before shipping (see Not changed here), and its rows are kept to show what it bought. The environment was Linux 6.18 x86_64, Intel Xeon at 2.80 GHz, Python 3.13.16, pytest 9.1.1, and pytest-xdist 3.8.0. `nproc` is 4 and `sched_getaffinity` gives 4 CPUs. The cgroup (v1) has no CPU quota (`cpu.cfs_quota_us` is -1) and no memory limit, and the host has 15 GB. Each configuration ran with its own `TMPDIR`, preloaded with earlier runs' directories so that every run pays pytest's cleanup the way a working machine does. The one exception is the first serial run of each commit, which ran in an empty `TMPDIR`. Runs were sequential, with nothing else running.
+Baseline is `149ece0` (main). Candidate is `1bc4f6c`, which is `149ece0` plus the conftest hook and nothing else that runs. `pytest --collect-only -q` lists the same 1277 node IDs at both commits, and the diff of the two sorted lists is empty.
 
-`--collect-only -q` collects 1191 tests at both commits. Every run passed all 1191.
+The environment was Linux 6.18 x86_64, Python 3.13.16, pytest 9.1.1, and pytest-xdist 3.8.0. `nproc` is 4. The cgroup is v1. `cpu.cfs_quota_us` is -1 (no CPU quota), the root `memory.limit_in_bytes` is unlimited, and the shell's memory cgroup is limited to 14343688192 bytes (13.4 GiB). The host has 15 GB.
 
-| Commit | Workers flag | Runs | Wall median (s) | Wall min to max (s) | User CPU median (s) | Sys CPU median (s) | Peak RSS median (MB) |
-|---|---|---|---|---|---|---|---|
-| base | `-n 0` | 1 | 462.4 | 462.4 to 462.4 | 352.2 | 89.5 | 107 |
-| base | `-n 0`, steady state | 1 | 527.7 | 527.7 to 527.7 | 386.2 | 100.8 | 112 |
-| cand | `-n 0` | 1 | 505.6 | 505.6 to 505.6 | 354.3 | 127.5 | 111 |
-| base | `-n 2` | 3 | 339.6 | 337.4 to 354.3 | 352.6 | 91.3 | 244 |
-| cand | `-n 2` | 3 | 286.8 | 271.0 to 291.5 | 388.8 | 144.2 | 251 |
-| base | `-n 4` | 3 | 297.4 | 276.2 to 300.1 | 371.9 | 104.5 | 401 |
-| cand | `-n 4` | 3 | 139.1 | 139.1 to 142.7 | 354.6 | 124.5 | 418 |
-| base | `-n auto` | 3 | 283.7 | 283.2 to 291.6 | 365.6 | 94.9 | 398 |
-| sched | `-n auto` | 3 | 157.8 | 150.8 to 158.1 | 362.2 | 102.2 | 421 |
-| cand | `-n auto` | 3 | 142.3 | 136.5 to 148.5 | 358.7 | 129.4 | 417 |
+Runs were sequential, alternating baseline and candidate, with nothing else running. Each ran in its own empty `TMPDIR`, removed afterwards. Wall, user, and sys time are for the pytest process and its children. Peak RSS is the largest sum over the process tree, sampled every 0.5 s. Workers is the number of xdist worker processes seen.
 
-`-n auto` started 4 workers. Wall, user, and sys time are for the pytest process and its children. Peak RSS is the largest sampled sum over the process tree. With 4 workers the work-stealing hook saves about 126 s, and the ranges do not overlap. A serial run never calls the hook, so the shipped change leaves it as it was. `-n 2` was measured only with both settings, where it gained 53 s. The retention setting saved about 15 s more under `-n auto`.
+| Commit | Workers flag | Workers | Runs | Wall median (s) | Wall min to max (s) | User CPU median (s) | Sys CPU median (s) | Peak RSS median (MB) | Result |
+|---|---|---|---|---|---|---|---|---|---|
+| base `149ece0` | `-n auto` | 4 | 3 | 212.1 | 208.1 to 213.6 | 286.3 | 72.3 | 401 | 1277 passed each |
+| cand `1bc4f6c` | `-n auto` | 4 | 3 | 105.6 | 105.5 to 108.7 | 287.2 | 71.6 | 416 | 1277 passed each |
+| cand `1bc4f6c` | `-n 0` | 0 | 1 | 371.5 | 371.5 | 284.1 | 67.0 | 107 | 1277 passed |
 
-There is no default worker count in the configuration. `-n auto` follows the CPUs the process may use. On a 2-CPU runner it starts 2 workers, and the `-n 2` row is the expected result there. The run needs about 100 MB of memory per worker.
+The candidate saves 106.5 s of median wall time, half the run. The spread is at most 5.5 s within either side, and the ranges are about 100 s apart, so the gain is well beyond the variance. CPU time is the same on both sides, which fits the cause. The work did not shrink. It is shared across all four workers instead of queued on one. The serial run never calls the hook. It passing shows the tests do not rely on running in parallel.
+
+There is no default worker count in the configuration. `-n auto` follows the CPUs the process may use. On a 2-CPU runner it starts 2 workers, and work stealing still keeps both busy. The run needs about 100 MB of memory per worker.
+
+### Earlier exploration at `e616be5`
+
+Before main gained 86 tests (`test_rework.py`, `test_rework_recovery.py`, one in `test_guard.py`), the first measurements ran at `e616be5`, with 1191 tests at both that commit and the change. They ran in a `TMPDIR` preloaded with earlier runs, so each run also paid pytest's deletion of the run three before it. That is why their times are higher than the table above. Medians of three runs: baseline `-n auto` 283.7 s, change `-n auto` 157.8 s, baseline `-n 2` 339.6 s, baseline `-n 4` 297.4 s. A single serial baseline run took 462.4 s in an empty `TMPDIR` and 527.7 s in a preloaded one.
 
 ## Reproduce
 
 ```bash
-python3 -m pytest hermes --collect-only -q -p no:cacheprovider | tail -1
+python3 -m pytest hermes --collect-only -q -p no:cacheprovider | grep '::' | sort > tests.txt
 python3 -m pytest hermes -q -n auto -p no:cacheprovider
 python3 -m pytest hermes -q -n auto -p no:cacheprovider --durations=40   # where the time goes
 python3 -m pytest hermes -q -n 0 -p no:cacheprovider
 ```
 
-To compare, run the same commands at `e616be5`. Run each command three times in one `TMPDIR`, because a run pays the cleanup of the run three before it.
+To compare, run the same commands at the baseline commit, each with a fresh `TMPDIR`.
 
 ## Not changed here
 
-- **CI runs the suite twice.** The `check` job runs it through `scripts/check.sh` (`-n auto`), and the `validate` job runs `pip install pytest pyyaml && python -m pytest hermes` serially, without xdist. Here that second run is 506 to 528 s. Removing that step from `.github/workflows/ci.yml` would save it on every push. The rest of `validate` (`sync-upstream.mjs --check`, `validate.mjs`, `gen-catalog.mjs --check`, `gen-site.mjs`, and both `bun test` lines) also repeats `check.sh`. Only the pstack and orchestrate tests are unique to it. Workflows are out of this change's scope, so this is a proposal.
-- **The next limiter is the per-test install in test_admin.py.** Its `ready` fixture runs `install.sh` for each of the 89 tests, about 2 s each and 111 s of setup in total. The install writes absolute paths into wrappers and profile configs, so a cached install cannot be copied into each test's `tmp_path` as it stands. A test-only way to relocate it would be the next change to measure.
-- **pytest's cleanup of earlier runs.** `tmp_path_retention_policy = "failed"` in `pyproject.toml` removes a passed test's `tmp_path` when it finishes, instead of deleting a whole run at exit, and saved a further 15 s under `-n auto`. One full run with it failed once at setup: the `kit` fixture's `git commit` exited 128 in `test_gh.py::test_tick_keeps_waiting_while_a_codex_task_runs_or_its_status_cannot_be_read[unknown]`. That did not happen in 27 other full runs. Under this policy pytest reuses a removed directory's numbered name for the next test with the same prefix. The default policy never reuses one. Whether the reuse caused the failure is unproven, so the setting is left out until it is.
+- **CI runs the suite twice.** The `check` job runs it through `scripts/check.sh` (`-n auto`), and the `validate` job runs `pip install pytest pyyaml && python -m pytest hermes` serially, without xdist. That second run is the serial row above, 371.5 s here. Removing that step from `.github/workflows/ci.yml` would save it on every push. The rest of `validate` (`sync-upstream.mjs --check`, `validate.mjs`, `gen-catalog.mjs --check`, `gen-site.mjs`, and both `bun test` lines) also repeats `check.sh`. Only the pstack and orchestrate tests are unique to it. Workflows are out of this change's scope, so this is a proposal.
+- **The next limiter is the per-test install in test_admin.py.** Its `ready` fixture runs `install.sh` for each of the 89 tests, about 111 s of setup in total at `e616be5`. The install writes absolute paths into wrappers and profile configs, so a cached install cannot be copied into each test's `tmp_path` as it stands. A test-only way to relocate it would be the next change to measure.
+- **pytest's cleanup of earlier runs.** `tmp_path_retention_policy = "failed"` in `pyproject.toml` removes a passed test's `tmp_path` when it finishes, instead of deleting a whole run at exit. At `e616be5` it saved a further 15 s under `-n auto`. One full run with it failed once at setup: the `kit` fixture's `git commit` exited 128 in `test_gh.py::test_tick_keeps_waiting_while_a_codex_task_runs_or_its_status_cannot_be_read[unknown]`. That did not happen in 27 other full runs, and the failure was not reproduced. Under this policy pytest reuses a removed directory's numbered name for the next test with the same prefix. The default policy never reuses one. Whether the reuse caused the failure is unproven, so the setting is left out.
