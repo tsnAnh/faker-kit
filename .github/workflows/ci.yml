@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   check:
-    runs-on: [self-hosted, team-kit]  # a fresh container on the Hermes machine: hermes/bin/team_kit_runner.py
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,7 +28,7 @@ jobs:
         run: scripts/check.sh
 
   validate:
-    runs-on: [self-hosted, team-kit]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -60,7 +60,7 @@ jobs:
         run: bun install --frozen-lockfile && bun x biome check . && bun x tsc --noEmit && bun test
 
   agents-load-the-kit:
-    runs-on: [self-hosted, team-kit]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,7 +86,7 @@ jobs:
         run: node scripts/check-pi-package.mjs --sdk "$RUNNER_TEMP/agents"
 
   lint-packs:
-    runs-on: [self-hosted, team-kit]
+    runs-on: ubuntu-latest
     env:
       CI: "true"
     steps:

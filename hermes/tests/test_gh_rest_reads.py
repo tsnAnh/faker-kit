@@ -174,7 +174,7 @@ def test_the_unit_pr_search_by_branch_reads_every_page_of_open_pull_requests(tea
     pr(gh, 6, issue=n, branch="dispatch/y")
     pr(gh, 7, issue=n, branch="dispatch/x", state="CLOSED")
     launch = {"user": {"login": BOT_LOGIN}, "body": f"{LAUNCHED_MARKER}\nsession: s\nbackend: claude\nbranch: dispatch/x\n", "created_at": iso(NOW - 600)}
-    assert bot.unit_pr(n, [launch]) == {"pr": 5, "url": f"https://github.com/{REPO}/pull/5", "head": HEAD}
+    assert bot.unit_pr(n, [launch]) == {"pr": 5, "url": f"https://github.com/{REPO}/pull/5", "head": HEAD, "branch": "dispatch/x"}
     listing = [r for r in requests(gh) if "/pulls?" in r]
     assert listing and all("head=acme%3Adispatch%2Fx" in r and "state=open" in r for r in listing)
     assert any("page=3" in r for r in listing)
