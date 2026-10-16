@@ -10,7 +10,7 @@ xdist's default `load` scheduler first gives each worker a chunk of consecutive 
 
 ## What changed
 
-`hermes/tests/conftest.py` implements xdist's `pytest_xdist_make_scheduler` hook. When xdist would use `load`, it uses `worksteal` instead, so an idle worker takes queued tests from a busy one. An explicit `--dist loadfile` or similar still wins. Without xdist the hook never runs, so `python -m pytest hermes` still works where only pytest is installed (CI's `validate` job).
+`hermes/tests/conftest.py` implements xdist's `pytest_xdist_make_scheduler` hook. When xdist would use `load`, it uses `worksteal` instead, so an idle worker takes queued tests from a busy one. That includes an explicit `--dist load`, which xdist cannot tell apart from the default. Any other `--dist`, such as `loadfile`, still wins. pytest loads this conftest at startup only when the command names `hermes` or a path under it, as every command here does. A bare `pytest -n auto` from the repository root keeps `load`. Without xdist the hook never runs, so `python -m pytest hermes` still works where only pytest is installed (CI's `validate` job).
 
 No test was skipped, deleted, or given a timeout. Isolation is unchanged. Each test still gets its own `tmp_path` and its own install, and the suite passes serially and in parallel.
 
@@ -30,7 +30,7 @@ Runs were sequential, alternating baseline and candidate, with nothing else runn
 
 The candidate saves 106.5 s of median wall time, half the run. The spread is at most 5.5 s within either side, and the ranges are about 100 s apart, so the gain is well beyond the variance. CPU time is the same on both sides, which fits the cause. The work did not shrink. It is shared across all four workers instead of queued on one. The serial run never calls the hook. It passing shows the tests do not rely on running in parallel.
 
-There is no default worker count in the configuration. `-n auto` follows the CPUs the process may use. On a 2-CPU runner it starts 2 workers, and work stealing still keeps both busy. The run needs about 100 MB of memory per worker.
+There is no default worker count in the configuration. Without `psutil` installed, as here, `-n auto` follows the CPUs the process may use (`sched_getaffinity`). With `psutil` it counts physical cores. Neither follows a cgroup CPU quota, so set `PYTEST_XDIST_AUTO_NUM_WORKERS` on a quota-limited runner. On a 2-CPU runner it starts 2 workers, and work stealing still keeps both busy. The run needs about 100 MB of memory per worker.
 
 ### Earlier exploration at `e616be5`
 
