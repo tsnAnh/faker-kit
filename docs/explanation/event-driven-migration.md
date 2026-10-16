@@ -21,7 +21,7 @@ Facts that only the Hermes machine can show and that no reading has settled yet 
 
 `ROUTE_JOBS` in `team_kit_machine.py` is the list. The schedule stays as the fallback for a missed delivery. `setup-machine.sh` step 8 sends one signed test event per bot and requires a 202 before it finishes.
 
-**Observed, on the installation.** This repository has no repository webhooks configured, so no GitHub event reaches Hermes today and every trigger below runs on its schedule. `cloudflared` is running, its persistence across a reboot is unverified, and no systemd unit for it was found. The kit's code installs the tunnel as the `team-kit-tunnel` service (`service_user` in `setup-machine.sh`): a systemd user unit on Linux, a launchd agent on macOS. So that name, in the form for the machine's OS, is the one to check.
+**Observed, on the installation.** This repository has no repository webhooks configured, so no GitHub event reaches Hermes today and every GitHub-driven trigger below runs on its schedule. `cloudflared` is running, its persistence across a reboot is unverified, and no systemd unit for it was found. The kit's code installs the tunnel as the `team-kit-tunnel` service (`service_user` in `setup-machine.sh`): a systemd user unit on Linux, a launchd agent on macOS. So that name, in the form for the machine's OS, is the one to check.
 
 What the code path lacks:
 
@@ -57,10 +57,10 @@ Source for all rows: `hermes/cron/project-jobs.md`, `hermes/bin/team_kit_admin.p
 
 | Id | Detects | Event available | Deterministic decision | Residual timer |
 |---|---|---|---|---|
-| T1a andon sync (`sync_andon`) | Open `agent:andon` issue by a trusted login; a recorded cord whose issue is gone | `issues` (opened, labeled, closed, unlabeled) | Raise or adopt the local cord from the trusted-author list. No GitHub event clears it: closing the issue leaves the line stopped, and only the local `team-kit-gh andon clear` lifts it | No for raising. A cleared cord is a local wake, R4 as the fallback |
+| T1a andon sync (`sync_andon`) | Open `agent:andon` issue by a trusted login; a recorded cord whose issue is gone | `issues` (opened, labeled, closed, unlabeled) | Raise or adopt the local cord from the trusted-author list. No GitHub event clears it: closing the issue leaves the line stopped. Code lifts it in two places: the local `team-kit-gh andon clear`, and `Incidents.close`, which clears a cord the incidents job pulled (`andon_on_red`) once its incident closes green | No for raising. A cleared cord is a local wake, R4 as the fallback |
 | T1b teammate proposals (`proposal_notices`) | New `agent:proposal` issue | `issues` labeled | Collaborator check, one notice per proposal | Yes, R4, to retry a collaborator check GitHub could not answer |
 | T1c PR comment mentions (`pr_comment_notices`) | A collaborator's PR comment that mentions the bot | `issue_comment` (subscribed). `pull_request_review_comment` is not | Notice with link, never the text. The record `since` time stays as the reconciliation anchor | Yes, R4, to retry a collaborator check GitHub could not answer. Until `pull_request_review_comment` is subscribed (decision 6), R4 also polls review comments |
-| T1d kit PRs (`kit_prs`, `land_kit_pr`) | Kit vendoring pull requests that match the local kit commit | `pull_request`, `push`, `check_suite` | Compare PR head to the local commit and notify once. With `auto_merge` low, merge it with `--match-head-commit` when checks pass and `mergeable` is true, or send a conflict notice | Yes, R4, for a `mergeable` GitHub has not computed yet |
+| T1d kit PRs (`kit_prs`, `land_kit_pr`) | Kit vendoring pull requests that match the local kit commit | `pull_request`, `push`, `check_suite` | Match the branch name `kit-<local commit, 12 characters>` and notify once. With `auto_merge` low and no cord, merge it with `--match-head-commit` only when its head is the commit `team-kit-admin vendor` recorded, it comes from this repository and targets the default branch, checks pass and `mergeable` is true; otherwise send a conflict notice where one applies | Yes, R4, for a `mergeable` GitHub has not computed yet |
 | T1e unit-state publish (`publish`, `UnitStates`, `~/.hermes/team-kit/units/<bot>.json`) | Closed or changed units that another project bot's briefs depend on | The close happens in this bot's repository, but the bot whose brief depends on the unit watches its own repository and gets no event | Needs a local event: when bot A publishes, wake the bots whose `wants` list names A | Yes, R4 as the fallback |
 | T1f running units (`check_running`) | A signed done report comment; a stopped cloud task | Report comment: `issue_comment`. Cloud task end (`codex cloud status`): no event | Parse the signed report, gate or advance | Yes, R1 (24h no-report deadline) and R2 (cloud task status) |
 | T1g verifying units (`check_verifying`) | Verifier verdict comment, PR head change | `issue_comment`, `pull_request` (synchronize) | Exact-head verdict, risk score, optional auto merge | Yes, R1 (verifier deadline) |
@@ -82,7 +82,7 @@ Source for all rows: `hermes/cron/project-jobs.md`, `hermes/bin/team_kit_admin.p
 
 ### Machine services
 
-Source: `hermes/setup-machine.sh`, `hermes/lib/team_kit_machine.py`, `hermes/bin/team_kit_runner.py`, `hermes/lib/team_kit_slack_relay.py`.
+Source: `hermes/setup-machine.sh`, `hermes/lib/team_kit_machine.py`, `hermes/bin/team_kit_runner.py`, `hermes/lib/team_kit_slack_relay.py`. These are machine-wide services, owned by no bot profile, and none runs a model.
 
 | Id | Mechanism | What it does | Event source | Timer content | Proposed | Unit |
 |---|---|---|---|---|---|---|
@@ -193,7 +193,7 @@ Everything in this section is **desired**. None of it is implemented. Each requi
 | Startup reconciliation (U6) | On listener start and on gateway start, run R4 once, then compare recent GitHub deliveries against the table through the REST deliveries endpoint, and request redelivery of any missing id |
 | Outbound first | The public listener stays off. Until HTTPS and the domain are verified through the bootstrap workflow, the only active mechanism is today's outbound polling. GitHub has no outbound event stream, so a stage that needs no inbound path can only shadow polling, not replace it. The Tunnel config already publishes only exact signed paths and answers 404 otherwise, and that remains the rule |
 | Shadow observation (U6) | Stage 1. The receiver records events and the check each would trigger, and does nothing else. The tick keeps making every transition. A report compares "event arrived" to "tick found the change" for at least one week per project. The pass bar is zero missed events for events that did produce a change |
-| Staged cutover (U6) | Stage 2, per project, one at a time: the event worker makes transitions, the tick drops to the residual timers, and shadow comparison continues. Stage 3: widen to all projects. The owner approves each stage by changing `bots.yaml` from their own terminal. The chief may propose a stage but cannot make the change, since the guard refuses bot writes under `~/.hermes`. No event and no model decision moves a stage |
+| Staged cutover (U6) | Stage 2, per project, one at a time: the event worker makes transitions, the tick drops to the residual timers, and shadow comparison continues. Stage 3: widen to all projects. The owner approves each stage from their own terminal, through the machine config that `setup-machine.sh` and `team-kit-admin machine` apply, so a rerun of setup keeps it. A hand edit of `bots.yaml` would not last, since `team-kit-admin` rebuilds each project entry. The chief may propose a stage but cannot make the change, since the guard refuses bot writes under `~/.hermes`. No event and no model decision moves a stage |
 | Rollback (U6) | Stop the event worker and resume the paused cron jobs. Jobs are paused, never deleted, until a stage has run a week without a dead letter. Rollback needs no data migration because GitHub labels remain the unit state |
 
 Gates that stay exactly as they are: exact-head CI, risk scoring, verification where configured, the andon cord, and `auto_merge: low`. Review follows decision 4.
@@ -203,7 +203,7 @@ Gates that stay exactly as they are: exact-head CI, risk scoring, verification w
 | Unit | Owns |
 |---|---|
 | U1, [#156](https://github.com/tsnAnh/faker-kit/issues/156) | Receiver: raw-body HMAC, binding, the durable unique delivery record, commit before 202, dedupe, per-consumer lease fencing, still off the public internet |
-| U2 | Bootstrap inbox and the local wake events (T6, T1e, a cleared project or machine cord, a machine-wide slot change, a kit reinstall), with the inbox fallback (R7) |
+| U2 | Bootstrap inbox and the local wake events (T6, T1e, a cleared project or machine cord, including one cleared by an incident closing (T4), a machine-wide slot change, a kit reinstall), with the inbox fallback (R7) |
 | U3, [#157](https://github.com/tsnAnh/faker-kit/issues/157) | Lifecycle worker: the common per-project lock and idempotent transitions shared with the temporary tick (T1 and its sub-triggers except T1e), stale-head behavior, retries and dead letter |
 | U4 | `push` events for security (T3) |
 | U5 | Default branch check events for incidents (T4), with health and alert polling kept (R3) |
