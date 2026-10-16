@@ -3552,7 +3552,8 @@ def test_a_codex_p1_finding_on_an_older_head_does_not_block_the_new_head(team_ki
     (lambda gh: (codex_summary(gh), gh.reactions.setdefault(7, []).append({"user": {"login": CODEX}, "content": "eyes", "created_at": "2026-10-12T03:03:12Z"})), "a different reaction"),
     (lambda gh: app_review(gh, state="COMMENTED", login=CODEX), "a COMMENTED review without a completed summary"),
     (lambda gh: (codex_summary(gh), app_review(gh, state="COMMENTED", login="claude[bot]")), "another app's review"),
-    (lambda gh: gh.comment(REPO, 7, "<!-- codex-pull-request-review-summary -->\n| **Code Review** | ✅ **Completed** <relative-time datetime=\"2026-10-12T03:03:07Z\"></relative-time> | `aaaaaaa` |", login="tsnAnh"),
+    (lambda gh: gh.comment(REPO, 7, "<!-- codex-pull-request-review-summary -->\n| **Code Review** | ✅ **Completed** "
+                           "<relative-time datetime=\"2026-10-12T03:03:07Z\"></relative-time> | `aaaaaaa` |", login="tsnAnh"),
      "a summary a person wrote"),
 ])
 def test_a_codex_review_that_is_not_complete_for_the_head_waits(team_kit_home, kit, capsys, setup, why):
