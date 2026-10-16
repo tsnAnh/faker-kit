@@ -119,7 +119,7 @@ def test_valid_signature_answers_202_after_the_row_is_committed(store, db):
     sign(body())[:-2],
     sign(body(), secret=b"wrong-secret"),
     sign(body() + b" "),
-])
+], ids=["empty", "zeros", "sha1", "truncated", "wrong-secret", "other-body"])
 def test_bad_signature_answers_401_and_stores_nothing(store, db, signature):
     raw = body()
     answer = receive(raw, headers(raw, signature=signature), SECRET, PROJECTS, store, 1000.0)
