@@ -372,6 +372,10 @@ def chief_work(host: Host) -> None:
         if bool(out and f"load the {skill} skill again" in out["context"]) is not go:
             wrong.append(f"{profile} ask={ask} {text[:50]}")
     host.step("guard: only the chief's work message to a project or bootstrap bot with ask_owner off is a go-ahead", not wrong, f"{len(table)} messages" if not wrong else wrong[0])
+    host.policy(ask=False)
+    work = host.message(WORK, profile="meo-beo", session=host.sid())
+    settle = bool(work and "settle every open decision before any launch" in work["context"] and "launch nothing yet" in work["context"])
+    host.step("guard: chief work tells the project bot to settle open decisions with the chief before it launches", settle, "")
     host.policy()
     wrong = []
     for text in (WORK, WORK.replace("@chanh-van", "@sep-crm")):
