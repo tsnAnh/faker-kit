@@ -63,6 +63,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: oven-sh/setup-bun@v2
       - name: Install Claude Code
         run: |
           npm i --prefix "$RUNNER_TEMP/agents" @anthropic-ai/claude-code

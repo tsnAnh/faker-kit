@@ -116,22 +116,20 @@ install_packages() {
     local pkg
     for pkg in "$@"; do
       case $pkg in
-        python3-yaml) python3 -m pip install --user --break-system-packages pyyaml >/dev/null ;;
         *) brew install "$pkg" ;;
       esac
     done
   fi
 }
 
-# Python with PyYAML first: it reads the config, which is checked before anything else changes.
+# Python first: it reads the config, which is checked before anything else changes. PyYAML comes from hermes/vendor.
 first=()
 have curl || first+=(curl)
-python3 -c 'import yaml' >/dev/null 2>&1 || first+=(python3 python3-yaml)
+have python3 || first+=(python3)
 install_packages "${first[@]+"${first[@]}"}"
-python3 -c 'import yaml' >/dev/null 2>&1 || die "python3 cannot import yaml (PyYAML)"
-PYTHONPATH=$here/lib python3 -c 'import sys, pathlib, faker_kit_machine as m; m.load_machine(pathlib.Path(sys.argv[1]))' "$config" \
+PYTHONPATH=$here/lib:$here/vendor python3 -c 'import sys, pathlib, faker_kit_machine as m; m.load_machine(pathlib.Path(sys.argv[1]))' "$config" \
   || die "fix $config first"
-read_config() { PYTHONPATH=$here/lib python3 -c "import sys, pathlib, faker_kit_machine as m; c = m.load_machine(pathlib.Path(sys.argv[1])); $1" "$config"; }
+read_config() { PYTHONPATH=$here/lib:$here/vendor python3 -c "import sys, pathlib, faker_kit_machine as m; c = m.load_machine(pathlib.Path(sys.argv[1])); $1" "$config"; }
 bootstrap_bot=$(read_config 'print(c.bootstrap_bot)')
 subscription=$(read_config 'print(1 if c.claude_subscription else 0)')
 project_bots=$(read_config 'print(" ".join(p.bot for p in c.projects))')
@@ -324,7 +322,7 @@ if [ -n "$webhook_url" ]; then
   chmod 600 "$creds"
   cloudflared tunnel route dns --overwrite-dns "$tunnel" "$public_host" >/dev/null
   tunnel_config=$HOME/.cloudflared/$tunnel.yml
-  PYTHONPATH=$kitlib python3 -c 'import sys, pathlib, faker_kit_machine as m; sys.stdout.write(m.cloudflared_config(sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3], m.load_machine(pathlib.Path(sys.argv[4]))))' \
+  PYTHONPATH=$kitlib:$kitlib/../vendor python3 -c 'import sys, pathlib, faker_kit_machine as m; sys.stdout.write(m.cloudflared_config(sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3], m.load_machine(pathlib.Path(sys.argv[4]))))' \
     "$id" "$creds" "$public_host" "$config" > "$tunnel_config"
   service_user faker-kit-tunnel "$(command -v cloudflared)" --no-autoupdate --config "$tunnel_config" tunnel run
   note "Cloudflare Tunnel $tunnel: https://$public_host serves only this machine's signed webhook routes"
@@ -347,7 +345,7 @@ if [ -n "$webhook_url" ]; then
   # not list, after checking the signature, so no model run starts. A new tunnel or DNS record takes a little while,
   # so it retries for about a minute.
   for bot in $project_bots; do
-    PYTHONPATH=$kitlib python3 - "$webhook_url" "$bot" "$HOME/.hermes/.env" <<'PY' || die "$bot: no signed test event reached Hermes through $webhook_url"
+    PYTHONPATH=$kitlib:$kitlib/../vendor python3 - "$webhook_url" "$bot" "$HOME/.hermes/.env" <<'PY' || die "$bot: no signed test event reached Hermes through $webhook_url"
 import hashlib, hmac, json, sys, time, urllib.error, urllib.request, uuid
 import faker_kit_machine as m
 url, bot, env = sys.argv[1], sys.argv[2], sys.argv[3]
