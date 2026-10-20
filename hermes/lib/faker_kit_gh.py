@@ -167,7 +167,12 @@ class Gh:
         return self.pages(f"repos/{self.repo}/commits/{head}/pulls")
 
     def head_jobs(self, head: str, workflow: str, job: str) -> list[dict]:
-        runs = self.pages(f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow.rsplit('/', 1)[-1])}/runs", {"head_sha": head}, key="workflow_runs")
+        try:
+            runs = self.pages(f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow.rsplit('/', 1)[-1])}/runs", {"head_sha": head}, key="workflow_runs")
+        except Refused as err:
+            if "HTTP 404" in str(err):
+                return []
+            raise
         return [found for run in runs for found in self.pages(f"repos/{self.repo}/actions/runs/{int(run['id'])}/jobs", {"filter": "all"}, key="jobs")
                 if found.get("name") == job]
 
