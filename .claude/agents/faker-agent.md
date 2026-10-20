@@ -1,1 +1,1 @@
-../../.agents/team-kit/plugins/pstack/agents/faker-agent.md
+../../.agents/faker-kit/plugins/pstack/agents/faker-agent.md

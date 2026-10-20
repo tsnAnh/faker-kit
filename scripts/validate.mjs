@@ -89,7 +89,7 @@ function checkSkills(pluginNames) {
   }
   for (const [name, owners] of seen) {
     if (owners.length > 1 && !ALLOWED_DUPLICATE_SKILLS.has(name)) {
-      report(`skill "${name}"`, `defined in ${owners.join(" and ")}; Pi keeps only the first, so rename the trust-ladder copy`);
+      report(`skill "${name}"`, `defined in ${owners.join(" and ")}; a project links skills by bare name, so rename the trust-ladder copy`);
     }
   }
 }
@@ -115,15 +115,6 @@ function checkHermesSkills(pluginNames) {
   }
 }
 
-function checkPiManifest() {
-  const pkg = readJson("package.json");
-  if (!pkg.keywords?.includes("pi-package")) report("package.json", 'keywords must include "pi-package"');
-  for (const extension of pkg.pi?.extensions ?? []) {
-    if (!fs.existsSync(path.join(ROOT, extension))) report("package.json", `pi extension ${extension} does not exist`);
-  }
-  if (!(pkg.pi?.skills ?? []).includes("./plugins/*/skills")) report("package.json", 'pi.skills must include "./plugins/*/skills"');
-}
-
 function checkOwnMarkdown() {
   const files = [
     ...markdownFiles(path.join(ROOT, "plugins", OWN_PLUGIN)),
@@ -134,7 +125,7 @@ function checkOwnMarkdown() {
   for (const file of files) checkLinks(file);
 }
 
-const OWN_ROOTS = ["README.md", "NOTICE.md", "AGENTS.md", "CLAUDE.md", "package.json", ".claude-plugin", ".github", "docs", "site", "deploy", "scripts", `plugins/${OWN_PLUGIN}`, "hermes", "upstream/agent-hooks"];
+const OWN_ROOTS = ["README.md", "NOTICE.md", "AGENTS.md", "CLAUDE.md", "package.json", ".claude-plugin", ".github", "docs", "scripts", `plugins/${OWN_PLUGIN}`, "hermes", "upstream/agent-hooks"];
 
 function textFiles(full) {
   if (!fs.existsSync(full)) return [];
@@ -163,19 +154,6 @@ function checkNoEditorName() {
   }
 }
 
-const LEGACY_REPO = "tsnAnh/team-kit"; // legacy team-kit name: only LEGACY_LINES may still use it
-// File -> text a line must carry to keep naming the old repository: the rename fact, and lines that
-// install or test the old name on purpose.
-const LEGACY_LINES = {
-  "AGENTS.md": "was renamed from",
-  "scripts/validate.mjs": "legacy team-kit",
-  "docs/how-to/install.md": "legacy team-kit",
-  "site/how-to/install.mdx": "legacy team-kit",
-  "hermes/tests/test_install.py": "legacy team-kit",
-  "plugins/trust-ladder/skills/setup-team-kit/scripts/migrate-from-team-kit.mjs": "legacy team-kit",
-  "plugins/trust-ladder/test/migrate-from-team-kit.test.mjs": "legacy team-kit",
-};
-
 // The kit's identity is the marketplace name and package.json's repository. Everything else must agree.
 function kitIdentity() {
   const repoUrl = readJson("package.json").repository?.url?.replace(/\.git$/, "") ?? "";
@@ -191,8 +169,6 @@ function checkKitIdentity() {
   for (const field of ["homepage", "repository"]) {
     if (plugin[field] !== kit.repoUrl) report(pluginFile, `${field} "${plugin[field]}" must be package.json's repository ${kit.repoUrl}`);
   }
-  const siteRepo = /^const REPO = "([^"]*)"/m.exec(fs.readFileSync(path.join(ROOT, "scripts/gen-site.mjs"), "utf8"))?.[1];
-  if (siteRepo !== kit.repoUrl) report("scripts/gen-site.mjs", `REPO "${siteRepo}" must be package.json's repository ${kit.repoUrl}`);
 
   const settingsFile = `plugins/${OWN_PLUGIN}/templates/claude-settings.json`;
   const settings = readJson(settingsFile);
@@ -212,17 +188,6 @@ function checkKitIdentity() {
     for (const [, id, market] of text.matchAll(/^\s+([a-z0-9-]+)@([a-z0-9-]+)\s*$/gm)) {
       if (market !== kit.name) report(rel(file), `plugin "${id}@${market}" must end with @${kit.name}`);
     }
-  }
-
-  for (const file of OWN_ROOTS.flatMap((r) => textFiles(path.join(ROOT, r)))) {
-    const buf = fs.readFileSync(file);
-    if (buf.includes(0) || !buf.includes(LEGACY_REPO)) continue;
-    const label = LEGACY_LINES[rel(file)];
-    buf.toString("utf8").split("\n").forEach((line, i) => {
-      if (line.includes(LEGACY_REPO) && !(label && line.includes(label))) {
-        report(rel(file), `line ${i + 1} names the old repository ${LEGACY_REPO}; use ${kit.slug}`);
-      }
-    });
   }
 }
 
@@ -247,7 +212,6 @@ function main() {
   const pluginNames = checkMarketplace();
   checkSkills(pluginNames);
   checkHermesSkills(pluginNames);
-  checkPiManifest();
   checkOwnMarkdown();
   checkOwnPathReferences();
   checkNoEditorName();

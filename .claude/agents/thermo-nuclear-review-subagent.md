@@ -1,1 +1,1 @@
-../../.agents/team-kit/plugins/thermos/agents/thermo-nuclear-review-subagent.md
+../../.agents/faker-kit/plugins/thermos/agents/thermo-nuclear-review-subagent.md

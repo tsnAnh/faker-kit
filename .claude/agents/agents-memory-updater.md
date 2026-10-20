@@ -1,1 +1,1 @@
-../../.agents/team-kit/plugins/continual-learning/agents/agents-memory-updater.md
+../../.agents/faker-kit/plugins/continual-learning/agents/agents-memory-updater.md

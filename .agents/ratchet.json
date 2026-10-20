@@ -8,14 +8,14 @@
     },
     {
       "id": "python-type-baseline",
-      "pattern": "team-kit baseline",
+      "pattern": "faker-kit baseline",
       "files": ["hermes/*.py", "plugins/trust-ladder/*.py"],
-      "message": "Fix the mypy error instead of ignoring it. Each `# type: ignore[...]  # team-kit baseline` is legacy code waiting for a type; remove it when you touch that line."
+      "message": "Fix the mypy error instead of ignoring it. Each `# type: ignore[...]  # faker-kit baseline` is legacy code waiting for a type; remove it when you touch that line."
     },
     {
       "id": "gh-graphql-read",
       "pattern": "[\"']\\s*(?:issue|pr)\\s*[\"']\\s*,\\s*[\"']\\s*(?:list|view|status|checks)\\s*[\"']|[\"']\\s*gh\\s+(?:issue|pr)\\s+(?:list|view|status|checks)\\b",
-      "files": ["hermes/bin/team_kit_gh.py"],
+      "files": ["hermes/*.py", ":(exclude)hermes/e2e/*", ":(exclude)hermes/vendor/*"],
       "zeroAllowance": true,
       "message": "Read GitHub with Gh.api_page / Gh.api_json (REST, conditional ETag). `gh issue` and `gh pr` list, view, status, and checks are GraphQL-backed and fail in cloud sessions. Writes (create, edit, close, comment, merge) stay allowed."
     }

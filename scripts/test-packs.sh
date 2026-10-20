@@ -24,7 +24,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 requirements() {
   case "$1" in
-    agnostic) echo bun node git ;;
+    agnostic) echo node git ;;
     rust) echo cargo cargo-clippy ;;
     python) echo python3 ruff mypy ;;
     kotlin-android|kmp) echo java curl ;;

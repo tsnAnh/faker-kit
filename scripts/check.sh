@@ -7,7 +7,7 @@ Usage: scripts/check.sh [--list]
 
 Run every check this repository requires, the same way CI does. The commands live
 in .agents/check-commands, one per line; lines starting with # are skipped. Each
-lint pack installed by the team kit adds its lines there.
+lint pack installed by faker-kit adds its lines there.
 
   --list   Print the commands without running them.
 
@@ -19,7 +19,7 @@ root=$(git rev-parse --show-toplevel)
 cd "$root"
 commands_file=.agents/check-commands
 [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { usage; exit 0; }
-[ -f "$commands_file" ] || { printf 'check: %s is missing. Run the setup-lint-pack skill to create it.\n' "$commands_file" >&2; exit 2; }
+[ -f "$commands_file" ] || { printf 'check: %s is missing. Run the setup-faker-kit skill to create it.\n' "$commands_file" >&2; exit 2; }
 
 # A while-read loop, not mapfile: macOS still ships bash 3.2.
 commands=()

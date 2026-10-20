@@ -1,0 +1,28 @@
+{
+  "name": "swift-ios",
+  "description": "SwiftLint in strict mode for force unwraps, casts, and tries; ast-grep rules for print, workaround comments, and DispatchQueue.main.async; Swift 6 language mode with complete concurrency checking and warnings as errors.",
+  "detect": { "files": ["Package.swift"], "globs": ["*.xcodeproj", "*.xcworkspace"] },
+  "tools": [
+    { "name": "swiftlint", "version": "0.65.1", "why": "built-in lint rules; on Linux use swiftlint-static from packs/tools.sh" },
+    { "name": "ast-grep", "version": ">=0.45", "why": "structural Swift rules that work without SourceKit (npx -p @ast-grep/cli ast-grep)" },
+    { "name": "Xcode or Swift", "version": ">=6.2", "why": "Swift 6 language mode and treatAllWarnings" }
+  ],
+  "merge": [
+    {
+      "from": "files/Config/Strict.xcconfig",
+      "into": "the Xcode project",
+      "how": "Set Config/Strict.xcconfig as the base configuration of every app and framework target (or #include it from the existing xcconfig)."
+    },
+    {
+      "from": "merge/Package.swift",
+      "into": "Package.swift",
+      "how": "Add swiftLanguageModes: [.v6] and the strict swiftSettings to every target in each Swift package."
+    }
+  ],
+  "check": [
+    "swiftlint lint --strict",
+    "npx -y -p @ast-grep/cli ast-grep scan"
+  ],
+  "baseline": "Run `swiftlint lint --write-baseline .swiftlint-baseline.json` once, commit it, and use `swiftlint lint --strict --baseline .swiftlint-baseline.json` in check. For ast-grep findings, add `// ast-grep-ignore: <rule-id>` with the reason `faker-kit baseline` and ratchet that marker in .agents/ratchet.json.",
+  "ci": "ci/github-actions.yml"
+}

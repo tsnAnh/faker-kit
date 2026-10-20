@@ -1,1 +1,1 @@
-../../.agents/team-kit/plugins/pstack/agents/comment-sicko.md
+../../.agents/faker-kit/plugins/pstack/agents/comment-sicko.md
