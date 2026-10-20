@@ -61,6 +61,8 @@ VENDOR_MANIFEST = ".agents/faker-kit/KIT.json"
 KIT_BRANCH_PREFIX = "faker-kit/kit-"
 BRIEF_START = "/faker-mode"
 MAX_BRIEF_CHARS = 60_000
+SESSION_MODEL = re.compile(r"\A(?:opus|sonnet|haiku|fable|claude-[a-z0-9]+(?:-[a-z0-9]+){1,6})\Z")
+SESSION_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 STATUS_PRS = 30
 OWNER_PLACEHOLDER = "owner-login"
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
@@ -201,7 +203,11 @@ class Kit:
                 raise Refused(f"{target} must be a regular file with no other names")
             return handle.read()
 
-    def launch(self, caller: Bot | None, project: str | None, brief_file: str) -> dict:
+    def launch(self, caller: Bot | None, project: str | None, brief_file: str, model: str | None = None, effort: str | None = None) -> dict:
+        if model is not None and not SESSION_MODEL.match(model):
+            raise Refused("--model takes opus, sonnet, haiku, fable, or a full claude- model name")
+        if effort is not None and effort not in SESSION_EFFORTS:
+            raise Refused(f"--effort takes one of {', '.join(SESSION_EFFORTS)}")
         if caller is not None and caller.role == "project":
             target = caller
         elif project:
@@ -229,10 +235,10 @@ class Kit:
         owner, name = repo.split("/")
         workdir = self.home / "checkouts" / f"{owner}__{name}" / f"launch-{int(self.now())}-{digest}"
         try:
-            session = self.cloud.start(repo, prompt, workdir)
+            session = self.cloud.start(repo, prompt, workdir, model, effort)
         except CloudError as err:
             raise Refused(f"launch failed: {err}") from err
-        return {"repo": repo, "session": session, "brief": digest}
+        return {"repo": repo, "session": session, "brief": digest, "model": model, "effort": effort}
 
     def kit_matches(self, gh: Gh, repo: str) -> None:
         local = self.kit_commit()
@@ -714,6 +720,8 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("launch")
     cmd.add_argument("--brief-file", required=True)
     cmd.add_argument("--project")
+    cmd.add_argument("--model")
+    cmd.add_argument("--effort")
     cmd = sub.add_parser("merge")
     cmd.add_argument("--pr", type=int, required=True)
     cmd = sub.add_parser("issues")
@@ -771,7 +779,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     if args.command == "vendor":
         return kit.vendor(args.project)
     if args.command == "launch":
-        return kit.launch(caller, args.project, args.brief_file)
+        return kit.launch(caller, args.project, args.brief_file, args.model, args.effort)
     if args.command == "merge":
         if caller is None or caller.role != "project":
             raise Refused("merge runs in a project bot's chat")

@@ -16,18 +16,18 @@ Prompt: `Babysit this project. Follow the Wake section of the dispatch skill: ru
 Schedule: `every 6h`
 Deliver: `bot-chat:{bot}`
 Skill: `dispatch`
-Prompt: `Run the per-push security review of the default branch. Follow the Security review section of the dispatch skill: compare the default branch head with the last reviewed commit in your store; if they match, answer [SILENT]. Otherwise write a brief that runs the review-main-security skill on the new commits, start it with faker-kit launch, and tell this chat the high and medium findings when its report is in.`
+Prompt: `Run the per-push security review of the default branch. Follow the Security review section of the dispatch skill: compare the default branch head with the last reviewed commit in your store; if they match, answer [SILENT]. Otherwise write a brief that runs the review-main-security skill on the new commits, start it with faker-kit launch on the model and effort the Choose the model section picks, and tell this chat the high and medium findings when its report is in.`
 
 ## faker-kit-incidents
 
 Schedule: `every 10m`
 Deliver: `bot-chat:{bot}`
 Skill: `dispatch`
-Prompt: `Check this project for incidents. Follow the Incidents section of the dispatch skill: run faker-kit incidents. If it lists no new incident, no resolved one, and no unreadable source, answer [SILENT]. Otherwise write a brief from the triage-incident template for each new incident, start it with faker-kit launch, acknowledge it with faker-kit incidents --ack, pull the andon cord when stop_the_line is true, and tell this chat what broke.`
+Prompt: `Check this project for incidents. Follow the Incidents section of the dispatch skill: run faker-kit incidents. If it lists no new incident, no resolved one, and no unreadable source, answer [SILENT]. Otherwise write a brief from the triage-incident template for each new incident, start it with faker-kit launch on the model and effort the Choose the model section picks, acknowledge it with faker-kit incidents --ack, pull the andon cord when stop_the_line is true, and tell this chat what broke.`
 
 ## faker-kit-issues
 
 Schedule: `every 1h`
 Deliver: `bot-chat:{bot}`
 Skill: `dispatch`
-Prompt: `Handle bug reports. Follow the Bug reports section of the dispatch skill: run faker-kit issues; for each issue it lists, write a brief from the fix-issue template, start it with faker-kit launch, and claim the issue with faker-kit issues --claim. When a pull request from one of those sessions opens, run the verifier swarm and the merge gate as that section says. Answer [SILENT] when it lists no issue and no pull request of this kind needs a step.`
+Prompt: `Handle bug reports. Follow the Bug reports section of the dispatch skill: run faker-kit issues; for each issue it lists, write a brief from the fix-issue template, start it with faker-kit launch on the model and effort the Choose the model section picks, and claim the issue with faker-kit issues --claim. When a pull request from one of those sessions opens, run the verifier swarm and the merge gate as that section says. Answer [SILENT] when it lists no issue and no pull request of this kind needs a step.`

@@ -100,13 +100,14 @@ class Cloud:
     clock: Callable[[], float] = time.monotonic
     now: Callable[[], float] = field(default=time.time)
 
-    def start(self, repo: str, prompt: str, workdir: Path) -> str:
+    def start(self, repo: str, prompt: str, workdir: Path, model: str | None = None, effort: str | None = None) -> str:
         if not prompt.strip() or prompt.startswith("-"):
             raise CloudError("the task for a Claude Code session must be text that does not start with -")
         workdir.parent.mkdir(parents=True, exist_ok=True)
         self.prune(workdir.parent)
         checkout = self.checkout(repo, workdir.parent / CHECKOUT)
-        return self.launch(["claude", "--cloud", prompt], checkout, workdir.with_name(workdir.name + ".log"), prompt)
+        chosen = [*(["--model", model] if model else []), *(["--effort", effort] if effort else [])]
+        return self.launch(["claude", *chosen, "--cloud", prompt], checkout, workdir.with_name(workdir.name + ".log"), prompt)
 
     def checkout(self, repo: str, path: Path) -> Path:
         if not (path / ".git").exists():
