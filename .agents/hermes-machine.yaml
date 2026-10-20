@@ -24,13 +24,6 @@ projects:
     repo: tsnAnh/faker-kit
     heartbeat_every: 1h
 
-# GitHub Actions jobs run here, one fresh container per job (faker-kit runner).
-ci_runners:
-  - repo: tsnAnh/faker-kit
-    slots: 2
-  - repo: TitoniumLab/Lectrostein
-    slots: 2
-
 webhooks:
   url: https://hermes.CHANGE-ME.example
   tunnel: hermes

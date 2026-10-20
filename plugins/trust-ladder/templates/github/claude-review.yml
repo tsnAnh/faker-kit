@@ -17,7 +17,7 @@ concurrency:
 jobs:
   review:
     if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
-    runs-on: [self-hosted, faker-kit]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
@@ -51,7 +51,7 @@ jobs:
   security:
     name: security
     if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
-    runs-on: [self-hosted, faker-kit]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
