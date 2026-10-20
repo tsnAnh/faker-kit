@@ -51,7 +51,7 @@ from faker_kit_incident_sources import FetchJson, fetch_json
 from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
 from faker_kit_loop import Loop, LoopError
-from faker_kit_machine import LOGIN, WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, edit_guard, load_machine, route_url, routes, secret_env
+from faker_kit_machine import LOGIN, WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env
 from faker_kit_merge import MERGE_METHOD, NOTICE, REVIEW_WORKFLOW, SECURITY_JOB, WINDOW_SECONDS, Evidence, WindowStore, decide, dispatch_rules, from_fork, security_run_id
 from faker_kit_profiles import Profiles
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
@@ -523,8 +523,8 @@ class Kit:
             self.api(f"repos/{repo}/issues/{number}/comments", "POST", {"body": f"Superseded: {why}."})
         return sorted(pr["html_url"] for pr in older)
 
-    def sync_bot(self, bot: Bot, ask_owner: bool, model: str | None, config_dir: str | None) -> dict:
-        home = self.profiles.refresh(bot.name, bot.role, ask_owner, model, config_dir)
+    def sync_bot(self, bot: Bot, ask_owner: bool, model: str | None, config_dir: str | None, provider: str | None = None) -> dict:
+        home = self.profiles.refresh(bot.name, bot.role, ask_owner, model, config_dir, provider)
         out: dict = {"bot": bot.name, "role": bot.role}
         (self.home / "briefs" / bot.name).mkdir(parents=True, exist_ok=True)
         if bot.role == "project":
@@ -558,7 +558,7 @@ class Kit:
 
     def add_project(self, repo: str, bot: str | None = None, project: str | None = None, model: str | None = None,
                     intervals: dict[str, str | None] | None = None, subscription: bool | None = None, slack_channel: str | None = None,
-                    refresh_webhooks: bool = True) -> dict:
+                    refresh_webhooks: bool = True, provider: str | None = None) -> dict:
         check_repo(repo)
         slug = project or slugify(repo.split("/")[1])
         name = bot or slug
@@ -567,7 +567,9 @@ class Kit:
         wanted = intervals or {}
         for key, value in wanted.items():
             check_interval(value, key)
-        use_subscription = subscription if subscription is not None else any(self.profiles.subscription_in_use(b) for b in self.bots_file()["bots"])
+        check_model_choice(provider, model, bool(subscription), "add-project --provider")
+        inherited = subscription if subscription is not None else any(self.profiles.subscription_in_use(b) for b in self.bots_file()["bots"])
+        use_subscription = not provider and inherited
         config_dir = self.profiles.claude_login() if use_subscription else None
         data = self.bots_file()
         self.register_project(data, repo, name, slug, {key: wanted.get(key) for key in SCHEDULE_DEFAULTS}, slack_channel)
@@ -577,7 +579,7 @@ class Kit:
         for name, (color, description) in LABELS.items():
             self.run(["label", "create", name, "-R", repo, "--color", color, "--description", description, "--force"])
         self.write_bots(data)
-        out = self.sync_bot(project_bot, policy.ask_owner, model, config_dir)
+        out = self.sync_bot(project_bot, policy.ask_owner, model, config_dir, provider)
         owner, repo_name = repo.split("/")
         try:
             checkout = self.cloud.checkout(repo, self.home / "checkouts" / f"{owner}__{repo_name}" / CHECKOUT)
@@ -590,7 +592,8 @@ class Kit:
         steps = [f"The owner trusts the launch checkout once: cd {checkout} && claude, choose yes, then /exit",
                  f"faker-kit vendor --project {slug}, then the owner merges its pull request"]
         if not out["jobs_active"]:
-            steps.append(f"The owner signs gh in on this machine (gh auth login), then runs faker-kit add-project {repo} again to start the jobs")
+            again = f"{repo} --provider {provider} --model {model}" if provider else repo
+            steps.append(f"The owner signs gh in on this machine (gh auth login), then runs faker-kit add-project {again} again to start the jobs")
         return {**out, "project": slug, "repo": repo, "launch_checkout": str(checkout), "next": steps}
 
     def kit_skill_dirs(self, machine: Machine) -> list[str]:
@@ -619,14 +622,24 @@ class Kit:
         if not kept.exists() or kept.read_text() != text:
             self.write_private(kept, text)
 
-    def install(self, config: Path | None, bootstrap: str | None, model: str | None, subscription: bool) -> dict:
+    def install(self, config: Path | None, bootstrap: str | None, model: str | None, subscription: bool, provider: str | None = None) -> dict:
         machine = load_machine(config) if config else None
         wanted = self.kit_skill_dirs(machine) if machine else []
+        use_subscription = subscription or bool(machine and machine.claude_subscription)
+        bootstrap = bootstrap or (machine.bootstrap_bot if machine else None)
+        if provider and not bootstrap:
+            raise Refused("--provider sets the bootstrap bot's provider; name the bot with --bootstrap-bot")
+        if not (model or provider) and machine:
+            model, provider = machine.bootstrap_model, machine.bootstrap_provider
+        choices = [("install --provider", provider, model)]
+        if machine:
+            choices += [("chief.provider", machine.chief_provider, machine.chief_model)]
+            choices += [(f"projects[{i}].provider", p.provider, p.model) for i, p in enumerate(machine.projects)]
+        for where, choice_provider, choice_model in choices:
+            check_model_choice(choice_provider, choice_model, use_subscription, where)
         if machine:
             self.write_guard(edit_guard((self.home / "guard.yaml").read_text(), machine))
-        use_subscription = subscription or bool(machine and machine.claude_subscription)
         config_dir = self.profiles.claude_login() if use_subscription else None
-        bootstrap = bootstrap or (machine.bootstrap_bot if machine else None)
         data = self.bots_file()
         for name, role in ((bootstrap, "bootstrap"), (machine.chief if machine else None, "chief")):
             if name:
@@ -640,15 +653,18 @@ class Kit:
         for item in machine.projects if machine else ():
             slack = machine.slack.channel_id if machine and machine.slack and machine.slack.bot == item.bot else None
             intervals = {"heartbeat_every": item.heartbeat_every, "incidents_every": item.incidents_every, "security_every": item.security_every}
-            projects.append(self.add_project(item.repo, item.bot, item.project, item.model, intervals, use_subscription, slack, refresh_webhooks=False))
+            projects.append(self.add_project(item.repo, item.bot, item.project, item.model, intervals, use_subscription, slack, refresh_webhooks=False,
+                                             provider=item.provider))
         policy = self.policy()
         done = {p["bot"] for p in projects}
-        chief_model = machine.chief_model if machine else None
+        chosen = {bootstrap: (model, provider)}
+        if machine and machine.chief:
+            chosen[machine.chief] = (machine.chief_model, machine.chief_provider)
         refreshed = []
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
             if bot.name not in done:
-                bot_model = model if bot.name == bootstrap else chief_model if machine and bot.name == machine.chief else None
-                refreshed.append(self.sync_bot(bot, policy.ask_owner, bot_model, config_dir))
+                bot_model, bot_provider = chosen.get(bot.name, (None, None))
+                refreshed.append(self.sync_bot(bot, policy.ask_owner, bot_model, config_dir, bot_provider))
         skills = self.profiles.kit_skills(["default", *policy.bots], self.kit / "plugins", wanted) if machine else []
         hooks = self.webhooks(machine.webhook_url, [(p.bot, p.repo) for p in machine.projects]) if machine and machine.webhook_url else []
         if config:
@@ -697,12 +713,14 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--config", type=Path)
     cmd.add_argument("--bootstrap-bot")
     cmd.add_argument("--model")
+    cmd.add_argument("--provider")
     cmd.add_argument("--claude-subscription", action="store_true")
     cmd = sub.add_parser("add-project")
     cmd.add_argument("repo")
     cmd.add_argument("--bot")
     cmd.add_argument("--project")
     cmd.add_argument("--model")
+    cmd.add_argument("--provider")
     cmd.add_argument("--claude-subscription", action="store_true", default=None)
     cmd.add_argument("--heartbeat-every")
     cmd.add_argument("--incidents-every")
@@ -764,10 +782,10 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     if args.command == "status":
         return kit.status(caller, args.all)
     if args.command == "install":
-        return kit.install(args.config, args.bootstrap_bot, args.model, args.claude_subscription)
+        return kit.install(args.config, args.bootstrap_bot, args.model, args.claude_subscription, args.provider)
     if args.command == "add-project":
         intervals = {key: getattr(args, key) for key in SCHEDULE_DEFAULTS}
-        return kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None)
+        return kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider)
     if args.command == "vendor":
         return kit.vendor(args.project)
     if args.command == "launch":

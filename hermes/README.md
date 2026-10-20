@@ -24,7 +24,7 @@ One command, `faker-kit` (`bin/faker_kit.py`, installed as `~/.hermes/bin/faker-
 
 | Command | Who | Does |
 |---|---|---|
-| `install` | owner's shell | Creates the bootstrap bot and chief, guard settings, webhooks and tunnel from a machine config |
+| `install` | owner's shell | Creates the bootstrap bot and chief, guard settings, webhooks and tunnel from a machine config, and sets each bot's model (see Choose each bot's model) |
 | `add-project OWNER/REPO` | bootstrap | Creates or refreshes a project bot: profile, guard, skills, jobs, the andon and bug-report labels, webhook routes (when the machine config is kept), launch checkout. Safe to rerun |
 | `vendor --project P` | bootstrap | Opens the pull request that copies the pinned kit into the repository's `.agents/faker-kit/` |
 | `launch --brief-file F` | project (bootstrap adds `--project P`) | Starts one cloud session; the brief must start with `/faker-mode` and live in the bot's briefs folder |
@@ -102,54 +102,21 @@ Under `~/.hermes/faker-kit/`: `kit/` (the kit at the pinned commit), `guard.yaml
 - **"the kit update <pull request> conflicts with its base branch".** Ask the bootstrap bot to run `faker-kit vendor --project <project>`; it rebuilds the pull request on the current branch.
 - **Merge keeps refusing.** `faker-kit status` shows the gate that is closed for each pull request.
 
-## Run bots on your Claude subscription
+## Choose each bot's model
 
-`faker-kit add-project` and `install` take `--claude-subscription`. It installs Hermes's [Claude Subscription DirectSDK](https://hermes-agent.nousresearch.com/docs/plugins/claude-subscription-directsdk) provider plugin into that bot's profile and sets its provider, so each turn runs through the Claude Code CLI logged in on this machine. Run it from your own shell, then restart the gateway and quit and reopen Hermes Desktop. A new project bot inherits the provider from an existing bot that uses it.
+A bot's own turns run on the provider and model in its Hermes profile (`model.provider` and `model.default` in its `config.yaml`). Cloud sessions always run in Claude Code through `claude --cloud`, whatever the bots use. For each bot, pick one of these:
 
-With `webhooks` in the machine config, GitHub calls the machine when a pull request, review, check suite, status, or push changes, and Hermes wakes the bot's `faker-kit-babysit` (or `faker-kit-security` for a push) at once. Hermes's webhook listener has three routes per project bot, `<bot>-pr`, `<bot>-security`, and `<bot>-issues` (which passes only the `labeled` action with the `faker:fix` label). Each fires the named agent job with a prompt made only of event names and numbers. The secret per bot is `FAKER_KIT_WEBHOOK_SECRET_<BOT>` in `~/.hermes/.env`; Hermes refuses any request whose `X-Hub-Signature-256` does not match. A Cloudflare Tunnel publishes only `/p/<bot>/webhooks/<route>` for each project bot, and Hermes answers 404 to a route it does not have.
-
-## CI on this machine
-
-`faker-kit runner up --config <machine.yaml>` runs the GitHub Actions jobs of every repository under `ci_runners` here, one fresh Ubuntu container per job. Workflows ask for them with `runs-on: [self-hosted, faker-kit]`. The image is `hermes/ci-runner/`.
-
-## How cloud agents get the kit
-
-A cloud session starts from a clone of the repository and cannot fetch the kit. `faker-kit vendor` copies the kit at this machine's commit into the repository's `.agents/faker-kit/` in a pull request. A project bot refuses to launch in a repository whose vendored kit is not this machine's. To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the bootstrap bot to run `faker-kit vendor` for each project, and merge each pull request.
-
-## Review workflow
-
-Every project repository needs `.github/workflows/claude-review.yml` (the trust-ladder template `templates/github/claude-review.yml`, which `setup-faker-kit` installs): on every push to a pull request, the Claude GitHub app comments and submits one formal review of the head whose body ends with `Risk: low|medium|high`, and a second job reviews the diff with the `review-main-security` checklist and sets the `security-review` commit status, linking its own run, then fails when it reported a finding. It needs the Claude GitHub app and a `CLAUDE_CODE_OAUTH_TOKEN` secret. Without both, or if that run's `security` job did not succeed, `faker-kit merge` never opens.
-
-## Layout
-
-| Path | What it is |
+| You give | What `faker-kit` writes to the profile |
 |---|---|
-| `setup-machine.sh`, `install.sh` | Build a machine from a machine config; fetch the kit at a commit, write the wrapper, refresh every bot |
-| `bin/faker_kit.py` | The command |
-| `lib/faker_kit_gh.py`, `faker_kit_merge.py`, `faker_kit_andon.py`, `faker_kit_cloud.py`, `faker_kit_env.py` | GitHub REST reads with ETags, the merge decision and window store, andon records, the `claude --cloud` launcher, profile `.env` reads |
-| `lib/faker_kit_incidents.py`, `faker_kit_incident_sources.py`, `faker_kit_issues.py` | Incident polling and its local record, the four alert sources, bug-report labels and the collaborator check |
-| `lib/faker_kit_profiles.py`, `faker_kit_machine.py`, `faker_kit_runner.py`, `install_config.py` | Bot profiles and jobs, the machine config, CI runners, Hermes config writes |
-| `plugin/faker_kit_guard/` | The Hermes plugin that checks every tool call against `guard.yaml` and `bots.yaml` |
-| `profiles/`, `skills/`, `cron/project-jobs.md` | Bot prompts and config, the bots' skills, the three job definitions |
-| `templates/` | `guard.yaml` and `machine.yaml` to copy, and the brief templates the dispatch skill fills (`triage-incident-brief.md`, `fix-issue-brief.md`) |
-| `e2e/run_dispatch_e2e.py`, `e2e/guard_scenario.py`, `e2e/guard-calls.json`, `e2e/tooling_scenario.py` | The kit's only test for the Hermes side, a stubbed end-to-end run: launch, andon, every merge refusal, the window, migration, CI runner slots, the vendoring script and API, the ratchet rule, and every guard verdict through the real plugin. Prints a digest; the same on every run |
+| Nothing | Nothing. The profile keeps the provider and model it has |
+| `--model M` alone, or `model` alone in the machine config | `model.default` only, as before |
+| `--provider P --model M`, or `provider` and `model` in the machine config | `model.provider` and `model.default`, and removes `model.base_url` and `model.api_mode` so no stale endpoint is left |
+| `--claude-subscription`, or `claude_subscription: true` | Hermes's [Claude Subscription DirectSDK](https://hermes-agent.nousresearch.com/docs/plugins/claude-subscription-directsdk) provider plugin and its provider, `model.default` (`sonnet` unless `--model` names another), and removes `model.base_url` and `model.api_mode`. Each turn runs through the Claude Code CLI logged in on this machine |
 
-Under `~/.hermes/faker-kit/`: `kit/` (the kit at the pinned commit), `guard.yaml` (the policy; you edit it), `bots.yaml` (each bot's role, project, and repository), `briefs/<bot>/` (the only place a project bot may write), `andon/`, `merge/<bot>.json` (merge windows), `etag/<bot>/`, and `checkouts/<owner>__<repo>/repo` (the launch checkout every session starts from, trusted once).
+The flags apply to the bot the command sets up: the bootstrap bot for `install` (with `--bootstrap-bot`), the project bot for `add-project`. In the machine config they are `bootstrap_provider` and `bootstrap_model`, `chief.provider` and `chief.model`, and `provider` and `model` on each project. A `--provider` or `--model` on `install` replaces the bootstrap pair from the machine config as a whole.
 
-## What only you do
+`faker-kit` refuses, before it writes anything, a provider with no model, a provider together with the Claude subscription for the same bot (`claude_subscription: true` covers every bot, so set it to false to give any bot a provider), the subscription provider's own id given as a provider, and a `CHANGE-ME` placeholder. The kit picks no provider, model, or reasoning budget for you: write the provider id as Hermes names it and the model you chose.
 
-- Merge pull requests the gate refuses (`Risk: high`, forks) and each project's kit-vendoring pull request.
-- Sign `gh` in on the machine once (`gh auth login`); every bot shares that login. No bot ever sees a token in chat.
-- Sign Claude Code in on the machine, and trust each launch checkout once: `cd <launch_checkout> && claude`, choose yes, then `/exit`.
-- Install the Claude GitHub app on each project repository and add the `CLAUDE_CODE_OAUTH_TOKEN` secret.
+`faker-kit` never reads, copies, prints, or asks for a credential. If the provider needs a login or a key, sign in with Hermes's own login for that provider from your own terminal, before you run `install` or `add-project`. Then restart the gateway and quit and reopen Hermes Desktop, and check the bot with `hermes -p <bot> status`.
 
-## Troubleshooting
-
-- **"Claude Code asks whether to trust <path>".** Run `cd <path> && claude`, choose yes, then `/exit`, and launch again.
-- **A Claude launch exits with "Not logged in" or "requires an interactive terminal".** The gateway runs `claude` without your shell. Check that the project bot's `.env` has `CLAUDE_CONFIG_DIR` pointing at your `claude` login, and rerun `faker-kit add-project` from a shell where it is exported.
-- **"the kit update <pull request> conflicts with its base branch".** Ask the bootstrap bot to run `faker-kit vendor --project <project>`; it rebuilds the pull request on the current branch.
-- **Merge keeps refusing.** `faker-kit status` shows the gate that is closed for each pull request.
-
-## Run bots on your Claude subscription
-
-`faker-kit add-project` and `install` take `--claude-subscription`. It installs Hermes's [Claude Subscription DirectSDK](https://hermes-agent.nousresearch.com/docs/plugins/claude-subscription-directsdk) provider plugin into that bot's profile and sets its provider, so each turn runs through the Claude Code CLI logged in on this machine. Run it from your own shell, then restart the gateway and quit and reopen Hermes Desktop. A new project bot inherits the provider from an existing bot that uses it.
+A new project bot given no flags inherits the Claude subscription from an existing bot that uses it, and so does an existing project bot when you run `add-project` again without flags. To keep a bot on its provider, run `add-project` again with the same `--provider` and `--model` (its printed next step says so), or keep the pair in the machine config.

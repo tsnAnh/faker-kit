@@ -85,6 +85,28 @@ Then edit `~/.hermes/faker-kit/guard.yaml`: `trusted_authors` (your GitHub login
 
 Every bot runs `gh` with the machine's one login: sign `gh` in once with `gh auth login`, and sign Claude Code in too.
 
+### Where each bot's model runs
+
+The bots' own turns and the cloud sessions run in different places. Cloud sessions always run in Claude Code (`claude --cloud`). The chief, bootstrap, and project bots run on the provider and model in their Hermes profiles, which you can set per bot: the Claude subscription (`claude_subscription: true` or `--claude-subscription`), or a provider and model you chose, given together:
+
+```yaml
+claude_subscription: false
+bootstrap_provider: <provider id>
+bootstrap_model: <model>
+chief:
+  bot: chief
+  provider: <provider id>
+  model: <model>
+projects:
+  - bot: shop
+    project: shop
+    repo: acme/shop
+    provider: <provider id>
+    model: <model>
+```
+
+On the command line the same pair is `install --bootstrap-bot <bot> --provider <provider id> --model <model>` or `add-project acme/shop --provider <provider id> --model <model>`. `faker-kit` writes the pair to the profile and removes any stale `base_url` and `api_mode`. It refuses a provider without a model and a provider together with the Claude subscription, before writing anything. A model alone still sets only the model. The kit never chooses a provider or model for you and never handles credentials: if the provider needs a login, run Hermes's own login for it from your own terminal first. The [Hermes README](../../hermes/README.md#choose-each-bots-model) has the full table.
+
 ### Optional Slack
 
 Slack uses Hermes's own Slack platform. Name a channel for a project bot under `slack` in the machine config, and put the Slack tokens in `~/.hermes/.env` as `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN`, with `SLACK_ALLOWED_USERS` set to the member ids that may talk to the bot. The bot's jobs then also deliver to that channel.
