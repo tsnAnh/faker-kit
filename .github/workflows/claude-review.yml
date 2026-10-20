@@ -85,13 +85,12 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          RESULT: ${{ steps.claude.outputs.structured_output }}
+          VERDICT: ${{ steps.claude.outputs.structured_output && fromJSON(steps.claude.outputs.structured_output).verdict || '' }}
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
-          if [ -f "$EXECUTION_FILE" ]; then
+          if [ -f "$EXECUTION_FILE" ] && command -v jq >/dev/null; then
             jq -r '.[]? | select(.type == "result") | .permission_denials[]? | "denied tool: \(.tool_name)"' "$EXECUTION_FILE" 2>/dev/null || true
           fi
-          verdict=$(printf '%s' "$RESULT" | jq -r '.verdict // empty' 2>/dev/null || true)
-          if [ "$verdict" = PASS ]; then state=success; description=clean; else state=failure; description=findings; fi
+          if [ "$VERDICT" = PASS ]; then state=success; description=clean; else state=failure; description=findings; fi
           gh api "repos/$REPO/statuses/$HEAD_SHA" -f state="$state" -f context=security-review -f description="$description" -f target_url="$RUN_URL" >/dev/null
           test "$state" = success
