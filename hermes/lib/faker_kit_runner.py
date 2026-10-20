@@ -1,22 +1,5 @@
-#!/usr/bin/env python3
-"""team-kit-runner: run repositories' GitHub Actions jobs on this machine, one fresh container per job.
-
-  up --config PATH          build the runner image, start one background service per slot in the machine
-                            config's ci_runners, and stop the services of slots it no longer lists
-  slot --repo R --slot N    what each service runs: forever, register a just-in-time runner for one job,
-                            run it in a new container, then remove it
-  build                     build the runner image
-
-A job's container is Ubuntu, like a GitHub-hosted runner, and sees nothing of this machine: no Hermes files,
-no gh login, no bot secrets. GitHub gives each runner a one-job configuration; it reaches the container on
-stdin, never this machine's argv, environment, or files. Workflows pick these runners with
-`runs-on: [self-hosted, team-kit]`. Every decision here is made in code: what to register, when, and how
-long to wait after a failure.
-"""
-
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
@@ -30,21 +13,13 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-for candidate in (HERE, HERE.parent / "lib"):
-    if candidate.is_dir() and str(candidate) not in sys.path:
-        sys.path.insert(0, str(candidate))
-# Last, so an installed PyYAML wins; the vendored copy keeps the command working on a Python without one.
-if (HERE.parent / "vendor").is_dir() and str(HERE.parent / "vendor") not in sys.path:
-    sys.path.append(str(HERE.parent / "vendor"))
+from faker_kit_machine import REPO, load_machine
 
-from team_kit_machine import REPO, MachineError, load_machine
-
-IMAGE_DIR = HERE.parent / "ci-runner"
-IMAGE = "team-kit-ci-runner"
-LABEL = "team-kit"
-SERVICE_PREFIX = "team-kit-ci-"
-JOB_TIMEOUT_SECONDS = 7 * 3600  # GitHub stops a job at 6 hours by default; past this the container is stuck
+IMAGE_DIR = Path(__file__).resolve().parent.parent / "ci-runner"
+IMAGE = "faker-kit-ci-runner"
+LABEL = "faker-kit"
+SERVICE_PREFIX = "faker-kit-ci-"
+JOB_TIMEOUT_SECONDS = 7 * 3600
 BACKOFF_SECONDS = (30, 60, 120, 300)
 SLUG = re.compile(r"[^a-z0-9]+")
 
@@ -64,7 +39,6 @@ def service_name(repo: str, slot: int) -> str:
 
 
 def image_tag() -> str:
-    """The image's tag names its sources, so a kit update that changes them builds a new image."""
     digest = hashlib.sha256()
     for path in sorted(IMAGE_DIR.iterdir()):
         digest.update(path.name.encode() + b"\0" + path.read_bytes())
@@ -80,7 +54,7 @@ def arch_label() -> str:
     return {"aarch64": "ARM64", "arm64": "ARM64", "x86_64": "X64", "amd64": "X64"}.get(machine, machine.upper())
 
 
-def build(run: Runner = subprocess.run) -> str:
+def build_image(run: Runner = subprocess.run) -> str:
     tag = image_tag()
     if run(["docker", "image", "inspect", tag], capture_output=True).returncode != 0:
         done = run(["docker", "build", "-q", "-t", tag, str(IMAGE_DIR)], capture_output=True, text=True)
@@ -89,9 +63,12 @@ def build(run: Runner = subprocess.run) -> str:
     return tag
 
 
-class Slot:
-    """One runner slot of one repository: one job at a time, each in a container of its own."""
+def check_slot(repo: str, slot: int) -> None:
+    if not REPO.match(repo) or not 1 <= slot <= 8:
+        raise RunnerError("--repo must be OWNER/REPO and --slot a number from 1 to 8")
 
+
+class Slot:
     def __init__(self, repo: str, slot: int, run: Runner = subprocess.run, sleep: Callable[[float], None] = time.sleep,
                  now: Callable[[], float] = time.time, host: str | None = None) -> None:
         self.repo, self.slot, self.run, self.sleep, self.now = repo, slot, run, sleep, now
@@ -99,7 +76,6 @@ class Slot:
         self.container = service_name(repo, slot)
 
     def register(self) -> tuple[int, str]:
-        """A just-in-time runner for one job: its id, and the configuration only that container gets."""
         body = {"name": f"{self.host}-{self.slot}-{int(self.now())}", "runner_group_id": 1,
                 "labels": ["self-hosted", "linux", arch_label(), LABEL], "work_folder": "_work"}
         done = self.run(["gh", "api", "-X", "POST", f"repos/{self.repo}/actions/runners/generate-jitconfig", "--input", "-"],
@@ -113,18 +89,15 @@ class Slot:
             raise RunnerError(f"GitHub's runner answer for {self.repo} was not readable") from None
 
     def once(self) -> int:
-        """Run one job. Returns the container's exit code."""
-        tag = build(self.run)
-        self.run(["docker", "rm", "-f", self.container], capture_output=True)  # left behind by a crash or a stop
+        tag = build_image(self.run)
+        self.run(["docker", "rm", "-f", self.container], capture_output=True)
         runner_id, config = self.register()
         try:
-            done = self.run(["docker", "run", "--rm", "-i", "--name", self.container, tag],
-                            input=config + "\n", text=True, timeout=JOB_TIMEOUT_SECONDS)
+            done = self.run(["docker", "run", "--rm", "-i", "--name", self.container, tag], input=config + "\n", text=True, timeout=JOB_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             self.run(["docker", "rm", "-f", self.container], capture_output=True)
             raise RunnerError(f"a job on {self.repo} ran past {JOB_TIMEOUT_SECONDS // 3600} hours; its container was removed") from None
         finally:
-            # GitHub removes a just-in-time runner after its job; this removes one that never got a job.
             self.run(["gh", "api", "-X", "DELETE", f"repos/{self.repo}/actions/runners/{runner_id}"], capture_output=True, timeout=60)
         return done.returncode
 
@@ -135,10 +108,10 @@ class Slot:
                 code = self.once()
                 failures = 0 if code == 0 else failures + 1
                 if code != 0:
-                    print(f"team-kit-runner: {self.repo} slot {self.slot}: the runner container exited {code}", file=sys.stderr)
+                    sys.stderr.write(f"faker-kit runner: {self.repo} slot {self.slot}: the runner container exited {code}\n")
             except (RunnerError, OSError, subprocess.SubprocessError) as err:
                 failures += 1
-                print(f"team-kit-runner: {self.repo} slot {self.slot}: {err}", file=sys.stderr)
+                sys.stderr.write(f"faker-kit runner: {self.repo} slot {self.slot}: {err}\n")
             if failures:
                 self.sleep(BACKOFF_SECONDS[min(failures, len(BACKOFF_SECONDS)) - 1])
             if rounds is not None:
@@ -146,11 +119,9 @@ class Slot:
 
 
 class Services:
-    """Background services that keep each slot running: launchd agents on macOS, systemd user units on Linux."""
-
     def __init__(self, home: Path, system: str, run: Runner = subprocess.run) -> None:
         self.home, self.system, self.run = home, system, run
-        self.logs = home / ".hermes" / "team-kit" / "logs"
+        self.logs = home / ".hermes" / "faker-kit" / "logs"
 
     def path(self, name: str) -> Path:
         if self.system == "Darwin":
@@ -160,7 +131,9 @@ class Services:
     def existing(self) -> set[str]:
         folder = self.path("x").parent
         suffix = ".plist" if self.system == "Darwin" else ".service"
-        return {p.name.removesuffix(suffix) for p in folder.glob(f"{SERVICE_PREFIX}*{suffix}")} if folder.is_dir() else set()
+        if not folder.is_dir():
+            return set()
+        return {p.name.removesuffix(suffix) for p in folder.glob(f"{SERVICE_PREFIX}*{suffix}")}
 
     def start(self, name: str, argv: list[str], path_env: str) -> None:
         target = self.path(name)
@@ -193,7 +166,7 @@ class Services:
         self.run(["docker", "rm", "-f", name], capture_output=True)
 
 
-def up(config: Path, services: Services, run: Runner = subprocess.run, path_env: str | None = None) -> dict:
+def up(config: Path, services: Services, python: str, script: str, run: Runner = subprocess.run, path_env: str | None = None) -> dict:
     machine = load_machine(config)
     wanted = {service_name(r.repo, n): (r.repo, n) for r in machine.ci_runners for n in range(1, r.slots + 1)}
     stopped = sorted(services.existing() - set(wanted))
@@ -201,45 +174,7 @@ def up(config: Path, services: Services, run: Runner = subprocess.run, path_env:
         services.stop(name)
     if not wanted:
         return {"image": None, "started": [], "stopped": stopped}
-    tag = build(run)
+    tag = build_image(run)
     for name, (repo, n) in sorted(wanted.items()):
-        services.start(name, [sys.executable, str(Path(__file__).resolve()), "slot", "--repo", repo, "--slot", str(n)],
-                       path_env or os.environ.get("PATH", "/usr/bin:/bin"))
-    return {"image": tag, "started": sorted(wanted), "stopped": stopped,
-            "runs_on": ["self-hosted", LABEL]}
-
-
-def check_slot(repo: str, slot: int) -> None:
-    if not REPO.match(repo) or not 1 <= slot <= 8:
-        raise RunnerError("--repo must be OWNER/REPO and --slot a number from 1 to 8")
-
-
-def parser() -> argparse.ArgumentParser:
-    top = argparse.ArgumentParser(prog="team-kit-runner")
-    sub = top.add_subparsers(dest="command", required=True)
-    cmd = sub.add_parser("up")
-    cmd.add_argument("--config", required=True, type=Path)
-    cmd = sub.add_parser("slot")
-    cmd.add_argument("--repo", required=True)
-    cmd.add_argument("--slot", required=True, type=int)
-    sub.add_parser("build")
-    return top
-
-
-def main(argv: list[str] | None = None, run: Runner = subprocess.run) -> int:
-    args = parser().parse_args(argv)
-    try:
-        if args.command == "slot":
-            check_slot(args.repo, args.slot)
-            Slot(args.repo, args.slot, run).forever()
-            return 0
-        out = {"image": build(run)} if args.command == "build" else up(args.config, Services(Path.home(), platform.system(), run), run)
-    except (RunnerError, MachineError) as err:
-        print(f"team-kit-runner: refused: {err}", file=sys.stderr)
-        return 1
-    print(json.dumps(out))
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+        services.start(name, [python, script, "runner", "slot", "--repo", repo, "--slot", str(n)], path_env or os.environ.get("PATH", "/usr/bin:/bin"))
+    return {"image": tag, "started": sorted(wanted), "stopped": stopped, "runs_on": ["self-hosted", LABEL]}

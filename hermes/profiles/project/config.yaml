@@ -1,13 +1,7 @@
-# Merged into each project bot's profile config by team-kit-admin add-project. Keys here win;
-# lists are replaced, except plugins.enabled, which gains team_kit_guard.
-# The model is set separately: add-project --model M, or
-# `hermes -p NAME config set model.default <model>`.
-#
-# No Kanban: a unit's state is the labels on its GitHub issue, which team-kit-gh reads and sets.
 toolsets: [web, browser, terminal, file, code_execution, vision, image_gen, tts, skills, todo, memory, session_search, connections, clarify, delegation, cronjob, computer_use]
 approvals:
   mode: manual
   cron_mode: deny
 plugins:
-  enabled: [team_kit_guard]
+  enabled: [faker_kit_guard]
 timezone: Asia/Saigon

@@ -1,9 +1,0 @@
-name: team_kit_guard
-version: "0.2.0"
-description: "team-kit guard. Gives each team-kit bot only its role's commands from ~/.hermes/team-kit/bots.yaml and guard.yaml, fails closed, asks the owner to approve every bootstrap change, wraps untrusted readers' output, and asks for approval of side-effecting tools in a turn that read it."
-author: "team-kit"
-provides_hooks:
-  - pre_tool_call
-  - transform_tool_result
-  - pre_llm_call
-  - on_session_end

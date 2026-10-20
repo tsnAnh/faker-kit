@@ -1,5 +1,5 @@
 # The image every self-hosted CI job runs in: Ubuntu, like GitHub's hosted runners, so setup-python,
-# setup-node, and the Rust toolchain actions work unchanged. team-kit-runner starts one container per job.
+# setup-node, and the Rust toolchain actions work unchanged. faker-kit runner starts one container per job.
 FROM ubuntu:24.04
 
 ARG RUNNER_VERSION=2.338.0
@@ -29,6 +29,6 @@ RUN case "$(dpkg --print-architecture)" in \
  && chown -R runner:runner /home/runner
 
 ENV AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache RUNNER_ALLOW_RUNASROOT=0
-COPY --chmod=755 entrypoint.sh /usr/local/bin/team-kit-ci-entrypoint
+COPY --chmod=755 entrypoint.sh /usr/local/bin/faker-kit-ci-entrypoint
 USER runner
-ENTRYPOINT ["/usr/local/bin/team-kit-ci-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/faker-kit-ci-entrypoint"]

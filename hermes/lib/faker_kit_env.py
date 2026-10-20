@@ -1,10 +1,3 @@
-"""A bot's own .env values, read by the bot's commands themselves.
-
-Hermes passes a routed profile's .env to a command only for names declared in
-terminal.env_passthrough. Without this, team-kit-gh starts claude without the config directory
-that holds its login and trusted folders, so the launch stops at the folder-trust question.
-"""
-
 from __future__ import annotations
 
 import os
@@ -21,7 +14,6 @@ class EnvFileError(ValueError):
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
-    """KEY=VALUE lines; blank lines, comments, and anything else are skipped. A missing file is empty."""
     try:
         lines = path.read_text().splitlines()
     except FileNotFoundError:
@@ -42,7 +34,20 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 
 def use_bot_env(profile: Path, environ: MutableMapping[str, str] = os.environ) -> None:
-    """Fill in the bot's Claude config directory from its profile .env when this command's environment lacks it."""
     values = parse_env_file(profile / ".env")
     if values.get(CLAUDE_CONFIG_DIR) and not environ.get(CLAUDE_CONFIG_DIR):
         environ[CLAUDE_CONFIG_DIR] = values[CLAUDE_CONFIG_DIR]
+
+
+def set_env(home: Path, key: str, value: str) -> None:
+    env = home / ".env"
+    kept = [line for line in (env.read_text().splitlines() if env.exists() else []) if not line.startswith(f"{key}=")]
+    if value:
+        kept.append(f"{key}={value}")
+    if not kept and not env.exists():
+        return
+    tmp = env.with_name(f".env.{os.getpid()}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        out.write("".join(f"{line}\n" for line in kept))
+    tmp.replace(env)

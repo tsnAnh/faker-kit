@@ -22,10 +22,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Python lint, type, and test tools
-        run: pip install ruff mypy types-PyYAML pytest pytest-xdist pyyaml
+      - name: Python lint, type, and end-to-end tools
+        run: pip install ruff mypy types-PyYAML pyyaml
+      - name: Install Claude Code
+        run: |
+          npm i --prefix "$RUNNER_TEMP/agents" @anthropic-ai/claude-code
+          echo "$RUNNER_TEMP/agents/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Single check command
         run: scripts/check.sh
+      - name: End-to-end transcripts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-transcripts
+          path: artifacts/
+          if-no-files-found: ignore
 
   validate:
     runs-on: ubuntu-latest
@@ -41,23 +52,9 @@ jobs:
         run: node scripts/validate.mjs
       - name: Generated docs are current
         run: node scripts/gen-catalog.mjs --check
-      - name: Docs site pages, links, and navigation resolve
-        run: node scripts/gen-site.mjs
-      - name: trust-ladder tests (hooks, Pi extension, run-model, link-skills)
-        run: bun test plugins/trust-ladder
-      - name: Upstream hooks run through the Claude Code and Codex adapter
-        run: bun test upstream/agent-hooks
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Hermes module guard, commands, and install
-        run: pip install pytest pyyaml && python -m pytest hermes
       - name: pstack script tests
         working-directory: plugins/pstack/skills/faker-mode/scripts
         run: bun install --frozen-lockfile && bun test orch watch-pr
-      - name: orchestrate engine, runtimes, and lint
-        working-directory: plugins/trust-ladder/skills/orchestrate/scripts
-        run: bun install --frozen-lockfile && bun x biome check . && bun x tsc --noEmit && bun test
 
   agents-load-the-kit:
     runs-on: ubuntu-latest
@@ -66,24 +63,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install Claude Code, Codex, and Pi
+      - name: Install Claude Code
         run: |
-          # Codex publishes its main package minutes before each platform binary, and npm skips a
-          # missing optional binary without an error. Take the newest release whose Linux build is out.
-          platform=linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64 ;; *) echo x64 ;; esac)
-          codex=$(npm view @openai/codex "dist-tags.$platform")
-          test -n "$codex"
-          npm i --prefix "$RUNNER_TEMP/agents" @anthropic-ai/claude-code "@openai/codex@${codex%-$platform}" @earendil-works/pi-coding-agent
+          npm i --prefix "$RUNNER_TEMP/agents" @anthropic-ai/claude-code
           echo "$RUNNER_TEMP/agents/node_modules/.bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/agents/node_modules/.bin/codex" --version
       - name: Claude Code validates the marketplace and every plugin
         run: |
           claude plugin validate .
           for plugin in plugins/*/; do claude plugin validate "$plugin"; done
-      - name: Codex installs every plugin
-        run: scripts/check-codex.sh codex
-      - name: Pi discovers every skill and loads the extension
-        run: node scripts/check-pi-package.mjs --sdk "$RUNNER_TEMP/agents"
+      - name: The kit's scripts and hooks run, and every plugin installs
+        run: node scripts/e2e/kit-e2e.mjs --artifact artifacts/kit-e2e.json
+      - name: End-to-end transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kit-e2e-transcript
+          path: artifacts/
+          if-no-files-found: ignore
 
   lint-packs:
     runs-on: ubuntu-latest
@@ -109,8 +105,8 @@ jobs:
       - uses: dart-lang/setup-dart@v1
       - uses: actions/cache@v4
         with:
-          path: ~/.cache/team-kit-tools
-          key: team-kit-tools-${{ hashFiles('plugins/trust-ladder/packs/tools.sh') }}
+          path: ~/.cache/faker-kit-tools
+          key: faker-kit-tools-${{ hashFiles('plugins/trust-ladder/packs/tools.sh') }}
       - name: Every pack fails on its bad fixture and passes on its good one
         run: scripts/test-packs.sh
       - name: Best-practices examples pass the packs

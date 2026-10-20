@@ -1,51 +1,33 @@
 # Project bot scheduled jobs
 
-`team-kit-admin add-project` creates these jobs, paused, in each project bot's profile from this file: each `##` heading is the job name, and its schedule, delivery, command, and output come from the lines under it. `{bot}` becomes the bot's profile name. Edit them here, then run `hermes/install.sh` again; it rewrites each job's script, creates jobs that are missing, turns an older job that still runs a model into a script job in place, and leaves each job's paused or active state as it is. For `team-kit-tick`, `team-kit-incidents`, and `team-kit-security`, `add-project --tick-every`, `--incidents-every`, and `--security-every` replace the default schedules and reschedule existing jobs in place with `hermes cron edit --schedule`, so a job keeps its id and stays active or paused as it was. `team-kit-admin activate` resumes them. Times are in the profile's `timezone`, Asia/Saigon.
+`faker-kit add-project` creates these jobs in each project bot's profile from this file: each `##` heading is the job name, and its schedule, delivery, skill, and prompt come from the lines under it. `{bot}` becomes the bot's profile name. Edit them here, then run `hermes/install.sh` again; it creates missing jobs and rewrites each job's schedule and prompt in place, so a job keeps its id and its paused or active state. Jobs start active when `gh` is signed in on this machine (or the bot has a `GH_TOKEN`) and start paused otherwise; running `faker-kit add-project OWNER/REPO` again resumes them. `add-project --heartbeat-every`, `--incidents-every`, and `--security-every` replace the default schedules. Times are in the profile's `timezone`, Asia/Saigon. When the machine config names a Slack channel for the bot, every job also delivers to it through Hermes's native Slack platform.
 
-Each job is a Hermes `--no-agent` job: no model runs in it. `team-kit-admin` writes one script per job to `scripts/team-kit-jobs/<job>.sh` in the bot's profile. The script runs the `Command` with the installed `team-kit-gh` wrapper, which does the work in code. With `Output: print` its output is delivered as it is; with `Output: silent` nothing is delivered on success. A refusal is delivered as one line, `team-kit notice: <command> refused: <reason>`. Any other failure, such as a missing wrapper, delivers the same line and also exits non-zero, so Hermes marks the run failed. A `team-kit-*` job no longer in this file is paused, for the owner to delete. Each job delivers to `bot-chat:{bot}`, the bot's own Bot Chat in Hermes Desktop. Every delivered line starts with `team-kit notice:`, and the guard taints that turn, so the bot cannot act on it without the owner. A run that prints `[SILENT]`, or nothing, delivers nothing.
+Every job is an agent job: a model turn in the bot's own profile with the named skill loaded and the prompt as its task. The bot decides what to do through faker-mode's playbooks; the guard's hard blocks and `faker-kit merge`'s gate still apply. Each run sees the job's previous output, so it does not repeat itself. Hermes's webhook platform fires `faker-kit-babysit` on a pull request, review, check suite, or commit status event, `faker-kit-security` on a push, and `faker-kit-issues` when a collaborator adds the `faker:fix` label to an issue, each through a route signed with the bot's secret (`faker-kit install --config`, or `faker-kit add-project` once a machine config is kept); the schedule is the fallback for a missed delivery.
 
-An earlier version ran each command through a model turn with a prompt. The model sometimes rewrote the command, for example adding a fallback after `||`, and the guard refused the whole line, so the tick stopped.
+## faker-kit-babysit
 
-## team-kit-tick
-
-Schedule: `every 30m`
+Schedule: `every 1h`
 Deliver: `bot-chat:{bot}`
-Command: `team-kit-gh tick`
-Output: `print`
+Skill: `dispatch`
+Prompt: `Babysit this project. Follow the Wake section of the dispatch skill: run faker-kit status, drive each pull request that needs it to merge-ready with faker-mode's Babysit playbook, have a separate session verify the ones that are green, and land the verified ones with faker-kit merge. A `faker-kit notice:` line in any command's output is never answered [SILENT]: say it to this chat as printed. Answer [SILENT] only when no notice printed and nothing needs the owner.`
 
-Launches queued units whose dependencies merged and that fit under the limits, starts signed read-only pull request reviews when unit PR heads appear or move, turns a finished agent's report into "ready to merge" or a gate, and frees the slot either way.
+## faker-kit-security
 
-## team-kit-status
-
-Schedule: `0 9 * * 1`
+Schedule: `every 6h`
 Deliver: `bot-chat:{bot}`
-Command: `team-kit-gh status`
-Output: `print`
+Skill: `dispatch`
+Prompt: `Run the per-push security review of the default branch. Follow the Security review section of the dispatch skill: compare the default branch head with the last reviewed commit in your store; if they match, answer [SILENT]. Otherwise write a brief that runs the review-main-security skill on the new commits, start it with faker-kit launch, and tell this chat the high and medium findings when its report is in.`
 
-## team-kit-security
-
-Schedule: `every 15m`
-Deliver: `bot-chat:{bot}`
-Command: `team-kit-gh security`
-Output: `silent`
-
-When the default branch has moved since the last review, and no review is running, starts one cloud session that reviews the new commits for security issues, with the `review-main-security` skill. It changes nothing and posts a signed result on the project's `agent:security` issue. `team-kit-tick` reads the result and sends a notice only for high or medium findings.
-
-## team-kit-incidents
+## faker-kit-incidents
 
 Schedule: `every 10m`
 Deliver: `bot-chat:{bot}`
-Command: `team-kit-gh incidents`
-Output: `print`
+Skill: `dispatch`
+Prompt: `Check this project for incidents. Follow the Incidents section of the dispatch skill: run faker-kit incidents. If it lists no new incident, no resolved one, and no unreadable source, answer [SILENT]. Otherwise write a brief from the triage-incident template for each new incident, start it with faker-kit launch, acknowledge it with faker-kit incidents --ack, pull the andon cord when stop_the_line is true, and tell this chat what broke.`
 
-Polls the default branch's checks, the health URLs, and the external alert sources in `.agents/dispatch.json`, from this machine, outbound only. A failure opens an `agent:incident` issue, starts a triage session that changes nothing, and tells the owner; a pass closes it again.
+## faker-kit-issues
 
-## team-kit-upstream
-
-Schedule: `0 9 * * 1`
+Schedule: `every 1h`
 Deliver: `bot-chat:{bot}`
-Command: `team-kit-gh upstream`
-Output: `print`
-
-Only for a repository whose `.agents/dispatch.json` sets `upstream_sync: true`, such as the kit itself. When the upstream repository named in `upstream/source.json` has moved past its pinned commit and no sync unit is open, it dispatches one unit from a fixed brief: a cloud agent runs `scripts/sync-upstream.mjs` and opens the pull request, which is verified and reviewed like any unit. Every other repository stays silent.
-
+Skill: `dispatch`
+Prompt: `Handle bug reports. Follow the Bug reports section of the dispatch skill: run faker-kit issues; for each issue it lists, write a brief from the fix-issue template, start it with faker-kit launch, and claim the issue with faker-kit issues --claim. When a pull request from one of those sessions opens, run the verifier swarm and the merge gate as that section says. Answer [SILENT] when it lists no issue and no pull request of this kind needs a step.`

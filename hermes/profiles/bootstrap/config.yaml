@@ -1,14 +1,7 @@
-# Merged into the bootstrap bot's profile config by team-kit-admin add-bootstrap. Keys here win;
-# lists are replaced, except plugins.enabled, which gains team_kit_guard.
-# The model is set separately: install.sh --bootstrap-bot NAME --model M, or
-# `hermes -p NAME config set model.default <model>`.
-#
-# The bootstrap bot has no file, web, or Kanban tools. Its only side effects are team-kit-admin
-# commands, and the guard asks the owner to approve each one but `status`.
 toolsets: [web, browser, terminal, file, code_execution, vision, image_gen, tts, skills, todo, memory, session_search, connections, clarify, delegation, cronjob, computer_use]
 approvals:
   mode: manual
   cron_mode: deny
 plugins:
-  enabled: [team_kit_guard]
+  enabled: [faker_kit_guard]
 timezone: Asia/Saigon

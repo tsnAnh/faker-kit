@@ -1,8 +1,3 @@
-"""The machine config: one file that describes a whole Hermes machine, so hermes/setup-machine.sh can
-rebuild it anywhere. It names the bots, the guard settings, the public webhook address, and Slack, and
-holds no secret: tokens and webhook secrets stay in the profiles' .env files.
-"""
-
 from __future__ import annotations
 
 import re
@@ -22,9 +17,17 @@ PLACEHOLDER = "CHANGE-ME"
 
 WEBHOOK_HOST = "127.0.0.1"
 WEBHOOK_PORT = 8644
-# Each route fires one of the bot's no-agent jobs by name, so a route survives the job's id changing.
-ROUTE_JOBS = {"tick": ("team-kit-tick", ("issues", "issue_comment", "pull_request", "pull_request_review", "check_suite")),
-              "security": ("team-kit-security", ("push",))}
+ROUTE_JOBS: dict[str, tuple[str, tuple[str, ...], str, tuple[dict[str, str], ...]]] = {
+    "pr": ("faker-kit-babysit", ("pull_request", "pull_request_review", "check_suite", "status"),
+           "GitHub event {event_type} ({action}) in {repository.full_name}. Pull request {pull_request.number}, "
+           "check suite head {check_suite.head_sha}. Babysit the open pull requests.", ()),
+    "security": ("faker-kit-security", ("push",),
+                 "GitHub event push to {ref} in {repository.full_name}, head {after}. Run the security review.", ()),
+    "issues": ("faker-kit-issues", ("issues",),
+               "GitHub event issues ({action}) in {repository.full_name}: the faker:fix label was added to issue {issue.number}. "
+               "Follow the Bug reports section of the dispatch skill.",
+               ({"field": "action", "equals": "labeled"}, {"field": "label.name", "equals": "faker:fix"})),
+}
 
 
 class Route(TypedDict):
@@ -33,6 +36,8 @@ class Route(TypedDict):
     profile: str
     cron_job: str
     deliver: str
+    prompt: str
+    filters: list[dict[str, str]]
 
 
 class MachineError(ValueError):
@@ -44,7 +49,7 @@ class Project:
     bot: str
     project: str
     repo: str
-    tick_every: str | None = None
+    heartbeat_every: str | None = None
     incidents_every: str | None = None
     security_every: str | None = None
     model: str | None = None
@@ -52,8 +57,6 @@ class Project:
 
 @dataclass(frozen=True)
 class CiRunner:
-    """Self-hosted GitHub Actions runners for one repository: up to `slots` jobs at once, each in its own container."""
-
     repo: str
     slots: int = 1
 
@@ -62,7 +65,6 @@ class CiRunner:
 class Slack:
     bot: str
     channel_id: str
-    channel_name: str
 
 
 @dataclass(frozen=True)
@@ -129,7 +131,7 @@ def parse_machine(data: object) -> Machine:
     for i, item in enumerate(raw_projects):
         where = f"projects[{i}]"
         entry = _mapping(item, where)
-        every = {k: _text(entry, k, where, EVERY, required=False) for k in ("tick_every", "incidents_every", "security_every")}
+        every = {k: _text(entry, k, where, EVERY, required=False) for k in ("heartbeat_every", "incidents_every", "security_every")}
         projects.append(Project(bot=str(_text(entry, "bot", where, NAME)), project=str(_text(entry, "project", where, NAME)),
                                 repo=str(_text(entry, "repo", where, REPO)), model=_text(entry, "model", where, required=False), **every))
     bots = [p.bot for p in projects]
@@ -153,8 +155,7 @@ def parse_machine(data: object) -> Machine:
     slack = None
     if top.get("slack") is not None:
         raw = _mapping(top["slack"], "slack")
-        slack = Slack(bot=str(_text(raw, "bot", "slack", NAME)), channel_id=str(_text(raw, "channel_id", "slack", SLACK_CHANNEL)),
-                      channel_name=str(_text(raw, "channel_name", "slack", NAME)))
+        slack = Slack(bot=str(_text(raw, "bot", "slack", NAME)), channel_id=str(_text(raw, "channel_id", "slack", SLACK_CHANNEL)))
         if slack.bot not in bots:
             raise MachineError(f"slack.bot {slack.bot} must be one of the project bots")
     kit_ref = _text(top, "kit_ref", "machine config", re.compile(r"\A[0-9a-f]{40}\Z"), required=False)
@@ -188,15 +189,13 @@ def load_machine(path: Path) -> Machine:
 
 
 def secret_env(bot: str) -> str:
-    """The root .env variable that holds a bot's webhook secret."""
-    return "TEAM_KIT_WEBHOOK_SECRET_" + re.sub(r"[^A-Z0-9]", "_", bot.upper())
+    return "FAKER_KIT_WEBHOOK_SECRET_" + re.sub(r"[^A-Z0-9]", "_", bot.upper())
 
 
 def routes(bot: str) -> dict[str, Route]:
-    """The Hermes webhook routes for one project bot, keyed by route name. The secret is a ${VAR} reference
-    that Hermes expands from the root .env, so config.yaml never holds it."""
-    return {f"{bot}-{kind}": Route(events=list(events), secret="${" + secret_env(bot) + "}", profile=bot, cron_job=job, deliver="log")
-            for kind, (job, events) in ROUTE_JOBS.items()}
+    return {f"{bot}-{kind}": Route(events=list(events), secret="${" + secret_env(bot) + "}", profile=bot, cron_job=job, deliver="log", prompt=prompt,
+                                   filters=[dict(f) for f in filters])
+            for kind, (job, events, prompt, filters) in ROUTE_JOBS.items()}
 
 
 def route_url(base: str, bot: str, route: str) -> str:
@@ -204,22 +203,16 @@ def route_url(base: str, bot: str, route: str) -> str:
 
 
 def cloudflared_config(tunnel_id: str, credentials: Path, hostname: str, machine: Machine) -> str:
-    """Only this machine's own signed routes are public, each by its exact path. Any other path, another
-    route on the same listener or the gateway's /health included, is 404, so a route added later is never
-    published by accident."""
-    rules = "".join(f"  - hostname: {hostname}\n    path: ^{re.escape(f'/p/{project.bot}/webhooks/{name}')}$\n"
+    rules = "".join(f"  - hostname: {hostname}\n    path: ^{re.escape(f'/p/{project.bot}/webhooks/')}[a-z0-9_-]+$\n"
                     f"    service: http://{WEBHOOK_HOST}:{WEBHOOK_PORT}\n"
-                    for project in machine.projects for name in routes(project.bot))
+                    for project in machine.projects)
     return f"tunnel: {tunnel_id}\ncredentials-file: {credentials}\n\ningress:\n{rules}  - service: http_status:404\n"
 
 
 GUARD_SCALARS = ("max_in_flight_total", "ask_owner")
-SLACK_KEYS = ("enabled", "bot", "channel_id", "channel_name")
 
 
 def edit_guard(text: str, machine: Machine) -> str:
-    """Set the machine's values in guard.yaml in place, keeping its comments. Every key must already be there,
-    as the template writes it, so a key never ends up twice."""
     def scalar(value: object) -> str:
         return ("true" if value else "false") if isinstance(value, bool) else str(value)
 
@@ -232,15 +225,4 @@ def edit_guard(text: str, machine: Machine) -> str:
     for key in GUARD_SCALARS:
         text = replace(rf"^{key}:.*$", f"{key}: {scalar(getattr(machine, key))}", text, key)
     authors = "trusted_authors:\n" + "".join(f"  - {a}\n" for a in machine.trusted_authors)
-    text = replace(r"^trusted_authors:\n(?:[ \t]+-[^\n]*\n|[ \t]*#[^\n]*\n)*", authors, text, "trusted_authors")
-    block = re.search(r"^slack:\n((?:[ \t]+[^\n]*\n|[ \t]*\n)*)", text, re.M)
-    if block is None:
-        raise MachineError("guard.yaml has no slack block to set")
-    body = block.group(1)
-    values: dict[str, object] = {"enabled": machine.slack is not None}
-    if machine.slack is not None:
-        values.update(bot=machine.slack.bot, channel_id=machine.slack.channel_id, channel_name=machine.slack.channel_name)
-    for key, value in values.items():
-        indent = re.search(rf"^([ \t]+){key}:", body, re.M)
-        body = replace(rf"^[ \t]+{key}:.*$", f"{indent.group(1) if indent else '  '}{key}: {scalar(value)}", body, f"slack.{key}")
-    return text[:block.start(1)] + body + text[block.end(1):]
+    return replace(r"^trusted_authors:\n(?:[ \t]+-[^\n]*\n|[ \t]*#[^\n]*\n)*", authors, text, "trusted_authors")

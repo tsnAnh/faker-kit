@@ -1,6 +1,6 @@
 # Vendored Python packages
 
-The team-kit commands put this directory last on `sys.path`, so they use an installed copy of a package
+The faker-kit commands put this directory last on `sys.path`, so they use an installed copy of a package
 first and fall back to the one here. With it, the commands need only a Python 3.9+ and its standard
 library: no pip, no virtual environment, and no network, so upgrading the machine's Python cannot leave
 them unable to import a dependency. Files here are copied unchanged from the release named below and are

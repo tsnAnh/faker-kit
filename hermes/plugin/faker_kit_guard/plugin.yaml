@@ -1,0 +1,9 @@
+name: faker_kit_guard
+version: "0.3.0"
+description: "faker-kit guard. Blocks the hard-blocked calls from ~/.hermes/faker-kit/guard.yaml and bots.yaml, fails closed, asks the owner to approve every bootstrap change, wraps untrusted readers' output, and asks for approval of side-effecting tools in a turn that read it."
+author: "faker-kit"
+provides_hooks:
+  - pre_tool_call
+  - transform_tool_result
+  - pre_llm_call
+  - on_session_end

@@ -2,7 +2,7 @@
 #   gh repo clone tsnAnh/faker-kit && faker-kit/hermes/setup-machine.sh
 # hermes/templates/machine.yaml explains each field. No secrets here.
 version: 1
-bootstrap_bot: team-kit-bootstrap
+bootstrap_bot: faker-kit-bootstrap
 claude_subscription: true
 
 skills:
@@ -15,16 +15,16 @@ guard:
   ask_owner: false
   max_in_flight_total: 5
 
-projects:
-  - bot: team-kit
-    project: team-kit
-    repo: tsnAnh/faker-kit
-    tick_every: 10m
-
 chief:
   bot: chief
 
-# GitHub Actions jobs run here, one fresh container per job (team-kit-runner).
+projects:
+  - bot: faker-kit
+    project: faker-kit
+    repo: tsnAnh/faker-kit
+    heartbeat_every: 1h
+
+# GitHub Actions jobs run here, one fresh container per job (faker-kit runner).
 ci_runners:
   - repo: tsnAnh/faker-kit
     slots: 2
@@ -36,6 +36,5 @@ webhooks:
   tunnel: hermes
 
 slack:
-  bot: team-kit
+  bot: faker-kit
   channel_id: CHANGE-ME
-  channel_name: team-kit

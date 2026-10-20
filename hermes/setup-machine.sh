@@ -5,7 +5,7 @@ usage() {
   cat <<'USAGE'
 Usage: hermes/setup-machine.sh [--config FILE] [--ref COMMIT] [--yes]
 
-Builds a whole team-kit Hermes machine from one machine config, so the same setup can be rebuilt
+Builds a whole faker-kit Hermes machine from one machine config, so the same setup can be rebuilt
 anywhere. Run it from a clone of the kit repository, on Linux (Debian, Ubuntu, or Raspberry Pi OS;
 amd64 or arm64, with systemd) or macOS. Run it again at any time: every step checks first and
 changes only what differs.
@@ -16,7 +16,7 @@ changes only what differs.
 
 It installs what is missing (gh, Claude Code, Hermes, cloudflared, and Python with PyYAML), asks you
 to sign in where a login is missing, asks for tokens with hidden input and writes them only to the
-profiles' .env files, installs the kit and its bots (team-kit-admin machine), publishes the signed
+profiles' .env files, installs the kit and its bots (faker-kit install), publishes the signed
 webhook paths through a Cloudflare Tunnel, runs every service in the background, and checks the
 result. Nothing secret is ever passed on a command line, printed, or written to the config.
 USAGE
@@ -129,9 +129,9 @@ have curl || first+=(curl)
 python3 -c 'import yaml' >/dev/null 2>&1 || first+=(python3 python3-yaml)
 install_packages "${first[@]+"${first[@]}"}"
 python3 -c 'import yaml' >/dev/null 2>&1 || die "python3 cannot import yaml (PyYAML)"
-PYTHONPATH=$here/lib python3 -c 'import sys, pathlib, team_kit_machine as m; m.load_machine(pathlib.Path(sys.argv[1]))' "$config" \
+PYTHONPATH=$here/lib python3 -c 'import sys, pathlib, faker_kit_machine as m; m.load_machine(pathlib.Path(sys.argv[1]))' "$config" \
   || die "fix $config first"
-read_config() { PYTHONPATH=$here/lib python3 -c "import sys, pathlib, team_kit_machine as m; c = m.load_machine(pathlib.Path(sys.argv[1])); $1" "$config"; }
+read_config() { PYTHONPATH=$here/lib python3 -c "import sys, pathlib, faker_kit_machine as m; c = m.load_machine(pathlib.Path(sys.argv[1])); $1" "$config"; }
 bootstrap_bot=$(read_config 'print(c.bootstrap_bot)')
 subscription=$(read_config 'print(1 if c.claude_subscription else 0)')
 project_bots=$(read_config 'print(" ".join(p.bot for p in c.projects))')
@@ -142,8 +142,7 @@ ci_runners=$(read_config 'print(" ".join(r.repo for r in c.ci_runners))')
 [ -n "$ref" ] || ref=$(read_config 'print(c.kit_ref or "")')
 [ -n "$ref" ] || ref=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("kit_ref", ""))' "$repo/.agents/dispatch.json")
 [[ $ref =~ ^[0-9a-f]{40}$ ]] || die "no kit commit: pass --ref, or set kit_ref in $config"
-# The installed kit's team-kit-admin does the work in step 5, so the commit must already have it.
-git -C "$repo" cat-file -e "$ref:hermes/lib/team_kit_machine.py" 2>/dev/null \
+git -C "$repo" cat-file -e "$ref:hermes/lib/faker_kit_machine.py" 2>/dev/null \
   || die "kit $ref has no machine setup (or this clone lacks it: git fetch); pass a newer --ref, or move kit_ref forward"
 
 rest=()
@@ -197,14 +196,15 @@ source_url=$(git -C "$repo" remote get-url origin 2>/dev/null || true)
 # The gateway starts once, in step 7, after the webhook routes exist.
 install_args=(--ref "$ref" --source "$source_url" --bootstrap-bot "$bootstrap_bot" --no-gateway)
 [ "$subscription" = 1 ] && install_args+=(--claude-subscription)
+mkdir -p "$HOME/.hermes/faker-kit"
+install -m 600 "$config" "$HOME/.hermes/faker-kit/machine.yaml"
 bash "$here/install.sh" "${install_args[@]}"
-# From here on, every helper comes from the installed kit, the same commit as team-kit-admin.
-kitlib=$HOME/.hermes/team-kit/kit/hermes/lib
+kitlib=$HOME/.hermes/faker-kit/kit/hermes/lib
 
 # ---------------------------------------------------------------------------------------------------
 say "5/8 Bots and webhooks"
-# A plain shell, never a bot profile: team-kit-admin machine runs only here.
-result=$(env -u HERMES_HOME team-kit-admin machine --config "$config")
+# A plain shell, never a bot profile: faker-kit install runs only here.
+result=$(env -u HERMES_HOME faker-kit install --config "$config")
 python3 - "$result" <<'PY'
 import json, sys
 out = json.loads(sys.argv[1])
@@ -214,14 +214,16 @@ if out["skills"]:
     print(f"    kit skills in: {', '.join(out['skills'])}")
 for hook in out["webhooks"]:
     print(f"    webhook {hook['hook']}: {hook['url']}")
-for line in out["pending"]:
-    print(f"    then: {line}")
+for project in out["projects"]:
+    if not project["jobs_active"]:
+        print(f"    then: sign gh in for {project['bot']}, or put its GH_TOKEN in its .env, so its jobs start")
 PY
 checkouts=$(python3 -c 'import json, sys; print("\n".join(p["launch_checkout"] for p in json.loads(sys.argv[1])["projects"]))' "$result")
 
 # ---------------------------------------------------------------------------------------------------
 say "6/8 Tokens"
 profiles=$HOME/.hermes/profiles
+token_stored=0
 for bot in $project_bots; do
   env_file=$profiles/$bot/.env
   if env_has "$env_file" GH_TOKEN; then
@@ -230,22 +232,29 @@ for bot in $project_bots; do
     # Every bot shares this machine's gh login unless it has a token of its own (another account).
     note "$bot uses this machine's gh login. Press Enter to keep that, or paste a token for a separate bot account."
     token=$(ask_secret "GH_TOKEN for $bot")
-    [ -z "$token" ] || env_set "$env_file" GH_TOKEN "$token"
+    if [ -n "$token" ]; then
+      env_set "$env_file" GH_TOKEN "$token"
+      token_stored=1
+    fi
     unset token
   fi
-  # The bots exist now, so their jobs can start; activate resumes only paused ones.
-  env -u HERMES_HOME team-kit-admin activate --bot "$bot" >/dev/null
-  note "$bot: jobs running"
 done
+[ "$token_stored" = 0 ] || env -u HERMES_HOME faker-kit install --config "$config" >/dev/null
 if [ -n "$slack_bot" ]; then
-  env_file=$profiles/$slack_bot/.env
-  for key in TEAM_KIT_SLACK_APP_TOKEN TEAM_KIT_SLACK_BOT_TOKEN; do
+  env_file=$HOME/.hermes/.env
+  for key in SLACK_APP_TOKEN SLACK_BOT_TOKEN; do
     env_has "$env_file" "$key" && continue
     value=$(ask_secret "$key for the Slack app (xapp-… for the app token, xoxb-… for the bot token)")
     [ -n "$value" ] || die "$key is required while the config enables Slack"
     env_set "$env_file" "$key" "$value"
     unset value
   done
+  env_has "$env_file" SLACK_ALLOWED_USERS || {
+    value=$(ask_secret "SLACK_ALLOWED_USERS: the Slack member ids (U…) that may talk to the bots, comma-separated")
+    [ -n "$value" ] || die "SLACK_ALLOWED_USERS is required while the config enables Slack, so no one else in the workspace reaches a bot"
+    env_set "$env_file" SLACK_ALLOWED_USERS "$value"
+    unset value
+  }
 fi
 
 # ---------------------------------------------------------------------------------------------------
@@ -315,64 +324,50 @@ if [ -n "$webhook_url" ]; then
   chmod 600 "$creds"
   cloudflared tunnel route dns --overwrite-dns "$tunnel" "$public_host" >/dev/null
   tunnel_config=$HOME/.cloudflared/$tunnel.yml
-  PYTHONPATH=$kitlib python3 -c 'import sys, pathlib, team_kit_machine as m; sys.stdout.write(m.cloudflared_config(sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3], m.load_machine(pathlib.Path(sys.argv[4]))))' \
+  PYTHONPATH=$kitlib python3 -c 'import sys, pathlib, faker_kit_machine as m; sys.stdout.write(m.cloudflared_config(sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3], m.load_machine(pathlib.Path(sys.argv[4]))))' \
     "$id" "$creds" "$public_host" "$config" > "$tunnel_config"
-  service_user team-kit-tunnel "$(command -v cloudflared)" --no-autoupdate --config "$tunnel_config" tunnel run
+  service_user faker-kit-tunnel "$(command -v cloudflared)" --no-autoupdate --config "$tunnel_config" tunnel run
   note "Cloudflare Tunnel $tunnel: https://$public_host serves only this machine's signed webhook routes"
 fi
-if [ -n "$slack_bot" ]; then
-  if [ "$os" = Linux ]; then
-    unit=$HOME/.config/systemd/user/team-kit-slack.service
-    mkdir -p "$(dirname "$unit")"
-    team-kit-slack service --format systemd > "$unit"
-    systemctl --user daemon-reload
-    systemctl --user enable team-kit-slack.service >/dev/null 2>&1
-    systemctl --user restart team-kit-slack.service
-  else
-    plist=$HOME/Library/LaunchAgents/team-kit-slack.plist
-    team-kit-slack service --format launchd > "$plist"
-    launchd_load team-kit-slack "$plist"
-  fi
-  note "Slack relay: running"
-fi
 # Also stops the runner services of repositories the config no longer lists.
-team-kit-runner up --config "$config" >/dev/null || die "the CI runners did not start; see team-kit-runner's message above"
-[ -z "$ci_runners" ] || note "CI runners: $ci_runners, one fresh container per job; workflows use runs-on: [self-hosted, team-kit]"
+faker-kit runner up --config "$config" >/dev/null || die "the CI runners did not start; see faker-kit runner's message above"
+[ -z "$ci_runners" ] || note "CI runners: $ci_runners, one fresh container per job; workflows use runs-on: [self-hosted, faker-kit]"
 
 # ---------------------------------------------------------------------------------------------------
 say "8/8 Checks"
 for bot in $project_bots; do
-  HERMES_HOME=$profiles/$bot team-kit-gh kit-check >/dev/null || die "$bot: kit-check failed; run: HERMES_HOME=$profiles/$bot team-kit-gh kit-check"
-  note "$bot: the kit matches the repository"
+  HERMES_HOME=$profiles/$bot faker-kit status >/dev/null || die "$bot: status failed; run: HERMES_HOME=$profiles/$bot faker-kit status"
+  note "$bot: GitHub and the repository's dispatch settings answer"
 done
 if [ -n "$webhook_url" ]; then
   for _ in $(seq 1 30); do curl -fsS --max-time 2 http://127.0.0.1:8644/health >/dev/null 2>&1 && break; sleep 2; done
   curl -fsS --max-time 2 http://127.0.0.1:8644/health >/dev/null || die "the Hermes webhook listener is not answering on 127.0.0.1:8644"
   note "webhook listener: up"
-  # A signed test event fires each bot's tick through the public address: tunnel, route, secret, and
-  # job. A new tunnel or DNS record takes a little while, so it retries for about a minute.
+  # A signed ping goes through the public address: tunnel, route, and secret. Hermes answers 200 for an event the route does
+  # not list, after checking the signature, so no model run starts. A new tunnel or DNS record takes a little while,
+  # so it retries for about a minute.
   for bot in $project_bots; do
     PYTHONPATH=$kitlib python3 - "$webhook_url" "$bot" "$HOME/.hermes/.env" <<'PY' || die "$bot: no signed test event reached Hermes through $webhook_url"
 import hashlib, hmac, json, sys, time, urllib.error, urllib.request, uuid
-import team_kit_machine as m
+import faker_kit_machine as m
 url, bot, env = sys.argv[1], sys.argv[2], sys.argv[3]
 key = m.secret_env(bot)
 secret = next(line.split("=", 1)[1] for line in open(env).read().splitlines() if line.startswith(key + "="))
-body = json.dumps({"zen": "team-kit setup check"}).encode()
+body = json.dumps({"zen": "faker-kit setup check"}).encode()
 signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 for attempt in range(12):
-    request = urllib.request.Request(m.route_url(url, bot, f"{bot}-tick"), data=body, method="POST", headers={
-        "Content-Type": "application/json", "X-GitHub-Event": "issues", "X-GitHub-Delivery": str(uuid.uuid4()),
-        "X-Hub-Signature-256": signature, "User-Agent": "team-kit-setup"})
+    request = urllib.request.Request(m.route_url(url, bot, f"{bot}-pr"), data=body, method="POST", headers={
+        "Content-Type": "application/json", "X-GitHub-Event": "ping", "X-GitHub-Delivery": str(uuid.uuid4()),
+        "X-Hub-Signature-256": signature, "User-Agent": "faker-kit-setup"})
     try:
-        if urllib.request.urlopen(request, timeout=20).status == 202:
+        if urllib.request.urlopen(request, timeout=20).status == 200:
             sys.exit(0)
     except (urllib.error.URLError, OSError):
         pass
     time.sleep(5)
 sys.exit(1)
 PY
-    note "$bot: a signed event through $webhook_url fired its tick"
+    note "$bot: a signed event through $webhook_url accepted a signed ping"
   done
 fi
 
@@ -399,5 +394,5 @@ done 3<<< "$checkouts"
 
 say "Done"
 note "Chat: in Hermes Desktop, Gateways > Add connection > SSH, host $user@$(hostname)."
-if [ -n "$slack_bot" ]; then note "Slack: mention the app in the configured channel; $slack_bot answers in Hermes."; fi
+if [ -n "$slack_bot" ]; then note "Slack: Hermes's own Slack platform serves $slack_bot. SLACK_ALLOWED_USERS in $HOME/.hermes/.env limits who may talk to it."; fi
 note "Run this script again after any change to $config."

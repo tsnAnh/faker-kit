@@ -1,14 +1,3 @@
-"""team-kit guard policy: guard.yaml and bots.yaml parsed into rules, and the decisions made from them.
-
-guard.yaml is the owner's policy for the machine. bots.yaml names each Hermes profile that is a
-team-kit bot, its role, and for a project bot its project and its one repository. team-kit-admin writes
-bots.yaml; nothing else does. A bot's name is free: its role comes from bots.yaml, never from its
-name.
-
-Pure logic, standard library plus PyYAML. The Hermes hook wiring lives in __init__.py. The
-team-kit-gh, team-kit-admin, team-kit-chief, and team-kit-slack import this module too, so every
-part of the machine reads the same policy.
-"""
 
 from __future__ import annotations
 
@@ -17,18 +6,19 @@ import hashlib
 import html
 import json
 import os
+import posixpath
 import re
 import shlex
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 
 GUARD_VERSION = 2
 BOTS_VERSION = 1
 ROLES = ("bootstrap", "project", "chief")
-DEFAULT_TICK_EVERY = "30m"
+DEFAULT_HEARTBEAT_EVERY = "1h"
 DEFAULT_INCIDENTS_EVERY = "10m"
-# The security review runs only when the default branch moved, so a short interval reviews each push soon after it lands.
-DEFAULT_SECURITY_EVERY = "15m"
+DEFAULT_SECURITY_EVERY = "6h"
 INTERVAL = re.compile(r"\A[1-9][0-9]*(?:m|h)\Z")
 
 DEFAULT_READ_ONLY_TOOLS = (
@@ -39,41 +29,24 @@ DEFAULT_READ_ONLY_TOOLS = (
 CHAT_TOOLS = ("message_agent", "clarify", "todo_*", "skills_list", "skill_view", "session_search")
 TRUSTED_RESULTS = (*CHAT_TOOLS, "write_file", "patch")
 PATH_ARGS = {"write_file": ("path",), "patch": ("path",), "read_file": ("path",), "search_files": ("path",)}
-TEAM_KIT_PROGRAMS = ("team-kit-gh", "team-kit-admin", "team-kit-chief")
-# Each role's one command.
-ROLE_COMMAND = {"project": "team-kit-gh", "bootstrap": "team-kit-admin", "chief": "team-kit-chief"}
-# install.sh writes every command under both names, so the guard reads faker-kit-<rest> as team-kit-<rest>.
-PROGRAM_PREFIX = "team-kit-"
-PROGRAM_ALIAS_PREFIX = "faker-kit-"
+PROGRAM = "faker-kit"
 SEGMENT_SPLIT = re.compile(r"\|\||&&|[;|&\n]|\$\(|`|\)")
 ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
-ENV_NAME = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
 
 NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
-# `default` is the owner's own Hermes profile, whose home is ~/.hermes itself.
 RESERVED_NAMES = frozenset({"default"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
-SLACK_CHANNEL_ID = re.compile(r"\A[CG][A-Z0-9]{2,}\Z")
-SLACK_CHANNEL_NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,79}\Z")
-
-PROJECT_COMMANDS = ("project", "dispatch", "launch", "verify", "rework", "andon", "security", "incidents", "upstream", "proposals", "teammate-proposals", "tick", "status", "report-status", "read", "show", "pr-state", "merge", "close", "code", "kit-check")  # noqa: E501
-BOOTSTRAP_COMMANDS = ("status", "add-project", "add-chief", "vendor", "setup-repo", "protect", "activate", "andon", "setup-request", "discover", "adopt")
-BOOTSTRAP_READ_ONLY = ("status", "discover")
-CLEAN_TURN_COMMANDS = ("merge", "close", "rework")
-# The chief of staff reads every project and hands work over by message. Its one write is `new-project`;
-# unless ask_owner is off, the guard asks the owner to approve it every time.
-CHIEF_COMMANDS = ("projects", "status", "show", "new-project", "andon")
-CHIEF_APPROVALS = {
-    "new-project": "The chief bot asks the bootstrap bot to set up a new project for this repository. Approve only if you asked for that project.",
-}
+SLACK_CHANNEL = re.compile(r"\A[CG][A-Z0-9]{8,}\Z")
+BOOTSTRAP_READ_ONLY = ("status",)
+CLEAN_TURN_COMMANDS = ("merge",)
 SECRET_TEXT = re.compile(
     r"(?<![\w.-])\.env(?:\.(?!example(?![\w-])|sample(?![\w-])|template(?![\w-])|dist(?![\w-]))[\w-]+)*(?![\w.-])"
     r"|\.ssh(?![\w-])|\.config/gh(?![\w-])|\.git-credentials|\.netrc(?![\w-])|\.aws/credentials|\bid_(?:rsa|ed25519|ecdsa)(?![\w-])"
-    r"|login\.keychain|\.hermes(?!/bin(?![\w-])|/team-kit/kit(?![\w-])|/team-kit/briefs(?![\w-]))(?![\w-])|\.hermes/\S*\.\."
-    r"|\bHERMES_HOME\b|\bTEAM_KIT_HOME\b",
+    r"|login\.keychain|\.hermes(?!/bin(?![\w-])|/faker-kit/kit(?![\w-])|/faker-kit/briefs(?![\w-]))(?![\w-])|\.hermes/\S*\.\."
+    r"|\bHERMES_HOME\b|\bFAKER_KIT_HOME\b",
     re.I,
 )
-WRITE_PROTECTED = re.compile(r"\.hermes(?!/team-kit/briefs(?![\w-]))(?![\w-])", re.I)
+WRITE_PROTECTED = re.compile(r"\.hermes(?!/faker-kit/briefs(?![\w-]))(?![\w-])", re.I)
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
 SECRET_SEGMENTS = re.compile(
     r"\A(?:gh auth token\b|gh auth status\b.*(?:\s-t\b|--show-token)|security (?:find-|dump-keychain|export)|git credential\b"
@@ -89,17 +62,24 @@ GIT_SHELL_ALIAS = re.compile(r"(?:-c)?alias\.[^=\s]*=\s*!", re.I)
 SEPARATORS = set(";&|()\n")
 MAX_WRAPPERS = 16
 MAX_COMMAND_CHARS = 100_000
+GRAPHQL_WRITES = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch|updateRef|createRef|deleteRef|createCommitOnBranch|dismissPullRequestReview)\b")
+GITHUB_MENTION = re.compile(r"github|\bgh\b|\brepos/", re.I)
+GITHUB_WRITE_PATHS = re.compile(
+    r"pulls/{1,8}.{0,60}?/{1,8}(?:merge|reviews)\b|/merges\b|/statuses/|/check-runs\b|/check-suites\b|\bgit/{1,8}refs\b|/contents/"
+    r"|actions/{1,8}(?:runs|jobs)/{1,8}.{0,40}?/{1,8}(?:rerun|cancel|force-cancel)", re.I)
+WRITE_INTENT = re.compile(
+    r"\b(?:put|post|patch|delete)\b|(?<![\w-])-[A-Za-z]*[XfF]|--method\b|--(?:field|raw-field|input)\b|\bmethod\s*[=:]|\b(?:data|json)=|\bbody\s*:", re.I)
 CODE_BLOCKS = (
-    (re.compile(r"\bgh\W+pr\W+merge\b"), "raw gh pr merge skips team-kit-gh merge's checks gate"),
+    (re.compile(r"\bgh\W+pr\W+merge\b"), "raw gh pr merge skips faker-kit merge's gate"),
     (re.compile(r"\bgh\W+repo\W+delete\b"), "it deletes a repository"),
-    (re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch)\b"), "it merges or deletes through GraphQL"),
+    (re.compile(r"\bgh\W+(?:run|workflow)\W+(?:rerun|cancel|run)\b"), "a bot never re-runs, cancels, or starts a workflow run"),
+    (GRAPHQL_WRITES, "it merges, deletes, moves a ref, or dismisses a review through GraphQL"),
     (re.compile(r"\bgit\b[^\n]{0,80}?\bpush\b"), "push from the terminal with a named branch, not from code or a delegated task"),
     (WIPE, "it wipes / or the home folder"),
 )
 INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|perl|ruby|php|bun|deno|osascript)\Z")
 INTERPRETER_CODE_OPTIONS = ("-c", "-e", "-E", "-r", "--eval", "--command", "-p", "--print")
 UNCHECKABLE = "(unchecked)"
-GRAPHQL_BLOCKS = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch)\b")
 WRAPPERS = ("env", "command", "exec", "nohup", "sudo", "xargs", "time", "nice", "stdbuf", "caffeinate", "timeout", "arch")
 WRAPPER_VALUE_OPTIONS = {"env": ("-u", "-C", "-P", "-L", "-U", "--unset", "--chdir"), "arch": ("-arch", "-e"), "nice": ("-n", "--adjustment"), "timeout": ("-s", "-k", "--signal", "--kill-after"),
                          "sudo": ("-u", "-g", "-C", "-D", "-h", "-p", "-U", "-r", "-t", "-T", "-R", "--user", "--group", "--close-from", "--chdir",
@@ -117,16 +97,17 @@ GH_API_VALUE_OPTIONS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field
 GH_API_BODY_OPTIONS = ("-f", "-F", "--field", "--raw-field", "--input")
 KIT_READERS = ("cat", "ls", "head", "tail", "grep", "rg", "wc", "less", "file", "stat", "diff", "realpath", "readlink")
 KIT_GIT_READS = ("log", "show", "status", "diff", "rev-parse", "describe", "ls-files", "blame")
-PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|team-kit/kit)(?![\w-])", re.I)
-CLEAN_TURN_TEXT = re.compile(r"\b(?:team|faker)-kit-gh\W+(merge|close|rework)\b")
+BRIEFS_PATH = re.compile(r"faker-kit/briefs(?![\w-])", re.I)
+LINK_CALL = r"(?:symlink\w*|hardlink_to|os\.link|fs\.link\w*)"
+LINK_IN_CODE = re.compile(rf"(?s){LINK_CALL}.{{0,300}}faker-kit/briefs|faker-kit/briefs.{{0,300}}{LINK_CALL}", re.I)
+PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|faker-kit/kit)(?![\w-])", re.I)
+CLEAN_TURN_TEXT = re.compile(r"\bfaker-kit\W+(merge)\b")
 TAINTED_TURN_SECONDS = 3600
 TAINT_BLOCKED_TOOLS = ("delegate_task", "cronjob*")
 
 
-def team_kit_program(word: str) -> bool:
-    name = Path(word).name
-    installed = (name, f"~/.hermes/bin/{name}", str(Path.home() / ".hermes" / "bin" / name))
-    return canonical_program(name) in TEAM_KIT_PROGRAMS and word in installed
+def faker_kit_program(word: str) -> bool:
+    return word in (PROGRAM, f"~/.hermes/bin/{PROGRAM}", str(Path.home() / ".hermes" / "bin" / PROGRAM))
 
 
 def tainted_turn_marker(home: Path, profile: str) -> Path:
@@ -137,36 +118,22 @@ def tainted_turn_record(home: Path, profile: str, session: str) -> Path:
     return tainted_turn_marker(home, profile) / (re.sub(r"[^A-Za-z0-9_.-]", "_", session)[:120] or "unknown")
 
 
-MIGRATE_V1 = (
-    "guard.yaml is version 1. team-kit now keeps bots in bots.yaml: set `version: 2` in guard.yaml, "
-    "delete its `repos` and `profiles` keys, add `max_in_flight_total`, and register each project "
-    "with `team-kit-admin add-project` (hermes/README.md, Migrate from version 1)"
-)
-
-
 class PolicyError(ValueError):
     pass
 
 
-def team_kit_home() -> Path:
-    return Path(os.environ.get("TEAM_KIT_HOME") or Path.home() / ".hermes" / "team-kit")
-
-
-def canonical_program(word: str) -> str:
-    if word.startswith(PROGRAM_ALIAS_PREFIX):
-        return PROGRAM_PREFIX + word.removeprefix(PROGRAM_ALIAS_PREFIX)
-    return word
+def faker_kit_home() -> Path:
+    return Path(os.environ.get("FAKER_KIT_HOME") or Path.home() / ".hermes" / "faker-kit")
 
 
 def command_segments(command: str) -> list[str]:
-    """Each simple command in a shell line, env assignments dropped, program name reduced to its canonical basename."""
     out = []
     for raw in SEGMENT_SPLIT.split(command or ""):
         words = raw.strip().split()
         while words and ENV_ASSIGN.match(words[0]):
             words.pop(0)
         if words:
-            words[0] = canonical_program(os.path.basename(words[0]))  # noqa: PTH119
+            words[0] = Path(words[0]).name
             out.append(" ".join(words))
     return out
 
@@ -187,38 +154,23 @@ class ToolRule:
         return self.tool if self.command is None else f"{self.tool}:{self.command}"
 
 
-# Readers whose output anyone can write, wrapped whatever guard.yaml says, so a machine with an older guard.yaml
-# still marks them: `code` prints commit and pull request titles.
-ALWAYS_UNTRUSTED = (ToolRule(tool="terminal", command="team-kit-gh code*"),)
-
 @dataclass(frozen=True)
 class Bot:
     name: str
     role: str
     project: str | None = None
     repo: str | None = None
-    tick_every: str = DEFAULT_TICK_EVERY
+    heartbeat_every: str = DEFAULT_HEARTBEAT_EVERY
     incidents_every: str = DEFAULT_INCIDENTS_EVERY
     security_every: str = DEFAULT_SECURITY_EVERY
+    slack_channel: str | None = None
 
     @property
     def repos(self) -> tuple[str, ...]:
         return (self.repo,) if self.repo else ()
 
     def owns(self, repo: str) -> bool:
-        return bool(self.repo) and repo.lower() == self.repo.lower()  # type: ignore[union-attr]  # team-kit baseline
-
-
-
-@dataclass(frozen=True)
-class SlackConfig:
-    enabled: bool
-    bot: str | None = None
-    channel_id: str | None = None
-    channel_name: str | None = None
-    app_token_env: str = "TEAM_KIT_SLACK_APP_TOKEN"  # noqa: S105
-    bot_token_env: str = "TEAM_KIT_SLACK_BOT_TOKEN"  # noqa: S105
-    mirror_notices: bool = False
+        return self.repo is not None and repo.lower() == self.repo.lower()
 
 
 @dataclass(frozen=True)
@@ -228,21 +180,19 @@ class Policy:
     read_only_tools: frozenset[str]
     trusted_authors: frozenset[str]
     max_in_flight_total: int
-    require_brief_marker: bool = True
     ask_owner: bool = True
     alert_hosts: frozenset[str] = frozenset()
-    slack: SlackConfig | None = None
     bots: dict[str, Bot] = field(default_factory=dict)
-    home: Path = field(default_factory=team_kit_home)
+    home: Path = field(default_factory=faker_kit_home)
 
     def bot(self, name: str) -> Bot:
         found = self.bots.get(name)
         if found is None:
-            raise PolicyError(f"profile {name} is not a team-kit bot in bots.yaml")
+            raise PolicyError(f"profile {name} is not a faker-kit bot in bots.yaml")
         return found
 
     def projects(self) -> dict[str, Bot]:
-        return {b.project: b for b in self.bots.values() if b.role == "project"}  # type: ignore[misc]  # team-kit baseline
+        return {b.project: b for b in self.bots.values() if b.role == "project" and b.project}
 
     def all_repos(self) -> list[str]:
         return [r for b in self.bots.values() for r in b.repos]
@@ -251,28 +201,21 @@ class Policy:
         return next((b for b in self.bots.values() if b.role == "project" and b.owns(repo)), None)
 
 
-def _canonical_glob(command: str | None) -> str | None:
-    if command is None:
-        return None
-    program, sep, rest = str(command).partition(" ")
-    return canonical_program(program) + sep + rest
-
-
-def _rule(entry, where: str) -> ToolRule:  # noqa: ANN001
+def _rule(entry: object, where: str) -> ToolRule:
     if isinstance(entry, str):
-        return ToolRule(command=_canonical_glob(entry))
+        return ToolRule(command=entry)
     if isinstance(entry, dict) and set(entry) <= {"tool", "command"} and entry:
-        return ToolRule(tool=str(entry.get("tool", "terminal")), command=_canonical_glob(entry.get("command")))
+        return ToolRule(tool=str(entry.get("tool", "terminal")), command=entry.get("command"))
     raise PolicyError(f"{where}: each entry is a command glob or {{tool, command}}")
 
 
-def _bool(value, where: str) -> bool:  # noqa: ANN001
+def _bool(value: object, where: str) -> bool:
     if isinstance(value, bool):
         return value
     raise PolicyError(f"{where} must be true or false")
 
 
-def parse_bots(data) -> dict[str, Bot]:  # noqa: ANN001
+def parse_bots(data: object) -> dict[str, Bot]:
     if data is None:
         return {}
     if not isinstance(data, dict) or data.get("version") != BOTS_VERSION:
@@ -303,15 +246,18 @@ def parse_bots(data) -> dict[str, Bot]:  # noqa: ANN001
         if repo.lower() in seen_repos:
             raise PolicyError(f"bots.yaml: {repo} belongs to both {seen_repos[repo.lower()]} and {name}")
         seen_repos[repo.lower()] = name
-        tick_every = _interval(raw.get("tick_every"), f"bots.yaml: {name} tick_every", DEFAULT_TICK_EVERY)
+        heartbeat_every = _interval(raw.get("heartbeat_every"), f"bots.yaml: {name} heartbeat_every", DEFAULT_HEARTBEAT_EVERY)
         incidents_every = _interval(raw.get("incidents_every"), f"bots.yaml: {name} incidents_every", DEFAULT_INCIDENTS_EVERY)
         security_every = _interval(raw.get("security_every"), f"bots.yaml: {name} security_every", DEFAULT_SECURITY_EVERY)
-        bots[name] = Bot(name=name, role="project", project=project, repo=repo, tick_every=tick_every, incidents_every=incidents_every,
-                         security_every=security_every)
+        slack_channel = raw.get("slack_channel")
+        if slack_channel is not None and not (isinstance(slack_channel, str) and SLACK_CHANNEL.match(slack_channel)):
+            raise PolicyError(f"bots.yaml: {name} slack_channel must be a Slack channel id like C012ABCDEF")
+        bots[name] = Bot(name=name, role="project", project=project, repo=repo, heartbeat_every=heartbeat_every, incidents_every=incidents_every,
+                         security_every=security_every, slack_channel=slack_channel)
     return bots
 
 
-def _interval(value, where: str, default: str) -> str:  # noqa: ANN001
+def _interval(value: object, where: str, default: str) -> str:
     if value is None:
         return default
     value = str(value)
@@ -323,8 +269,7 @@ def _interval(value, where: str, default: str) -> str:  # noqa: ANN001
 ALERT_HOST = re.compile(r"\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+\Z")
 
 
-def parse_alert_hosts(value) -> frozenset[str]:  # noqa: ANN001
-    """Hosts an alert source may send its token to, besides each source's own default. Only the owner edits this."""
+def parse_alert_hosts(value: object) -> frozenset[str]:
     if value is None:
         return frozenset()
     if not isinstance(value, list) or any(not isinstance(h, str) or not ALERT_HOST.match(h.lower()) for h in value):
@@ -332,50 +277,7 @@ def parse_alert_hosts(value) -> frozenset[str]:  # noqa: ANN001
     return frozenset(h.lower() for h in value)
 
 
-def parse_slack(data, bots: dict[str, Bot]) -> SlackConfig | None:  # noqa: ANN001
-    if data is None:
-        return None
-    if not isinstance(data, dict):
-        raise PolicyError("guard.yaml slack must be a mapping")
-    allowed = {"enabled", "bot", "channel_id", "channel_name", "app_token_env", "bot_token_env", "mirror_notices"}
-    extra = sorted(set(data) - allowed)
-    if extra:
-        raise PolicyError(f"guard.yaml slack may hold only {', '.join(sorted(allowed))}; got {', '.join(extra)}")
-    enabled = _bool(data.get("enabled", False), "guard.yaml slack.enabled")
-    mirror = _bool(data.get("mirror_notices", False), "guard.yaml slack.mirror_notices")
-    app_token_env = str(data.get("app_token_env") or "TEAM_KIT_SLACK_APP_TOKEN")
-    bot_token_env = str(data.get("bot_token_env") or "TEAM_KIT_SLACK_BOT_TOKEN")
-    for key, value in (("app_token_env", app_token_env), ("bot_token_env", bot_token_env)):
-        if not ENV_NAME.match(value):
-            raise PolicyError(f"guard.yaml slack.{key} must be an environment variable name, not a token value")
-    bot = str(data.get("bot") or "")
-    channel_id = str(data.get("channel_id") or "")
-    channel_name = str(data.get("channel_name") or "").removeprefix("#")
-    if channel_id and not SLACK_CHANNEL_ID.match(channel_id):
-        raise PolicyError("guard.yaml slack.channel_id must be a Slack channel id like C012ABCDEF or G012ABCDEF")
-    if channel_name and not SLACK_CHANNEL_NAME.match(channel_name):
-        raise PolicyError("guard.yaml slack.channel_name must be a lowercase Slack channel name without #")
-    if enabled:
-        if not channel_id:
-            raise PolicyError("guard.yaml slack.channel_id is required when slack.enabled is true")
-        if not channel_name:
-            raise PolicyError("guard.yaml slack.channel_name is required when slack.enabled is true")
-        if bot not in bots:
-            raise PolicyError("guard.yaml slack.bot must name a bot from bots.yaml when slack.enabled is true")
-    return SlackConfig(
-        enabled=enabled,
-        bot=bot or None,
-        channel_id=channel_id or None,
-        channel_name=channel_name or None,
-        app_token_env=app_token_env,
-        bot_token_env=bot_token_env,
-        mirror_notices=mirror,
-    )
-
-
-def parse_policy(data, bots=None, home: Path | None = None) -> Policy:  # noqa: ANN001
-    if isinstance(data, dict) and data.get("version") == 1:
-        raise PolicyError(MIGRATE_V1)
+def parse_policy(data: object, bots: object = None, home: Path | None = None) -> Policy:
     if not isinstance(data, dict) or data.get("version") != GUARD_VERSION:
         raise PolicyError("guard.yaml must be a mapping with version: 2")
     total = data.get("max_in_flight_total")
@@ -387,20 +289,18 @@ def parse_policy(data, bots=None, home: Path | None = None) -> Policy:  # noqa: 
     parsed_bots = parse_bots(bots)
     return Policy(
         deny=tuple(_rule(e, "deny") for e in data.get("deny") or []),
-        untrusted_readers=tuple(_rule(e, "untrusted_readers") for e in data.get("untrusted_readers") or []) + ALWAYS_UNTRUSTED,
+        untrusted_readers=tuple(_rule(e, "untrusted_readers") for e in data.get("untrusted_readers") or []),
         read_only_tools=frozenset(data.get("read_only_tools") or DEFAULT_READ_ONLY_TOOLS),
         trusted_authors=frozenset(str(a).lower() for a in data.get("trusted_authors") or []),
         max_in_flight_total=total,
-        require_brief_marker=bool(data.get("require_brief_marker", True)),
         ask_owner=ask_owner,
         alert_hosts=parse_alert_hosts(data.get("alert_hosts")),
-        slack=parse_slack(data.get("slack"), parsed_bots),
         bots=parsed_bots,
-        home=home or team_kit_home(),
+        home=home or faker_kit_home(),
     )
 
 
-def _yaml(path: Path, missing_ok: bool):  # noqa: ANN202
+def _yaml(path: Path, missing_ok: bool) -> object:
     import yaml  # noqa: PLC0415
 
     try:
@@ -414,17 +314,16 @@ def _yaml(path: Path, missing_ok: bool):  # noqa: ANN202
 
 
 def load_policy(home: Path | None = None) -> Policy:
-    """guard.yaml must exist. A missing bots.yaml means no bots yet, so every bot is refused."""
-    home = home or team_kit_home()
+    home = home or faker_kit_home()
     return parse_policy(_yaml(home / "guard.yaml", False), _yaml(home / "bots.yaml", True), home)
 
 
 def block(message: str) -> dict:
-    return {"action": "block", "message": f"team-kit guard: {message}"}
+    return {"action": "block", "message": f"faker-kit guard: {message}"}
 
 
 def approve(message: str, tool_name: str, args: dict, kind: str) -> dict:
-    return {"action": "approve", "message": message, "rule_key": f"team-kit-{kind}:{tool_name}:{call_digest(args)}"}
+    return {"action": "approve", "message": message, "rule_key": f"faker-kit-{kind}:{tool_name}:{call_digest(args)}"}
 
 
 def strings(value: object) -> list[str]:
@@ -532,7 +431,7 @@ def shell_words(segment: str, keep_path: bool = False) -> list[str]:
     else:
         return [UNCHECKABLE, *words[:1]]
     if words and not keep_path:
-        words[0] = canonical_program(Path(words[0]).name)
+        words[0] = Path(words[0]).name
     return words
 
 
@@ -685,40 +584,178 @@ def git_push_problem(args: list[str]) -> str | None:
     return None
 
 
+PROTECTED_BRANCHES = ("main", "master", "trunk", "HEAD")
+REVIEW_DISMISSAL = re.compile(r"\Apulls/[0-9]+/reviews/[0-9]+/dismissals\Z")
+CURL_BODY_OPTIONS = ("-d", "--data", "--data-raw", "--data-binary", "--data-ascii", "--json", "-F", "--form", "--data-urlencode", "-T", "--upload-file")
+CURL_VALUE_OPTIONS = (*CURL_BODY_OPTIONS, "-X", "--request", "-H", "--header", "-u", "--user", "-o", "--output", "-A", "--user-agent", "-e", "--referer",
+                      "--url", "-b", "--cookie", "-c", "--cookie-jar", "--connect-timeout", "-m", "--max-time", "--retry", "--proxy", "-x", "--cacert", "--cert", "-w", "--write-out")
+API_HOST = re.compile(r"\A(?:https?://)?api\.github\.com(?::443)?(?=/|\Z)", re.I)
+
+
+def body_fields(pairs: list[str]) -> dict[str, str]:
+    return {key: value for key, _, value in (pair.partition("=") for pair in pairs)}
+
+
+def json_fields(text: str) -> dict[str, str] | None:
+    if text.lstrip().startswith("{"):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return None
+        return {str(k): str(v).lower() if isinstance(v, bool) else str(v) for k, v in data.items()} if isinstance(data, dict) else None
+    if text.startswith("@") or text == "-":
+        return None
+    return body_fields(text.split("&"))
+
+
+def decoded_path(path: str) -> str:
+    for _ in range(3):
+        decoded = urllib.parse.unquote(path)
+        if decoded == path:
+            break
+        path = decoded
+    return posixpath.normpath(path.replace("\\", "/")).lower()
+
+
+def github_write_problem(method: str, path: str, fields: dict[str, str] | None) -> str | None:
+    parts = [p for p in decoded_path(path).split("/") if p not in ("", ".", "..")]
+    if parts[:1] != ["repos"] or len(parts) < 3:
+        return None
+    rest = parts[3:]
+    tail = "/".join(rest)
+    if method == "DELETE" and len(parts) == 3:
+        return "it deletes a repository"
+    if parts[-1:] == ["merge"] and method != "GET":
+        return "a raw merge skips faker-kit merge's gate"
+    if parts[-1:] == ["merges"] and method != "GET":
+        return "it merges branches straight into a base branch"
+    if method == "GET":
+        return None
+    if not rest:
+        return "it changes repository settings such as the default branch"
+    if rest[:1] == ["pulls"] and "reviews" in rest:
+        return "a bot never submits, edits, or dismisses a review, which is the merge gate's evidence"
+    if rest[:1] in (["statuses"], ["check-runs"], ["check-suites"]):
+        return "a bot never writes a commit status or a check run, which are the merge gate's evidence"
+    if rest[:1] == ["actions"] and rest[1:2] in (["runs"], ["jobs"]) and rest[-1:] and rest[-1].startswith(("rerun", "cancel", "force-cancel")):
+        return "a bot never re-runs or cancels a workflow run, because the security verdict on a head must stick"
+    if REVIEW_DISMISSAL.match(tail):
+        return "a bot never dismisses a review, which is the merge gate's evidence"
+    if rest[:2] == ["git", "refs"]:
+        ref = "/".join(rest[2:]) if len(rest) > 2 else (fields or {}).get("ref", "")
+        name = ref.lower().removeprefix("refs/").removeprefix("heads/").strip("/")
+        if name in {b.lower() for b in PROTECTED_BRANCHES}:
+            return "it moves, creates, or deletes the main branch's ref"
+        if method in ("PATCH", "PUT") and (fields is None or fields.get("force", "false").lower() not in ("false", "0", "")):
+            return "it can force-update a ref"
+    if rest[:1] == ["contents"] and method in ("PUT", "DELETE"):
+        branch = (fields or {}).get("branch", "")
+        if fields is None or branch.lower().removeprefix("refs/heads/").strip("/") in ("", *(b.lower() for b in PROTECTED_BRANCHES)):
+            return "it writes a file to the default branch or to a branch it does not name"
+    return None
+
+
+GH_API_SHORT_VALUES = "XHfFqtp"
+UNSEEN_KEYS = ("branch", "force", "ref", "query")
+
+
+def gh_api_words(args: list[str]) -> tuple[str, str, list[str], bool]:
+    method, path, pairs, unseen, i = "", "", [], False, 0
+    while i < len(args):
+        word = args[i]
+        i += 1
+        if word == "--":
+            continue
+        if word.startswith("--"):
+            name, eq, value = word.partition("=")
+            if name not in GH_API_VALUE_OPTIONS:
+                continue
+            if not eq and i < len(args):
+                value, i = args[i], i + 1
+            option = name
+        elif word.startswith("-") and len(word) > 1:
+            option, value = "", ""
+            for k, letter in enumerate(word[1:], 1):
+                if letter in GH_API_SHORT_VALUES:
+                    option = f"-{letter}"
+                    value = word[k + 1:].removeprefix("=")
+                    if not value and i < len(args):
+                        value, i = args[i], i + 1
+                    break
+            if not option:
+                continue
+        else:
+            path = path or word
+            continue
+        if option in ("-X", "--method"):
+            method = value
+        elif option in ("-f", "-F", "--field", "--raw-field"):
+            pairs.append(value)
+        elif option == "--input":
+            unseen = True
+    return method, path, pairs, unseen
+
+
 def gh_api_problem(args: list[str]) -> str | None:
-    method, path, body, i = "", "", False, 0
+    method, path, pairs, unseen = gh_api_words(args)
+    fields = body_fields(pairs)
+    method = (method or ("POST" if pairs or unseen else "GET")).upper()
+    path = re.sub(r"\Ahttps?://[^/]+/", "", urllib.parse.unquote(path)).split("?")[0].strip("/")
+    unseen = unseen or any(fields.get(key, "").startswith("@") for key in UNSEEN_KEYS)
+    if path.lower() == "graphql" and (unseen or any(GRAPHQL_WRITES.search(w) for w in args) or any(v.startswith("@") for v in fields.values())):
+        return "it merges, deletes, moves a ref, or dismisses a review through GraphQL, or the guard cannot read the query"
+    return github_write_problem(method, path, None if unseen else fields)
+
+
+def curl_problem(args: list[str]) -> str | None:
+    method, url, bodies, upload, i = "", "", [], False, 0
     while i < len(args):
         word = args[i]
         name, eq, value = word.partition("=")
         if word.startswith("-X") and len(word) > 2:
-            method = word[2:]
-        elif eq and name in ("--method",):
-            method = value
-        elif word in GH_API_VALUE_OPTIONS:
-            if word in ("-X", "--method") and i + 1 < len(args):
+            method = word[2:].removeprefix("=")
+        elif word.startswith("-") and not word.startswith("--") and len(word) > 2 and "X" in word[1:]:
+            attached = word[word.index("X", 1) + 1:].removeprefix("=")
+            if attached:
+                method = attached
+            elif i + 1 < len(args):
                 method = args[i + 1]
-            body = body or word in GH_API_BODY_OPTIONS
+                i += 2
+                continue
+        elif word in ("-X", "--request") and i + 1 < len(args):
+            method = args[i + 1]
             i += 2
             continue
-        elif eq and name in GH_API_VALUE_OPTIONS:
-            body = body or name in GH_API_BODY_OPTIONS
-        elif not word.startswith("-") and not path:
-            path = word
+        elif eq and name == "--request":
+            method = value
+        elif word == "--url" and i + 1 < len(args):
+            url = args[i + 1]
+            i += 2
+            continue
+        elif word in CURL_VALUE_OPTIONS:
+            if word in CURL_BODY_OPTIONS and i + 1 < len(args):
+                bodies.append(args[i + 1])
+                upload = upload or word in ("-T", "--upload-file")
+            i += 2
+            continue
+        elif eq and name in CURL_BODY_OPTIONS:
+            bodies.append(value)
+        elif word[:2] in ("-d", "-F") and len(word) > 2 and not word.startswith("--"):
+            bodies.append(word[2:])
+        elif API_HOST.match(word):
+            url = word
         i += 1
-    method = (method or ("POST" if body else "GET")).upper()
-    path = re.sub(r"\Ahttps?://[^/]+/", "", path).split("?")[0].strip("/")
-    if path == "graphql" and any(GRAPHQL_BLOCKS.search(w) for w in args):
-        return "it merges or deletes through GraphQL"
-    parts = path.split("/")
-    if parts[:1] != ["repos"]:
+    if not API_HOST.match(url):
         return None
-    if method == "DELETE" and len(parts) == 3:
-        return "it deletes a repository"
-    if parts[-1:] == ["merge"] and method != "GET":
-        return "a raw merge skips team-kit-gh merge's checks gate"
-    if parts[-1:] == ["merges"] and method != "GET":
-        return "it merges branches straight into a base branch"
-    return None
+    method = (method or ("PUT" if upload else "POST" if bodies else "GET")).upper()
+    path = urllib.parse.unquote(API_HOST.sub("", url)).split("?")[0].split("#")[0].strip("/")
+    if path == "graphql" and any(GRAPHQL_WRITES.search(w) for w in args):
+        return "it merges, deletes, moves a ref, or dismisses a review through GraphQL"
+    fields: dict[str, str] | None = {}
+    for text in bodies:
+        parsed = json_fields(text)
+        fields = None if parsed is None or fields is None else {**fields, **parsed}
+    return github_write_problem(method, path, fields)
 
 
 def wipes_home_or_root(words: list[str]) -> bool:
@@ -737,11 +774,17 @@ def command_problem(policy: Policy, words: list[str]) -> str | None:
     if program == UNCHECKABLE:
         return "the guard cannot check shells or eval nested this deep; write the commands to a script file and run that"
     if program == "gh" and words[1:3] == ["pr", "merge"]:
-        return "raw gh pr merge skips team-kit-gh merge's checks gate"
+        return "raw gh pr merge skips faker-kit merge's gate"
+    if program == "gh" and words[1:2] in (["run"], ["workflow"]) and words[2:3] in (["rerun"], ["cancel"], ["run"]):
+        return "a bot never re-runs, cancels, or starts a workflow run, because the security verdict on a head must stick"
+    if program == "gh" and words[1:2] in (["alias"], ["extension"], ["ext"]):
+        return "a gh alias or extension can hide any command"
     if program == "gh" and words[1:3] == ["repo", "delete"]:
         return "it deletes a repository"
     if program == "gh" and words[1:2] == ["api"]:
         return gh_api_problem(words[2:])
+    if program == "curl":
+        return curl_problem(words[1:])
     if program == "git" and (any(GIT_SHELL_ALIAS.match(w) for w in words)
                              or any(words[k].lower().startswith("alias.") and words[k + 1].startswith("!") for k in range(len(words) - 1))):
         return "a git shell alias can hide any command"
@@ -757,8 +800,8 @@ def command_problem(policy: Policy, words: list[str]) -> str | None:
         chosen = next((words[j + 1] for j, w in enumerate(words[:-1]) if w in ("-p", "--profile")), None)
         chosen = chosen or next((w.split("=", 1)[1] for w in words if w.startswith("--profile=")), None)
         if chosen not in policy.bots or chosen == "default":
-            return "a bot runs hermes only with -p naming a team-kit bot, never the default Hermes agent"
-    if any(PROTECTED_KIT.search(w) for w in words[1:]) and program not in (*KIT_READERS, *TEAM_KIT_PROGRAMS):
+            return "a bot runs hermes only with -p naming a faker-kit bot, never the default Hermes agent"
+    if any(PROTECTED_KIT.search(w) for w in words[1:]) and program not in (*KIT_READERS, PROGRAM):
         reading = program == "git" and any(w in KIT_GIT_READS for w in words[1:4])
         reading = reading or (program == "find" and not {"-delete", "-exec", "-execdir", "-ok"} & set(words))
         if not reading:
@@ -785,10 +828,13 @@ def terminal_problem(policy: Policy, command: str, depth: int = 0) -> str | None
         return "the command is too long for the guard to check; put long content in a file with write_file and run a short command"
     if re.search(r">\s*\S*" + PROTECTED_KIT.pattern, command, re.I):
         return "bots never change the kit or ~/.hermes/bin"
-    for words in shell_commands(command, keep_path=True):
-        why = command_problem(policy, [canonical_program(Path(words[0]).name), *words[1:]])
+    commands = shell_commands(command, keep_path=True)
+    for words in commands:
+        why = command_problem(policy, [Path(words[0]).name, *words[1:]])
         if why:
             return why
+    if BRIEFS_PATH.search(command) and any(Path(words[0]).name == "ln" for words in commands):
+        return "a link inside a briefs folder can point at files a brief must never read"
     for kind, value in shell_inputs(command):
         why = value if kind == "block" else terminal_problem(policy, value, depth + 1) if depth < 3 else command_problem(policy, [UNCHECKABLE])
         if why:
@@ -796,8 +842,15 @@ def terminal_problem(policy: Policy, command: str, depth: int = 0) -> str | None
     return code_problem(interpreter_code(command), hermes=True)
 
 
+def github_code_write(text: str) -> bool:
+    seen = urllib.parse.unquote(text)
+    return bool(GITHUB_MENTION.search(seen) and GITHUB_WRITE_PATHS.search(seen) and WRITE_INTENT.search(seen))
+
+
 def code_problem(texts: list[str], hermes: bool = False) -> str | None:
     for text in texts:
+        if github_code_write(text):
+            return "code never writes merges, statuses, check runs, reviews, refs, or file contents through the GitHub API; the merge gate's evidence stays with faker-kit merge"
         if hermes and HERMES_RUN.search(text):
             return "a bot never runs the default Hermes agent"
         for pattern, why in CODE_BLOCKS:
@@ -805,6 +858,8 @@ def code_problem(texts: list[str], hermes: bool = False) -> str | None:
                 return why
         if PROTECTED_KIT.search(text):
             return "bots never change the kit or ~/.hermes/bin from code or a delegated task"
+        if LINK_IN_CODE.search(text):
+            return "a link inside a briefs folder can point at files a brief must never read"
     return None
 
 
@@ -814,7 +869,7 @@ def default_agent_use(policy: Policy, profile: str, tool_name: str, args: dict) 
     target = str(args.get("target", "")).strip().lstrip("@")
     if target == profile or target not in policy.bots:
         others = ", ".join(sorted(name for name in policy.bots if name != profile)) or "none"
-        return f"{profile} may message only this machine's team-kit bots ({others}), never the default Hermes agent"
+        return f"{profile} may message only this machine's faker-kit bots ({others}), never the default Hermes agent"
     return None
 
 
@@ -846,16 +901,13 @@ def clean_turn_command(tool_name: str, args: dict) -> str | None:
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
         return None
     if tool_name in ("terminal", "process_manage"):
-        found = [w[1] for w in shell_commands(str(args.get("command", ""))) if w[0] == "team-kit-gh" and w[1:2] and w[1] in CLEAN_TURN_COMMANDS]
+        found = [w[1] for w in shell_commands(str(args.get("command", ""))) if w[0] == PROGRAM and w[1:2] and w[1] in CLEAN_TURN_COMMANDS]
         return found[0] if found else None
     found_text = next((m for t in strings(args) for m in [CLEAN_TURN_TEXT.search(t)] if m), None)
     return found_text.group(1) if found_text else None
 
 
 def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bool) -> dict | None:
-    """The pre_tool_call verdict. Every bot may use every tool and the shell; the blocks are the hard blocks, guard.yaml's
-    deny rules, secrets, the default Hermes agent, and merge or close in a tainted turn. Unless ask_owner is off,
-    bootstrap and chief approval and taint then ask the owner."""
     why = hard_block(policy, tool_name, args)
     if why:
         return block(f"{tool_name} is blocked for every bot: {why}")
@@ -867,34 +919,29 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
         return block(f"{tool_name} touches {secret}, a secret store or the kit's own files; bots never read secrets or edit the kit")
     bot = policy.bots.get(profile)
     if bot is None:
-        return block(f"profile {profile} is not a team-kit bot in bots.yaml; every tool call is blocked")
+        return block(f"profile {profile} is not a faker-kit bot in bots.yaml; every tool call is blocked")
     default = default_agent_use(policy, profile, tool_name, args)
     if default:
         return block(default)
     gated = clean_turn_command(tool_name, args) if tainted else None
     if gated:
-        return block(f"{gated} runs only in a turn that read nothing untrusted; the owner or the chief of staff must ask for it in a new message")
+        return block(f"{gated} runs only in a turn that read nothing untrusted; the owner or the chief of staff must ask for it in a new message, or a new wake must start it")
     read_only = tool_name in policy.read_only_tools
     if not policy.ask_owner:
         return None
     segments = [s.split() for s in command_segments(str(args.get("command", "")))] if tool_name == "terminal" else []
-    bootstrap_reads = bool(segments) and all(w[0] == "team-kit-admin" and w[1:2] and w[1] in BOOTSTRAP_READ_ONLY for w in segments)
+    bootstrap_reads = bool(segments) and all(w[0] == PROGRAM and w[1:2] and w[1] in BOOTSTRAP_READ_ONLY for w in segments)
     if bot.role == "bootstrap" and not read_only and not bootstrap_reads:
         return approve(
             f"The bootstrap bot changes this machine or GitHub. Approve {tool_name} only if you asked for it.",
             tool_name, args, "bootstrap",
         )
-    if bot.role == "chief" and not read_only:
-        asked = next((w[1] for w in segments if w[0] == "team-kit-chief" and w[1:2] and w[1] in CHIEF_APPROVALS), None)
-        if asked:
-            return approve(CHIEF_APPROVALS[asked], tool_name, args, "chief")
     if tainted and not read_only:
         return approve(f"This turn read untrusted content. Approve {tool_name} only if you asked for it.", tool_name, args, "taint")
     return None
 
 
 def call_digest(args: dict) -> str:
-    """Scopes an approval to one exact call, so "always" never covers a different one."""
     return hashlib.sha256(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
@@ -905,12 +952,12 @@ def reader_source(policy: Policy, tool_name: str, args: dict) -> str | None:
         return source
     if tool_name in ("terminal", "process_manage"):
         commands = shell_commands(str(args.get("command", "")), keep_path=True)
-        trusted = commands and all(team_kit_program(w[0]) for w in commands)
+        trusted = commands and all(faker_kit_program(w[0]) and w[1:2] != ["incidents"] for w in commands)
         return None if trusted else source
     return None if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in TRUSTED_RESULTS) else source
 
 
-def wrap_untrusted(source: str, result) -> str:  # noqa: ANN001
+def wrap_untrusted(source: str, result: object) -> str:
     text = result if isinstance(result, str) else json.dumps(result, default=str)
     text = re.sub(r"(?i)<(/?)untrusted", r"&lt;\1untrusted", text)
     return (
