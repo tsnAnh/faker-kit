@@ -164,6 +164,22 @@ def points_into_vendor(target: str) -> bool:
     return target.startswith(f"../../{VENDOR_DIR}/plugins/")
 
 
+def foreign_kit_links(repo: Path) -> list[str]:
+    found = []
+    for link_dir in sorted({place for places in LINK_DIRS.values() for place, _ in places}):
+        folder = repo / link_dir
+        if not folder.is_dir():
+            continue
+        for entry in sorted(folder.iterdir()):
+            if not entry.is_symlink():
+                continue
+            target = entry.readlink().as_posix()
+            parts = [part for part in target.split("/") if part != ".."]
+            if parts[:1] == [".agents"] and parts[2:3] == ["plugins"] and not points_into_vendor(target):
+                found.append(f"{entry.relative_to(repo).as_posix()} -> {target}")
+    return found
+
+
 def link_key(path: str) -> tuple[str, str]:
     """A link's kind and name: a skill of one name is one skill, whichever folder links it."""
     return ("agents" if path.startswith(".claude/agents/") else "skills", path.rsplit("/", 1)[1])
@@ -202,6 +218,10 @@ def apply(kit: Path, repo: Path, allow_dirty: bool = False) -> dict:
     for link_dir in {place for places in LINK_DIRS.values() for place, _ in places}:
         if (repo / link_dir).is_symlink():
             raise VendorError(f"{link_dir} is a symlink; make it a real folder first, so the kit's relative links resolve")
+    foreign = foreign_kit_links(repo)
+    if foreign:
+        raise VendorError("these links point into another vendored kit folder, so its skills would stay in use: " + ", ".join(foreign[:5])
+                          + "; delete those links and that folder, then run again")
     p = plan(kit, kit_commit(kit, allow_dirty))
     vendor = repo / VENDOR_DIR
     wanted = set(p.files)
@@ -293,6 +313,7 @@ def check(repo: Path) -> list[str]:
             problems.append(f"{path} should link to {target}")
         elif not where.exists():
             problems.append(f"{path} links to {target}, which does not exist")
+    problems.extend(f"{link} points into another vendored kit folder; delete it" for link in foreign_kit_links(repo))
     dispatch = repo / ".agents" / "dispatch.json"
     if dispatch.is_file():
         try:
