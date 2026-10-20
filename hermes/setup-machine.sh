@@ -384,7 +384,7 @@ print(1 if ((d.get("projects") or {}).get(sys.argv[2]) or {}).get("hasTrustDialo
     note "launch folder trusted: $checkout"
   elif [ -t 0 ] && [ -t 1 ]; then
     note "Claude Code opens in $checkout now: choose Yes to trust it, then type /exit"
-    (cd "$checkout" && claude </dev/tty) || true
+    (cd "$checkout" && claude) || true
   else
     note "still to do: cd $checkout && claude, choose Yes, then /exit"
   fi
