@@ -16,7 +16,7 @@
 
 ## Install
 
-Run `node skills/setup-lint-pack/scripts/install-pack.mjs python` from the trust-ladder plugin. It copies `ruff.toml`, `mypy.ini`, and `.importlinter`. Edit `.importlinter` so `root_package` and `layers` match the repository.
+Run `node skills/setup-faker-kit/scripts/install-pack.mjs python` from the trust-ladder plugin. It copies `ruff.toml`, `mypy.ini`, and `.importlinter`. Edit `.importlinter` so `root_package` and `layers` match the repository.
 
 ## Existing violations
 

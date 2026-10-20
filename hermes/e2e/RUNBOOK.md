@@ -1,109 +1,22 @@
-# Hermes Dispatch E2E Runbook
+# Hermes coordinator E2E
 
-This artifact proves the live Hermes dispatch loop on a scratch repository:
+`python3 hermes/e2e/run_dispatch_e2e.py` runs the project bot's path end to end on this checkout, with no network and no live bot. It builds a throwaway `FAKER_KIT_HOME`, a kit checkout, and stand-ins for `gh` (a small repository: a vendored-kit manifest, three open pull requests, their reviews, checks, and statuses), `claude` (behaves like `claude --cloud <message>` on a terminal), and `hermes` (profiles, config, cron jobs). Then it runs the real `faker-kit` command, the real guard policy, and the real `install.sh` against them:
 
-1. install this checkout into a temporary `TEAM_KIT_HOME` and Hermes home (your `HOME` is not changed);
-2. add one project bot for the scratch repository;
-3. dispatch one tiny README-only unit;
-4. wait for launch, a `done` report, a verifier verdict, risk label, and ready-to-merge notice;
-5. raise and clear the project andon cord once;
-6. stop before any merge.
+1. `launch --brief-file` starts one cloud session whose first message is the brief with the andon stop rule appended, from the kept launch checkout. A brief without `/faker-mode`, with a token inside, or outside the bot's briefs folder is refused, as is a launch in a repository whose vendored kit is not this machine's; `claude` is called once. A bot may run only its own role's commands.
+2. The andon cord refuses every launch and every merge until it is cleared.
+3. The project's webhook routes fire the bot's own agent jobs. A stand-in for Hermes's webhook platform checks the HMAC, filters events, and renders the route's prompt: a signed pull request event wakes `faker-kit-babysit` with numbers only, unsigned and wrongly signed deliveries get 401, and an unlisted event runs nothing.
+4. `merge` refuses failed or pending checks, no review by `claude[bot]`, an approval of an older head, a latest review that is not an approval, `Risk: high`, no Risk line, a failed or missing `security-review` status, a person's changes-requested review, a conflict, and a fork. It refuses each forged `security-review`: a run whose `security` job failed, was cancelled, is still running, is missing, repeated, or of another run or commit, run of another workflow, run of another commit, a run that is not a pull_request run or does not exist, no run link, another repository's run, a later forged status over the workflow's own, and a check run of that name. It refuses a pull request that touches `.github/workflows/`, `.agents/dispatch.json`, the guard, or a path the repository's `dispatch.json` protects.
+5. The first passing `merge` tells the owner (a stub of `hermes send` for a bot with a Slack channel, a pull request comment for one without), then prints one notice, records the head and the time, and refuses; when the owner cannot be told it records nothing and refuses. `status` does not claim a window started when none is stored. A call inside the hour refuses without a second notice. After the hour with the head unchanged, `merge` lands the pull request on its exact head, once. A new head restarts the window. The clock is the `now` the run injects.
+6. `status` shows one gate line per open pull request. The guard hard-blocks raw `gh pr merge`, the merge API, and a push to main, and lets `faker-kit merge` run only in a turn that read nothing untrusted.
+7. `install.sh` run against a `~/.hermes/faker-kit` tree keeps its briefs, checkouts, andon records, policy, and machine config, leaves one `faker-kit` wrapper, installs the guard plugin in every bot's profile beside the profile's own plugins, creates the `faker-kit-*` jobs, starts the runner service (stubs of `docker`, `launchctl`, and `systemctl`), refreshes the Hermes webhook routes and the GitHub repository hooks, creates `briefs/default/` for an owner-shell launch, and changes nothing when run again.
+8. `incidents` polls the default branch, a health URL, and Sentry, PagerDuty, Datadog, and Grafana stubs: a source host not in `alert_hosts` is refused, a missing token is said once, an incident opens on its second failing poll with a title free of alert text, alert examples are fenced and redacted, a triage session launches from the brief template, an acknowledged incident is not listed again, and resolved, red-branch, never-started-check, and health cases each report. No alert token appears in a log, a brief, or the first message.
+9. `issues` lists an issue only when a user with write, maintain, or admin permission added the latest `faker:fix` label, ignoring a read or triage user, an unknown user, a pull request, and a closed issue; the listing holds no title or body; a claimed issue is not listed until the label is added again; a fix session launches from the brief template; `add-project` creates the three labels; and the `issues` webhook route wakes its job only for the `labeled` action with that label.
 
-## Before You Run It
+10. The runner: `runner up` starts one service per slot (a plist on macOS, a systemd unit on Linux) and stops services no longer listed (stubs of `docker`, `launchctl`, `systemctl`); with no runners it builds nothing. A real `runner slot` process registers a one-job runner labelled `self-hosted` and `faker-kit` through the `gh` stub, starts a fresh container, hands it the credential on stdin only, deregisters the runner after its job, and starts the next job at once; it builds a missing image first, says why when GitHub gives no runner and starts no container, and refuses a bad repository or slot. A job that runs past seven hours is not modelled.
+11. Vendoring: `faker-kit vendor` opens a pull request through the API that refreshes `.agents/faker-kit/`, deletes the files and links the kit no longer ships, and keeps a repository's own skills; the real `vendor_kit.py` vendors a small kit and this kit into temp git repositories, links skills and agents, keeps a repository's own skills, `--check` catches an edit, an extra file, a broken link, and a pin mismatch; a newer commit removes stale files and links, `kit_ref` moves, ignore rules cannot drop vendored files, and a dirty kit, a linked skills folder, a non-git folder, and a symlink in the kit are refused.
+12. The ratchet: the `gh-graphql-read` rule finds nothing in the GitHub files, fails a reintroduced `gh pr view`, cannot be grandfathered by `update`, and covers only those files.
+13. The guard, loaded from a copy of the plugin folder the way Hermes loads it and called through the hooks it registers (`pre_tool_call`, `transform_tool_result`, `pre_llm_call`, `on_session_end`): `guard-calls.json` holds every hard-blocked and allowed tool call (secret reads, repository deletion, pushes to main and force-pushes, raw `gh pr merge`, REST writes to merges, statuses, reviews, refs, contents, check runs, and workflow reruns, curl, `python -c`, `node -e`, merge-path tricks, links into briefs folders, code and delegation that run the default agent), and `guard_scenario.py` covers a missing or invalid `guard.yaml` and `bots.yaml`, a gateway-routed profile, wrapped and tainting results, approvals, relayed and chief messages, the clean-turn rule for `faker-kit merge`, skill reload reminders, and tainted-turn records. Every verdict lands in the transcript's `verdicts`.
 
-1. **A `claude` scratch repository stops at the trust question.** Hermes starts Claude Code sessions from one kept checkout per repository, and the owner trusts it once. This script installs into a fresh temporary `TEAM_KIT_HOME` on every run, so its checkout is new each time, and the dispatch step stops with "Claude Code asks whether to trust <path>". Run it against a `codex` scratch repository, or prove the Claude path on a real project bot instead.
-2. **Create a token for the project bot, for the scratch repository only.** In GitHub, create a fine-grained personal access token whose repository access is "Only select repositories" and names just the scratch repository, with: Issues read and write; Contents, Pull requests, Checks, and Commit statuses read; Metadata read (added automatically). Prefer a separate bot account. Its login must be in `trusted_dispatchers` in the scratch repository's `.agents/dispatch.json`.
-3. **Put it in an environment variable, from your own shell,** and pass only the variable's *name* to the script:
+The run exits 0 only when every step held. It writes a JSON transcript (`--artifact PATH`; without it the run directory is kept) whose `digest` is the SHA-256 of the step names, their results, and every recorded guard verdict, so two runs of the same code print the same digest. `scripts/check.sh` runs it through `.agents/check-commands`, writing `artifacts/hermes-e2e.json`.
 
-   ```bash
-   read -rs HERMES_E2E_TOKEN && export HERMES_E2E_TOKEN
-   ```
-
-   Do not use `GH_TOKEN` or `GITHUB_TOKEN`: those are what your own `gh` login reads, and the project bot must not inherit your broad token. The script refuses those names, and refuses to run when the variable is unset or empty.
-4. Sign in to `gh`, `claude`, and `codex` as usual. The script leaves `HOME` alone, so it sees the same logins you do.
-
-## Authorization Boundary
-
-Run this only against a disposable scratch repository that the owner explicitly names for this test. The script has no default repository and requires `--confirm-scratch-repo OWNER/REPO` to match `--repo OWNER/REPO`.
-
-The script never runs `gh pr merge`, never pushes to `main` or `master`, never force-pushes, and writes the bot's token only to the temporary profile's `.env`. It leaves the test pull request open for the owner to inspect or close unmerged.
-
-Do not run it against a production repository.
-
-## Required Scratch Repo State
-
-Before the live run, the scratch repository must already be dispatch-ready:
-
-- `.agents/dispatch.json` exists on the default branch.
-- `.agents/dispatch.md` exists on the default branch.
-- `.agents/team-kit/KIT.json` exists on the default branch.
-- Both `kit_ref` values match this checkout's current commit.
-- `trusted_dispatchers` in `.agents/dispatch.json` includes the login of the project bot's token.
-- `verifier_backend` is not `none`.
-- `README.md` exists.
-- The scratch repository's `backend` (in `.agents/dispatch.json`) is signed in on this machine. The script does not change that file; set `backend`, and `codex_env` for Codex, in the scratch repository yourself.
-
-If any of these are missing, the script stops with a preflight error. It does not open setup or vendoring pull requests because those require owner review and merge.
-
-## Inputs
-
-```bash
-python3 hermes/e2e/run_dispatch_e2e.py \
-  --repo OWNER/REPO \
-  --confirm-scratch-repo OWNER/REPO \
-  --owner-login YOUR-GITHUB-LOGIN \
-  --token-env HERMES_E2E_TOKEN
-```
-
-Options:
-
-- `--token-env NAME` (required): the environment variable that holds the project bot's token. The script writes the token to the temporary profile's `.env` (mode 600), passes it to the bot's commands as `GH_TOKEN` in their environment only, replaces any token your shell already exports for `gh`, and never prints it or puts it in an argument, URL, or error message.
-- `--trusted-author LOGIN`: add another login whose reports and verifier verdicts count.
-- `--timeout-minutes N`: overall wait for report, verifier, and ready notice. Default: `120`.
-- `--poll-seconds N`: poll cadence. Default: `60`.
-- `--keep-home`: preserve the temporary home for inspection.
-- `--dry-run`: validate arguments and print the plan without touching anything.
-
-## What It Changes
-
-Local machine:
-
-- Creates a temporary directory containing `.hermes/`, used as `TEAM_KIT_HOME` (`.hermes/team-kit`) and as the Hermes home. `HOME` is not replaced.
-- Runs `hermes/install.sh --source <this checkout> --no-gateway` with those two variables set, so nothing is written to your real `~/.hermes`.
-- Writes the temporary `guard.yaml` trusted authors (you, the bot's login, and any `--trusted-author`).
-- Creates temporary Hermes profiles there, and writes the bot's `GH_TOKEN` to its profile's `.env`.
-
-Scratch repository:
-
-- Creates Hermes labels through `team-kit-admin add-project`.
-- Opens one `agent-task` issue.
-- Starts one cloud coding session and one verifier session.
-- The coding session opens one pull request that edits `README.md`.
-- Adds a `risk:*` label and risk comment to that pull request.
-- Opens and closes one `agent:andon` issue.
-
-It does not merge the pull request.
-
-## Cleanup
-
-After a successful run:
-
-1. Inspect the printed pull request URL.
-2. Close the pull request unmerged, or merge it only if you intentionally want the README marker in the scratch repo.
-3. Close the task issue if it remains open.
-4. Delete the pull request branch if desired.
-5. Remove the preserved temporary home if you used `--keep-home`.
-
-Without `--keep-home`, the temporary directory, token included, is removed automatically after the script exits. Revoke the fine-grained token when you are done.
-
-## Reading the Result
-
-The script prints one line per step: `observed` only when a command's output showed it, otherwise `not seen`. Steps that wait on the cloud say how long it waited (`not seen (waited up to N min)`); steps after a failure say the run stopped before them. A step is never filled in from a later one. The run passes only when the done report, the verifier verdict, and the ready-to-merge notice were all seen; a verifier launch that no poll caught is shown as `not seen` but does not fail the run.
-
-## Troubleshooting
-
-- `kit commit ... differs from kit_ref`: run the normal Hermes vendoring flow for the scratch repo, merge that setup PR yourself, then rerun this e2e.
-- `dispatch did not launch immediately`: the cloud CLI is not authenticated in the bot's `CLAUDE_CONFIG_DIR`, the launch checkout is not trusted yet, the repo does not trust the dispatching login, a limit is already full, or the andon cord is pulled.
-- `unit gated`: read the issue linked in the notice. The script stops rather than launching fallback work.
-- `ready notice has no verifier verdict`: the scratch repo has verification disabled; set `verifier_backend` to `claude` or `codex`.
-- No `risk:*` label: inspect the pull request and `team-kit-gh tick` output; the e2e requires the real risk label before it passes.
+What it does not prove: the real Hermes webhook platform and cron flags, real GitHub, the Claude GitHub app's reviews and statuses, and a real Claude Code session. Prove those on a machine with `hermes/setup-machine.sh`, which sends a signed `ping` through the public address to each bot's route, and with one small real change through a project bot.

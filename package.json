@@ -2,23 +2,12 @@
   "name": "faker-kit",
   "version": "0.1.0",
   "private": true,
-  "description": "faker-kit, a trust-ladder team kit for Claude Code, Codex, and Pi. Install in Pi with: pi install git:github.com/tsnAnh/faker-kit",
+  "description": "faker-kit, a trust-ladder kit for Claude Code.",
   "license": "MIT",
   "type": "module",
-  "keywords": [
-    "pi-package"
-  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/tsnAnh/faker-kit.git"
-  },
-  "pi": {
-    "skills": [
-      "./plugins/*/skills"
-    ],
-    "extensions": [
-      "./plugins/trust-ladder/pi/team-kit.ts"
-    ]
   },
   "scripts": {
     "sync": "node scripts/sync-upstream.mjs",

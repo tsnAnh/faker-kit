@@ -1,11 +1,38 @@
 {
-  "$comment": "Model-name rewrites applied to vendored upstream files, in order. Each rule is a literal find/replace scoped to upstream paths by glob. `count` is the exact number of replacements the rule must make across its files; a mismatch fails the sync so upstream changes are never rewritten blindly. Team models: each member runs one coding agent, Claude Code (Opus 5.5, max effort) or Codex (GPT-6 Sol, high effort, never the fast tier). So every judgment, prose, and panel role is `inherit-parent`: it runs on the member's own agent, and panels get their independent opinions from separate runs. Code delegates are the exception the owner chose: in Claude Code they run on `sonnet` (Claude Sonnet 5.5), or `haiku` (Claude Haiku 5.5) for trivial mechanical edits, and in Codex and Pi on the parent model. An explicit model name survives only as an example a user can type, and a GPT name is always `gpt-6-sol-high`.",
+  "$comment": "Model-name rewrites applied to vendored upstream files, in order. Each rule is a literal find/replace scoped to upstream paths by glob. `count` is the exact number of replacements the rule must make across its files; a mismatch fails the sync so upstream changes are never rewritten blindly. Team models: each member runs Claude Code (Opus 5.5, max effort). So every judgment, prose, and panel role is `inherit-parent`: it runs on the member's own agent, and panels get their independent opinions from separate runs. Code delegates are the exception the owner chose: they run on `sonnet` (Claude Sonnet 5.5), or `haiku` (Claude Haiku 5.5) for trivial mechanical edits. An explicit model name survives only as an example a user can type, and a GPT name is always `gpt-6-sol-high`.",
   "rules": [
+    {
+      "id": "pstack-arena-model-families",
+      "files": [
+        "harness/pstack/claude-code/skills/arena/SKILL.md"
+      ],
+      "from": "Families go by prefix: `claude-*`, and `grok-*` with `cursor-grok-*` and `composer-*`. A refused `composer-*` entry runs on `grok-4.7-xhigh-fast`.",
+      "to": "Families go by prefix: `claude-*` and `gpt-*`.",
+      "count": 1
+    },
+    {
+      "id": "pstack-interrogate-model-families",
+      "files": [
+        "harness/pstack/claude-code/skills/interrogate/SKILL.md"
+      ],
+      "from": "Families go by prefix: `claude-*`, and `grok-*` with `cursor-grok-*` and `composer-*`. A refused `composer-*` entry runs on Reviewer B's default.",
+      "to": "Families go by prefix: `claude-*` and `gpt-*`. A refused `gpt-*` entry runs on Reviewer B's default.",
+      "count": 1
+    },
+    {
+      "id": "pstack-adapter-default-slugs",
+      "files": [
+        "harness/pstack/claude-code/docs/harness/claude-code.md"
+      ],
+      "from": "Map each default slug with the rows above: `claude-opus-5-5-xhigh` is `opus xhigh`, and `grok-4.7-xhigh-fast` is `inherit-parent`.",
+      "to": "Map each default slug with the rows above. A default of `inherit-parent` stays `inherit-parent`.",
+      "count": 1
+    },
     {
       "id": "pstack-panel-backticked",
       "files": [
-        "pstack/skills/architect/SKILL.md",
-        "pstack/skills/arena/SKILL.md"
+        "harness/pstack/claude-code/skills/architect/SKILL.md",
+        "harness/pstack/claude-code/skills/arena/SKILL.md"
       ],
       "from": "`claude-opus-5-5-xhigh` and `grok-4.7-xhigh-fast`",
       "to": "`inherit-parent` and `inherit-parent`",
@@ -14,26 +41,16 @@
     {
       "id": "pstack-panel-role-lines",
       "files": [
-        "pstack/skills/setup-pstack/SKILL.md"
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
       "from": "claude-opus-5-5-xhigh, grok-4.7-xhigh-fast",
       "to": "inherit-parent, inherit-parent, inherit-parent",
       "count": 4
     },
     {
-      "id": "pstack-model-families",
-      "files": [
-        "pstack/skills/arena/SKILL.md",
-        "pstack/skills/interrogate/SKILL.md"
-      ],
-      "from": "Families go by prefix: `claude-*` and `grok-*`.",
-      "to": "Families go by prefix: `claude-*` and `gpt-*`.",
-      "count": 2
-    },
-    {
       "id": "pstack-arena-no-family-fallback",
       "files": [
-        "pstack/skills/arena/SKILL.md"
+        "harness/pstack/claude-code/skills/arena/SKILL.md"
       ],
       "from": "With no family match, use `claude-opus-5-5-xhigh`.",
       "to": "With no family match, use `inherit-parent`.",
@@ -42,7 +59,7 @@
     {
       "id": "pstack-interrogate-reviewer-a",
       "files": [
-        "pstack/skills/interrogate/SKILL.md"
+        "harness/pstack/claude-code/skills/interrogate/SKILL.md"
       ],
       "from": "| Reviewer A | `claude-opus-5-5-xhigh` |",
       "to": "| Reviewer A | `inherit-parent` |",
@@ -51,7 +68,7 @@
     {
       "id": "pstack-interrogate-reviewer-b",
       "files": [
-        "pstack/skills/interrogate/SKILL.md"
+        "harness/pstack/claude-code/skills/interrogate/SKILL.md"
       ],
       "from": "| Reviewer B | `grok-4.7-xhigh-fast` |",
       "to": "| Reviewer B | `inherit-parent` |",
@@ -60,7 +77,7 @@
     {
       "id": "pstack-budget-example",
       "files": [
-        "pstack/skills/setup-pstack/SKILL.md"
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
       "from": "So `unlimited` turns `claude-opus-5-5-xhigh` into `claude-opus-5-5-max`. Grok slugs top out at `xhigh`, so under `unlimited` the fallback puts Grok at `xhigh` and keeps `grok-4.7-xhigh-fast` as it is. `large` keeps both defaults. `small` turns them into `claude-opus-5-5-medium` and `grok-4.7-medium-fast`.",
       "to": "So `small` turns `gpt-6-sol-high` into `gpt-6-sol-medium`.",
@@ -69,7 +86,7 @@
     {
       "id": "pstack-poteto-mode-code-default-sonnet",
       "files": [
-        "pstack/skills/poteto-mode/SKILL.md"
+        "harness/pstack/claude-code/skills/poteto-mode/SKILL.md"
       ],
       "from": "Defaults `grok-4.7-xhigh-fast` for code",
       "to": "Defaults `sonnet` for code",
@@ -78,7 +95,7 @@
     {
       "id": "pstack-setup-code-roles-sonnet-haiku",
       "files": [
-        "pstack/skills/setup-pstack/SKILL.md"
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
       "from": "feature, refactoring: grok-4.7-xhigh-fast\nbug-fix: grok-4.7-xhigh-fast\nperf-issue: grok-4.7-xhigh-fast\nhillclimb: grok-4.7-xhigh-fast\n",
       "to": "feature, refactoring: sonnet\nbug-fix: sonnet\nperf-issue: sonnet\nhillclimb: sonnet\ntrivial edits: haiku\n",
@@ -87,11 +104,11 @@
     {
       "id": "pstack-playbook-code-model-sonnet-haiku",
       "files": [
-        "pstack/skills/poteto-mode/playbooks/bug-fix.md",
-        "pstack/skills/poteto-mode/playbooks/feature.md",
-        "pstack/skills/poteto-mode/playbooks/hillclimb.md",
-        "pstack/skills/poteto-mode/playbooks/perf-issue.md",
-        "pstack/skills/poteto-mode/playbooks/refactoring.md"
+        "harness/pstack/claude-code/skills/poteto-mode/playbooks/bug-fix.md",
+        "harness/pstack/claude-code/skills/poteto-mode/playbooks/feature.md",
+        "harness/pstack/claude-code/skills/poteto-mode/playbooks/hillclimb.md",
+        "harness/pstack/claude-code/skills/poteto-mode/playbooks/perf-issue.md",
+        "harness/pstack/claude-code/skills/poteto-mode/playbooks/refactoring.md"
       ],
       "from": "model (default `grok-4.7-xhigh-fast`)",
       "to": "model (default `sonnet`, or `haiku` for a trivial mechanical edit)",
@@ -100,16 +117,16 @@
     {
       "id": "pstack-code-roles-current-agent",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "grok-4.7-xhigh-fast",
       "to": "inherit-parent",
-      "count": 9
+      "count": 10
     },
     {
       "id": "pstack-how-explainer-current-agent",
       "files": [
-        "pstack/skills/how/SKILL.md"
+        "harness/pstack/claude-code/skills/how/SKILL.md"
       ],
       "from": "the `how explainer` line (default `claude-opus-5-5-xhigh`)",
       "to": "the `how explainer` line (default `inherit-parent`)",
@@ -118,7 +135,7 @@
     {
       "id": "pstack-why-synthesizer-current-agent",
       "files": [
-        "pstack/skills/why/SKILL.md"
+        "harness/pstack/claude-code/skills/why/SKILL.md"
       ],
       "from": "the `why synthesizer` line, default `claude-opus-5-5-xhigh`",
       "to": "the `why synthesizer` line, default `inherit-parent`",
@@ -127,7 +144,7 @@
     {
       "id": "pstack-reflect-judgment-table-current-agent",
       "files": [
-        "pstack/skills/reflect/SKILL.md"
+        "harness/pstack/claude-code/skills/reflect/SKILL.md"
       ],
       "from": "| `reflect judgment, divergent, synthesizer` | `claude-opus-5-5-xhigh` |",
       "to": "| `reflect judgment, divergent, synthesizer` | `inherit-parent` |",
@@ -136,7 +153,7 @@
     {
       "id": "pstack-reflect-synthesizer-current-agent",
       "files": [
-        "pstack/skills/reflect/SKILL.md"
+        "harness/pstack/claude-code/skills/reflect/SKILL.md"
       ],
       "from": "(default `claude-opus-5-5-xhigh`)",
       "to": "(default `inherit-parent`)",
@@ -145,7 +162,7 @@
     {
       "id": "pstack-poteto-mode-prose-judgment-current-agent",
       "files": [
-        "pstack/skills/poteto-mode/SKILL.md"
+        "harness/pstack/claude-code/skills/poteto-mode/SKILL.md"
       ],
       "from": "`claude-opus-5-5-xhigh` for prose and judgment",
       "to": "`inherit-parent` for prose and judgment",
@@ -154,16 +171,16 @@
     {
       "id": "pstack-poteto-mode-hardest-current-agent",
       "files": [
-        "pstack/skills/poteto-mode/SKILL.md"
+        "harness/pstack/claude-code/skills/poteto-mode/SKILL.md"
       ],
       "from": "The hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) go to your strongest judgment model (`claude-opus-5-5-xhigh`), whether the task needs judgment on vague intent or is a precisely specified sequence of steps to execute to the letter. Trivial mechanical edits go to your fast code model.",
-      "to": "In Claude Code, a feature, refactor, bug fix, perf fix, hillclimb step, or one of the hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) goes to `sonnet` (Claude Sonnet 5.5). A trivial mechanical edit (a rename, a move, a formatting or one-line fix, or steps specified to the letter with nothing to decide) goes to `haiku` (Claude Haiku 5.5), the `trivial edits` line. The Task tool takes these aliases, not version slugs. In Codex and Pi, which have neither model, omit `model` so the code delegate runs on the parent model.",
+      "to": "A feature, refactor, bug fix, perf fix, hillclimb step, or one of the hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) goes to `sonnet` (Claude Sonnet 5.5). A trivial mechanical edit (a rename, a move, a formatting or one-line fix, or steps specified to the letter with nothing to decide) goes to `haiku` (Claude Haiku 5.5), the `trivial edits` line. The Task tool takes these aliases, not version slugs.",
       "count": 1
     },
     {
       "id": "pstack-setup-judgment-and-prose",
       "files": [
-        "pstack/skills/setup-pstack/SKILL.md"
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
       "from": "judgment and prose: claude-opus-5-5-xhigh",
       "to": "judgment and prose: inherit-parent",
@@ -172,7 +189,7 @@
     {
       "id": "pstack-setup-hardest-tasks",
       "files": [
-        "pstack/skills/setup-pstack/SKILL.md"
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
       "from": "hardest tasks: claude-opus-5-5-xhigh",
       "to": "hardest tasks: sonnet",
@@ -181,7 +198,7 @@
     {
       "id": "pstack-setup-how-explainer",
       "files": [
-        "pstack/skills/setup-pstack/SKILL.md"
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
       "from": "how explainer: claude-opus-5-5-xhigh",
       "to": "how explainer: inherit-parent",
@@ -190,7 +207,7 @@
     {
       "id": "pstack-setup-why-synthesizer",
       "files": [
-        "pstack/skills/setup-pstack/SKILL.md"
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
       "from": "why synthesizer: claude-opus-5-5-xhigh",
       "to": "why synthesizer: inherit-parent",
@@ -199,7 +216,7 @@
     {
       "id": "pstack-setup-reflect-judgment",
       "files": [
-        "pstack/skills/setup-pstack/SKILL.md"
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
       "from": "reflect judgment, divergent, synthesizer: claude-opus-5-5-xhigh",
       "to": "reflect judgment, divergent, synthesizer: inherit-parent",
@@ -208,10 +225,10 @@
     {
       "id": "pstack-readme-model-split",
       "files": [
-        "pstack/README.md"
+        "harness/pstack/claude-code/README.md"
       ],
       "from": "code delegates (feature, refactoring, bug fix, perf, hillclimb) go to grok, while the hardest changes, prose, and judgment go to opus 5.5. the default panel is opus 5.5 / grok.",
-      "to": "code delegates (feature, refactoring, bug fix, perf, hillclimb) and the hardest changes run on `sonnet` (Claude Sonnet 5.5) in Claude Code, and trivial mechanical edits on `haiku` (Claude Haiku 5.5); in Codex and Pi they run on your current coding agent's model. prose, judgment, and every seat of the default panel run on your current coding agent's model.",
+      "to": "code delegates (feature, refactoring, bug fix, perf, hillclimb) and the hardest changes run on `sonnet` (Claude Sonnet 5.5), and trivial mechanical edits on `haiku` (Claude Haiku 5.5). prose, judgment, and every seat of the default panel run on your current coding agent's model.",
       "count": 1
     },
     {
@@ -394,14 +411,24 @@
   ],
   "tokenExceptions": [
     {
-      "file": "pstack/skills/reflect/references/synthesizer.md",
+      "file": "harness/pstack/claude-code/skills/reflect/references/synthesizer.md",
       "token": "gpt-4",
       "reason": "example of a renamed code identifier, not a model choice"
     },
     {
-      "file": "pstack/skills/reflect/references/synthesizer.md",
+      "file": "harness/pstack/claude-code/skills/reflect/references/synthesizer.md",
       "token": "gpt-4o",
       "reason": "example of a renamed code identifier, not a model choice"
+    },
+    {
+      "file": "harness/pstack/claude-code/docs/harness/claude-code.md",
+      "token": "claude-opus-5-5-xhigh",
+      "reason": "example slug in the adapter's model mapping table"
+    },
+    {
+      "file": "harness/pstack/claude-code/docs/harness/claude-code.md",
+      "token": "grok",
+      "reason": "family prefix in the adapter's model mapping table"
     }
   ]
 }

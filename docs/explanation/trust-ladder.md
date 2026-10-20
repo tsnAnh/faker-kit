@@ -12,7 +12,7 @@ That trust does not come from better prompts. It comes from the environment the 
 
 1. **The codebase.** Agents extend the patterns they see, because the files they read become their context. The codebase is their memory. Make the mistake impossible to write, with types, data structures, module boundaries, and one conventional way to do each thing.
 2. **Static analysis.** Lint rules, compiler diagnostics, and CI. When an agent keeps making the same mistake, a check stops it without anyone's cooperation.
-3. **Rules and review bots.** AGENTS.md and automated pull request review (Claude and Codex here). This is guidance, not enforcement: an agent can skip a file, and a person can ignore a bot.
+3. **Rules and review bots.** AGENTS.md and automated pull request review (the Claude review workflow here). This is guidance, not enforcement: an agent can skip a file, and a person can ignore a bot.
 4. **Skills.** Procedures agents load when they need them, above all the verification skill that lets an agent run the app and prove its work.
 5. **The style guide.** Enforced only by humans in review. At the rate agents open pull requests, nobody can remember every rule for every line, so the style guide is where rules are found, not where they should stay.
 
@@ -24,7 +24,7 @@ Patterns spread both ways. A codebase that is clean and conventional teaches eve
 
 The answer is an agent-friendly framework. Agents take shortcuts, so the framework makes the shortcut the right path: features live in one place, what runs where is enforced through the import graph, and even comments are banned because agents used them to justify papering over problems. A codebase like that can be annoying for people. For agents, especially ones with little context, it is the environment where the right thing happens by default.
 
-The kit's version: `paved-path` to leave one blessed way per concern, `gardener` to catch patterns while they spread, and [lint packs](../reference/lint-packs.md) that ban the escape hatches agents reach for.
+The kit's version: `/correct` to leave one blessed way per concern and migrate callers, and [lint packs](../reference/lint-packs.md) that ban the escape hatches agents reach for.
 
 ## When you cannot fix it today
 
@@ -32,6 +32,6 @@ Tech debt does not have to be cleaned up before you can act. A lint rule or a ra
 
 ## It compounds
 
-Each correction encoded at layer 1 or 2 is one that no agent, reviewer, or new teammate has to think about again. The rule table in AGENTS.md pairs every rule with what enforces it; `/trust-audit` scores the layers. As the share of rules a check enforces grows, the environment becomes something you can trust, and then you can run agents freely, including agents started by people who are not engineers. Think of a Michelin kitchen: set up so well that even a cook with little experience does good work.
+Each correction encoded at layer 1 or 2 is one that no agent, reviewer, or new teammate has to think about again. The rule table in AGENTS.md pairs every rule with what enforces it; `/check-agent-compatibility` checks how ready the repository is for agents. As the share of rules a check enforces grows, the environment becomes something you can trust, and then you can run agents freely, including agents started by people who are not engineers. Think of a Michelin kitchen: set up so well that even a cook with little experience does good work.
 
-Continue with [Verification is all you need](verification-is-all-you-need.md).
+Continue with the pstack guide's [Verify the result and open a PR](../../plugins/pstack/docs/guide/06-verify-and-ship.md).

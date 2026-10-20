@@ -1,7 +1,0 @@
-{
-  "packages": [
-    {
-      "source": "git:github.com/tsnAnh/faker-kit@<commit sha of the kit release the team uses>"
-    }
-  ]
-}

@@ -8,11 +8,11 @@ import { fileURLToPath } from "node:url";
 const USAGE = `Usage: node agent-hooks/hook-adapter.mjs <PostToolUse|Stop|SubagentStop> < hook-input.json
 
 Runs this plugin's upstream hooks (hooks/hooks.json, in the upstream hook format) from
-a Claude Code or Codex hook. Translates the agent's hook input into the upstream format,
+a Claude Code hook. Translates the agent's hook input into the upstream format,
 runs each matching upstream command, and turns an upstream "followup_message" into a
 {"decision": "block", "reason": ...} reply, which makes the agent continue with it.
 
-  PostToolUse   runs afterFileEdit hooks after Edit, Write, MultiEdit, NotebookEdit, or apply_patch
+  PostToolUse   runs afterFileEdit hooks after Edit, Write, MultiEdit, or NotebookEdit
   Stop          runs afterAgentResponse hooks, then stop hooks
   SubagentStop  runs subagentStop hooks whose matcher fits the subagent's name
 
@@ -25,7 +25,7 @@ export const UPSTREAM_EVENTS = {
   Stop: ["afterAgentResponse", "stop"],
   SubagentStop: ["subagentStop"],
 };
-export const EDIT_TOOL_MATCHER = "Edit|Write|MultiEdit|NotebookEdit|apply_patch";
+export const EDIT_TOOL_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
 const FOLLOWUP_EVENTS = new Set(["stop", "subagentStop"]);
 const DEFAULT_LOOP_LIMIT = 5;
 const DEFAULT_TIMEOUT_SECONDS = 50;
@@ -34,10 +34,6 @@ export function editedFile(toolInput) {
   if (!toolInput || typeof toolInput !== "object") return "";
   for (const key of ["file_path", "notebook_path", "path"]) {
     if (typeof toolInput[key] === "string") return toolInput[key];
-  }
-  for (const value of Object.values(toolInput)) {
-    const match = typeof value === "string" ? /^\*\*\* (?:Add|Update|Delete) File: (.+)$/m.exec(value) : null;
-    if (match) return match[1].trim();
   }
   return "";
 }
@@ -49,7 +45,6 @@ export function subagentName(agentType) {
 export function upstreamInput(upstreamEvent, input, { projectDir, loopCount }) {
   const common = {
     conversation_id: input.session_id,
-    generation_id: input.turn_id,
     model: input.model,
     hook_event_name: upstreamEvent,
     workspace_roots: [projectDir],
@@ -156,7 +151,7 @@ function main() {
     const input = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
     const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
     const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
-    const dataDir = process.env.CLAUDE_PLUGIN_DATA || path.join(os.tmpdir(), `team-kit-hooks-${path.basename(pluginRoot)}`);
+    const dataDir = process.env.CLAUDE_PLUGIN_DATA || path.join(os.tmpdir(), `faker-kit-hooks-${path.basename(pluginRoot)}`);
     const { output, errors } = runAdapter(event, input, { pluginRoot, projectDir, dataDir });
     for (const error of errors) process.stderr.write(`hook-adapter: ${error}\n`);
     if (output) process.stdout.write(`${JSON.stringify(output)}\n`);

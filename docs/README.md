@@ -1,64 +1,38 @@
-# Using the team kit
+# Using faker-kit
 
-The kit gives your coding agent Lauren Tan's pstack working methods and their companion plugins and a way to make the agent more trustworthy every time you correct it. It works in Claude Code, Codex, and Pi. Each person uses whichever one they already have.
+faker-kit gives Claude Code Lauren Tan's pstack working methods and their companion plugins, and a way to make the agent more trustworthy every time you correct it. The kit's own pages are below; the pstack guide and the plugin READMEs cover the vendored parts, so this index links to them instead of restating them.
 
-## Pick your starting page
+## The kit's own pages
 
-| You are | Start with | What you will do in the first hour |
-|---|---|---|
-| An engineer | [Engineers](start/engineers.md) | Install, set up a repository, build a verification skill, ship a proven change, encode your first correction |
-| A designer | [Designers](start/designers.md) | Ask for two or three versions of a screen, compare screenshots, and hand the chosen one to an engineer as a pull request |
-| In product or marketing | [Product and marketing](start/product-and-marketing.md) | Change copy in every language, report a bug so an agent reproduces it, and ask how a feature works |
-| A founder or lead | [Founders and leads](start/founders-and-leads.md) | See what shipped, ask why things are built the way they are, and decide how many agents the team can trust |
+| Page | Read it to |
+|---|---|
+| [Engineers: your first hour](start/engineers.md) | Install, set up a repository, build a verification skill, ship a proven change, encode your first correction |
+| [Install the kit](how-to/install.md) | Install in Claude Code, enable it for a whole team, choose the model |
+| [Set up a repository](how-to/set-up-a-repo.md) | Run `/setup-faker-kit`: AGENTS.md, lint packs, review, team settings |
+| [Roll the kit out to a team](how-to/roll-out-to-a-team.md) | Sequence a rollout and name the roles |
+| [Correct an agent so it stays corrected](how-to/correct-an-agent.md) | Use `/correct` to move a fix to the strongest layer |
+| [Dispatch work with Hermes](how-to/dispatch-with-hermes.md) | Let cloud agents turn what you ask for into pull requests you only merge |
+| [The trust ladder](explanation/trust-ladder.md) | Understand why the kit routes every correction down five layers |
+| [Every skill](reference/skills.md) | Look up a skill, who it is for, and a prompt to try |
+| [Lint packs](reference/lint-packs.md) | See what each stack's pack enforces |
+| [Models](reference/models.md) | See how upstream model names map to ours |
+| [Claude Code terms](../plugins/trust-ladder/references/compat.md) | Read the table that maps the upstream skills' terms to Claude Code |
 
-Not sure? Open claude.ai/code or the Claude app ([how](how-to/use-the-kit-from-the-browser.md)), or install the kit ([how](how-to/install.md)), and type `/start-here`. It asks what you want to do in plain words and picks the right skill.
+## The pstack guide
 
-## The idea in one minute
+Written by pstack's author. It is the best tour of `/faker-mode` and its skills. [Start at the guide's index](../plugins/pstack/docs/guide/README.md).
 
-An agent is only as trustworthy as the place it works. When an agent gets something wrong and you correct it in chat, that correction helps one agent, once. The kit's `correct` skill instead puts the fix where every future agent meets it, choosing the strongest place that can hold it:
+1. [Set up pstack](../plugins/pstack/docs/guide/01-setup.md)
+2. [Route work through `/faker-mode`](../plugins/pstack/docs/guide/02-faker-mode.md)
+3. [Understand the code before changing it](../plugins/pstack/docs/guide/03-understand.md)
+4. [Design before you write code](../plugins/pstack/docs/guide/04-design.md)
+5. [Build the change and clean the diff](../plugins/pstack/docs/guide/05-build-and-clean.md)
+6. [Verify the result and open a PR](../plugins/pstack/docs/guide/06-verify-and-ship.md)
+7. [Run work while you sleep](../plugins/pstack/docs/guide/07-overnight.md)
+8. [Steer with principle names](../plugins/pstack/docs/guide/08-principles.md)
+9. [Make it yours](../plugins/pstack/docs/guide/09-make-it-yours.md)
+10. [Recipes and pitfalls](../plugins/pstack/docs/guide/10-recipes-and-pitfalls.md)
 
-1. **Codebase.** Make the mistake impossible to write: types, module boundaries, one blessed way to do each thing.
-2. **Static analysis.** Make it fail CI: lint rules, compiler settings, checks.
-3. **Rules and review bots.** Make it visible: AGENTS.md, plus Claude and Codex reviewing every pull request.
-4. **Skills.** Teach the procedure, above all how to run the app and prove a change works.
-5. **Style guide.** Write it down for human reviewers, until it can climb to a stronger layer.
+## The vendored plugins
 
-As more corrections land in layers 1 and 2, the same mistake stops coming back, and you can run more agents at once without reading every line they write. [The trust ladder](explanation/trust-ladder.md) explains why.
-
-## Everything else
-
-**How-to guides** for a specific job:
-
-- [Use the kit from a browser or your phone](how-to/use-the-kit-from-the-browser.md), with nothing installed
-- [Install the kit](how-to/install.md) in Claude Code, Codex, or Pi
-- [Choose models](how-to/models.md)
-- [Set up a repository](how-to/set-up-a-repo.md)
-- [Correct an agent so it stays corrected](how-to/correct-an-agent.md)
-- [Build a verification skill](how-to/build-a-verification-skill.md)
-- [Design before building](how-to/design-before-building.md)
-- [Build, review, and ship a change](how-to/build-review-ship.md)
-- [Run many agents](how-to/run-many-agents.md)
-- [Dispatch work with Hermes](how-to/dispatch-with-hermes.md), so cloud agents turn what you ask for into pull requests you only merge
-- [Garden the codebase](how-to/garden-the-codebase.md)
-- [Capture lessons from past sessions](how-to/capture-lessons.md)
-- [Roll the kit out to a team](how-to/roll-out-to-a-team.md)
-
-**Reference** to look things up:
-
-- [Every skill](reference/skills.md), by layer, with who it is for and a prompt to try
-- [Prompts](reference/prompts.md) to copy, by role
-- [Playbooks and principles](reference/playbooks.md) that `/faker-mode` uses
-- [Lint packs](reference/lint-packs.md) for Kotlin/Android, KMP, Rust, Python, Flutter/Dart, Swift/iOS, and any stack
-- [Models](reference/models.md): how upstream model names map to ours
-- [Upstream terms in Claude Code, Codex, and Pi](../plugins/trust-ladder/references/compat.md)
-- [Coverage](reference/coverage.md): where everything from the talk and posts lives
-
-**Explanations** of why it works this way:
-
-- [The trust ladder](explanation/trust-ladder.md)
-- [Verification is all you need](explanation/verification-is-all-you-need.md)
-- [Plan with code](explanation/plan-with-code.md)
-- [Scaling to many agents](explanation/scaling-agents.md)
-- [Why non-engineers can ship safely](explanation/why-non-engineers-can-ship-safely.md)
-
-pstack also ships its own [guide](../plugins/pstack/docs/guide/README.md), written by its author. It is the best tour of `/faker-mode` and its skills. Read it for the pstack parts; where it names a tool your agent calls differently, use the [compat table](../plugins/trust-ladder/references/compat.md).
+[pstack](../plugins/pstack/README.md), [team-workflows](../plugins/team-workflows/README.md), [thermos](../plugins/thermos/README.md), [continual-learning](../plugins/continual-learning/README.md), [cli-for-agent](../plugins/cli-for-agent/README.md), [agent-compatibility](../plugins/agent-compatibility/README.md), [advisor](../plugins/advisor/README.md), and [teaching](../plugins/teaching/README.md).

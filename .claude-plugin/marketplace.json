@@ -4,12 +4,12 @@
     "name": "tsnAnh",
     "url": "https://github.com/tsnAnh"
   },
-  "description": "faker-kit, a trust-ladder team kit for Claude Code, Codex, and Pi: Lauren Tan's pstack, team-workflows, thermos, and five more vendored plugins (unchanged except model names and the team's renames), plus the trust-ladder glue.",
+  "description": "faker-kit, a trust-ladder kit for Claude Code: Lauren Tan's pstack, team-workflows, thermos, and five more vendored plugins (unchanged except model names and the team's renames), plus the trust-ladder glue.",
   "plugins": [
     {
       "name": "trust-ladder",
       "source": "./plugins/trust-ladder",
-      "description": "Route every agent correction to the strongest layer (codebase, lint/CI, rules and review bots, skills, style guide), set up repos for agents, and give everyone on the team a plain-English front door. Installs the vendored upstream plugins as dependencies.",
+      "description": "Route every agent correction to the strongest layer (codebase, lint/CI, rules and review bots, skills, style guide), set up repos for agents, and connect them to Hermes dispatch. Installs the vendored upstream plugins as dependencies.",
       "category": "faker-kit"
     },
     {

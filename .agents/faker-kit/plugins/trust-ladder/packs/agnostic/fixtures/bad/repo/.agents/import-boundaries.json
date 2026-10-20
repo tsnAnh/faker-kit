@@ -1,0 +1,37 @@
+{
+  "rules": [
+    {
+      "id": "ui-no-data",
+      "from": [
+        "lib/features/*/ui/**"
+      ],
+      "forbid": [
+        "lib/features/*/data/**",
+        "package:http/**"
+      ],
+      "message": "Go through the controller."
+    },
+    {
+      "id": "domain-no-framework",
+      "from": [
+        "app/domain/**"
+      ],
+      "forbid": [
+        "app/ui/**",
+        "django**"
+      ],
+      "message": "Domain stays framework-free."
+    },
+    {
+      "id": "common-no-android",
+      "from": [
+        "shared/src/commonMain/**"
+      ],
+      "forbid": [
+        "android.**",
+        "java.io.**"
+      ],
+      "message": "Use expect/actual."
+    }
+  ]
+}

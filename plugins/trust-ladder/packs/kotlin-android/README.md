@@ -16,7 +16,7 @@ Layer boundaries, such as UI not importing `com.example.data`, belong in the agn
 
 ## Install
 
-Run `node skills/setup-lint-pack/scripts/install-pack.mjs kotlin-android` from the trust-ladder plugin. It copies `config/detekt/detekt.yml`, `.editorconfig`, and `lint.xml`. Merge `merge/build.gradle.kts` into each module, or better into a convention plugin every module applies.
+Run `node skills/setup-faker-kit/scripts/install-pack.mjs kotlin-android` from the trust-ladder plugin. It copies `config/detekt/detekt.yml`, `.editorconfig`, and `lint.xml`. Merge `merge/build.gradle.kts` into each module, or better into a convention plugin every module applies.
 
 ## Existing violations
 

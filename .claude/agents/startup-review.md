@@ -1,1 +1,1 @@
-../../.agents/team-kit/plugins/agent-compatibility/agents/startup-review.md
+../../.agents/faker-kit/plugins/agent-compatibility/agents/startup-review.md

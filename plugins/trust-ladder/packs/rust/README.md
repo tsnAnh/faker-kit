@@ -13,17 +13,17 @@
 
 ## Install
 
-Run `node skills/setup-lint-pack/scripts/install-pack.mjs rust` from the trust-ladder plugin, then merge `merge/cargo-lints.toml` into `Cargo.toml` as the script prints. `clippy.toml` and `deny.toml` are copied as they are.
+Run `node skills/setup-faker-kit/scripts/install-pack.mjs rust` from the trust-ladder plugin, then merge `merge/cargo-lints.toml` into `Cargo.toml` as the script prints. `clippy.toml` and `deny.toml` are copied as they are.
 
 ## Existing violations
 
 Clippy has no baseline file. Mark each file that already violates a rule with an inner attribute that names the reason:
 
 ```rust
-#![expect(clippy::unwrap_used, reason = "team-kit baseline")]
+#![expect(clippy::unwrap_used, reason = "faker-kit baseline")]
 ```
 
-Then ratchet the marker so it can only disappear. Add `{"id": "rust-baseline", "pattern": "team-kit baseline", "files": ["*.rs"]}` to `.agents/ratchet.json` and run `node scripts/agent-checks/ratchet.mjs update`.
+Then ratchet the marker so it can only disappear. Add `{"id": "rust-baseline", "pattern": "faker-kit baseline", "files": ["*.rs"]}` to `.agents/ratchet.json` and run `node scripts/agent-checks/ratchet.mjs update`.
 
 ## Proof
 

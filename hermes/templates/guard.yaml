@@ -1,67 +1,62 @@
-# team-kit guard policy for one machine. Lives at ~/.hermes/team-kit/guard.yaml.
-# Read by the team_kit_guard Hermes plugin on every tool call, and by team-kit-gh,
-# team-kit-admin, team-kit-chief, and team-kit-slack. If this file is missing or invalid,
-# the guard blocks every tool call of every team-kit bot.
+# faker-kit guard policy for one machine. Lives at ~/.hermes/faker-kit/guard.yaml.
+# Read by the faker_kit_guard Hermes plugin on every tool call, and by faker-kit.
+# If this file is missing or invalid, the guard blocks every tool call of every faker-kit bot.
 #
 # Which Hermes profiles are bots, their roles, and each project's one repository live in
-# bots.yaml next to this file. team-kit-admin writes bots.yaml. Do not list repositories here.
+# bots.yaml next to this file. faker-kit writes bots.yaml. Do not list repositories here.
 version: 2
 
-# Cloud coding sessions running at once, across every project on this machine. They all draw
-# on one Claude or ChatGPT subscription, and project bots cannot see each other, so only this
-# number stops five projects from starting fifteen sessions. Each repository also has its own
-# max_in_flight in .agents/dispatch.json. A launch needs room under both.
+# Cloud coding sessions the machine may keep running at once, across every project. They all draw on
+# one Claude subscription, so this is the number a project bot's dispatch skill plans its fan-out against.
 max_in_flight_total: 3
 
-# GitHub logins whose unit issues and reports count: the login each project bot opens issues as,
-# and the account the coding agent posts as (for Claude Code on the web, usually the owner).
-# Reports by anyone else are ignored, so a copied report cannot move a unit.
-# team-kit-admin setup-repo writes these logins into the repository's trusted_dispatchers.
+# GitHub logins that count as the owner: the account the coding agent posts as (for Claude Code
+# on the web, usually the owner). A repository's setup brief writes them into its trusted_dispatchers.
 trusted_authors:
   - OWNER-LOGIN
 
-# Refuse to open an issue whose body is not a parsed brief with the team-kit marker.
-require_brief_marker: true
+# Whether the guard and Hermes ask the owner in Desktop before a bot acts: every bootstrap bot
+# change, and any tool after a turn read untrusted content.
+# false stops every question. Deny rules and the wrapping of untrusted output still apply, and the
+# hard blocks never lift (secret reads, repository deletion, pushes to main, force-pushes, raw
+# gh pr merge, wiping / or home), but a prompt injection in a web page can then make a bot act
+# without you seeing it first.
+# faker-kit also sets each bot's Hermes approvals.mode to off when this is false; run
+# faker-kit install after changing it.
+ask_owner: true
 
-# Hosts an incident alert source in a repository's .agents/dispatch.json may send its token to,
-# besides the defaults (sentry.io, api.pagerduty.com, and Datadog's own API hosts). Grafana and
-# self-hosted Sentry need their host listed here. Only the owner edits this file; a merged
-# dispatch.json change cannot add a host. Bare host names, no scheme or path.
+# Hosts an incident alert source in a repository's .agents/dispatch.json may send its token to, besides
+# the defaults (sentry.io, api.pagerduty.com, and Datadog's own API hosts). Grafana and self-hosted
+# Sentry need their host listed here. Only the owner edits this file; a merged dispatch.json change
+# cannot add a host. Bare host names, no scheme or path.
 # alert_hosts:
 #   - grafana.example.com
 
-# Optional outbound-only Slack relay. The relay connects to Slack Socket Mode over a WebSocket
-# it opens itself; it does not create a public route or a webhook. Put token values only in the
-# named environment variables, usually in the configured bot profile's .env.
-slack:
-  enabled: false
-  bot: meo-beo
-  channel_id: C0123456789
-  channel_name: faker-kit
-  app_token_env: TEAM_KIT_SLACK_APP_TOKEN
-  bot_token_env: TEAM_KIT_SLACK_BOT_TOKEN
-  mirror_notices: false
-
-# Whether the guard and Hermes ask the owner in Desktop before a bot acts: every bootstrap bot
-# change, each chief new-project request, and any tool after a turn read untrusted content.
-# false stops every question. Deny rules, each role's tool and path limits, and the wrapping of
-# untrusted output still apply, but a prompt injection in an issue, a web page, or a teammate's
-# proposal can then make a bot act within those limits without you seeing it first.
-# team-kit-admin also sets each bot's Hermes approvals.mode to off when this is false; run
-# team-kit-admin sync after changing it.
-ask_owner: true
-
 # Tool results from these are wrapped in <untrusted source=...> and taint the turn.
-# After that, every tool not in read_only_tools needs the owner's approval in Desktop.
-# team-kit-gh report-status is not here: it prints only the parsed status line.
+# After that, every tool not in read_only_tools needs the owner's approval in Desktop, and
+# faker-kit merge refuses until a new message or wake.
 untrusted_readers:
   - tool: web_*
   - tool: browser_*
   - tool: x_search
   - tool: terminal
-    command: "team-kit-gh teammate-proposals*"
+    command: "gh api *pulls*"
   - tool: terminal
-    command: "team-kit-gh read *"
+    command: "gh api *issues*"
+  - tool: terminal
+    command: "gh api *comments*"
+  - tool: terminal
+    command: "gh api *reviews*"
+  - tool: terminal
+    command: "gh api *compare*"
+  - tool: terminal
+    command: "gh api *commits*"
+  - tool: terminal
+    command: "gh pr view*"
+  - tool: terminal
+    command: "gh pr diff*"
+  - tool: terminal
+    command: "gh issue view*"
 
 # More tool calls to block for every bot, beyond the guard's own: secrets, raw gh pr merge, repository
 # deletion, pushes to main, force-pushes, and wiping / or home. A plain string is a glob over each simple

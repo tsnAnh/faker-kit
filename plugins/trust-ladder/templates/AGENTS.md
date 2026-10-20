@@ -56,7 +56,7 @@ Each concern has one blessed way. The alternatives are deleted and banned by lin
 
 ## Review guidelines
 
-Codex code review reads this section. The Claude review routine reads it with REVIEW.md.
+The Claude review workflow reads this section with REVIEW.md.
 
 - Treat the rules in REVIEW.md as the review checklist.
 - Treat every rule under Blocking in REVIEW.md as P1.

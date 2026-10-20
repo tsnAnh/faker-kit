@@ -1,6 +1,6 @@
 {
   "backend": "claude",
-  "kit_ref": "8af51c0617c055fee4a7904920adb025df96cca0",
+  "kit_ref": "f49ed4455496aaad8c0386d706c650c953a8c870",
   "max_in_flight": 5,
   "forbidden_paths": [
     ".github/workflows/",
@@ -8,20 +8,13 @@
     "*.lock",
     "bun.lock",
     "package-lock.json",
-    ".agents/team-kit/"
+    ".agents/faker-kit/"
   ],
   "trusted_dispatchers": [
     "tsnAnh"
   ],
-  "review_backend": "none",
-  "verifier_backend": "none",
-  "accept_verifications": [
-    "live-ui-verified",
-    "unit-test-verified"
-  ],
   "risk_paths_high": [
     "hermes/",
-    "deploy/",
     ".agents/dispatch.json",
     "REVIEW.md",
     "AGENTS.md"
@@ -33,13 +26,7 @@
   "incidents": {
     "main_checks": true,
     "health": [],
-    "andon_on_red": false,
-    "triage_backend": "claude"
+    "andon_on_red": false
   },
-  "security_backend": "none",
-  "upstream_sync": true,
-  "auto_merge": "low",
-  "verification_skill": "verify-team-kit",
-  "second_verifier_backend": "none",
-  "review_app": "claude[bot]"
+  "verification_skill": "verify-faker-kit"
 }

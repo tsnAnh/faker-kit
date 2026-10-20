@@ -1,6 +1,6 @@
 {
   "repo": "https://github.com/cursor/plugins.git",
-  "ref": "11713c683fe4add4fd403ea880580abbc9e0875f",
+  "ref": "88d47514b82e7c44f00f2b2a72ff6dd12158038c",
   "manifestDir": ".cursor-plugin",
   "plugins": [
     "pstack",
@@ -11,5 +11,11 @@
     "agent-compatibility",
     "advisor",
     "teaching"
-  ]
+  ],
+  "pluginSources": {
+    "pstack": {
+      "dir": "harness/pstack/claude-code",
+      "manifestDir": ".claude-plugin"
+    }
+  }
 }

@@ -1,1 +1,1 @@
-../../.agents/team-kit/plugins/thermos/agents/thermo-nuclear-code-quality-review-subagent.md
+../../.agents/faker-kit/plugins/thermos/agents/thermo-nuclear-code-quality-review-subagent.md

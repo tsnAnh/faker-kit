@@ -6,8 +6,8 @@ export const MODES = [
   },
 ];
 
-const invocation = (skill) => new RegExp(`(?:^|\\s)[/$](?:skill:)?(?:[a-z0-9-]+:)?${skill}\\b`, "i");
-const switchOff = (skill) => new RegExp(`(?:^|\\s)[/$](?:skill:)?(?:[a-z0-9-]+:)?${skill}\\s+off\\b`, "i");
+const invocation = (skill) => new RegExp(`(?:^|\\s)/(?:[a-z0-9-]+:)?${skill}\\b`, "i");
+const switchOff = (skill) => new RegExp(`(?:^|\\s)/(?:[a-z0-9-]+:)?${skill}\\s+off\\b`, "i");
 const optOut = (skill) => {
   const words = skill.replace(/-/g, "[- ]");
   return new RegExp(`\\b(?:exit|leave|stop|disable|turn off|quit|drop|opt out of|no more)\\s+(?:the\\s+)?(?:/)?${words}\\b`, "i");

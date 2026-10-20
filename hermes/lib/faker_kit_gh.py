@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+import base64
+import binascii
+import hashlib
+import json
+import os
+import re
+import subprocess
+import urllib.parse
+from collections.abc import Callable
+from pathlib import Path
+
+PAGE_SIZE = 100
+PAGE_LIMIT = 50
+NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
+STATUS_LINE = re.compile(r"HTTP/\S+\s+([0-9]{3})")
+
+Runner = Callable[..., str]
+
+
+class Refused(Exception):
+    pass
+
+
+def run_gh(args: list[str], input: str | None = None) -> str:
+    done = subprocess.run(["gh", *args], capture_output=True, text=True, input=input)
+    if done.returncode != 0:
+        if args[:1] == ["api"] and "--include" in args:
+            status = STATUS_LINE.match(done.stdout)
+            if status and status.group(1) == "304":
+                return done.stdout
+        raise Refused(f"gh {' '.join(args[:2])} failed: {done.stderr.strip()[:300]}")
+    return done.stdout
+
+
+def included_response(text: str) -> tuple[int, dict[str, str], str]:
+    normal = text.replace("\r\n", "\n")
+    if not normal.startswith("HTTP/"):
+        return 200, {}, text
+    header_text, _, body = normal.partition("\n\n")
+    lines = header_text.splitlines()
+    match = STATUS_LINE.match(lines[0] if lines else "")
+    if match is None:
+        return 200, {}, body
+    headers = {}
+    for line in lines[1:]:
+        key, sep, value = line.partition(":")
+        if sep:
+            headers[key.strip().lower()] = value.strip()
+    return int(match.group(1)), headers, body
+
+
+def has_next_page(link: str | None) -> bool:
+    return bool(link) and any(re.search(r'rel="?next"?', part) for part in str(link).split(","))
+
+
+class EtagCache:
+    def __init__(self, home: Path, bot: str) -> None:
+        if not NAME.match(bot):
+            raise Refused(f"bot {bot!r} is not a profile name")
+        self.directory = home / "etag" / bot
+
+    def path(self, endpoint: str) -> Path:
+        return self.directory / f"{hashlib.sha256(endpoint.encode()).hexdigest()}.json"
+
+    def read(self, endpoint: str) -> dict | None:
+        try:
+            data = json.loads(self.path(endpoint).read_text())
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) and data.get("endpoint") == endpoint else None
+
+    def write(self, endpoint: str, etag: str, body: str, more: bool) -> None:
+        self.directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.directory.mkdir(mode=0o700, exist_ok=True)
+        self.directory.chmod(0o700)
+        path = self.path(endpoint)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.touch(mode=0o600)
+        tmp.write_text(json.dumps({"endpoint": endpoint, "etag": etag, "body": body, "more": more}))
+        tmp.replace(path)
+
+
+class Gh:
+    def __init__(self, home: Path, bot: str, repo: str, run: Runner) -> None:
+        self.repo, self.run = repo, run
+        self.etags = EtagCache(home, bot)
+
+    def page(self, path: str) -> tuple[str, bool]:
+        endpoint = f"GET {path}"
+        cached = self.etags.read(endpoint)
+        args = ["api", "--include"]
+        if cached and cached.get("etag"):
+            args += ["-H", f"If-None-Match: {cached['etag']}"]
+        status, headers, body = included_response(self.run([*args, path]))
+        if status == 304:
+            if cached and isinstance(cached.get("body"), str):
+                return cached["body"], bool(cached.get("more"))
+            raise Refused(f"gh api failed: HTTP 304 without a cached body for {path}")
+        if not 200 <= status < 300:
+            raise Refused(f"gh api failed: HTTP {status}")
+        more = has_next_page(headers.get("link"))
+        if headers.get("etag"):
+            self.etags.write(endpoint, headers["etag"], body, more)
+        return body, more
+
+    def json(self, path: str) -> dict:
+        data = json.loads(self.page(path)[0])
+        if not isinstance(data, dict):
+            raise Refused(f"gh api returned no object for {path}")
+        return data
+
+    def pages(self, path: str, params: dict[str, str] | None = None, key: str | None = None) -> list[dict]:
+        items: list[dict] = []
+        for number in range(1, PAGE_LIMIT + 1):
+            query = urllib.parse.urlencode({**(params or {}), "per_page": str(PAGE_SIZE), "page": str(number)})
+            body, more = self.page(f"{path}?{query}")
+            data = json.loads(body)
+            rows = data.get(key) if key and isinstance(data, dict) else data
+            if not isinstance(rows, list):
+                raise Refused(f"gh api returned no list for {path}")
+            items.extend(row for row in rows if isinstance(row, dict))
+            if not more or not rows:
+                return items
+        raise Refused(f"more than {PAGE_LIMIT * PAGE_SIZE} items at {path}")
+
+    def pull(self, number: int) -> dict:
+        return self.json(f"repos/{self.repo}/pulls/{int(number)}")
+
+    def open_pulls(self) -> list[dict]:
+        return sorted(self.pages(f"repos/{self.repo}/pulls", {"state": "open"}), key=lambda p: int(p["number"]))
+
+    def reviews(self, number: int) -> list[dict]:
+        return self.pages(f"repos/{self.repo}/pulls/{int(number)}/reviews")
+
+    def check_runs(self, head: str) -> list[dict]:
+        return self.pages(f"repos/{self.repo}/commits/{head}/check-runs", key="check_runs")
+
+    def statuses(self, head: str) -> list[dict]:
+        newest_first = self.pages(f"repos/{self.repo}/commits/{head}/statuses")
+        latest: dict[str, dict] = {}
+        for status in newest_first:
+            latest.setdefault(str(status.get("context") or ""), status)
+        return list(latest.values())
+
+    def pull_files(self, number: int) -> list[dict]:
+        return self.pages(f"repos/{self.repo}/pulls/{int(number)}/files")
+
+    def actions_run(self, run_id: int) -> dict | None:
+        try:
+            return self.json(f"repos/{self.repo}/actions/runs/{int(run_id)}")
+        except Refused as err:
+            if "HTTP 404" in str(err):
+                return None
+            raise
+
+    def actions_jobs(self, run_id: int) -> list[dict] | None:
+        try:
+            return self.pages(f"repos/{self.repo}/actions/runs/{int(run_id)}/jobs", {"filter": "latest"}, key="jobs")
+        except Refused as err:
+            if "HTTP 404" in str(err):
+                return None
+            raise
+
+    def head_pulls(self, head: str) -> list[dict]:
+        return self.pages(f"repos/{self.repo}/commits/{head}/pulls")
+
+    def head_jobs(self, head: str, workflow: str, job: str) -> list[dict]:
+        runs = self.pages(f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow.rsplit('/', 1)[-1])}/runs", {"head_sha": head}, key="workflow_runs")
+        return [found for run in runs for found in self.pages(f"repos/{self.repo}/actions/runs/{int(run['id'])}/jobs", {"filter": "all"}, key="jobs")
+                if found.get("name") == job]
+
+    def file_text(self, path: str, ref: str) -> str | None:
+        query = urllib.parse.urlencode({"ref": ref})
+        try:
+            data = self.json(f"repos/{self.repo}/contents/{urllib.parse.quote(path)}?{query}")
+        except Refused as err:
+            if "HTTP 404" in str(err):
+                return None
+            raise
+        try:
+            return base64.b64decode(str(data.get("content") or "")).decode()
+        except (binascii.Error, UnicodeDecodeError):
+            raise Refused(f"{path} on {ref} is not text") from None
+
+    def default_branch(self) -> str:
+        return str(self.json(f"repos/{self.repo}").get("default_branch") or "")

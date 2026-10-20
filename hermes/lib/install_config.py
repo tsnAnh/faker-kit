@@ -1,14 +1,10 @@
-"""Hermes configuration adapter for install.sh and team-kit-admin: read YAML, write through the Hermes CLI.
-
-Every write goes through `hermes ... config set` and is read back, so a CLI that ignores or
-coerces a value is caught. Error messages name the key, never the value.
-"""
-
 from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import yaml
@@ -25,6 +21,16 @@ def hermes(*args: str) -> str:
     return done.stdout
 
 
+def hermes_send(profile: str, target: str, message: str, timeout: float = 60.0) -> None:
+    exe = shutil.which("hermes") or str(Path.home() / ".local" / "bin" / "hermes")
+    try:
+        done = subprocess.run([exe, "-p", profile, "send", "--to", target, "--quiet", message], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        raise InstallError("hermes send did not finish") from None
+    if done.returncode:
+        raise InstallError(f"hermes send exited {done.returncode}")
+
+
 def profile_home(root: Path, profile: str) -> Path:
     return root if profile == "default" else root / "profiles" / profile
 
@@ -33,7 +39,6 @@ def mapping(path: Path) -> dict:
     try:
         value = yaml.safe_load(path.read_text()) if path.exists() else {}
     except (OSError, yaml.YAMLError):
-        # A parser exception may contain a secret-bearing source line.
         raise InstallError(f"cannot read configuration mapping: {path}") from None
     if value is None:
         return {}
@@ -50,16 +55,16 @@ def section(config: dict, *keys: str) -> dict:
     return config
 
 
-def leaves(config: dict, prefix=()):  # noqa: ANN001, ANN201
+def leaves(config: dict, prefix: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], object]]:
     for key, value in config.items():
-        path = prefix + (key,)  # noqa: RUF005
+        path = (*prefix, str(key))
         if isinstance(value, dict) and value:
             yield from leaves(value, path)
         else:
             yield path, value
 
 
-def value_at(config, keys):  # noqa: ANN001, ANN201
+def value_at(config: object, keys: tuple[str, ...]) -> object:
     for key in keys:
         if not isinstance(config, dict) or key not in config:
             return None
@@ -67,13 +72,11 @@ def value_at(config, keys):  # noqa: ANN001, ANN201
     return config
 
 
-def config_set(root: Path, profile: str, keys, value) -> None:  # noqa: ANN001
+def config_set(root: Path, profile: str, keys: tuple[str, ...], value: object) -> None:
     key = ".".join(keys)
-    # Hermes preserves string scalars; JSON literals retain list/map/bool typing.
     literal = value if isinstance(value, str) else json.dumps(value)
     result = subprocess.run(["hermes", "-p", profile, "config", "set", key, literal], capture_output=True, text=True)
     if result.returncode:
-        # CLI output can echo the value, including a route's secret.
         raise InstallError(f"Hermes config set failed for {profile}: {key}; check CLI/schema compatibility")
     actual = value_at(mapping(profile_home(root, profile) / "config.yaml"), keys)
     if actual != value or type(actual) is not type(value):
@@ -86,71 +89,53 @@ def apply_profile(root: Path, profile: str, snippet: Path) -> None:
         raise InstallError(f"{profile} has gateway.standalone: true; migrate it to the shared host gateway first")
     updates = []
     for keys, value in leaves(mapping(snippet)):
-        # Validate all parent mappings before writing any setting.
         section(current, *keys[:-1])
         if keys == ("plugins", "enabled"):
             enabled = value_at(current, keys)
             if enabled is not None and not isinstance(enabled, list):
                 raise InstallError(f"expected plugins.enabled list in {profile}")
-            value = (enabled or []) + [item for item in value if item not in (enabled or [])]
+            current_list = enabled or []
+            value = current_list + [item for item in (value if isinstance(value, list) else []) if item not in current_list]
         updates.append((keys, value))
     for keys, value in updates:
         config_set(root, profile, keys, value)
 
 
 def cron_jobs(text: str) -> dict[str, dict]:
-    """`hermes cron list --all` output to {name: {id, enabled, schedule, script, mode}}. The CLI prints an id line, then rows."""
-    text = re.sub(r"\x1b\[[0-9;]*m", "", text)
     jobs: dict[str, dict] = {}
-    current = None
-
-    def finish() -> None:
-        if current is not None and current.get("name"):  # type: ignore[unreachable]  # team-kit baseline
-            jobs[current["name"]] = {k: v for k, v in current.items() if k != "name"}  # type: ignore[unreachable]  # team-kit baseline
-
-    for line in text.splitlines():
+    current: dict[str, object] = {}
+    for line in re.sub(r"\x1b\[[0-9;]*m", "", text).splitlines():
         head = re.match(r"^\s*(\S+)\s+\[(active|paused|enabled|disabled)\]", line)
         if head:
-            finish()
             current = {"id": head.group(1), "enabled": head.group(2) in ("active", "enabled")}
             continue
         name = re.match(r"^\s*Name:\s*(.*?)\s*$", line)
-        if name and current is not None:
-            current["name"] = name.group(1)
+        if name and current:
+            jobs[name.group(1)] = current
             continue
         row = re.match(r"^\s*(Schedule|Script|Mode):\s*(.*?)\s*$", line)
-        if row and current is not None:
+        if row and current:
             current[row.group(1).lower()] = row.group(2)
-            continue
-    finish()
     return jobs
 
 
-JOB_NAME = re.compile(r"\Ateam-kit-[a-z][a-z0-9-]*\Z")
-JOB_COMMAND = re.compile(r"\A(team-kit-(?:gh|admin)) ([a-z][a-z-]*)\Z")
-JOB_OUTPUTS = ("print", "silent")
+JOB_NAME = re.compile(r"\Afaker-kit-[a-z][a-z0-9-]*\Z")
 
 
 def cron_spec(source: Path, bot: str) -> list[dict]:
-    """The jobs in a cron spec file: each `##` heading is a job, with Schedule, Deliver, Command, and Output.
-    A Command is one team-kit-gh or team-kit-admin subcommand with no arguments, so a script can run it without quoting."""
     out = []
     for block in re.split(r"^## ", source.read_text(), flags=re.M)[1:]:
         name = block.split("\n", 1)[0].strip()
         if not JOB_NAME.match(name):
-            raise InstallError(f"cron job name {name!r} must look like team-kit-<word>; it names the job's script")
+            raise InstallError(f"cron job name {name!r} must look like faker-kit-<word>")
 
-        def field(key):  # noqa: ANN001, ANN202
-            match = re.search(rf"^{key}: `([^`]+)`", block, re.M)  # noqa: B023
+        def field(key: str, optional: bool = False, block: str = block, name: str = name) -> str | None:
+            match = re.search(rf"^{key}: `([^`]+)`", block, re.M)
             if match is None:
-                raise InstallError(f"missing cron {key} field for {name}")  # noqa: B023
+                if optional:
+                    return None
+                raise InstallError(f"missing cron {key} field for {name}")
             return match.group(1).replace("{bot}", bot)
 
-        command = JOB_COMMAND.match(field("Command"))
-        if command is None:
-            raise InstallError(f"cron Command for {name} must be `team-kit-gh <subcommand>` or `team-kit-admin <subcommand>`")
-        output = field("Output")
-        if output not in JOB_OUTPUTS:
-            raise InstallError(f"cron Output for {name} must be one of {', '.join(JOB_OUTPUTS)}")
-        out.append({"name": name, "schedule": field("Schedule"), "deliver": field("Deliver"), "program": command.group(1), "subcommand": command.group(2), "output": output})
+        out.append({"name": name, "schedule": field("Schedule"), "deliver": field("Deliver"), "prompt": field("Prompt"), "skill": field("Skill", optional=True)})
     return out

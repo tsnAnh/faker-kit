@@ -2,17 +2,13 @@
 
 # Skills
 
-Every skill in the kit: 105 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 94 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
-The examples below are written for Claude Code. In the other agents, change the first word:
+Call a skill with a slash in Claude Code, for example `/faker-mode` or `/pstack:faker-mode`.
 
-| Claude Code | Codex | Pi |
-|---|---|---|
-| `/faker-mode` or `/pstack:faker-mode` | `$faker-mode` | `/skill:faker-mode` |
-
-You rarely need the name. Each agent picks a skill on its own when your request matches the skill's description, so "verify it really works" is often enough. Call a skill by name when you want to be sure.
+You rarely need the name. Claude Code picks a skill on its own when your request matches the skill's description, so "verify it really works" is often enough. Call a skill by name when you want to be sure.
 
 **For** says who the skill is written for. **Everyone** means you do not need to read code to use it.
 
@@ -20,8 +16,6 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 
 | Skill | Plugin | For | Try | What it does |
 |---|---|---|---|---|
-| [paved-path](../../plugins/trust-ladder/skills/paved-path/SKILL.md) | trust-ladder | Engineers | `/paved-path we have three ways to format dates` | Give one concern (networking, persistence, dates, logging, navigation, feature flags, state, UI tokens) exactly one blessed way to do it. |
-| [gardener](../../plugins/trust-ladder/skills/gardener/SKILL.md) | trust-ladder | Engineers | `/gardener what spread in the codebase this week?` | Tend the codebase the way a gardener tends weeds. |
 | [architect](../../plugins/pstack/skills/architect/SKILL.md) | pstack | Engineers | `/faker-mode we need rate limiting for external webhooks. /architect this first, and answer open questions with prototypes.` | Sketch types, signatures, and module structure before code, then stay in the loop while implementation fills in. |
 | [blast-radius](../../plugins/pstack/skills/blast-radius/SKILL.md) | pstack | Engineers | `/blast-radius this change to the session cache` | Find what a change could break somewhere else before it ships, beyond the diff, and prove the one fact it's safe because of by running real code instead of writing it up. |
 | [no-comments](../../plugins/pstack/skills/no-comments/SKILL.md) | pstack | Engineers | `/no-comments` | Spawn Comment Sicko, fix accepted findings, and offer encodings for claimed constraints. |
@@ -36,8 +30,6 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 
 | Skill | Plugin | For | Try | What it does |
 |---|---|---|---|---|
-| [setup-lint-pack](../../plugins/trust-ladder/skills/setup-lint-pack/SKILL.md) | trust-ladder | Engineers | `/setup-lint-pack kotlin-android` | Install a tested lint pack into a repository (agnostic, rust, python, kotlin-android, kmp, flutter-dart, swift-ios), baseline the existing violations so CI blocks only new ones, and wire it into the single check... |
-| [encode-lint-rule](../../plugins/trust-ladder/skills/encode-lint-rule/SKILL.md) | trust-ladder | Engineers | `/encode-lint-rule ban android.util.Log; use AppLog` | Write a lint rule, compiler setting, or CI check that fails on a specific agent mistake and tells the next agent what to do instead, in the repository's own linter (detekt, ktlint, Android Lint, SwiftLint, ast-grep,... |
 | [check-compiler-errors](../../plugins/team-workflows/skills/check-compiler-errors/SKILL.md) | team-workflows | Engineers | `/check-compiler-errors` | Run compile and type-check commands and report failures |
 | [fix-ci](../../plugins/team-workflows/skills/fix-ci/SKILL.md) | team-workflows | Engineers | `/fix-ci` | Find failing PR checks, inspect logs or external check links, and apply focused fixes |
 | [loop-on-ci](../../plugins/team-workflows/skills/loop-on-ci/SKILL.md) | team-workflows | Engineers | `/loop-on-ci until it is green` | Monitor PR checks and fix failures until green. |
@@ -46,7 +38,6 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 
 | Skill | Plugin | For | Try | What it does |
 |---|---|---|---|---|
-| [setup-review-bots](../../plugins/trust-ladder/skills/setup-review-bots/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-review-bots` | Give every pull request an automatic review from two model families, Claude and Codex, that follows the repository's own REVIEW.md, AGENTS.md review guidelines, and STYLE.md, and set up the triage loop for their... |
 | [thermos](../../plugins/thermos/skills/thermos/SKILL.md) | thermos | Engineers | `/thermos review this branch` | Launch both thermo-nuclear review subagents in parallel, then synthesize their findings. |
 | [thermo-nuclear-review](../../plugins/thermos/skills/thermo-nuclear-review/SKILL.md) | thermos | Engineers | `/thermo-nuclear-review` | Comprehensive security and correctness audit of a branch's changes. |
 | [thermo-nuclear-code-quality-review](../../plugins/thermos/skills/thermo-nuclear-code-quality-review/SKILL.md) | thermos | Engineers | `/thermo-nuclear-code-quality-review` | Run an extremely strict maintainability review for abstraction quality, giant files, and spaghetti-condition growth. |
@@ -66,6 +57,8 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 | [faker-mode](../../plugins/pstack/skills/faker-mode/SKILL.md) | pstack | Engineers | `/faker-mode build a small feature behind a feature flag. verify it really works.` | poteto's agent style for concise, detailed responses, deliberate subagents, unslopped prose, simple code, and verified work. |
 | [create-verification-skill](../../plugins/pstack/skills/create-verification-skill/SKILL.md) | pstack | Engineers | `/create-verification-skill` | Generate a project-local verification skill that drives your app the way a user does — any language, framework, or platform. |
 | [maintain-verification-skill](../../plugins/pstack/skills/maintain-verification-skill/SKILL.md) | pstack | Engineers | `/maintain-verification-skill` | Periodic pass that keeps a project's verification skill and feature map honest: parallel source readers per feature, one live session driving every feature, at most one PR of proven corrections. |
+| [create-formal-verification-skill](../../plugins/pstack/skills/create-formal-verification-skill/SKILL.md) | pstack | Engineers | `/create-formal-verification-skill model-check the retry queue's race conditions` | Generate a project-local skill that formally verifies the code where a bug costs the most and tests reach the least, in any language, with whichever verification tool fits. |
+| [maintain-formal-verification-skill](../../plugins/pstack/skills/maintain-formal-verification-skill/SKILL.md) | pstack | Engineers | `/maintain-formal-verification-skill is the model still true to the code?` | Bring a project's formal verification back in line with the code after the code changes: find the commits that touched verified code, update the model, harness, or properties to describe the code as it is now, rerun,... |
 | [control-mobile](../../plugins/trust-ladder/skills/control-mobile/SKILL.md) | trust-ladder | Engineers | `use control-mobile to reproduce the crash on the Android emulator and record it` | Build or adapt a local harness to drive and inspect an Android, iOS, Flutter, or Kotlin Multiplatform app on an emulator or simulator. |
 | [control-ui](../../plugins/team-workflows/skills/control-ui/SKILL.md) | team-workflows | Engineers | `use control-ui to take a trace of the settings page opening` | Build or adapt a local browser/CDP harness to drive and inspect a web, IDE, or Electron UI. |
 | [control-cli](../../plugins/team-workflows/skills/control-cli/SKILL.md) | team-workflows | Engineers | `use control-cli to drive the TUI and capture the transcript` | Build or adapt a local harness to drive, inspect, and profile an interactive CLI or TUI without external services. |
@@ -124,49 +117,32 @@ You rarely need the name. Each agent picks a skill on its own when your request 
 
 | Skill | Plugin | For | Try | What it does |
 |---|---|---|---|---|
-| [start-here](../../plugins/trust-ladder/skills/start-here/SKILL.md) | trust-ladder | Everyone | `/start-here I want to change the text on the checkout button` | A plain-English front door to the team kit for anyone, including designers, marketers, product people, and founders who do not know the skill names. |
-| [request-a-change](../../plugins/trust-ladder/skills/request-a-change/SKILL.md) | trust-ladder | Everyone | `/request-a-change the empty cart screen should suggest popular items` | Let anyone on the team, including designers, marketers, and founders, turn a plain-English request or bug report into a reviewed pull request. |
 | [bro](../../plugins/pstack/skills/bro/SKILL.md) | pstack | Everyone | `/bro` | Restate the last message in plain human language, with no jargon. |
 | [teach](../../plugins/pstack/skills/teach/SKILL.md) | pstack | Everyone | `/teach me why you implemented it this way and not with a cache. what were the tradeoffs?` | Explain a body of work plainly so a person actually understands it. |
 | [faker-help](../../plugins/pstack/skills/faker-help/SKILL.md) | pstack | Everyone | `/faker-help which skill should i use to review this branch?` | Guides users through pstack setup, /faker-mode, and picking the skill, playbook, or principle for a task. |
-| [ketchup](../../plugins/pstack/skills/ketchup/SKILL.md) | pstack | Everyone | `/ketchup` | Catch the user up on everything in this chat since their last message, in plain words. |
+| [ketchup](../../plugins/pstack/skills/ketchup/SKILL.md) | pstack | Everyone | `/ketchup` | Catch the user up on what changed in this chat since their last message, in plain words and small visuals. |
 | [what-did-i-get-done](../../plugins/team-workflows/skills/what-did-i-get-done/SKILL.md) | team-workflows | Everyone | `/what-did-i-get-done this week` | Summarize authored commits over a user-specified time period into a concise update |
 | [weekly-review](../../plugins/team-workflows/skills/weekly-review/SKILL.md) | team-workflows | Everyone | `/weekly-review for every author on main` | Produce a weekly synthesis of authored commits with highlights by bugfix, tech debt, and net-new work |
 | [create-learning-path](../../plugins/teaching/skills/create-learning-path/SKILL.md) | teaching | Everyone | `/create-learning-path I want to review pull requests with confidence` | Build a personalized learning roadmap with milestones and practice checkpoints |
 | [run-learning-retrospective](../../plugins/teaching/skills/run-learning-retrospective/SKILL.md) | teaching | Everyone | `/run-learning-retrospective` | Evaluate learning progress, identify blockers, and adjust the learning plan |
+| [sharpen](../../plugins/pstack/skills/sharpen/SKILL.md) | pstack | Everyone | `/sharpen add dark mode to the settings page` | Make a task deeper, not bigger, then rewrite the prompt. |
+| [in-your-own-words](../../plugins/pstack/skills/in-your-own-words/SKILL.md) | pstack | Everyone | `/in-your-own-words` | Restate in your own words what you think the user's goals are and what problem they're trying to solve. |
 
 ## The ladder: route corrections, set up, and measure
 
 | Skill | Plugin | For | Try | What it does |
 |---|---|---|---|---|
 | [correct](../../plugins/pstack/skills/correct/SKILL.md) | pstack | Engineers, Leads | `/correct agents keep catching Exception and swallowing it` | Find the mistakes agents keep repeating in this repo and make each one impossible. |
-| [setup-team-kit](../../plugins/trust-ladder/skills/setup-team-kit/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-team-kit` | Prepare a repository so agents can work in it unattended and anyone on the team can use the kit. |
-| [trust-audit](../../plugins/trust-ladder/skills/trust-audit/SKILL.md) | trust-ladder | Engineers, Leads | `/trust-audit how many agents can this repo take?` | Score how far a repository can be trusted to agents, layer by layer (codebase, static analysis, rules and review bots, skills and verification, style guide), with evidence from running its commands. |
+| [setup-faker-kit](../../plugins/trust-ladder/skills/setup-faker-kit/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-faker-kit` | Prepare a repository so agents can work in it unattended and anyone on the team can use the kit. |
 | [check-agent-compatibility](../../plugins/agent-compatibility/skills/check-agent-compatibility/SKILL.md) | agent-compatibility | Engineers, Leads | `/check-agent-compatibility` | Run the full repository compatibility pass: scanner score, startup path, validation loop, and docs reliability. |
-| [run-model](../../plugins/trust-ladder/skills/run-model/SKILL.md) | trust-ladder | Engineers | `run this seat on gpt-6-sol-high with the run-model skill` | Run one panel seat, judge, or delegate on a specific model slug (claude-opus-5-5-max, gpt-6-sol-high) from Claude Code, Codex, or Pi. |
 
 ## Scale: many agents and the outer loop
 
 | Skill | Plugin | For | Try | What it does |
 |---|---|---|---|---|
 | [setup-cloud-agents](../../plugins/trust-ladder/skills/setup-cloud-agents/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-cloud-agents` | Make the repository start, build, test, and run its app in a fresh cloud container, so engineers can run agents in parallel and designers, marketers, and founders can use the kit from a browser or phone with nothing... |
-| [setup-routines](../../plugins/trust-ladder/skills/setup-routines/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-routines run the gardener and the verification-skill upkeep every night` | Put the team's upkeep on a schedule so it happens without anyone remembering. |
-| [setup-dispatch](../../plugins/trust-ladder/skills/setup-dispatch/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-dispatch for this repo: backend claude, project shop` | Prepare one repository for faker-kit dispatch, so a Hermes project bot can brief cloud coding agents there and the owner only merges. |
-| [setup-hermes-project](../../plugins/trust-ladder/skills/setup-hermes-project/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-hermes-project for acme/shop with Claude Code` | Connect a GitHub repository to this machine's Hermes dispatch in one guided pass, from the owner's own coding agent. |
-| [follow-brief](../../plugins/trust-ladder/skills/follow-brief/SKILL.md) | trust-ladder | Engineers, Leads | `/faker-mode Work the brief in OWNER/REPO#123 using the follow-brief skill` | Work one unit a Hermes project bot handed to a cloud coding agent, from its GitHub issue to a pull request and a report. |
-| [review-pr](../../plugins/trust-ladder/skills/review-pr/SKILL.md) | trust-ladder | Engineers, Leads | `/review-pr Review https://github.com/OWNER/REPO/pull/7 at commit <sha> for the unit in OWNER/REPO#123. Sign the result with key <key>.` | Review one Hermes-dispatched unit pull request head in a read-only cloud session, post one signed finding summary on the unit issue, and never approve, request reviews, merge, push, or edit. |
-| [verify-unit](../../plugins/trust-ladder/skills/verify-unit/SKILL.md) | trust-ladder | Engineers, Leads | `/verify-unit Verify https://github.com/OWNER/REPO/pull/7 at commit <sha> against the brief in OWNER/REPO#123. Sign the verdict with key <key>.` | Independently verify one unit a Hermes project bot dispatched, from its brief and its pull request, without changing either. |
-| [triage-incident](../../plugins/trust-ladder/skills/triage-incident/SKILL.md) | trust-ladder | Engineers, Leads | `/triage-incident Investigate the incident in OWNER/REPO#12: main is red: test. The head of main is <sha>; its last commit with passing checks is <sha>. Post the diagnosis on OWNER/REPO#12. Sign it with key <key>.` | Investigate one incident a Hermes project bot opened from polling (the default branch's checks went red, or a health URL fails), without changing anything. |
-| [review-main-security](../../plugins/trust-ladder/skills/review-main-security/SKILL.md) | trust-ladder | Engineers, Leads | `/review-main-security Review the commits after <base> up to <head> on main of OWNER/REPO, and post the result on OWNER/REPO#9. Sign the result with key <key>.` | Review the new commits on a repository's default branch for security issues, from a Hermes project bot's scheduled job soon after each push, without changing anything. |
-| [orchestrate](../../plugins/trust-ladder/skills/orchestrate/SKILL.md) | trust-ladder | Engineers, Leads | `/orchestrate migrate every service to the new config loader, workers on Claude Code in the cloud, verifiers on Codex` | Use only when the user explicitly types `/orchestrate <goal>` (Codex `$orchestrate <goal>`) to decompose a large task, run a tree of parallel workers, subplanners, and verifiers as Claude Code or Codex agents, in the... |
+| [setup-hermes-project](../../plugins/trust-ladder/skills/setup-hermes-project/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-hermes-project for acme/shop with Claude Code` | Connect a GitHub repository to this machine's Hermes dispatch. |
+| [triage-incident](../../plugins/trust-ladder/skills/triage-incident/SKILL.md) | trust-ladder | Engineers, Leads | `/triage-incident Investigate OWNER/REPO: main is red: test. The head of main is <sha>; its last commit with passing checks is <sha>. Post the diagnosis on the head commit.` | Investigate one incident a Hermes project bot brought to you (the default branch's checks went red, a health URL fails, or an alert source such as Sentry, PagerDuty, Datadog, or Grafana reports a failure), without... |
+| [review-main-security](../../plugins/trust-ladder/skills/review-main-security/SKILL.md) | trust-ladder | Engineers, Leads | `/review-main-security Review the commits after <base> up to <head> on main of OWNER/REPO, and post the result on the head commit.` | Review the new commits on a repository's default branch for security issues, from a Hermes project bot's brief soon after each push, without changing anything. |
 | [swarm](../../plugins/pstack/skills/swarm/SKILL.md) | pstack | Engineers | `take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win` | Fan out N parallel workers, drain them, and return one report. |
 
-## Dormant: the benny automation pack
-
-pstack ships an issue-report bot as an automation pack. Its skills are not loaded until you set it up, because they need a feedback channel and a bot identity. Point your agent at [`FOR_AGENTS.md`](../../plugins/pstack/automations/benny/FOR_AGENTS.md) to install it.
-
-| Skill | Try | What it does |
-|---|---|---|
-| [setup-benny](../../plugins/pstack/automations/benny/skills/setup-benny/SKILL.md) | `point your agent at plugins/pstack/automations/benny/FOR_AGENTS.md` | Configure Benny and prepare its triage and repro automations. |
-| [triage-issue-reports](../../plugins/pstack/automations/benny/skills/triage-issue-reports/SKILL.md) | `triage new reports from the feedback channel` | Triage Slack issue reports with one thread-only verdict, evidence review, cause-aware routing, tracker dedupe, and fail-closed ticket creation. |
-| [reproduce-and-fix-issues](../../plugins/pstack/automations/benny/skills/reproduce-and-fix-issues/SKILL.md) | `reproduce confirmed reports with the verification skill and open fixes` | Reproduce triaged Slack bugs through a configured app-control adapter, verify existing fixes, and open a bounded draft pull request only after before-and-after proof. |

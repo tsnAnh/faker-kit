@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/team-kit-hook.mjs\" session-start"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/faker-kit-hook.mjs\" session-start"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/team-kit-hook.mjs\" user-prompt-submit"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/faker-kit-hook.mjs\" user-prompt-submit"
           }
         ]
       }

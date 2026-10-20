@@ -1,10 +1,10 @@
-# A whole team-kit Hermes machine. hermes/setup-machine.sh reads this file and rebuilds the machine
+# A whole faker-kit Hermes machine. hermes/setup-machine.sh reads this file and rebuilds the machine
 # from it, on any Linux or macOS host; run it again after every change. It holds no secret: the
 # script asks for tokens with hidden input and keeps them in the profiles' .env files.
 version: 1
 
-# The bot that sets up projects (hermes/install.sh --bootstrap-bot).
-bootstrap_bot: team-kit-bootstrap
+# The bot that sets up projects (faker-kit install --bootstrap-bot).
+bootstrap_bot: faker-kit-bootstrap
 # true: every bot's model runs on your Claude subscription through the logged-in Claude Code CLI.
 claude_subscription: true
 # Optional: the kit commit to install. Default: kit_ref in this repository's .agents/dispatch.json.
@@ -16,23 +16,23 @@ skills:
   - pstack
   - trust-ladder
 
-# Written into ~/.hermes/team-kit/guard.yaml; its comments explain each setting.
+# Written into ~/.hermes/faker-kit/guard.yaml; its comments explain each setting.
 guard:
   trusted_authors:
     - CHANGE-ME          # your GitHub login
   ask_owner: true
   max_in_flight_total: 3
 
-# One project bot per repository.
+# One project bot per repository. Each plays the long-lived coordinator chat for its project.
 projects:
   - bot: my-project
     project: my-project
     repo: CHANGE-ME/repo
-    tick_every: 10m        # the fallback poll; GitHub webhooks start work as events happen
+    heartbeat_every: 1h    # the fallback wake; GitHub webhooks wake the bot as events happen
 
 # Optional: run these repositories' GitHub Actions jobs on this machine (needs Docker). Each job gets
 # a fresh Linux container that sees nothing of this machine. Workflows ask for them with
-# `runs-on: [self-hosted, team-kit]`. slots: how many jobs run at once (1 to 8, default 1).
+# `runs-on: [self-hosted, faker-kit]`. slots: how many jobs run at once (1 to 8, default 1).
 # ci_runners:
 #   - repo: CHANGE-ME/repo
 #     slots: 2
@@ -47,8 +47,9 @@ webhooks:
   url: https://hermes.CHANGE-ME.example
   tunnel: hermes
 
-# Optional: the outbound-only Slack relay. The bot is one of the project bots above.
+# Optional: Hermes's own Slack platform. Put SLACK_BOT_TOKEN and SLACK_APP_TOKEN in ~/.hermes/.env
+# (setup-machine.sh asks for them); the bot's jobs then also deliver to this channel. The bot is one of
+# the project bots above.
 # slack:
 #   bot: my-project
 #   channel_id: C0123456789
-#   channel_name: my-project

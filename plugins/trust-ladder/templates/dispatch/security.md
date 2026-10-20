@@ -1,7 +1,5 @@
-<!-- team-kit:security v1 -->
+security-review: <CLEAN | FINDINGS <N> high, <N> medium, <N> low>
 range: <base commit from your prompt, or none>..<the full head commit from your prompt>
-findings: <N> high, <N> medium, <N> low
-sig: <HMAC-SHA256, in hex, of "<high>|<medium>|<low>|<head>" under the key in your prompt>
 
 ## Scope
 - Commits: <count>, `<base>..<head>`. Files read: <count>.

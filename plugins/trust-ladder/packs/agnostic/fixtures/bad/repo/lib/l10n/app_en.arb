@@ -1,0 +1,10 @@
+{
+  "appName": "Kirumi",
+  "greet": "Hello {name}",
+  "save": "Save",
+  "@greet": {
+    "placeholders": {
+      "name": {}
+    }
+  }
+}

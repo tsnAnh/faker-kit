@@ -1,1 +1,1 @@
-../../.agents/team-kit/plugins/team-workflows/agents/ci-watcher.md
+../../.agents/faker-kit/plugins/team-workflows/agents/ci-watcher.md

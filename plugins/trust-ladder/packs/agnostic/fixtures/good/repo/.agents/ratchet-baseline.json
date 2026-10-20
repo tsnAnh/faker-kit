@@ -1,0 +1,8 @@
+{
+  "rust-unwrap": {
+    "total": 2,
+    "perFile": {
+      "src/a.rs": 2
+    }
+  }
+}

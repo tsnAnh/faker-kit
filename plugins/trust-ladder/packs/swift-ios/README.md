@@ -14,7 +14,7 @@ The ast-grep rules live in `.agents/ast-grep/` with `sgconfig.yml` at the reposi
 
 ## Install
 
-Run `node skills/setup-lint-pack/scripts/install-pack.mjs swift-ios` from the trust-ladder plugin. Then set `Config/Strict.xcconfig` as each target's base configuration, or add the settings from `merge/Package.swift` to each Swift package.
+Run `node skills/setup-faker-kit/scripts/install-pack.mjs swift-ios` from the trust-ladder plugin. Then set `Config/Strict.xcconfig` as each target's base configuration, or add the settings from `merge/Package.swift` to each Swift package.
 
 ## Proof
 

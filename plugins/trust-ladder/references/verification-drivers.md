@@ -28,7 +28,7 @@ Give agents a small command-line tool inside the skill, not paragraphs of instru
 
 ## The feature map
 
-Next to the CLI, keep `references/features/`: a `README.md` index and one file per user-facing feature, each with the sections `Sub-features`, `How to get to it (user POV)`, `Driving it with <cli>`, and `Gotchas`. It is the app's memory in a form agents can search: what exists, how a user reaches it, and how to prove it works. Keep it current with `/maintain-verification-skill`, ideally from a daily routine (`setup-routines`), and give the skill an owner the way you would any critical infrastructure.
+Next to the CLI, keep `references/features/`: a `README.md` index and one file per user-facing feature, each with the sections `Sub-features`, `How to get to it (user POV)`, `Driving it with <cli>`, and `Gotchas`. It is the app's memory in a form agents can search: what exists, how a user reaches it, and how to prove it works. Keep it current with `/maintain-verification-skill`, ideally from a daily scheduled job, and give the skill an owner the way you would any critical infrastructure.
 
 ## Proof without a device
 

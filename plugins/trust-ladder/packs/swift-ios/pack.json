@@ -23,6 +23,6 @@
     "swiftlint lint --strict",
     "npx -y -p @ast-grep/cli ast-grep scan"
   ],
-  "baseline": "Run `swiftlint lint --write-baseline .swiftlint-baseline.json` once, commit it, and use `swiftlint lint --strict --baseline .swiftlint-baseline.json` in check. For ast-grep findings, add `// ast-grep-ignore: <rule-id>` with the reason `team-kit baseline` and ratchet that marker in .agents/ratchet.json.",
+  "baseline": "Run `swiftlint lint --write-baseline .swiftlint-baseline.json` once, commit it, and use `swiftlint lint --strict --baseline .swiftlint-baseline.json` in check. For ast-grep findings, add `// ast-grep-ignore: <rule-id>` with the reason `faker-kit baseline` and ratchet that marker in .agents/ratchet.json.",
   "ci": "ci/github-actions.yml"
 }

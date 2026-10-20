@@ -1,15 +1,13 @@
 # One command per line. scripts/check.sh runs them all; CI's check job runs scripts/check.sh.
-python3 .agents/team-kit/vendor_kit.py --check .
+python3 .agents/faker-kit/vendor_kit.py --check .
 node scripts/sync-upstream.mjs --check
 node scripts/validate.mjs
 node scripts/gen-catalog.mjs --check
-node scripts/gen-site.mjs
 node scripts/agent-checks/ratchet.mjs check
 node scripts/agent-checks/import-boundaries.mjs
 node scripts/agent-checks/rule-fixtures.mjs
 node scripts/check-commit-messages.mjs
 ruff check
 mypy
-bun test plugins/trust-ladder
-bun test upstream/agent-hooks
-python3 -m pytest hermes -q -n auto
+python3 hermes/e2e/run_dispatch_e2e.py --artifact artifacts/hermes-e2e.json
+node scripts/e2e/kit-e2e.mjs --artifact artifacts/kit-e2e.json

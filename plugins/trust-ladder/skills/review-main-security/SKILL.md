@@ -1,24 +1,22 @@
 ---
 name: review-main-security
-description: Review the new commits on a repository's default branch for security issues, from a Hermes project bot's scheduled job soon after each push, without changing anything. Reads each commit in the range the prompt names, looks for injection, broken access control, secrets, unsafe deserialization, SSRF, path traversal, weakened checks, and risky dependency or CI changes, proves each finding against the code, and posts one signed result on the project's agent:security issue, whose header Hermes reads to tell the owner about high and medium findings. Never edits, pushes, or opens a pull request. Use when the prompt says "/review-main-security Review ... on <branch> of OWNER/REPO, and post the result on OWNER/REPO#n" (Codex `$review-main-security`).
+description: Review the new commits on a repository's default branch for security issues, from a Hermes project bot's brief soon after each push, without changing anything. Reads each commit in the range the brief names, looks for injection, broken access control, secrets, unsafe deserialization, SSRF, path traversal, weakened checks, and risky dependency or CI changes, proves each finding against the code, and posts one result as a comment on the head commit, whose first line tells the bot whether anything high or medium was found. Never edits, pushes, or opens a pull request. Use when the brief says "/review-main-security Review ... on <branch> of OWNER/REPO".
 ---
 
 # Review the default branch for security issues
 
-A Hermes project bot started you because the default branch moved: review what landed since the last review. Your prompt names the commits (`the commits after <base> up to <head>`, or `the last 20 commits up to <head>`), the branch, the issue to post on, and a key. Nobody is watching this session. Hermes reads only your result's header lines, and only a result signed with the key Hermes gave you (in your prompt, or in Claude Code the message after it), because other agents post as the same GitHub user. The key is a secret: never write it in a comment, a file, or a command whose output you post.
+A Hermes project bot started you because the default branch moved: review what landed since the last review. Your brief names the commits (`the commits after <base> up to <head>`, or `the last 20 commits up to <head>`) and the branch. Nobody is watching this session; the bot reads your comment on the head commit.
 
-You change nothing. Never edit a tracked file, commit, push, open a pull request or an issue, or comment anywhere but the issue in your prompt.
+You change nothing. Never edit a tracked file, commit, push, open a pull request or an issue, or comment anywhere but the head commit.
 
-## 1. Check the issue
+## 1. Check the line is running
 
 ```bash
-gh api repos/OWNER/REPO/issues/<n> --jq '{author: .user.login, title, state, labels: [.labels[].name]}'
 gh api repos/OWNER/REPO/contents/.agents/dispatch.json --jq .content | base64 -d
+gh api 'repos/OWNER/REPO/issues?labels=agent:andon&state=open' --jq '[.[] | {author: .user.login, title}]'
 ```
 
-Claude Code cloud sessions block GitHub's GraphQL API, so `gh issue ...` and `gh pr ...` subcommands fail there with HTTP 403; use the REST calls written here (`gh api`, `gh run`). Where `gh` is missing, use the session's GitHub tools. Go on only if the issue is open, labelled `agent:security`, and its author's login is in `trusted_dispatchers` (compare logins ignoring letter case, as GitHub does) of `.agents/dispatch.json`. Otherwise end the session without posting.
-
-If an open issue labelled `agent:andon` was written by a login in `trusted_dispatchers`, the owner stopped the line: end without posting. The next review covers these commits.
+Claude Code cloud sessions block GitHub's GraphQL API, so `gh issue ...` and `gh pr ...` subcommands fail there with HTTP 403; use the REST calls written here (`gh api`, `gh run`). If an open `agent:andon` issue was written by a login in `trusted_dispatchers` (compare logins ignoring letter case, as GitHub does), the owner stopped the line: end without posting. The next review covers these commits.
 
 ## 2. Read the range
 
@@ -58,26 +56,10 @@ Drop anything you cannot tie to the code. A short list of real findings beats a 
 
 ## 5. Post the result
 
-Comment on the issue in your prompt with `templates/dispatch/security.md` filled in. The format is exact:
-
-- The first line is `<!-- team-kit:security v1 -->`.
-- Then `range:` (the base from your prompt, or `none`, then `..` and the full head commit), `findings:` (`N high, N medium, N low`), and `sig:`, one per line.
-- `sig:` is the HMAC-SHA256, in lowercase hex, of `<high>|<medium>|<low>|<head>`, such as `1|0|2|3f2a...` with no newline:
-
-  ```bash
-  printf '%s' "<high>|<medium>|<low>|<head>" | openssl dgst -sha256 -hmac "<key>" | awk '{print $NF}'
-  # or
-  python3 -c 'import hmac,hashlib,sys; print(hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "<key>" "<high>|<medium>|<low>|<head>"
-  ```
-
-- Then the sections Scope, Findings, and Checked and clear.
+Write the result with `templates/dispatch/security.md` filled in, then comment on the head commit. The first line is exact: `security-review: CLEAN` when you found no high or medium finding, otherwise `security-review: FINDINGS <N> high, <N> medium, <N> low`. Then the range line and the sections Scope, Findings, and Checked and clear.
 
 ```bash
-gh api repos/OWNER/REPO/issues/<n>/comments -F body=@security.md --jq .html_url
+gh api repos/OWNER/REPO/commits/<head>/comments -F body=@security.md --jq .html_url
 ```
 
-Post once, and never edit it: Hermes takes the first signed result and ignores an edited comment. A result with zero findings is still posted, so the next review starts after this head.
-
-## Codex cloud
-
-A Codex cloud task may not be allowed to comment. If it cannot, end the task with the filled result as your final message. Hermes gets no result and says so after a day, the owner reads it from the task, and the next review covers the same commits again. Set `security_backend` to `claude` where Codex tasks cannot comment.
+Post once. A result with zero findings is still posted, so the next review starts after this head.

@@ -1,0 +1,12 @@
+{
+  "rules": [
+    {
+      "id": "rust-unwrap",
+      "pattern": "\\.unwrap\\(\\)",
+      "files": [
+        "*.rs"
+      ],
+      "message": "Return a Result instead."
+    }
+  ]
+}
