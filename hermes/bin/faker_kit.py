@@ -63,6 +63,7 @@ BRIEF_START = "/faker-mode"
 MAX_BRIEF_CHARS = 60_000
 SESSION_MODEL = re.compile(r"\A(?:opus|sonnet|haiku|fable|claude-[a-z0-9]+(?:-[a-z0-9]+){1,6})\Z")
 SESSION_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+UNIT_LINE = re.compile(r"\AUnit: ([a-z0-9][a-z0-9-]{0,63})[ \t]*\r?(?:\n|\Z)")
 STATUS_PRS = 30
 OWNER_PLACEHOLDER = "owner-login"
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
@@ -364,7 +365,8 @@ class Kit:
         verdict = decide(number, head, self.evidence(gh, number, head, default), gh.repo, default, store.get(number), self.now())
         gate = {"merge": "ready to merge", "wait": verdict.message, "refuse": f"blocked: {verdict.message}"}[verdict.action]
         mergeable = {True: "mergeable", False: "conflicts", None: "mergeable unknown"}[detail.get("mergeable")]
-        return " | ".join([f"#{number}", f"by {who}", "draft" if pull.get("draft") else "ready", mergeable, gate])
+        unit = UNIT_LINE.match(str(detail.get("body") or ""))
+        return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready", mergeable, gate])
 
     def handoff(self, caller: Bot, project: str, part: str) -> dict:
         self.refuse_after_untrusted_text(caller.name, "hand out work")
