@@ -266,12 +266,16 @@ else:
 FAKE_CLAUDE = r'''
 import json, os, sys
 args = sys.argv[1:]
+chosen = {}
+while len(args) > 2 and args[0] in ("--model", "--effort"):
+    chosen[args[0][2:]] = args[1]
+    args = args[2:]
 if len(args) == 2 and args[0] == "--cloud":
     if not os.isatty(1):
         print("Error: --cloud requires an interactive terminal.")
         sys.exit(1)
     with open(os.environ["E2E_CLAUDE_LOG"], "a") as out:
-        out.write(json.dumps({"argv": args, "cwd": os.getcwd()}) + "\n")
+        out.write(json.dumps({"argv": args, "cwd": os.getcwd(), **chosen}) + "\n")
     print("Created cloud session: Task", flush=True)
     print("View: https://claude.ai/code/session_01E2Eabc?from=cli&m=0", flush=True)
 else:
@@ -558,6 +562,7 @@ def launch_scenario(run: Run) -> None:
     first = calls[-1]["argv"][1]
     run.step("the brief is the session's first message and carries the andon stop rule",
              len(calls) == 1 and first.startswith("/faker-mode") and "agent:andon" in first and "README typo" in first, first[:120].replace("\n", " "))
+    run.step("a launch with no model choice leaves the session on the account's default", "model" not in calls[-1] and "effort" not in calls[-1], "")
     run.step("the session starts from the kept launch checkout", Path(calls[-1]["cwd"]).name == "repo" and "checkouts" in calls[-1]["cwd"], calls[-1]["cwd"])
     for name, text, needle in (("loose.md", "Fix the README typo.\n", "/faker-mode"), ("secret.md", "/faker-mode\n\nUse ghp_" + "A" * 36 + " to push.\n", "token")):
         code, _, err = run.kit("launch", "--brief-file", str(run.brief(name, text)))
@@ -579,6 +584,13 @@ def launch_scenario(run: Run) -> None:
     run.step("launch refuses a repository whose vendored kit is not this machine's", code == 1 and "vendored kit" in err, err.strip())
     run.update_gh(lambda state: state["files"].update({".agents/faker-kit/KIT.json": json.dumps({"kit_ref": run.kit_ref})}))
     run.step("nothing but the one launch reached claude", len(run.claude_log.read_text().splitlines()) == 1, "1 session")
+    refused = [run.kit("launch", "--brief-file", str(good), *flags) for flags in (["--model", "sonnet --cloud x"], ["--model", "gpt-5"], ["--effort", "ultra"])]
+    run.step("launch refuses a model or effort the claude CLI does not take", all(code == 1 for code, _, _ in refused)
+             and len(run.claude_log.read_text().splitlines()) == 1, " | ".join(err.strip() for _, _, err in refused))
+    code, out, err = run.kit("launch", "--brief-file", str(good), "--model", "sonnet", "--effort", "low")
+    chosen = json.loads(run.claude_log.read_text().splitlines()[-1])
+    run.step("launch starts the session on the model and effort the bot chose for the task", code == 0 and chosen.get("model") == "sonnet"
+             and chosen.get("effort") == "low" and chosen["argv"][-1].startswith("/faker-mode") and json.loads(out)["model"] == "sonnet", out.strip() or err.strip())
 
     code, _, err = run.kit("merge", "--pr", "1", bot=BOOTSTRAP)
     run.step("a bot may run only its own role's commands", code == 1 and "not one of its commands" in err, err.strip())
@@ -586,7 +598,7 @@ def launch_scenario(run: Run) -> None:
     raised = run.kit("andon", "raise", "bad", "merge", "landed")
     run.step("the bot pulls the andon cord", raised[0] == 0 and json.loads(raised[1])["stopped"] is True, raised[1].strip() or raised[2].strip())
     code, _, err = run.kit("launch", "--brief-file", str(good))
-    run.step("launch is refused while the andon cord is raised", code == 1 and "andon" in err.lower() and len(run.claude_log.read_text().splitlines()) == 1, err.strip())
+    run.step("launch is refused while the andon cord is raised", code == 1 and "andon" in err.lower() and len(run.claude_log.read_text().splitlines()) == 2, err.strip())
     open_gates(run, 1, sha("a"))
     code, _, err = run.merge(1)
     run.step("merge is refused while the andon cord is raised", code == 1 and "andon" in err.lower(), err.strip())

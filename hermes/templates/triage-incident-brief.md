@@ -25,3 +25,5 @@ FORBIDDEN: Editing tracked files, committing, pushing, reverting, re-running wor
 REPORT: The comment's URL.
 
 STANDING: {standing}
+
+{models}

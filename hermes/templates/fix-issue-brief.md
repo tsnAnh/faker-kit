@@ -26,3 +26,5 @@ FORBIDDEN: Merging, rebasing, or force-pushing any shared branch; editing the pa
 REPORT: The issue comment's URL, or the pull request's URL and head SHA.
 
 STANDING: {standing}
+
+{models}
