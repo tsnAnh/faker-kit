@@ -4,7 +4,7 @@
 
 Each pack is a tested set of lint rules, compiler settings, and CI checks aimed at the mistakes agents make in that stack. Every rule fails with a message that says what to do instead, because that message is what the next agent reads. Each pack has `fixtures/bad` that must fail and `fixtures/good` that must pass, and this repository's CI runs both.
 
-Install a pack with `/setup-lint-pack <name>`, or let `/setup-team-kit` pick packs from the stacks it detects. Existing violations go into a baseline, so only new ones fail. To add a rule for a mistake the pack does not cover, use `/encode-lint-rule`.
+`/setup-faker-kit` picks packs from the stacks it detects and installs them. Existing violations go into a baseline, so only new ones fail. To add a rule for a mistake the pack does not cover, run pstack's `/correct`, which writes the rule in the strongest layer that can hold it.
 
 | Pack | Installed when the repository has | What it enforces |
 |---|---|---|
@@ -104,7 +104,7 @@ Tools:
 - rust >=1.81: #[expect] and lint reasons are stable from 1.81
 - cargo-deny >=0.16: dependency advisories, licenses, and sources
 
-Existing violations: Clippy has no baseline file. For each file with existing violations, add an inner attribute such as #![expect(clippy::unwrap_used, reason = "team-kit baseline")] at the top, then add a ratchet rule {"id": "rust-baseline", "pattern": "team-kit baseline", "files": ["*.rs"]} and run ratchet.mjs update. #[expect] fails once the code is fixed, so baselines remove themselves.
+Existing violations: Clippy has no baseline file. For each file with existing violations, add an inner attribute such as #![expect(clippy::unwrap_used, reason = "faker-kit baseline")] at the top, then add a ratchet rule {"id": "rust-baseline", "pattern": "faker-kit baseline", "files": ["*.rs"]} and run ratchet.mjs update. #[expect] fails once the code is fixed, so baselines remove themselves.
 
 Details and the full rule list: [rust README](../../plugins/trust-ladder/packs/rust/README.md).
 
@@ -150,7 +150,7 @@ Tools:
 - flutter >=3.24: flutter analyze and flutter test; pure Dart packages can use dart analyze
 - flutter_lints >=5.0: dev dependency the analysis_options include needs
 
-Existing violations: The analyzer has no baseline file. Add `// ignore_for_file: <rule>, team-kit baseline` at the top of each file with existing violations, then add {"id": "dart-baseline", "pattern": "team-kit baseline", "files": ["*.dart"]} to .agents/ratchet.json and run ratchet.mjs update.
+Existing violations: The analyzer has no baseline file. Add `// ignore_for_file: <rule>, faker-kit baseline` at the top of each file with existing violations, then add {"id": "dart-baseline", "pattern": "faker-kit baseline", "files": ["*.dart"]} to .agents/ratchet.json and run ratchet.mjs update.
 
 Details and the full rule list: [flutter-dart README](../../plugins/trust-ladder/packs/flutter-dart/README.md).
 
@@ -171,6 +171,6 @@ Tools:
 - ast-grep >=0.45: structural Swift rules that work without SourceKit (npx -p @ast-grep/cli ast-grep)
 - Xcode or Swift >=6.2: Swift 6 language mode and treatAllWarnings
 
-Existing violations: Run `swiftlint lint --write-baseline .swiftlint-baseline.json` once, commit it, and use `swiftlint lint --strict --baseline .swiftlint-baseline.json` in check. For ast-grep findings, add `// ast-grep-ignore: <rule-id>` with the reason `team-kit baseline` and ratchet that marker in .agents/ratchet.json.
+Existing violations: Run `swiftlint lint --write-baseline .swiftlint-baseline.json` once, commit it, and use `swiftlint lint --strict --baseline .swiftlint-baseline.json` in check. For ast-grep findings, add `// ast-grep-ignore: <rule-id>` with the reason `faker-kit baseline` and ratchet that marker in .agents/ratchet.json.
 
 Details and the full rule list: [swift-ios README](../../plugins/trust-ladder/packs/swift-ios/README.md).

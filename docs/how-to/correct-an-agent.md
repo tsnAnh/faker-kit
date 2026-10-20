@@ -22,8 +22,8 @@ It then:
 
 1. **Finds the mistake classes:** it reads recent commits, reverts, review comments, agent instruction files, and comments that explain workarounds, and groups the mistakes. A class counts once it has happened twice.
 2. **Fixes each class at the highest level that works:**
-   1. **Architecture:** one owner for each piece of state and one supported way to do each task; internals hidden so the wrong import fails; old ways an agent would copy deleted. Use `paved-path` when callers must move.
-   2. **Types**, so the bad state cannot be written. Where bad code still compiles, a **lint or CI check** whose error names what to use instead (`encode-lint-rule`). If the pattern is already common, it fails only when a change adds more.
+   1. **Architecture:** one owner for each piece of state and one supported way to do each task; internals hidden so the wrong import fails; old ways an agent would copy deleted. When callers must move, migrate them and delete the old API in the same change.
+   2. **Types**, so the bad state cannot be written. Where bad code still compiles, a **lint or CI check** whose error names what to use instead (written in the repository's own linter, or the agnostic checks). If the pattern is already common, it fails only when a change adds more.
    3. **A test** of the behavior.
    4. **Docs or agent rules last**, only for judgment calls: nothing fails when an agent skips them. Human review is not a level.
 3. **Proves it:** each new check fails on a real past mistake, and runs the same way locally and in CI. Exceptions go on the offending line with a reason, an expiry date, and a human's approval.

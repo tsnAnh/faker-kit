@@ -4,17 +4,17 @@ Your first hour with the kit. By the end, a repository is set up for agents, an 
 
 ## 1. Install (5 minutes)
 
-Follow [Install the kit](../how-to/install.md) for your agent, then [set the team model](../how-to/models.md). The examples below use Claude Code's `/name`. In Codex type `$name`; in Pi, `/skill:name`.
+Follow [Install the kit](../how-to/install.md), then [choose the model](../how-to/install.md#choose-the-model).
 
 ## 2. Set up a repository (20 minutes)
 
 In the repository, on a new branch:
 
 ```text
-/setup-team-kit
+/setup-faker-kit
 ```
 
-It writes AGENTS.md (with one `scripts/check.sh` that runs everything CI runs), installs the lint pack for each stack it detects with a baseline so only new violations fail, adds Claude and Codex PR review, and links project skills for all three agents. It opens one pull request. Details: [Set up a repository](../how-to/set-up-a-repo.md).
+It writes AGENTS.md (with one `scripts/check.sh` that runs everything CI runs), installs the lint pack for each stack it detects with a baseline so only new violations fail, adds the Claude PR review workflow, and links project skills. It opens one pull request. Details: [Set up a repository](../how-to/set-up-a-repo.md).
 
 ## 3. Build a verification skill (20 minutes, then ongoing)
 
@@ -22,7 +22,7 @@ It writes AGENTS.md (with one `scripts/check.sh` that runs everything CI runs), 
 /create-verification-skill
 ```
 
-This is the most valuable thing you can give an agent: a small CLI that starts your app, drives it, and captures screenshots, logs, and traces, plus a feature map of how to reach every screen. Without it, agents can only guess whether their change works, and you stay the bottleneck. For Android, iOS, Flutter, and KMP apps, it builds on `control-mobile`. Details: [Build a verification skill](../how-to/build-a-verification-skill.md).
+This is the most valuable thing you can give an agent: a small CLI that starts your app, drives it, and captures screenshots, logs, and traces, plus a feature map of how to reach every screen. Without it, agents can only guess whether their change works, and you stay the bottleneck. For Android, iOS, Flutter, and KMP apps, it builds on `control-mobile`. Details: the pstack guide's [Verify the result and open a PR](../../plugins/pstack/docs/guide/06-verify-and-ship.md).
 
 ## 4. Ship one change with proof (15 minutes)
 
@@ -47,10 +47,10 @@ It finds the mistakes agents repeat, fixes each at the highest level that works 
 | When you want to | Use | Guide |
 |---|---|---|
 | Understand code before changing it | `/how`, `/why`, `/teach`, `/recall` | [pstack guide: understand](../../plugins/pstack/docs/guide/03-understand.md) |
-| Decide on a design with evidence | `/architect`, `/arena`, the Prototype playbook | [Design before building](../how-to/design-before-building.md) |
-| Review and land work | `/interrogate`, `/thermos`, `/deslop`, `/no-comments`, the Babysit playbook | [Build, review, and ship](../how-to/build-review-ship.md) |
-| Run agents while you are away | the Autonomous run, Orchestrate, and Autopilot playbooks, routines | [Run many agents](../how-to/run-many-agents.md) |
-| Stop bad patterns from spreading | `gardener`, `paved-path` | [Garden the codebase](../how-to/garden-the-codebase.md) |
-| Know how many agents a repo can take | `/trust-audit` | [Scaling to many agents](../explanation/scaling-agents.md) |
+| Decide on a design with evidence | `/architect`, `/arena`, the Prototype playbook | [pstack guide: design](../../plugins/pstack/docs/guide/04-design.md) |
+| Review and land work | `/interrogate`, `/thermos`, `/deslop`, `/no-comments`, the Babysit playbook | [pstack guide: verify and ship](../../plugins/pstack/docs/guide/06-verify-and-ship.md) |
+| Run agents while you are away | the Autonomous run, Orchestrate, and Autopilot playbooks, or a Hermes project bot | [pstack guide: overnight](../../plugins/pstack/docs/guide/07-overnight.md), [Dispatch work with Hermes](../how-to/dispatch-with-hermes.md) |
+| Steer with principle names | the `principle-*` skills | [pstack guide: principles](../../plugins/pstack/docs/guide/08-principles.md) |
+| See how ready a repo is for agents | `/check-agent-compatibility` | [The trust ladder](../explanation/trust-ladder.md) |
 
-[Every skill](../reference/skills.md) and [prompts to copy](../reference/prompts.md) are in the reference.
+[Every skill](../reference/skills.md) is in the reference.

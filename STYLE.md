@@ -23,8 +23,8 @@ This repository's pull requests come from agents, and it has no human review com
 ### S1. A refusal or notice tells the owner what to do next
 
 - Why: the owner reads these in Bot Chat or a terminal, often hours later. A line that only says what failed leaves them guessing which command or setting fixes it.
-- Bad: `team-kit-gh: refused: no routine token`
-- Good: `team-kit-gh: refused: no routine token: put it in the project bot profile's .env as TEAM_KIT_ROUTINE_TOKEN`
+- Bad: `faker-kit: refused: no security-review status`
+- Good: `faker-kit: refused: security-review has not reported on the head; add the security job from .github/workflows/claude-review.yml`
 - Promotion: review
 - Source: the owner's setup sessions for the routine and the claude --cloud launch (#35, #46), where every stuck step was a refusal that did not name its fix.
 
@@ -46,7 +46,7 @@ This repository's pull requests come from agents, and it has no human review com
 
 ### S4. Prefer the upstream skill when one covers the capability
 
-- Why: two skills for one job split the team's habits, and Pi keeps only the first skill of a name. A wrapper keeps upstream fixes flowing.
+- Why: two skills for one job split the team's habits, and a project links skills by bare name, so a repeated name collides. A wrapper keeps upstream fixes flowing.
 - Bad: keeping trust-ladder's own `correct` next to pstack's `correct`.
 - Good: use pstack's `/correct`; put this repository's extra steps in AGENTS.md or a trust-ladder skill that calls it.
 - Promotion: review (AGENTS.md, Writing trust-ladder skills)
