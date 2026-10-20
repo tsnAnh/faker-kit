@@ -2,7 +2,7 @@
 
 GOAL: Settle bug report issue #{number} of {repo}: reproduce it, then either show with evidence that it is not a bug, or fix it with a test that fails first.
 
-SCOPE: The code that behaves wrongly according to the report. Nothing else in the repository changes. Branch `dispatch/fix-issue-{number}`.
+SCOPE: The code that behaves wrongly according to the report. Nothing else in the repository changes.
 
 CONTEXT:
 - A collaborator with write access, {labeler}, asked for this by adding the `faker:fix` label: {url}

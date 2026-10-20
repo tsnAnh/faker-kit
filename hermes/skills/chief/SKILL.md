@@ -39,13 +39,15 @@ Run `faker-kit status --all`. For each project the intent might touch, read its 
 - A part belongs to the project whose repository holds the code it changes. A feature across one product's API, web app, and mobile app is one project's work when they live in one repository: one message to that bot. Do not split it further; the project bot splits units.
 - When two projects must change together (a shared API and its consumer in another repository), the provider goes first. Hand the provider bot its part first and wait for its reply naming the pull request. Message the consumer bot only after that pull request is merged. If the provider project is not on this Hermes machine, the owner sends the consumer message only after the provider's pull request merges.
 - If no project fits, or the owner asks for a new project, message the bootstrap bot yourself; see New projects below. Never tell the owner to ask the bootstrap bot.
-- If the intent is unclear, ask one question with `clarify` before you write anything.
+- Settle the part before you hand it out. A cloud session only implements and never asks, so every product, design, or economics choice must be decided before launch. From the project's `AGENTS.md` and the files it points at, list what the owner's request leaves open (amounts, limits, prices, which screen, what done looks like) that the code does not already decide. Ask them in your reply, up to 5, each with a recommended answer, and end the turn. When nothing is open, restate the plan, ask the owner to reply "go", and end the turn. Reading the repository leaves the turn unclean, so record and send the part in the owner's next message, running `faker-kit handoff` and `message_agent` before you read anything else, and put the answers in the part.
 
 ### 3. Hand each part to its bot
 
 Restate the plan in a short list: each project, its bot, what it gets, and the order. Then hand each part to its project bot yourself with `message_agent`. Never ask the owner to copy and paste a message to a bot on this Hermes machine.
 
 Start the message with "Work from the chief of staff:", then the part (see What goes in each part below). The project bot briefs and launches it in its own flow and replies with its pull request numbers as they open; record them with `faker-kit loop set <id> --pr <n>`. When a consumer waits for a provider, message the consumer only after the provider's pull request is merged.
+
+A project bot may reply with questions it found in the code before it launches. Its reply leaves your turn unclean, so do not answer for the owner and do not message the bot from it: tell the owner every question with the bot's recommended answers in this chat, run `faker-kit loop set <id> --state blocked --reported`, and end the turn. When a later owner message answers them, send the answers from that turn, before you read anything else, as "Work from the chief of staff: follow-up on <the part, in the words you handed it out with>: <the answers>" and set the part back to `handed-out`. Until then the part stays `blocked`.
 
 Record each part with `faker-kit handoff` before you message its bot. If `handoff` refuses because the part is already open, do not message the bot a second handoff; follow up instead (see Steer, never respawn). Add `--pr` numbers with `faker-kit loop set` as the bot reports them.
 
@@ -85,7 +87,7 @@ The `faker-kit-loop` job runs a pass every weekday hour from 10:00 to 18:00; the
 
 ### When a bot replies
 
-1. Set the part's state from the reply with `faker-kit loop set <id> --state <state>`, adding any new `--pr`. A pull request the bot says waits on the owner (a protected path, `Risk: high`, a workflow change, or a gate only the owner can open) is `ready-to-merge`; a refusal, a failed check, or a stuck session the bot cannot fix is `blocked`; a merged pull request that finishes the part is `merged`.
+1. Set the part's state from the reply with `faker-kit loop set <id> --state <state>`, adding any new `--pr`. A pull request the bot says waits on the owner (a protected path, `Risk: high`, a workflow change, or a gate only the owner can open) is `ready-to-merge`; questions the bot needs the owner to answer before it launches, a refusal, a failed check, or a stuck session the bot cannot fix is `blocked` (questions go to the owner as Hand each part to its bot says); a merged pull request that finishes the part is `merged`.
 2. If the new state is in `to_report`, tell this chat in one line with the pull request link and mark it `--reported`. Otherwise answer `[SILENT]`: a reply that changes nothing the owner needs is not news.
 3. When a provider part becomes `merged`, its `waiting` consumer part is due. A reply turn is never clean, so do not message the consumer's bot from it; the next loop pass hands it over (step 2 there), or the owner's next message does.
 
