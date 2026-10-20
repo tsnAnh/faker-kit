@@ -66,10 +66,10 @@ class Profiles:
             self.use_subscription(bot, home, model, claude_config_dir)
         elif model:
             config_set(self.root, bot, ("model", "default"), model)
-        soul = self.pkg / "profiles" / role / "SOUL.md"
-        if (home / "SOUL.md").exists() and (home / "SOUL.md").read_text() != soul.read_text():
+        soul = (self.pkg / "profiles" / role / "SOUL.md").read_text().rstrip() + "\n\n" + (self.pkg / "profiles" / "OPERATING.md").read_text()
+        if (home / "SOUL.md").exists() and (home / "SOUL.md").read_text() != soul:
             shutil.copy2(home / "SOUL.md", home / "SOUL.md.bak")
-        shutil.copy2(soul, home / "SOUL.md")
+        (home / "SOUL.md").write_text(soul)
         plugin = home / "plugins" / PLUGIN
         shutil.rmtree(plugin, ignore_errors=True)
         shutil.copytree(self.pkg / "plugin" / PLUGIN, plugin, ignore=shutil.ignore_patterns("__pycache__"))
