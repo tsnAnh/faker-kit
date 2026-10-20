@@ -50,6 +50,7 @@ from faker_kit_guard.policy import (
 from faker_kit_incident_sources import FetchJson, fetch_json
 from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
+from faker_kit_loop import Loop, LoopError
 from faker_kit_machine import LOGIN, WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, edit_guard, load_machine, route_url, routes, secret_env
 from faker_kit_merge import MERGE_METHOD, NOTICE, REVIEW_WORKFLOW, SECURITY_JOB, WINDOW_SECONDS, Evidence, WindowStore, decide, dispatch_rules, from_fork, security_run_id
 from faker_kit_profiles import Profiles
@@ -74,7 +75,7 @@ ANDON_FOOTER = (
 ROLE_COMMANDS = {
     "project": {"launch", "merge", "status", "andon", "incidents", "issues"},
     "bootstrap": {"add-project", "vendor", "launch", "status", "andon"},
-    "chief": {"status"},
+    "chief": {"status", "handoff", "loop"},
 }
 OWNER_ONLY = {"install", "runner"}
 ANDON_COLOR = "b60205"
@@ -359,6 +360,24 @@ class Kit:
         mergeable = {True: "mergeable", False: "conflicts", None: "mergeable unknown"}[detail.get("mergeable")]
         return " | ".join([f"#{number}", f"by {who}", "draft" if pull.get("draft") else "ready", mergeable, gate])
 
+    def handoff(self, caller: Bot, project: str, part: str) -> dict:
+        self.refuse_after_untrusted_text(caller.name, "hand out work")
+        owner = self.policy().projects().get(project)
+        if owner is None:
+            raise Refused(f"no project {project} on this machine; faker-kit status --all lists them")
+        return Loop(self.home, caller.name).add(project, owner.name, part, self.now())
+
+    def loop(self, caller: Bot, action: str, part_id: int | None, state: str | None, prs: list[int], waits_on: str | None, reported: bool,
+             everything: bool) -> dict:
+        loop = Loop(self.home, caller.name)
+        if action == "set":
+            if part_id is None:
+                raise Refused("loop set takes the part's id: faker-kit loop set <id> --state <state>")
+            return loop.update(part_id, state, prs, waits_on, reported, self.now())
+        if part_id is not None or state or prs or waits_on or reported:
+            raise Refused(f"loop {action} takes no part id or changes; use loop set <id>")
+        return loop.digest(self.now()) if action == "digest" else loop.show(everything)
+
     def andon_command(self, caller: Bot | None, action: str, words: list[str]) -> dict:
         project = caller is not None and caller.role == "project"
         name = caller.name if project and caller else MACHINE
@@ -507,14 +526,17 @@ class Kit:
     def sync_bot(self, bot: Bot, ask_owner: bool, model: str | None, config_dir: str | None) -> dict:
         home = self.profiles.refresh(bot.name, bot.role, ask_owner, model, config_dir)
         out: dict = {"bot": bot.name, "role": bot.role}
-        if bot.role in ("project", "bootstrap"):
-            (self.home / "briefs" / bot.name).mkdir(parents=True, exist_ok=True)
+        (self.home / "briefs" / bot.name).mkdir(parents=True, exist_ok=True)
         if bot.role == "project":
             if config_dir is None:
                 self.profiles.record_config_dir(home, os.environ.get("CLAUDE_CONFIG_DIR", ""))
             intervals = {key: getattr(bot, key) for key in SCHEDULE_DEFAULTS}
             active = self.profiles.github_login(home, self.machine_login())
-            out["jobs_created"] = self.profiles.ensure_jobs(bot.name, intervals, bot.slack_channel, active)
+            out["jobs_created"] = self.profiles.ensure_jobs(bot.name, "project-jobs.md", intervals, bot.slack_channel, active)
+            out["jobs_active"] = active
+        if bot.role == "chief":
+            active = self.profiles.github_login(home, self.machine_login())
+            out["jobs_created"] = self.profiles.ensure_jobs(bot.name, "chief-jobs.md", {}, None, active)
             out["jobs_active"] = active
         return out
 
@@ -698,6 +720,17 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--claim", type=int)
     cmd = sub.add_parser("incidents")
     cmd.add_argument("--ack")
+    cmd = sub.add_parser("handoff")
+    cmd.add_argument("--project", required=True)
+    cmd.add_argument("--part", required=True)
+    cmd = sub.add_parser("loop")
+    cmd.add_argument("action", nargs="?", choices=["show", "set", "digest"], default="show")
+    cmd.add_argument("id", nargs="?", type=int)
+    cmd.add_argument("--state")
+    cmd.add_argument("--pr", type=int, action="append", default=[])
+    cmd.add_argument("--waits-on")
+    cmd.add_argument("--reported", action="store_true")
+    cmd.add_argument("--all", action="store_true")
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
     cmd.add_argument("reason", nargs="*")
@@ -751,6 +784,12 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
         if caller is None or caller.role != "project":
             raise Refused("incidents runs in a project bot's chat or job")
         return kit.incidents(caller, args.ack)
+    if args.command in ("handoff", "loop"):
+        if caller is None or caller.role != "chief":
+            raise Refused(f"{args.command} runs in the chief of staff's chat or job")
+        if args.command == "handoff":
+            return kit.handoff(caller, args.project, args.part)
+        return kit.loop(caller, args.action, args.id, args.state, args.pr, args.waits_on, args.reported, args.all)
     if args.command == "andon":
         return kit.andon_command(caller, args.action, args.reason)
     return run_runner(args)
@@ -761,7 +800,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
     args = parser().parse_args(argv)
     try:
         out = run_command(args, Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url), bot or current_bot())
-    except (Refused, CloudError, PolicyError, AndonError, MachineError, InstallError, RunnerError, yaml.YAMLError) as err:
+    except (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError) as err:
         print(f"faker-kit: refused: {err}", file=sys.stderr)
         return 1
     print("\n".join(out) if isinstance(out, list) else json.dumps(out, ensure_ascii=False))

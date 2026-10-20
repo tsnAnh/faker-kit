@@ -38,7 +38,8 @@ RESERVED_NAMES = frozenset({"default"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SLACK_CHANNEL = re.compile(r"\A[CG][A-Z0-9]{8,}\Z")
 BOOTSTRAP_READ_ONLY = ("status",)
-CLEAN_TURN_COMMANDS = ("merge",)
+CHIEF_NO_APPROVAL = ("status", "loop")
+CLEAN_TURN_COMMANDS = ("merge", "handoff")
 SECRET_TEXT = re.compile(
     r"(?<![\w.-])\.env(?:\.(?!example(?![\w-])|sample(?![\w-])|template(?![\w-])|dist(?![\w-]))[\w-]+)*(?![\w.-])"
     r"|\.ssh(?![\w-])|\.config/gh(?![\w-])|\.git-credentials|\.netrc(?![\w-])|\.aws/credentials|\bid_(?:rsa|ed25519|ecdsa)(?![\w-])"
@@ -101,7 +102,7 @@ BRIEFS_PATH = re.compile(r"faker-kit/briefs(?![\w-])", re.I)
 LINK_CALL = r"(?:symlink\w*|hardlink_to|os\.link|fs\.link\w*)"
 LINK_IN_CODE = re.compile(rf"(?s){LINK_CALL}.{{0,300}}faker-kit/briefs|faker-kit/briefs.{{0,300}}{LINK_CALL}", re.I)
 PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|faker-kit/kit)(?![\w-])", re.I)
-CLEAN_TURN_TEXT = re.compile(r"\bfaker-kit\W+(merge)\b")
+CLEAN_TURN_TEXT = re.compile(r"\bfaker-kit\W+(merge|handoff)\b")
 TAINTED_TURN_SECONDS = 3600
 TAINT_BLOCKED_TOOLS = ("delegate_task", "cronjob*")
 
@@ -936,7 +937,8 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
             f"The bootstrap bot changes this machine or GitHub. Approve {tool_name} only if you asked for it.",
             tool_name, args, "bootstrap",
         )
-    if tainted and not read_only:
+    chief_loop = bool(segments) and all(w[0] == PROGRAM and w[1:2] and w[1] in CHIEF_NO_APPROVAL for w in segments)
+    if tainted and not read_only and not (bot.role == "chief" and chief_loop):
         return approve(f"This turn read untrusted content. Approve {tool_name} only if you asked for it.", tool_name, args, "taint")
     return None
 

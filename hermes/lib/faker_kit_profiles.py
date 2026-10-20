@@ -121,11 +121,11 @@ class Profiles:
     def github_login(self, home: Path, machine_login: bool) -> bool:
         return bool(parse_env_file(home / ".env").get("GH_TOKEN")) or machine_login
 
-    def ensure_jobs(self, bot: str, intervals: dict[str, str], slack_channel: str | None, enabled: bool) -> list[str]:
+    def ensure_jobs(self, bot: str, spec: str, intervals: dict[str, str], slack_channel: str | None, enabled: bool) -> list[str]:
         existing = cron_jobs(hermes("-p", bot, "cron", "list", "--all"))
         created = []
-        for job in cron_spec(self.pkg / "cron" / "project-jobs.md", bot):
-            schedule = f"every {intervals[SCHEDULE_FIELDS[job['name']]]}"
+        for job in cron_spec(self.pkg / "cron" / spec, bot):
+            schedule = f"every {intervals[SCHEDULE_FIELDS[job['name']]]}" if intervals else job["schedule"]
             deliver = f"{job['deliver']},slack:{slack_channel}" if slack_channel else job["deliver"]
             current = existing.get(job["name"])
             if current is None:

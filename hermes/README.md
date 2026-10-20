@@ -1,6 +1,6 @@
 # faker-kit for Hermes
 
-This module runs faker-kit dispatch on a [Hermes Agent](https://github.com/NousResearch/hermes-agent) machine: one bootstrap bot that sets projects up, one project bot per project that runs the project as its long-lived coordinator chat and starts Claude Code cloud sessions, one pull request per unit, and an optional chief of staff that routes the owner's intent across projects. How to use it is in [Dispatch work with Hermes](../docs/how-to/dispatch-with-hermes.md).
+This module runs faker-kit dispatch on a [Hermes Agent](https://github.com/NousResearch/hermes-agent) machine: one bootstrap bot that sets projects up, one project bot per project that runs the project as its long-lived coordinator chat and starts Claude Code cloud sessions, one pull request per unit, and an optional chief of staff, an engineering lead that routes the owner's intent across projects and owns each part until it merges, on weekday jobs from `cron/chief-jobs.md`. How to use it is in [Dispatch work with Hermes](../docs/how-to/dispatch-with-hermes.md).
 
 It lives outside `plugins/` on purpose. Nothing here loads in a coding agent: plugins are what coding agents load, and this is what the Hermes bots load.
 
