@@ -5,7 +5,7 @@ usage() {
   cat <<'USAGE'
 Usage: packs/tools.sh <detekt|ktlint|swiftlint>
 
-Download a pinned linter into ${TEAM_KIT_TOOLS:-~/.cache/team-kit-tools}, verify its
+Download a pinned linter into ${FAKER_KIT_TOOLS:-~/.cache/faker-kit-tools}, verify its
 SHA-256, and print the path to run. Pack tests and CI use this so everyone runs the
 same version.
 
@@ -14,7 +14,7 @@ Example:
 USAGE
 }
 
-cache=${TEAM_KIT_TOOLS:-${XDG_CACHE_HOME:-$HOME/.cache}/team-kit-tools}
+cache=${FAKER_KIT_TOOLS:-${XDG_CACHE_HOME:-$HOME/.cache}/faker-kit-tools}
 case "${1:-}" in
   detekt)
     url=https://github.com/detekt/detekt/releases/download/v1.23.8/detekt-cli-1.23.8-all.jar

@@ -1,6 +1,6 @@
 # Review bot patterns
 
-Learned patterns for triaging comments from the Claude and Codex review bots on this repository. The pstack babysit playbook's Bugbot triage (`references/bugbot-triage.md` in the pstack plugin) defines the fix, dismiss, or ask rubric; this file holds this repository's own patterns in the same shape.
+Learned patterns for triaging comments from the Claude review bot on this repository. The pstack babysit playbook's Bugbot triage (`references/bugbot-triage.md` in the pstack plugin) defines the fix, dismiss, or ask rubric; this file holds this repository's own patterns in the same shape.
 
 Treat each bot comment on its merits. Security, privacy, data, auth, billing, migration, and concurrency findings are never auto-dismissed.
 

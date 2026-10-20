@@ -9,9 +9,9 @@ Install the kotlin-android pack first; this pack layers on top of it.
 | `explicitApi()` | Leaking internals as public API of the shared module. |
 | `allWarningsAsErrors` on every target | Warnings on one target going unnoticed because nobody builds it locally. |
 
-The `imports` list in `detekt-kmp.yml` replaces the kotlin-android list for the source sets it includes, so add any of your paved-path bans to both files.
+The `imports` list in `detekt-kmp.yml` replaces the kotlin-android list for the source sets it includes, so add any of your banned APIs to both files.
 
-Duplicated logic in `androidMain` and `iosMain` that belongs in `commonMain` is a gardener finding: the gardener scan lists helpers defined in several files.
+Duplicated logic in `androidMain` and `iosMain` that belongs in `commonMain` is a finding for `/correct` or a cleanup task: the same helper defined in several files.
 
 ## Proof
 

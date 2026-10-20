@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const COMPAT_START = "<!-- team-kit:compat:start -->";
-export const COMPAT_END = "<!-- team-kit:compat:end -->";
+export const COMPAT_START = "<!-- faker-kit:compat:start -->";
+export const COMPAT_END = "<!-- faker-kit:compat:end -->";
 const COMPAT_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "references", "compat.md");
 
 export function compatBlock() {

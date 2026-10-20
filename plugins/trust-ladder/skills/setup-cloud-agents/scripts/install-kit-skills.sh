@@ -5,20 +5,19 @@ usage() {
   cat <<'USAGE'
 Usage: install-kit-skills.sh [--ref REF] [--source URL_OR_DIR] [--checkout DIR] [--dest DIR]
 
-Make the team kit's skills available where plugins do not load, such as Codex
-cloud tasks. Fetches the kit at REF into a checkout outside the repository and
-symlinks every plugin skill into DEST, which Codex scans for user skills.
-Nothing is written inside the repository, so the task's diff stays clean.
+Make faker-kit's skills available where plugins do not load, such as the
+Hermes machine. Fetches the kit at REF into a checkout outside any repository and
+symlinks every plugin skill into DEST. Nothing is written inside a repository, so
+a task's diff stays clean.
 
-Run it from the cloud environment's setup script, which has network access.
+hermes/install.sh runs it to keep the machine's kit checkout at the pinned commit.
 Running it again moves the links to the new REF. A real directory, or a link
 that points somewhere else, is never replaced.
 
   --ref REF          Branch, tag, or commit of the kit (default: main; pin a commit)
   --source SRC       Kit repository (default: https://github.com/tsnAnh/faker-kit.git)
-  --checkout DIR     Where to keep the kit (default: $HOME/.team-kit, the name it
-                     had before the faker-kit rename; existing links point into
-                     it, and a link into any other folder counts as a conflict)
+  --checkout DIR     Where to keep the kit (default: $HOME/.faker-kit; a link into
+                     any other folder counts as a conflict)
   --dest DIR         Where to link skills (default: $HOME/.agents/skills)
 
 Examples:
@@ -29,7 +28,7 @@ USAGE
 
 ref=main
 source=https://github.com/tsnAnh/faker-kit.git
-checkout="$HOME/.team-kit"
+checkout="$HOME/.faker-kit"
 dest="$HOME/.agents/skills"
 while [ $# -gt 0 ]; do
   case "$1" in

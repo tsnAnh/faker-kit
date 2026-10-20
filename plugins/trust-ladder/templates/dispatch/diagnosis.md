@@ -1,7 +1,4 @@
-<!-- team-kit:diagnosis v1 -->
-suspect: <the full commit you believe caused it, or none>
-confidence: <high | medium | low>
-sig: <HMAC-SHA256, in hex, of "<suspect or none>|<confidence>|<issue number>" under the key in your prompt>
+triage: suspect <full commit, or none>, confidence <high | medium | low>
 
 ## What is failing
 - <the failing check, test, or endpoint, and its error, quoted briefly>

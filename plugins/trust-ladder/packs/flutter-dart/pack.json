@@ -24,6 +24,6 @@
     "flutter analyze --fatal-infos",
     "flutter test"
   ],
-  "baseline": "The analyzer has no baseline file. Add `// ignore_for_file: <rule>, team-kit baseline` at the top of each file with existing violations, then add {\"id\": \"dart-baseline\", \"pattern\": \"team-kit baseline\", \"files\": [\"*.dart\"]} to .agents/ratchet.json and run ratchet.mjs update.",
+  "baseline": "The analyzer has no baseline file. Add `// ignore_for_file: <rule>, faker-kit baseline` at the top of each file with existing violations, then add {\"id\": \"dart-baseline\", \"pattern\": \"faker-kit baseline\", \"files\": [\"*.dart\"]} to .agents/ratchet.json and run ratchet.mjs update.",
   "ci": "ci/github-actions.yml"
 }

@@ -4,11 +4,11 @@ A codebase that agents extend well is locked down enough that the easy path is t
 
 ## Principles
 
-1. **One paved path per concern.** Networking, persistence, navigation, date formatting, feature flags, logging: each has exactly one blessed API. Delete the alternatives and ban them with a lint rule whose message names the blessed API. Use the `paved-path` skill.
+1. **One paved path per concern.** Networking, persistence, navigation, date formatting, feature flags, logging: each has exactly one blessed API. Delete the alternatives and ban them with a lint rule whose message names the blessed API.
 2. **Colocate a feature.** Everything a feature needs lives in one folder: its entry point, UI, state, data access, and tests. An agent working on the feature reads one folder, not ten.
 3. **Enforce boundaries in the import graph.** Decide which layers may depend on which, then make the build or a test fail when that rule breaks. Documentation alone does not hold a boundary.
 4. **No comments.** Explain with names, types, and structure. Agents treat a comment next to a workaround as permission to keep the workaround, and they copy the comment and the workaround together. Allowed: license headers, public API docs, a link to an external constraint, and a suppression with its reason.
-5. **Delete tech debt, or at least stop it growing.** A pattern you would not want copied gets a lint rule today and a cleanup task. See the `gardener` skill.
+5. **Delete tech debt, or at least stop it growing.** A pattern you would not want copied gets a lint rule today and a cleanup task. Run `/correct` on it.
 6. **Make performance budgets structural.** If the UI thread must stay under 16 ms (8 ms at 120 Hz), keep slow work out of the UI module by construction, not by review.
 7. **Prefer strict tools.** Strict compiler modes, exhaustive switches over sealed types, and warnings as errors turn whole classes of agent mistakes into build failures.
 

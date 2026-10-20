@@ -1,6 +1,6 @@
 # REVIEW.md
 
-What reviewers check that no tool can. Human reviewers, the Claude review routine, and Codex code review all use this file. Anything a linter or compiler already enforces is out of scope here.
+What reviewers check that no tool can. Human reviewers and the Claude review workflow both use this file. Anything a linter or compiler already enforces is out of scope here.
 
 ## Blocking
 

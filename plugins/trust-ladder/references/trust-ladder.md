@@ -8,7 +8,7 @@ You can only run many agents at once when you trust what they do unattended. Tha
 |---|---|---|---|
 | 1. Codebase | Types, module boundaries, one blessed API per concern, deleted alternatives | The compiler and the build | Never, if the bad state cannot be written |
 | 2. Static analysis | Lint rules, compiler flags, CI checks, ratchets | CI on every change | Someone disables or baselines the rule |
-| 3. Rules and review bots | AGENTS.md, nested AGENTS.md, `.claude/rules/`, review-bot guidelines | Agents reading instructions; Claude and Codex PR review | An agent skips the file or the bot misses it |
+| 3. Rules and review bots | AGENTS.md, nested AGENTS.md, `.claude/rules/`, review-bot guidelines | Agents reading instructions; Claude PR review | An agent skips the file or the bot misses it |
 | 4. Skills | Verification skills, workflow skills, playbooks | Agents choosing to load them | Nobody loads the skill |
 | 5. Style guide | STYLE.md entries | Humans in review | The reviewer is busy or new |
 
@@ -34,7 +34,7 @@ Agents copy the code around them. A codebase with one clean pattern per concern 
 | "No `# type: ignore` without a reason" (Python) | 2 | mypy `warn_unused_ignores` plus ruff `PGH003` |
 | "UI code must not call the network" | 1, then 2 | Move networking into a data module the UI module cannot depend on; add a Konsist, import-linter, or import-boundary test so the rule survives refactors |
 | "commonMain must not import Android APIs" (KMP) | 1 | expect/actual declarations; the compiler rejects platform imports in commonMain |
-| "Use our `DateFormatter` wrapper, not three new helpers" | 1, then 2 | `paved-path`: migrate callers, delete the helpers, ban the raw API with a lint message that names the wrapper |
+| "Use our `DateFormatter` wrapper, not three new helpers" | 1, then 2 | `/correct`: migrate callers, delete the helpers, ban the raw API with a lint message that names the wrapper |
 | "Stop explaining workarounds in comments" | 2 | The `no-new-comments` check, plus `/no-comments` before review |
 | "Every user-facing string needs all locales" | 2 | A CI check that every locale file has the same keys |
 | "Prove it works before saying done" | 4, then 3 | A verification skill that drives the real app (`/create-verification-skill`), and an AGENTS.md rule that PRs carry its evidence |
@@ -43,4 +43,4 @@ Agents copy the code around them. A codebase with one clean pattern per concern 
 
 ## Measuring the climb
 
-`/correct` (pstack) keeps a table in AGENTS.md that pairs each rule with what enforces it, and a rule that nothing enforces counts as a repeat. `trust-audit` appends one row per audit to `.agents/trust-audit.tsv`. Read both before raising the number of agents you run in parallel: the share of rules a check enforces (layers 1 and 2) should grow, and no rule should be left to the doc alone.
+`/correct` (pstack) keeps a table in AGENTS.md that pairs each rule with what enforces it, and a rule that nothing enforces counts as a repeat. `/check-agent-compatibility` reports how ready the repository is for agents. Read both before raising `max_in_flight` in `.agents/dispatch.json`, which the owner sets: the share of rules a check enforces (layers 1 and 2) should grow, and no rule should be left to the doc alone.

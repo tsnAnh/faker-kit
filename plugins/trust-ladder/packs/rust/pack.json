@@ -19,6 +19,6 @@
     "cargo test --workspace",
     "cargo deny check"
   ],
-  "baseline": "Clippy has no baseline file. For each file with existing violations, add an inner attribute such as #![expect(clippy::unwrap_used, reason = \"team-kit baseline\")] at the top, then add a ratchet rule {\"id\": \"rust-baseline\", \"pattern\": \"team-kit baseline\", \"files\": [\"*.rs\"]} and run ratchet.mjs update. #[expect] fails once the code is fixed, so baselines remove themselves.",
+  "baseline": "Clippy has no baseline file. For each file with existing violations, add an inner attribute such as #![expect(clippy::unwrap_used, reason = \"faker-kit baseline\")] at the top, then add a ratchet rule {\"id\": \"rust-baseline\", \"pattern\": \"faker-kit baseline\", \"files\": [\"*.rs\"]} and run ratchet.mjs update. #[expect] fails once the code is fixed, so baselines remove themselves.",
   "ci": "ci/github-actions.yml"
 }
