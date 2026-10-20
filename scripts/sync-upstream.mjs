@@ -13,7 +13,7 @@ const ADAPTER_FILE = "hook-adapter.mjs";
 const ADAPTER_SOURCE = path.join(UPSTREAM_DIR, "agent-hooks", ADAPTER_FILE);
 const AGENT_HOOKS_DIR = "agent-hooks";
 const UPSTREAM_TO_AGENT_EVENT = { afterFileEdit: "PostToolUse", afterAgentResponse: "Stop", stop: "Stop", subagentStop: "SubagentStop" };
-const EDIT_TOOL_MATCHER = "Edit|Write|MultiEdit|NotebookEdit|apply_patch";
+const EDIT_TOOL_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
 const BINARY_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".woff", ".woff2"]);
 const MODEL_TOKEN = /\b(?:grok|gpt|claude-(?:opus|sonnet|haiku|fable)|composer|gemini)(?:[-.][a-z0-9.]+)*(?:\[[^\]\s]*\])?/gi;
 
@@ -22,8 +22,10 @@ const USAGE = `Usage: node scripts/sync-upstream.mjs [--check] [--src <dir>] [--
 Vendors the upstream plugin repository in upstream/source.json into plugins/<name>/
 byte-for-byte, except the model-name rewrites in upstream/model-map.json, the load
 fixes in upstream/compat-patches.json, and the team's renames and omissions in
-upstream/renames.json. Adds generated Claude Code and Codex manifests, and hook files
-that run a plugin's upstream hooks in both agents.
+upstream/renames.json. A plugin listed in "pluginSources" is read from that
+subdirectory of the upstream repository, with its own manifest directory. Adds a
+generated Claude Code manifest, and hook files that run a plugin's upstream hooks
+in Claude Code.
 
   --check       Rebuild in memory and fail if plugins/ differs. Writes nothing.
   --src <dir>   Use an existing checkout of the upstream repository instead of cloning.
@@ -143,7 +145,7 @@ function agentHooks(plugin, upstreamHooksBuf) {
   const hooks = {};
   for (const upstreamEvent of Object.keys(upstream.hooks ?? {})) {
     const event = UPSTREAM_TO_AGENT_EVENT[upstreamEvent];
-    if (!event) fail(`${plugin}/hooks/hooks.json uses upstream hook "${upstreamEvent}", which has no Claude Code or Codex mapping. Add one to UPSTREAM_TO_AGENT_EVENT and the adapter.`);
+    if (!event) fail(`${plugin}/hooks/hooks.json uses upstream hook "${upstreamEvent}", which has no Claude Code mapping. Add one to UPSTREAM_TO_AGENT_EVENT and the adapter.`);
     if (hooks[event]) continue;
     const command = `node "\${CLAUDE_PLUGIN_ROOT}/${AGENT_HOOKS_DIR}/${ADAPTER_FILE}" ${event}`;
     hooks[event] = [{ ...(event === "PostToolUse" ? { matcher: EDIT_TOOL_MATCHER } : {}), hooks: [{ type: "command", command }] }];
@@ -151,24 +153,31 @@ function agentHooks(plugin, upstreamHooksBuf) {
   return Buffer.from(`${JSON.stringify({ hooks }, null, 2)}\n`, "utf8");
 }
 
-function transform(upstreamDir, pluginNames, { rules, allowed, exceptions, omit }, manifestDir) {
+function pluginLayout(source, plugin) {
+  const custom = source.pluginSources?.[plugin];
+  return { dir: custom?.dir ?? plugin, manifestDir: custom?.manifestDir ?? source.manifestDir };
+}
+
+function transform(upstreamDir, source, { rules, allowed, exceptions, omit }) {
   const outputs = new Map();
+  const owners = new Map();
   const skipped = [];
   const counts = new Map(rules.map((r) => [r.id, 0]));
   const changes = new Map(rules.map((r) => [r.id, []]));
   const tokenProblems = [];
 
-  for (const plugin of pluginNames) {
-    const pluginDir = path.join(upstreamDir, plugin);
-    if (!fs.existsSync(pluginDir)) fail(`upstream has no plugin directory "${plugin}"`);
+  for (const plugin of source.plugins) {
+    const { dir, manifestDir } = pluginLayout(source, plugin);
+    const pluginDir = path.join(upstreamDir, dir);
+    if (!fs.existsSync(pluginDir)) fail(`upstream has no plugin directory "${dir}" for "${plugin}"`);
     for (const rel of listFiles(pluginDir)) {
-      const upstreamPath = `${plugin}/${rel}`;
-      // Omitted files take no rules, except the manifest the generated one is built from.
+      const upstreamPath = `${dir}/${rel}`;
       if (rel !== `${manifestDir}/plugin.json` && omit.some((re) => re.test(upstreamPath))) {
         skipped.push(upstreamPath);
         continue;
       }
       const buf = fs.readFileSync(path.join(pluginDir, rel));
+      owners.set(upstreamPath, `${plugin}/${rel}`);
       if (!isText(upstreamPath, buf)) {
         outputs.set(upstreamPath, buf);
         continue;
@@ -201,7 +210,7 @@ function transform(upstreamDir, pluginNames, { rules, allowed, exceptions, omit 
   const countProblems = rules
     .filter((r) => counts.get(r.id) !== r.count)
     .map((r) => `rule "${r.id}" expected ${r.count} replacement(s), made ${counts.get(r.id)}`);
-  return { outputs, skipped, counts, changes, problems: [...countProblems, ...tokenProblems] };
+  return { outputs, owners, skipped, counts, changes, problems: [...countProblems, ...tokenProblems] };
 }
 
 function claudeManifest(upstreamManifestBuf, hooksPath, { pathRenames, forbidden, authorFallback }) {
@@ -237,29 +246,34 @@ function forbiddenProblems(tree, sources, forbidden) {
   return problems;
 }
 
-function buildTree(upstreamDir, pluginNames, rules, manifestDir) {
-  const result = transform(upstreamDir, pluginNames, rules, manifestDir);
+function buildTree(upstreamDir, source, rules) {
+  const result = transform(upstreamDir, source, rules);
   const tree = new Map();
   const sources = new Map();
   const renamedPaths = [];
   const omitted = [...result.skipped];
   const generated = [];
+  const manifests = new Set(source.plugins.map((plugin) => {
+    const { dir, manifestDir } = pluginLayout(source, plugin);
+    return `${dir}/${manifestDir}/plugin.json`;
+  }));
   for (const [upstreamPath, buf] of result.outputs) {
-    if (rules.omit.some((re) => re.test(upstreamPath))) {
-      omitted.push(upstreamPath);
+    if (manifests.has(upstreamPath) || rules.omit.some((re) => re.test(upstreamPath))) {
+      if (!manifests.has(upstreamPath)) omitted.push(upstreamPath);
       continue;
     }
-    const vendoredPath = renamePath(upstreamPath, rules.pathRenames);
+    const vendoredPath = renamePath(result.owners.get(upstreamPath), rules.pathRenames);
     if (vendoredPath !== upstreamPath) renamedPaths.push([upstreamPath, vendoredPath]);
     tree.set(`plugins/${vendoredPath}`, buf);
     sources.set(`plugins/${vendoredPath}`, upstreamPath);
   }
   const adapter = fs.readFileSync(ADAPTER_SOURCE);
-  for (const plugin of pluginNames) {
+  for (const plugin of source.plugins) {
+    const layout = pluginLayout(source, plugin);
     const dir = `plugins/${renamePath(plugin, rules.pathRenames)}`;
-    const upstreamManifest = result.outputs.get(`${plugin}/${manifestDir}/plugin.json`);
-    if (!upstreamManifest) fail(`upstream plugin "${plugin}" has no ${manifestDir}/plugin.json`);
-    const upstreamHooks = result.outputs.get(`${plugin}/hooks/hooks.json`);
+    const upstreamManifest = result.outputs.get(`${layout.dir}/${layout.manifestDir}/plugin.json`);
+    if (!upstreamManifest) fail(`upstream plugin "${plugin}" has no ${layout.manifestDir}/plugin.json in ${layout.dir}`);
+    const upstreamHooks = result.outputs.get(`${layout.dir}/hooks/hooks.json`);
     const hooksPath = upstreamHooks ? `./${AGENT_HOOKS_DIR}/hooks.json` : null;
     tree.set(`${dir}/.claude-plugin/plugin.json`, claudeManifest(upstreamManifest, hooksPath, rules));
     generated.push(`${dir}/.claude-plugin/plugin.json`);
@@ -282,7 +296,7 @@ function renderChanges(rules, changes, renamedPaths, omitted, generated) {
   const lines = [
     "# Upstream changes",
     "",
-    "Generated by `scripts/sync-upstream.mjs`. Every difference between `plugins/` and the upstream repository in `upstream/source.json` is listed here. Model rules rewrite LLM model names to the team's models; compat rules are the minimum edits a file needs to load in Claude Code, Codex, or Pi; rename rules apply the names the team chose. Rules quote the upstream text they replace, and occurrences use upstream paths.",
+    "Generated by `scripts/sync-upstream.mjs`. Every difference between `plugins/` and the upstream repository in `upstream/source.json` is listed here. Model rules rewrite LLM model names to the team's models; compat rules are the minimum edits a file needs to load in Claude Code; rename rules apply the names the team chose. Rules quote the upstream text they replace, and occurrences use upstream paths.",
     "",
     "## Renamed paths",
     "",
@@ -296,7 +310,7 @@ function renderChanges(rules, changes, renamedPaths, omitted, generated) {
     "",
     "## Generated files",
     "",
-    "Not in upstream. `.claude-plugin/plugin.json` is built from the upstream manifest named in `upstream/source.json`. `agent-hooks/` runs the plugin's upstream hooks (`hooks/hooks.json`) as Claude Code and Codex hooks, through `upstream/agent-hooks/hook-adapter.mjs`.",
+    "Not in upstream. `.claude-plugin/plugin.json` is built from the upstream manifest named in `upstream/source.json` (per plugin in `pluginSources`). `agent-hooks/` runs the plugin's upstream hooks (`hooks/hooks.json`) as Claude Code hooks, through `upstream/agent-hooks/hook-adapter.mjs`.",
     "",
     ...generated.map((file) => `- \`${file}\``),
     "",
@@ -333,7 +347,7 @@ function main() {
 
   const rules = loadRules();
   const vendoredNames = source.plugins.map((plugin) => renamePath(plugin, rules.pathRenames));
-  const { tree, sources, changes, renamedPaths, omitted, generated, problems } = buildTree(upstreamDir, source.plugins, rules, source.manifestDir);
+  const { tree, sources, changes, renamedPaths, omitted, generated, problems } = buildTree(upstreamDir, source, rules);
   if (problems.length > 0) fail(`transform problems:\n  ${problems.join("\n  ")}`);
 
   const changesDoc = Buffer.from(renderChanges(rules.rules, changes, renamedPaths, omitted, generated), "utf8");

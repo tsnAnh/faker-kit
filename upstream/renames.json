@@ -22,7 +22,7 @@
     {
       "id": "rename-poteto-mode-heading",
       "files": [
-        "pstack/skills/poteto-mode/SKILL.md"
+        "harness/pstack/claude-code/skills/poteto-mode/SKILL.md"
       ],
       "from": "\n# Poteto mode\n",
       "to": "\n# Faker mode\n",
@@ -31,7 +31,7 @@
     {
       "id": "rename-poteto-agent-heading",
       "files": [
-        "pstack/agents/poteto-agent.md"
+        "harness/pstack/claude-code/agents/poteto-agent.md"
       ],
       "from": "\n# Poteto subagent\n",
       "to": "\n# Faker subagent\n",
@@ -40,38 +40,128 @@
     {
       "id": "rename-poteto-mode",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "poteto-mode",
       "to": "faker-mode",
-      "count": 235
+      "count": 252
     },
     {
       "id": "rename-poteto-agent",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "poteto-agent",
       "to": "faker-agent",
-      "count": 13
+      "count": 17
+    },
+    {
+      "id": "neutral-adapter-skill-line",
+      "files": [
+        "harness/pstack/claude-code/skills/*/SKILL.md"
+      ],
+      "from": "It maps the Cursor names in pstack skills to Claude Code.",
+      "to": "It maps the names in pstack skills to Claude Code.",
+      "count": 22
+    },
+    {
+      "id": "neutral-claude-marketplace",
+      "files": [
+        "harness/pstack/claude-code/**"
+      ],
+      "from": "/plugin marketplace add cursor/plugins",
+      "to": "/plugin marketplace add tsnAnh/faker-kit",
+      "count": 3
+    },
+    {
+      "id": "neutral-claude-plugin-ref",
+      "files": [
+        "harness/pstack/claude-code/**"
+      ],
+      "from": "pstack@cursor-plugins",
+      "to": "pstack@faker-kit",
+      "count": 3
+    },
+    {
+      "id": "neutral-readme-adapter-names",
+      "files": [
+        "harness/pstack/claude-code/README.md"
+      ],
+      "from": "maps every other cursor name. in claude code, `/pstack:setup-pstack` writes your model choices to `~/.claude/rules/pstack-models.md`, and a step that needs a cursor-only feature,",
+      "to": "maps every other name pstack skills use. in claude code, `/pstack:setup-pstack` writes your model choices to `~/.claude/rules/pstack-models.md`, and a step that needs an editor-only feature,",
+      "count": 1
+    },
+    {
+      "id": "neutral-help-built-for",
+      "files": [
+        "harness/pstack/claude-code/skills/poteto-help/SKILL.md"
+      ],
+      "from": "pstack is built for Cursor, and it also installs in Claude Code with",
+      "to": "pstack installs in Claude Code with",
+      "count": 1
+    },
+    {
+      "id": "neutral-help-adapter-names",
+      "files": [
+        "harness/pstack/claude-code/skills/poteto-help/SKILL.md"
+      ],
+      "from": "maps the Cursor names, and a step that needs a Cursor-only feature, such as Bugbot or Automations,",
+      "to": "maps the names pstack skills use to Claude Code, and a step that needs an editor-only feature, such as Bugbot or Automations,",
+      "count": 1
+    },
+    {
+      "id": "drop-readme-generated-copy",
+      "files": [
+        "harness/pstack/claude-code/README.md"
+      ],
+      "from": "claude code installs a generated copy of pstack, including this readme and the guide, from [`harness/pstack/`](https://github.com/cursor/plugins/tree/main/harness/pstack) at the repository root. after you change pstack, run `node scripts/generate-pstack-harness-trees.mjs` from the repository root and commit the result. ci fails while the generated copy is out of date.\n\n",
+      "to": "",
+      "count": 1
+    },
+    {
+      "id": "neutral-readme-attaches-skill",
+      "files": [
+        "harness/pstack/claude-code/README.md"
+      ],
+      "from": "so cursor attaches the skill to the message.",
+      "to": "so your agent attaches the skill to the message.",
+      "count": 1
+    },
+    {
+      "id": "drop-benny-readme-section",
+      "files": [
+        "harness/pstack/claude-code/README.md"
+      ],
+      "from": "## automations\n\npstack also ships a dormant [benny automation pack](https://github.com/cursor/plugins/tree/main/pstack/automations/benny). benny triages slack issue reports, then reproduces and fixes confirmed bugs with real ui evidence. its files are not registered as slash skills.\n\nto set it up, point cursor at [`FOR_AGENTS.md`](https://github.com/cursor/plugins/blob/main/pstack/automations/benny/FOR_AGENTS.md). setup copies the pack into the target repository at `.cursor/automations/benny/`, enables pstack there for shared skills, and keeps user configuration outside the copied pack. benny runs on cursor automations, so it is cursor-only.\n\n",
+      "to": "",
+      "count": 1
+    },
+    {
+      "id": "drop-benny-guide-paragraph",
+      "files": [
+        "harness/pstack/claude-code/docs/guide/07-overnight.md"
+      ],
+      "from": "pstack ships this as a dormant [automation pack](https://github.com/cursor/plugins/blob/main/pstack/automations/benny/README.md) for Slack issue reports. One automation triages each report. The other reproduces confirmed bugs and may prepare a small draft fix. Point an agent at its [`FOR_AGENTS.md`](https://github.com/cursor/plugins/blob/main/pstack/automations/benny/FOR_AGENTS.md) and name the target repository to set it up.\n\n",
+      "to": "",
+      "count": 1
     },
     {
       "id": "neutral-pstack-models-path",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "~/.cursor/rules/pstack-models.mdc",
       "to": "~/.agents/pstack-models.md",
-      "count": 9
+      "count": 10
     },
     {
       "id": "neutral-pstack-models-file",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "pstack-models.mdc",
       "to": "pstack-models.md",
-      "count": 4
+      "count": 5
     },
     {
       "id": "neutral-home-dir-shell",
@@ -89,7 +179,7 @@
       ],
       "from": "~/.cursor/",
       "to": "~/.agents/",
-      "count": 17
+      "count": 20
     },
     {
       "id": "neutral-project-dir",
@@ -98,16 +188,7 @@
       ],
       "from": ".cursor/",
       "to": ".agents/",
-      "count": 84
-    },
-    {
-      "id": "neutral-project-dir-name",
-      "files": [
-        "pstack/automations/**"
-      ],
-      "from": "`.cursor` directory",
-      "to": "`.agents` directory",
-      "count": 1
+      "count": 41
     },
     {
       "id": "neutral-plugin-root-env",
@@ -128,7 +209,7 @@
       "count": 2
     },
     {
-      "id": "neutral-team-kit-display-name",
+      "id": "neutral-team-workflows-display-name",
       "files": [
         "**"
       ],
@@ -137,27 +218,27 @@
       "count": 2
     },
     {
-      "id": "neutral-team-kit-name",
+      "id": "neutral-team-workflows-name",
       "files": [
         "**"
       ],
       "from": "cursor-team-kit",
       "to": "team-workflows",
-      "count": 23
+      "count": 22
     },
     {
       "id": "neutral-scripts-package-scope",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "@cursor-skill/",
-      "to": "@team-kit/",
+      "to": "@faker-kit/",
       "count": 2
     },
     {
       "id": "neutral-review-bot-login",
       "files": [
-        "pstack/skills/poteto-mode/scripts/watch-pr/github.ts"
+        "harness/pstack/claude-code/skills/poteto-mode/scripts/watch-pr/github.ts"
       ],
       "from": "(author === \"cursor\" &&",
       "to": "(author === \"review-bot\" &&",
@@ -166,7 +247,7 @@
     {
       "id": "neutral-review-bot-token",
       "files": [
-        "pstack/skills/poteto-mode/scripts/watch-pr/github.ts"
+        "harness/pstack/claude-code/skills/poteto-mode/scripts/watch-pr/github.ts"
       ],
       "from": "\"cursor_automation_id\",",
       "to": "\"automation_id\",",
@@ -175,7 +256,7 @@
     {
       "id": "neutral-review-bot-pass-key",
       "files": [
-        "pstack/skills/poteto-mode/scripts/watch-pr/github.ts"
+        "harness/pstack/claude-code/skills/poteto-mode/scripts/watch-pr/github.ts"
       ],
       "from": "/CURSOR_AUTOMATION_ID:\\s*",
       "to": "/AUTOMATION_ID:\\s*",
@@ -184,7 +265,7 @@
     {
       "id": "neutral-review-bot-test-body",
       "files": [
-        "pstack/skills/poteto-mode/scripts/watch-pr/github.test.ts"
+        "harness/pstack/claude-code/skills/poteto-mode/scripts/watch-pr/github.test.ts"
       ],
       "from": "\"CURSOR_AUTOMATION_ID: run-2",
       "to": "\"AUTOMATION_ID: run-2",
@@ -193,29 +274,11 @@
     {
       "id": "neutral-review-bot-test-login",
       "files": [
-        "pstack/skills/poteto-mode/scripts/watch-pr/github.test.ts"
+        "harness/pstack/claude-code/skills/poteto-mode/scripts/watch-pr/github.test.ts"
       ],
       "from": "author: { login: \"cursor\" }",
       "to": "author: { login: \"review-bot\" }",
       "count": 1
-    },
-    {
-      "id": "neutral-benny-connector-key",
-      "files": [
-        "pstack/automations/**"
-      ],
-      "from": "prefer_cursor_actions",
-      "to": "prefer_connector_actions",
-      "count": 1
-    },
-    {
-      "id": "neutral-benny-slack-actions",
-      "files": [
-        "pstack/automations/**"
-      ],
-      "from": "Cursor Slack actions",
-      "to": "Slack connector actions",
-      "count": 2
     },
     {
       "id": "neutral-built-in",
@@ -229,7 +292,7 @@
     {
       "id": "neutral-loop-command",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "Cursor's `/loop` command",
       "to": "the `/loop` command",
@@ -238,7 +301,7 @@
     {
       "id": "neutral-restart",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "a Cursor restart",
       "to": "an agent restart",
@@ -247,16 +310,16 @@
     {
       "id": "neutral-cloud-agent",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "Cursor cloud agent",
       "to": "cloud agent",
-      "count": 3
+      "count": 4
     },
     {
       "id": "neutral-cloud-dashboard",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "in the Cursor dashboard",
       "to": "in the cloud dashboard",
@@ -265,7 +328,7 @@
     {
       "id": "neutral-models-api",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "If Cursor also exposes",
       "to": "If your agent also exposes",
@@ -274,7 +337,7 @@
     {
       "id": "neutral-mcp-environment",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "from the Cursor environment",
       "to": "from the agent environment",
@@ -283,7 +346,7 @@
     {
       "id": "neutral-mcp-directory",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "directory Cursor exposes",
       "to": "directory the agent exposes",
@@ -292,7 +355,7 @@
     {
       "id": "neutral-editor-support-dir",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "`~/Library/Application Support/Cursor`",
       "to": "`~/Library/Application Support/<your editor>`",
@@ -301,7 +364,7 @@
     {
       "id": "neutral-readme-bio",
       "files": [
-        "pstack/README.md"
+        "harness/pstack/claude-code/README.md"
       ],
       "from": "at Meta, Netflix, and Cursor.",
       "to": "at Meta, Netflix, and elsewhere.",
@@ -310,7 +373,7 @@
     {
       "id": "neutral-readme-pitch",
       "files": [
-        "pstack/README.md"
+        "harness/pstack/claude-code/README.md"
       ],
       "from": "ship high quality code at Cursor. this turns cursor into a real engineering team.",
       "to": "ship high quality code at work. this turns your coding agent into a real engineering team.",
@@ -319,7 +382,7 @@
     {
       "id": "neutral-readme-models",
       "files": [
-        "pstack/README.md"
+        "harness/pstack/claude-code/README.md"
       ],
       "from": "**cursor gives you the best of all worlds.**",
       "to": "**a multi-model setup gives you the best of all worlds.**",
@@ -328,7 +391,7 @@
     {
       "id": "neutral-readme-loop",
       "files": [
-        "pstack/README.md"
+        "harness/pstack/claude-code/README.md"
       ],
       "from": "works extremely well with cursor's `/loop` command. you can make cursor work for many hours",
       "to": "works extremely well with your agent's `/loop` command. you can make your agent work for many hours",
@@ -337,52 +400,25 @@
     {
       "id": "neutral-readme-built-ins",
       "files": [
-        "pstack/README.md"
+        "harness/pstack/claude-code/README.md"
       ],
-      "from": "`/create-skill` is a cursor built-in. cursor also ships a built-in `/babysit`;",
-      "to": "`/create-skill` is an agent built-in. many agents also ship a built-in `/babysit`;",
+      "from": "`/create-skill` is a cursor built-in. cursor also ships a built-in `/autopilot` that watches a pr.",
+      "to": "`/create-skill` is an agent built-in. many agents also ship a built-in `/autopilot` that watches a pr.",
       "count": 1
     },
     {
       "id": "neutral-readme-plan-mode",
       "files": [
-        "pstack/README.md"
+        "harness/pstack/claude-code/README.md"
       ],
       "from": "cursor already has a great plan mode which works great with pstack.",
       "to": "your agent likely has a great plan mode, which works great with pstack.",
       "count": 1
     },
     {
-      "id": "neutral-point-at",
-      "files": [
-        "**"
-      ],
-      "from": "point cursor at",
-      "to": "point your agent at",
-      "count": 2
-    },
-    {
-      "id": "neutral-pointing-at-lower",
-      "files": [
-        "**"
-      ],
-      "from": "pointing cursor at",
-      "to": "pointing your agent at",
-      "count": 1
-    },
-    {
-      "id": "neutral-pointing-at",
-      "files": [
-        "**"
-      ],
-      "from": "pointing Cursor at",
-      "to": "pointing your agent at",
-      "count": 1
-    },
-    {
       "id": "neutral-guide-chat",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "In a Cursor chat, run:",
       "to": "In a chat with your agent, run:",
@@ -391,46 +427,10 @@
     {
       "id": "neutral-guide-confirms",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "Cursor confirms the plugin is installed.",
       "to": "Your agent confirms the plugin is installed.",
-      "count": 1
-    },
-    {
-      "id": "neutral-benny-live-automations",
-      "files": [
-        "pstack/automations/**"
-      ],
-      "from": "two live Cursor automations",
-      "to": "two live automations",
-      "count": 1
-    },
-    {
-      "id": "neutral-benny-automations-lower",
-      "files": [
-        "pstack/automations/**"
-      ],
-      "from": "two cursor automations",
-      "to": "two automations",
-      "count": 2
-    },
-    {
-      "id": "neutral-benny-model-picker",
-      "files": [
-        "pstack/automations/**"
-      ],
-      "from": "the user's Cursor model picker",
-      "to": "the user's model picker",
-      "count": 1
-    },
-    {
-      "id": "neutral-benny-deep-link",
-      "files": [
-        "pstack/automations/**"
-      ],
-      "from": "a Cursor protocol deep link",
-      "to": "an app protocol deep link",
       "count": 1
     },
     {
@@ -482,7 +482,7 @@
     {
       "id": "drop-make-bot-ui-readme-row",
       "files": [
-        "pstack/README.md"
+        "harness/pstack/claude-code/README.md"
       ],
       "from": "| [`/make-bot-ui`](./skills/make-bot-ui/SKILL.md) | you want a page or dashboard whose buttons wake a Grok Bot over a webhook, including the sender-key handoff and Tailscale. |\n",
       "to": "",
@@ -491,7 +491,7 @@
     {
       "id": "neutral-help-public-copy",
       "files": [
-        "pstack/skills/poteto-help/SKILL.md"
+        "harness/pstack/claude-code/skills/poteto-help/SKILL.md"
       ],
       "from": "so give the user the file's public copy: `https://github.com/cursor/plugins/blob/main/pstack/` followed by its path.",
       "to": "so quote the text they need instead of linking to it.",
@@ -500,16 +500,16 @@
     {
       "id": "neutral-help-works-elsewhere",
       "files": [
-        "pstack/skills/poteto-help/SKILL.md"
+        "harness/pstack/claude-code/skills/poteto-help/SKILL.md"
       ],
-      "from": "pstack is built for Cursor. Its skills use the Agent Skills format, so other tools can read them. But most workflow skills, including `/faker-mode`, `/how`, `/why`, and `/teach`, spawn Cursor subagents with per-role models, and Custom Modes and `/loop` are Cursor features, so those parts may not work there.",
-      "to": "pstack's skills use the Agent Skills format, so any compatible agent can read them. Most workflow skills, including `/faker-mode`, `/how`, `/why`, and `/teach`, spawn subagents, and Custom Modes and `/loop` depend on the agent, so those parts may not work in every one.",
+      "from": "Other tools can read the skills, because they use the Agent Skills format. But most workflow skills, including `/faker-mode`, `/how`, `/why`, and `/teach`, spawn Cursor subagents with per-role models, and Custom Modes and `/loop` are Cursor features, so those parts may not work there.",
+      "to": "Other tools can read the skills, because they use the Agent Skills format. But most workflow skills, including `/faker-mode`, `/how`, `/why`, and `/teach`, spawn subagents with per-role models, and Custom Modes and `/loop` depend on the agent, so those parts may not work in every one.",
       "count": 1
     },
     {
       "id": "neutral-help-custom-modes",
       "files": [
-        "pstack/skills/poteto-help/SKILL.md"
+        "harness/pstack/claude-code/skills/poteto-help/SKILL.md"
       ],
       "from": "- Cursor's docs list Custom Modes in the Agents Window and the CLI. Elsewhere, start each new task with `/faker-mode`.",
       "to": "- Not every agent offers Custom Modes. Where it does not, start each new task with `/faker-mode`.",
@@ -518,7 +518,7 @@
     {
       "id": "neutral-help-skills-docs-link",
       "files": [
-        "pstack/skills/poteto-help/SKILL.md"
+        "harness/pstack/claude-code/skills/poteto-help/SKILL.md"
       ],
       "from": "Link [Cursor's skills docs](https://cursor.com/docs/skills) when this comes up. Mid-chat,",
       "to": "Mid-chat,",
@@ -527,7 +527,7 @@
     {
       "id": "neutral-help-built-ins",
       "files": [
-        "pstack/skills/poteto-help/SKILL.md"
+        "harness/pstack/claude-code/skills/poteto-help/SKILL.md"
       ],
       "from": "are Cursor built-ins.",
       "to": "are built-ins of the agent.",
@@ -536,7 +536,7 @@
     {
       "id": "neutral-help-own-skill",
       "files": [
-        "pstack/skills/poteto-help/SKILL.md"
+        "harness/pstack/claude-code/skills/poteto-help/SKILL.md"
       ],
       "from": "can start Cursor's own skill for the same job",
       "to": "can start the agent's own skill for the same job",
@@ -545,7 +545,7 @@
     {
       "id": "neutral-help-plan-mode",
       "files": [
-        "pstack/skills/poteto-help/SKILL.md"
+        "harness/pstack/claude-code/skills/poteto-help/SKILL.md"
       ],
       "from": "Cursor's Plan Mode works alongside it.",
       "to": "The agent's plan mode works alongside it.",
@@ -554,7 +554,7 @@
     {
       "id": "drop-make-bot-ui-help-row",
       "files": [
-        "pstack/skills/poteto-help/SKILL.md"
+        "harness/pstack/claude-code/skills/poteto-help/SKILL.md"
       ],
       "from": "| Build a page whose buttons wake a Grok Bot over a webhook | [`/make-bot-ui`](../make-bot-ui/SKILL.md) |\n",
       "to": "",
@@ -563,7 +563,7 @@
     {
       "id": "drop-make-bot-ui-guide-section",
       "files": [
-        "pstack/docs/guide/09-make-it-yours.md"
+        "harness/pstack/claude-code/docs/guide/09-make-it-yours.md"
       ],
       "from": "## Build a bot UI with `/make-bot-ui`\n\nOne situational skill is for Grok Bot users. [`/make-bot-ui`](../../skills/make-bot-ui/SKILL.md) builds a small page whose buttons wake a bot over a webhook routine. For example, you could swipe through a review queue and have each swipe ask the bot to act on that item. A server on your machine holds the webhook's sender key, so the key never reaches the browser or the chat. The skill also covers exposing the page on Tailscale.\n\n",
       "to": "",
@@ -572,7 +572,7 @@
     {
       "id": "neutral-guide-budget-grok",
       "files": [
-        "pstack/docs/guide/01-setup.md"
+        "harness/pstack/claude-code/docs/guide/01-setup.md"
       ],
       "from": " Opus goes to `max`. Grok tops out at `xhigh`, so it stays there.",
       "to": "",
@@ -581,25 +581,25 @@
     {
       "id": "neutral-readme-custom-mode",
       "files": [
-        "pstack/README.md"
+        "harness/pstack/claude-code/README.md"
       ],
-      "from": "that makes it a [custom mode](https://cursor.com/docs/skills), which cursor offers in the agents window and the cli. it stays",
+      "from": "that makes it a [custom mode](https://cursor.com/docs/skills#using-a-skill-as-a-custom-mode), which cursor offers in the agents window and the cli. it stays",
       "to": "that makes it a custom mode in agents that offer them. it stays",
       "count": 1
     },
     {
       "id": "neutral-guide-custom-mode",
       "files": [
-        "pstack/docs/guide/01-setup.md"
+        "harness/pstack/claude-code/docs/guide/01-setup.md"
       ],
-      "from": "That makes it a [Custom Mode](https://cursor.com/docs/skills), which stays in context on every turn until you exit it. Custom Modes are available in the Agents Window and the CLI.",
+      "from": "That makes it a [Custom Mode](https://cursor.com/docs/skills#using-a-skill-as-a-custom-mode), which stays in context on every turn until you exit it. Custom Modes are available in the Agents Window and the CLI.",
       "to": "That makes it a Custom Mode in agents that offer them, which stays in context on every turn until you exit it.",
       "count": 1
     },
     {
       "id": "neutral-guide-cloud-subagent",
       "files": [
-        "pstack/docs/guide/02-poteto-mode.md"
+        "harness/pstack/claude-code/docs/guide/02-poteto-mode.md"
       ],
       "from": "[cloud subagent](https://cursor.com/docs/subagents#cloud-subagents)",
       "to": "cloud subagent",
@@ -608,7 +608,7 @@
     {
       "id": "neutral-guide-restart",
       "files": [
-        "pstack/docs/guide/07-overnight.md"
+        "harness/pstack/claude-code/docs/guide/07-overnight.md"
       ],
       "from": "or restart Cursor.",
       "to": "or restart the agent.",
@@ -617,7 +617,7 @@
     {
       "id": "neutral-guide-project",
       "files": [
-        "pstack/docs/guide/07-overnight.md"
+        "harness/pstack/claude-code/docs/guide/07-overnight.md"
       ],
       "from": "A [Cursor Project](https://cursor.com/blog/projects) gives one coordinator agent a persistent thread.",
       "to": "A long-lived project thread gives one coordinator agent a persistent thread.",
@@ -626,7 +626,7 @@
     {
       "id": "rename-poteto-help",
       "files": [
-        "pstack/**"
+        "harness/pstack/claude-code/**"
       ],
       "from": "poteto-help",
       "to": "faker-help",
@@ -635,14 +635,16 @@
   ],
   "omit": [
     "*/.cursor-plugin/**",
-    "pstack/skills/make-bot-ui/**"
+    "harness/pstack/claude-code/skills/make-bot-ui/**",
+    "harness/pstack/claude-code/plugin.json"
   ],
   "forbidden": {
     "pattern": "cursor",
     "flags": "i",
     "skipFiles": [
       "*/LICENSE",
-      "*/LICENSE.*"
+      "*/LICENSE.*",
+      "harness/pstack/claude-code/docs/harness/claude-code.md"
     ],
     "allowedWords": [
       "endCursor",
@@ -650,12 +652,12 @@
     ],
     "exceptions": [
       {
-        "file": "pstack/skills/poteto-mode/scripts/check-plan.mjs",
+        "file": "harness/pstack/claude-code/skills/poteto-mode/scripts/check-plan.mjs",
         "word": "cursor",
         "reason": "a variable holding a position in a list"
       },
       {
-        "file": "pstack/skills/poteto-mode/scripts/watch-pr/github.ts",
+        "file": "harness/pstack/claude-code/skills/poteto-mode/scripts/watch-pr/github.ts",
         "word": "cursor",
         "reason": "a GraphQL pagination cursor variable"
       },
@@ -665,31 +667,14 @@
         "reason": "the CSS cursor property"
       },
       {
-        "file": "pstack/skills/why/SKILL.md",
+        "file": "harness/pstack/claude-code/skills/why/SKILL.md",
         "word": "cursor",
         "reason": "the text cursor in the user's editor"
-      }
-    ],
-    "ownExceptions": [
+      },
       {
-        "file": "plugins/trust-ladder/skills/orchestrate/scripts/adapters/slack/index.ts",
+        "file": "harness/pstack/claude-code/skills/poteto-mode/scripts/watch-pr/github.test.ts",
         "word": "cursor",
-        "reason": "Slack's conversations.replies pagination parameter"
-      },
-      {
-        "file": "plugins/trust-ladder/skills/orchestrate/scripts/adapters/slack/index.ts",
-        "word": "next_cursor",
-        "reason": "Slack's pagination response field"
-      },
-      {
-        "file": "plugins/trust-ladder/skills/orchestrate/scripts/__tests__/slack-adapter.test.ts",
-        "word": "cursor",
-        "reason": "Slack's conversations.replies pagination parameter"
-      },
-      {
-        "file": "plugins/trust-ladder/skills/orchestrate/scripts/__tests__/slack-adapter.test.ts",
-        "word": "next_cursor",
-        "reason": "Slack's pagination response field"
+        "reason": "a GraphQL pagination cursor in a test title"
       }
     ]
   },
