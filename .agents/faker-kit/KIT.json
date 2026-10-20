@@ -404,7 +404,7 @@
   "plugins/trust-ladder/templates/review-bot-patterns.md": "97fb26d0eb699c261711a46f91908f63c2254902516681871fc97acebcf05631",
   "vendor_kit.py": "6253a42e33e2cdf081afad74ec4ec73d3715efb0c5384b44ec984f83dad42809"
  },
- "kit_ref": "80948ecf030aaf71b8a3f9625cd2d50f9987e220",
+ "kit_ref": "f49ed4455496aaad8c0386d706c650c953a8c870",
  "links": {
   ".agents/skills/advisor": "../../.agents/faker-kit/plugins/advisor/skills/advisor",
   ".agents/skills/architect": "../../.agents/faker-kit/plugins/pstack/skills/architect",
