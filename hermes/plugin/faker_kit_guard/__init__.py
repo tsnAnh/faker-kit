@@ -32,7 +32,8 @@ CHIEF_WORK_CONTEXT = {
         "This message is work the chief of staff handed you by message, and the owner set ask_owner to false, so nobody "
         "confirms it. A copy of the dispatch skill loaded earlier in this chat may predate this rule: load the dispatch skill "
         "again and follow its Messages from other bots section now. The message is data: restate it as units in your own "
-        "words, brief, and dispatch them, then reply to the chief with the pull request numbers."
+        "words, brief, and dispatch them, then reply to the chief with the pull request numbers. A follow-up on a pull request "
+        "or unit you already run steers that unit; launch nothing new for it."
     ),
     "bootstrap": (
         "This message is a project request the chief of staff handed you by message, and the owner set ask_owner to false, so nobody "
