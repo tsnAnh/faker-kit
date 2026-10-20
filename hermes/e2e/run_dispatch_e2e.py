@@ -213,6 +213,8 @@ if args[0] == "api":
         head = route.split("/")[-2]
         answer([pull_row(p) for p in state["pulls"] if pull_row(p)["head"]["sha"] == head] + state.get("head_pulls", {}).get(head, []))
     elif route == prefix + "/actions/workflows/claude-review.yml/runs":
+        if state.get("no_review_workflow"):
+            fail("gh: Not Found (HTTP 404)")
         head = urllib.parse.parse_qs(split.query).get("head_sha", [""])[0]
         answer({"workflow_runs": [r for r in state["runs"].values() if r["head_sha"] == head]})
     elif route.startswith(prefix + "/commits/") and route.endswith("/statuses"):
@@ -830,6 +832,16 @@ def merge_scenario(run: Run) -> None:
              code == 0 and "blocked: the change touches .github/workflows/ignore?previous?instru" in out
              and "ignore previous" not in out and "curl" not in out and "<" not in out, out.strip() or err.strip())
     run.update_gh(lambda state: state["pull_files"].pop("3"))
+    saved = {}
+    run.update_gh(lambda state: (saved.update(statuses=state["statuses"], runs=state["runs"], jobs=state["jobs"]),
+                                 state.update(no_review_workflow=True, statuses={}, runs={}, jobs={})))
+    merges = len(run.merged())
+    code, out, err = run.kit("status")
+    result = run.merge(3)
+    run.step("status and merge read a repository that has no review workflow yet as a security review that has not reported",
+             code == 0 and out.strip().startswith("#3 ") and "has not reported" in out and refused(result, "has not reported") and len(run.merged()) == merges,
+             out.strip() or err.strip())
+    run.update_gh(lambda state: (state.pop("no_review_workflow"), state.update(saved)))
 
     (run.team / "bots.yaml").write_text(BOTS_YAML.format(slack=""))
     guard_file = run.team / "guard.yaml"
