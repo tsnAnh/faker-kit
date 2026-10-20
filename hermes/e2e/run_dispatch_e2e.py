@@ -1155,6 +1155,12 @@ def install_scenario(run: Run, work: Path) -> None:
              "faker_kit_guard" in profile_config["plugins"]["enabled"] and "other_plugin" in profile_config["plugins"]["enabled"]
              and (hermes / "profiles" / BOT / "plugins" / "faker_kit_guard").is_dir() and (hermes / "profiles" / BOOTSTRAP / "plugins" / "faker_kit_guard").is_dir(),
              json.dumps(profile_config["plugins"]))
+    operating = (HERMES / "profiles" / "OPERATING.md").read_text()
+    souls = {bot: (hermes / "profiles" / bot / "SOUL.md").read_text() for bot in (BOOTSTRAP, BOT)}
+    run.step("every bot's SOUL.md is its role prompt followed by the shared operating guide",
+             souls[BOT].startswith((HERMES / "profiles" / "project" / "SOUL.md").read_text().rstrip()) and souls[BOT].endswith(operating)
+             and souls[BOOTSTRAP].startswith((HERMES / "profiles" / "bootstrap" / "SOUL.md").read_text().rstrip()) and souls[BOOTSTRAP].endswith(operating),
+             " | ".join(f"{bot}: {len(text)} chars" for bot, text in souls.items()))
     dirs = __import__("yaml").safe_load((hermes / "config.yaml").read_text())["skills"]["external_dirs"]
     skill = hermes / "profiles" / BOT / "skills" / "dispatch"
     run.step("skill folders and links point at the faker-kit kit", dirs == ["/elsewhere/skills", str(new / "kit" / "plugins" / "pstack" / "skills")]
