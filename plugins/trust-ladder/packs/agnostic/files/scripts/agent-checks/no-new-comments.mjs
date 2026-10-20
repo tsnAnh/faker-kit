@@ -29,6 +29,7 @@ const SLASH = ["ts", "tsx", "js", "jsx", "mjs", "cjs", "kt", "kts", "swift", "rs
 const HASH = ["py", "sh", "bash", "zsh", "rb", "tf", "cmake"];
 const DASH = ["sql", "lua"];
 const MARKUP = ["xml", "html", "svg"];
+const VENDORED_KIT = ".agents/faker-kit/**";
 const JS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs"]);
 const BACKTICK_STRINGS = new Set([...JS, "go"]);
 const TRIPLE_QUOTED = new Set(["kt", "kts", "swift", "dart", "java", "py"]);
@@ -260,7 +261,7 @@ export function commentIn(line, ext) {
 
 export function findNewComments(repo, base, config = {}) {
   const allow = [...ALWAYS_ALLOWED, ...(config.allow ?? []).map((p) => new RegExp(p))];
-  const exclude = (config.exclude ?? []).map(globToRegExp);
+  const exclude = [VENDORED_KIT, ...(config.exclude ?? [])].map(globToRegExp);
   const known = new Set([...SLASH, ...HASH, ...DASH, ...MARKUP]);
   const diff = git(repo, ["diff", "--unified=0", "--no-color", "--no-ext-diff", base, "--"]);
   const untracked = git(repo, ["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
