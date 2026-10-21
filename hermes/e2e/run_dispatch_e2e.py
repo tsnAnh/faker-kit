@@ -1268,6 +1268,11 @@ def install_scenario(run: Run, work: Path) -> None:
              and (new / "briefs" / CHIEF).is_dir() and chief_soul.startswith((HERMES / "profiles" / "chief" / "SOUL.md").read_text().rstrip())
              and (hermes / "profiles" / CHIEF / "skills" / "chief").is_symlink(),
              ", ".join(f"{n}={j['schedule']}" for n, j in sorted(chief_jobs.items())))
+    project_jobs = {j["name"]: j for j in json.loads((hermes / "profiles" / BOT / "jobs.json").read_text())}
+    run.step("install.sh keeps bot chatter out of the owner's chat: the chief's hourly loop messages no bot, and the project bot's babysit tells the chief its units' news",
+             "message no other bot" in chief_jobs.get("faker-kit-loop", {}).get("prompt", "")
+             and "tell the chief what changed for its units" in project_jobs.get("faker-kit-babysit", {}).get("prompt", ""),
+             chief_jobs.get("faker-kit-loop", {}).get("prompt", "")[:80])
     profile_config = json.loads(json.dumps(__import__("yaml").safe_load((hermes / "profiles" / BOT / "config.yaml").read_text())))
     run.step("the guard plugin is installed and enabled in every bot's profile beside the profile's own plugins",
              "faker_kit_guard" in profile_config["plugins"]["enabled"] and "other_plugin" in profile_config["plugins"]["enabled"]

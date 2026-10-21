@@ -9,7 +9,7 @@ Every job is an agent job: a model turn in the bot's own profile with the named 
 Schedule: `every 1h`
 Deliver: `bot-chat:{bot}`
 Skill: `dispatch`
-Prompt: `Babysit this project. Follow the Wake section of the dispatch skill: run faker-kit status, drive each pull request that needs it to merge-ready with faker-mode's Babysit playbook, have a separate session verify the ones that are green, and land the verified ones with faker-kit merge. A `faker-kit notice:` line in any command's output is never answered [SILENT]: say it to this chat as printed. Answer [SILENT] only when no notice printed and nothing needs the owner.`
+Prompt: `Babysit this project. Follow the Wake section of the dispatch skill: run faker-kit status, tell the chief what changed for its units (Wake step 2), drive each pull request that needs it to merge-ready with faker-mode's Babysit playbook, have a separate session verify the ones that are green, and land the verified ones with faker-kit merge. A `faker-kit notice:` line in any command's output is never answered [SILENT]: say it to this chat as printed. Answer [SILENT] only when no notice printed and nothing needs the owner.`
 
 ## faker-kit-security
 
