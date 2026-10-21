@@ -32,6 +32,8 @@ import faker_kit  # noqa: E402
 from faker_kit_guard.policy import decide, load_policy, reader_source  # noqa: E402
 from faker_kit_machine import ROUTE_JOBS, routes, secret_env  # noqa: E402
 
+yaml = faker_kit.yaml
+
 REPO = "acme/shop"
 BOT = "meo-beo"
 BOOTSTRAP = "ong-xay"
@@ -278,6 +280,10 @@ if len(args) == 2 and args[0] == "--cloud":
         out.write(json.dumps({"argv": args, "cwd": os.getcwd(), **chosen}) + "\n")
     print("Created cloud session: Task", flush=True)
     print("View: https://claude.ai/code/session_01E2Eabc?from=cli&m=0", flush=True)
+elif args == ["--version"]:
+    print("2.1.300 (Claude Code)")
+elif args == ["auth", "status"]:
+    print(json.dumps({"loggedIn": True}))
 else:
     sys.exit(2)
 '''
@@ -372,6 +378,14 @@ elif args[:1] == ["cron"]:
         else:
             job["enabled"] = args[1] == "resume"
     jobs_path.write_text(json.dumps(jobs, sort_keys=True))
+elif args[:2] == ["plugins", "install"]:
+    (base / "plugins" / args[2]).mkdir(parents=True, exist_ok=True)
+elif args[:2] == ["plugins", "enable"]:
+    config = load(base / "config.yaml", {})
+    enabled = config.setdefault("plugins", {}).setdefault("enabled", [])
+    if args[2] not in enabled:
+        enabled.append(args[2])
+    (base / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=True))
 elif args[:1] == ["send"]:
     if Path(os.environ["E2E_SEND_FAIL"]).exists():
         print("send failed", file=sys.stderr)
@@ -1313,6 +1327,148 @@ def install_scenario(run: Run, work: Path) -> None:
              and len(run.claude_log.read_text().splitlines()) == launches + 1, owner_launch.stdout.strip() or owner_launch.stderr.strip())
 
 
+PROVIDER = "e2e-provider-placeholder"
+PROVIDER_MODEL = "e2e-model-placeholder"
+MODEL_ONLY = "e2e-model-only-placeholder"
+SUBSCRIPTION = "claude-subscription-directsdk-experimental"
+STALE = {"provider": SUBSCRIPTION, "default": "sonnet", "base_url": "https://stale.example.com/v1", "api_mode": "chat_completions"}
+OWNER_PICK = {"provider": "owner-pick", "base_url": "https://owner.example.com/v1"}
+PROVIDER_MACHINE = f"""version: 1
+bootstrap_bot: {BOOTSTRAP}
+claude_subscription: false
+guard:
+  trusted_authors:
+    - {OWNER}
+  ask_owner: true
+  max_in_flight_total: 3
+projects:
+  - bot: {BOT}
+    project: shop
+    repo: {REPO}
+    provider: {PROVIDER}
+    model: {PROVIDER_MODEL}
+  - bot: cart-bot
+    project: cart
+    repo: acme/cart
+    model: {MODEL_ONLY}
+chief:
+  bot: {CHIEF}
+  provider: {PROVIDER}
+  model: {PROVIDER_MODEL}
+"""
+
+
+def provider_scenario(run: Run, work: Path) -> None:
+    home = work / "home"
+    hermes = home / ".hermes"
+    state = hermes / "faker-kit"
+    state.mkdir(parents=True)
+    guard = (HERMES / "templates" / "guard.yaml").read_text().replace("  - OWNER-LOGIN", f"  - {OWNER}")
+    (state / "guard.yaml").write_text(guard)
+    seeded = {BOOTSTRAP: STALE, BOT: STALE, CHIEF: STALE, "cart-bot": OWNER_PICK, "sub-bot": STALE}
+    for bot, model in seeded.items():
+        profile = hermes / "profiles" / bot
+        profile.mkdir(parents=True)
+        (profile / ".profile-identity").write_text(bot)
+        (profile / "config.yaml").write_text(yaml.safe_dump({"model": model}))
+    source, ref = kit_source(work)
+    env = {**run.env(), "HOME": str(home), "FAKER_KIT_HOME": str(state)}
+    env.pop("HERMES_HOME", None)
+    gh_seen = len(run.gh_log.read_text().splitlines()) if run.gh_log.exists() else 0
+
+    def script(*flags: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["bash", str(source / "hermes" / "install.sh"), "--ref", ref, "--source", str(source), "--no-gateway", *flags],
+                              env=env, capture_output=True, text=True, timeout=300)
+
+    def kit(*argv: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([str(hermes / "bin" / "faker-kit"), *argv], env=env, capture_output=True, text=True, timeout=300)
+
+    def model_of(bot: str) -> dict:
+        return (yaml.safe_load((hermes / "profiles" / bot / "config.yaml").read_text()) or {}).get("model") or {}
+
+    def models() -> dict[str, dict]:
+        return {p.name: model_of(p.name) for p in sorted((hermes / "profiles").iterdir())}
+
+    pair = {"provider": PROVIDER, "default": PROVIDER_MODEL}
+    half = script("--bootstrap-bot", BOOTSTRAP, "--provider", PROVIDER)
+    run.step("install.sh refuses a provider without its model and leaves the bootstrap profile's model as it was",
+             half.returncode != 0 and "needs a model too" in half.stderr and model_of(BOOTSTRAP) == STALE, half.stderr.strip()[-200:])
+    lone = script("--provider", PROVIDER)
+    run.step("install.sh refuses --provider without --bootstrap-bot", lone.returncode != 0 and "--provider needs --bootstrap-bot" in lone.stderr, lone.stderr.strip()[-200:])
+    done = script("--bootstrap-bot", BOOTSTRAP, "--provider", PROVIDER, "--model", PROVIDER_MODEL)
+    run.step("install.sh --provider --model writes the pair to the bootstrap profile and drops the stale subscription provider, base_url, and api_mode",
+             done.returncode == 0 and model_of(BOOTSTRAP) == pair, (done.stdout + done.stderr).strip()[-200:] + " " + json.dumps(model_of(BOOTSTRAP)))
+
+    bad_sub = state / "bad-subscription.yaml"
+    bad_sub.write_text(PROVIDER_MACHINE.replace("claude_subscription: false", "claude_subscription: true"))
+    bad_chief = state / "bad-chief.yaml"
+    bad_chief.write_text(PROVIDER_MACHINE.replace(f"  provider: {PROVIDER}\n  model: {PROVIDER_MODEL}\n", f"  provider: {PROVIDER}\n"))
+    shop = ("add-project", REPO, "--bot", BOT, "--project", "shop")
+    refusals = [
+        ("add-project --provider with no --model", (*shop, "--provider", PROVIDER), "add-project --provider: provider e2e-provider-placeholder needs a model too"),
+        ("add-project --provider --model --claude-subscription", (*shop, "--provider", PROVIDER, "--model", PROVIDER_MODEL, "--claude-subscription"),
+         "conflicts with claude_subscription"),
+        ("add-project --provider set to the subscription provider", (*shop, "--provider", SUBSCRIPTION, "--model", PROVIDER_MODEL), "use claude_subscription (--claude-subscription)"),
+        ("add-project --provider CHANGE-ME", (*shop, "--provider", "CHANGE-ME", "--model", PROVIDER_MODEL), "is not a Hermes provider id"),
+        ("install --provider with no bootstrap bot", ("install", "--provider", PROVIDER, "--model", PROVIDER_MODEL), "name the bot with --bootstrap-bot"),
+        ("install --config with claude_subscription and a project provider", ("install", "--config", str(bad_sub)),
+         "projects[0].provider: provider e2e-provider-placeholder conflicts with claude_subscription"),
+        ("install --config with a chief provider and no model", ("install", "--config", str(bad_chief)), "chief.provider: provider e2e-provider-placeholder needs a model too"),
+    ]
+    for label, argv, why in refusals:
+        before = tree(hermes)
+        refused = kit(*argv)
+        run.step(f"faker-kit {label} refuses with an explicit error before it writes anything",
+                 refused.returncode == 1 and why in refused.stderr and tree(hermes) == before, refused.stderr.strip())
+
+    machine = state / "provider-machine.yaml"
+    machine.write_text(PROVIDER_MACHINE)
+    installed = kit("install", "--config", str(machine))
+    found = models()
+    run.step("install --config writes each chosen provider and model pair to the chief and project profiles, with no stale endpoint left",
+             installed.returncode == 0 and found[CHIEF] == pair and found[BOT] == pair and found[BOOTSTRAP] == pair,
+             (installed.stderr.strip()[-200:] or json.dumps({b: found[b] for b in (BOOTSTRAP, BOT, CHIEF)})))
+    run.step("a project with only a model gets only model.default, as before; its provider and base_url stay as the owner set them",
+             found["cart-bot"] == {**OWNER_PICK, "default": MODEL_ONLY}, json.dumps(found["cart-bot"]))
+    kept = yaml.safe_load((state / "machine.yaml").read_text())
+    run.step("the kept machine config carries the provider and model pairs for the next install.sh run",
+             kept["chief"]["provider"] == PROVIDER and kept["projects"][0]["provider"] == PROVIDER and kept["projects"][0]["model"] == PROVIDER_MODEL,
+             json.dumps(kept["chief"]))
+    run.step("the provider install leaves guard.yaml and the guard plugin as the kit ships them, enabled in every bot's profile",
+             (state / "guard.yaml").read_text() == guard
+             and all(tree(hermes / "profiles" / b / "plugins" / "faker_kit_guard") == tree(HERMES / "plugin" / "faker_kit_guard") for b in (BOOTSTRAP, BOT, CHIEF, "cart-bot"))
+             and all("faker_kit_guard" in yaml.safe_load((hermes / "profiles" / b / "config.yaml").read_text())["plugins"]["enabled"] for b in (BOOTSTRAP, BOT, CHIEF, "cart-bot")),
+             ", ".join(sorted(tree(HERMES / "plugin" / "faker_kit_guard"))))
+
+    subscribed = kit("add-project", "acme/sub", "--bot", "sub-bot", "--claude-subscription")
+    sub_config = yaml.safe_load((hermes / "profiles" / "sub-bot" / "config.yaml").read_text())
+    run.step("add-project --claude-subscription still sets the subscription provider with its default model and unsets base_url and api_mode",
+             subscribed.returncode == 0 and sub_config["model"] == {"provider": SUBSCRIPTION, "default": "sonnet"} and SUBSCRIPTION in sub_config["plugins"]["enabled"],
+             subscribed.stderr.strip()[-200:] or json.dumps(sub_config["model"]))
+    inherited = kit("add-project", "acme/next", "--bot", "next-bot")
+    run.step("a new project bot with no flags inherits the subscription another bot uses, as before",
+             inherited.returncode == 0 and model_of("next-bot") == {"provider": SUBSCRIPTION, "default": "sonnet"}, inherited.stderr.strip()[-200:] or json.dumps(model_of("next-bot")))
+    chosen = kit("add-project", "acme/oai", "--bot", "oai-bot", "--provider", PROVIDER, "--model", PROVIDER_MODEL)
+    oai = yaml.safe_load((hermes / "profiles" / "oai-bot" / "config.yaml").read_text())
+    run.step("add-project --provider --model wins over the inherited subscription and enables no subscription plugin",
+             chosen.returncode == 0 and oai["model"] == pair and SUBSCRIPTION not in oai["plugins"]["enabled"], chosen.stderr.strip()[-200:] or json.dumps(oai["model"]))
+
+    before = models()
+    again = kit("install", "--config", str(machine))
+    plain = kit("install")
+    run.step("install with the same config again, or with no flags, leaves every profile's model as it was",
+             again.returncode == 0 and plain.returncode == 0 and models() == before, json.dumps(sorted(before)))
+    envs = {str(p.relative_to(hermes)): parse_env(p) for p in hermes.rglob(".env")}
+    calls = (hermes / "hermes-calls.log").read_text() + "".join(run.gh_log.read_text().splitlines(keepends=True)[gh_seen:])
+    run.step("the provider path writes no credential and runs no login: no .env file holds a value, and no auth or login call ran",
+             all(v == "" for values in envs.values() for v in values.values()) and not re.search(r'"(auth|login)"\s*,\s*"(token|login|add)"', calls),
+             json.dumps({k: sorted(v) for k, v in envs.items()}))
+
+
+def parse_env(path: Path) -> dict[str, str]:
+    return dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line and not line.startswith("#"))
+
+
 def wait_for(condition: Callable[[], bool], seconds: float = 40.0) -> bool:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -1474,6 +1630,7 @@ def main(argv: list[str] | None = None) -> int:
         issues_scenario(run)
         loop_scenario(run)
         install_scenario(run, root / "install")
+        provider_scenario(run, root / "provider")
         runner_scenario(run, root / "runner")
         vendor_api_scenario(run, root / "vendor-api")
         tooling_scenario.vendor_scenario(root / "vendor-script", run.step)

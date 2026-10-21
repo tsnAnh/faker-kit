@@ -14,7 +14,7 @@ If the shell does not find `faker-kit`, run it as `~/.hermes/bin/faker-kit`. Eve
 | Command | Does |
 |---|---|
 | `faker-kit status [--all]` | Every project on this machine with its bot, repository, andon cord, and open pull requests. Read-only |
-| `faker-kit add-project OWNER/REPO [--bot B] [--project P] [--model M] [--heartbeat-every 1h] [--incidents-every 10m] [--security-every 6h] [--claude-subscription]` | Creates or refreshes project bot B for repository R: profile, guard, `dispatch` skill, the babysit, security, incident, and bug-report jobs, the schedules, the andon and bug-report labels, the webhook routes, and the launch checkout. The bot name and the project slug default to the repository's name. Safe to run again; it also starts the jobs once `gh` is signed in |
+| `faker-kit add-project OWNER/REPO [--bot B] [--project P] [--provider PR --model M] [--heartbeat-every 1h] [--incidents-every 10m] [--security-every 6h] [--claude-subscription]` | Creates or refreshes project bot B for repository R: profile, guard, `dispatch` skill, the babysit, security, incident, and bug-report jobs, the schedules, the andon and bug-report labels, the webhook routes, and the launch checkout. The bot name and the project slug default to the repository's name. Safe to run again; it also starts the jobs once `gh` is signed in |
 | `faker-kit vendor --project P` | Opens a pull request that copies the pinned kit into the repository's `.agents/faker-kit/`, so cloud sessions there have its skills, and moves the repository's `kit_ref` |
 | `faker-kit launch --project P --brief-file <path>` | Starts one cloud session from a brief in your briefs folder. Used for the repository's setup session below |
 | `faker-kit andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows the machine's andon cord. Only when the owner asks |
@@ -46,10 +46,10 @@ Then restate the plan in a short list and ask the owner to confirm before step 3
 ## 3. Create the project bot
 
 ```text
-faker-kit add-project <OWNER/REPO> [--bot <bot>] [--project <project>] [--model <model>] [--heartbeat-every <interval>] [--incidents-every <interval>] [--security-every <interval>]
+faker-kit add-project <OWNER/REPO> [--bot <bot>] [--project <project>] [--provider <provider> --model <model>] [--heartbeat-every <interval>] [--incidents-every <interval>] [--security-every <interval>]
 ```
 
-Intervals are positive minutes or hours, such as `10m` or `1h`. It runs on the Claude subscription when an existing bot of this machine does. It prints the jobs it created, whether they run, the `launch_checkout` Claude Code sessions start from, and next steps.
+Intervals are positive minutes or hours, such as `10m` or `1h`. It runs on the Claude subscription when an existing bot of this machine does, unless `--provider` and `--model` name another provider; pass both only when the owner named both, and never `--provider` with `--claude-subscription`. When re-running it for a bot the owner put on a provider, pass the same `--provider` and `--model` again. It prints the jobs it created, whether they run, the `launch_checkout` Claude Code sessions start from, and next steps.
 
 ## 4. Vendor the kit
 

@@ -10,13 +10,13 @@ from pathlib import Path
 
 from faker_kit_env import CLAUDE_CONFIG_DIR, parse_env_file, set_env
 from faker_kit_gh import Refused
+from faker_kit_machine import SUBSCRIPTION_PROVIDER
 from install_config import InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, mapping, profile_home, value_at
 
 PLUGIN = "faker_kit_guard"
 KIT_SKILL_DIRS = ("skills", "external_dirs")
 ROLE_SKILL = {"project": "dispatch", "bootstrap": "bootstrap", "chief": "chief"}
 SUBSCRIPTION_PLUGIN = "claude-subscription-directsdk"
-SUBSCRIPTION_PROVIDER = "claude-subscription-directsdk-experimental"
 SUBSCRIPTION_MIN_CLI = (2, 1, 284)
 SUBSCRIPTION_DEFAULT_MODEL = "sonnet"
 PLUGIN_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
@@ -57,13 +57,17 @@ class Profiles:
             return
         target.symlink_to(self.pkg / "skills" / name)
 
-    def refresh(self, bot: str, role: str, ask_owner: bool, model: str | None, claude_config_dir: str | None) -> Path:
+    def refresh(self, bot: str, role: str, ask_owner: bool, model: str | None, claude_config_dir: str | None, provider: str | None = None) -> Path:
         home = self.ensure(bot)
         apply_profile(self.root, bot, self.pkg / "profiles" / role / "config.yaml")
         if not ask_owner:
             config_set(self.root, bot, ("approvals", "mode"), "off")
         if claude_config_dir is not None:
             self.use_subscription(bot, home, model, claude_config_dir)
+        elif provider:
+            config_set(self.root, bot, ("model", "provider"), provider)
+            config_set(self.root, bot, ("model", "default"), str(model))
+            self.unset_endpoint(bot, home)
         elif model:
             config_set(self.root, bot, ("model", "default"), model)
         soul = (self.pkg / "profiles" / role / "SOUL.md").read_text().rstrip() + "\n\n" + (self.pkg / "profiles" / "OPERATING.md").read_text()
@@ -105,13 +109,16 @@ class Profiles:
         hermes("-p", bot, "plugins", "enable", SUBSCRIPTION_PROVIDER, "--no-allow-tool-override")
         config_set(self.root, bot, ("model", "provider"), SUBSCRIPTION_PROVIDER)
         config_set(self.root, bot, ("model", "default"), model or SUBSCRIPTION_DEFAULT_MODEL)
+        self.unset_endpoint(bot, home)
+        self.record_config_dir(home, config_dir)
+        if config_dir:
+            set_env(self.root, PLUGIN_CLAUDE_DIR_ENV, config_dir)
+
+    def unset_endpoint(self, bot: str, home: Path) -> None:
         current = mapping(home / "config.yaml")
         for key in ("base_url", "api_mode"):
             if value_at(current, ("model", key)) is not None:
                 hermes("-p", bot, "config", "unset", f"model.{key}")
-        self.record_config_dir(home, config_dir)
-        if config_dir:
-            set_env(self.root, PLUGIN_CLAUDE_DIR_ENV, config_dir)
 
     def record_config_dir(self, home: Path, config_dir: str) -> None:
         if config_dir:
