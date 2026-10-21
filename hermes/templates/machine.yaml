@@ -6,7 +6,13 @@ version: 1
 # The bot that sets up projects (faker-kit install --bootstrap-bot).
 bootstrap_bot: faker-kit-bootstrap
 # true: every bot's model runs on your Claude subscription through the logged-in Claude Code CLI.
+# false: each bot keeps the provider its Hermes profile has, or takes the provider and model given below.
+# Cloud sessions run in Claude Code either way.
 claude_subscription: true
+# Optional, only with claude_subscription: false: the bootstrap bot's Hermes provider id and model, always
+# together. The kit picks neither; write the ones you chose. Sign in to the provider from your own terminal first.
+# bootstrap_provider: CHANGE-ME
+# bootstrap_model: CHANGE-ME
 # Optional: the kit commit to install. Default: kit_ref in this repository's .agents/dispatch.json.
 # kit_ref: 0123456789abcdef0123456789abcdef01234567
 
@@ -29,6 +35,9 @@ projects:
     project: my-project
     repo: CHANGE-ME/repo
     heartbeat_every: 1h    # the fallback wake; GitHub webhooks wake the bot as events happen
+    # Optional: the bot's model. model alone sets only the model; provider needs model with it.
+    # provider: CHANGE-ME
+    # model: CHANGE-ME
 
 # Optional: run these repositories' GitHub Actions jobs on this machine (needs Docker). Each job gets
 # a fresh Linux container that sees nothing of this machine. Workflows ask for them with
@@ -40,6 +49,8 @@ projects:
 # Optional: the chief of staff across all projects.
 chief:
   bot: chief
+  # provider: CHANGE-ME    # optional, as for a project bot
+  # model: CHANGE-ME
 
 # Optional: GitHub events reach Hermes through a Cloudflare Tunnel at this address, a hostname in a
 # zone of your Cloudflare account. Only the signed webhook paths are public.

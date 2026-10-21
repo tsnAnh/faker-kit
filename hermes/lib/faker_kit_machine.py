@@ -14,6 +14,7 @@ EVERY = re.compile(r"\A[1-9][0-9]*[mh]\Z")
 HTTPS_URL = re.compile(r"\Ahttps://[a-z0-9.-]+\.[a-z]{2,}\Z")
 SLACK_CHANNEL = re.compile(r"\A[CG][A-Z0-9]{8,}\Z")
 PLACEHOLDER = "CHANGE-ME"
+SUBSCRIPTION_PROVIDER = "claude-subscription-directsdk-experimental"
 
 WEBHOOK_HOST = "127.0.0.1"
 WEBHOOK_PORT = 8644
@@ -53,6 +54,7 @@ class Project:
     incidents_every: str | None = None
     security_every: str | None = None
     model: str | None = None
+    provider: str | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,9 @@ class Machine:
     projects: tuple[Project, ...]
     chief: str | None = None
     chief_model: str | None = None
+    chief_provider: str | None = None
+    bootstrap_model: str | None = None
+    bootstrap_provider: str | None = None
     webhook_url: str | None = None
     tunnel: str | None = None
     slack: Slack | None = None
@@ -102,6 +107,26 @@ def _text(data: dict[str, object], key: str, where: str, pattern: re.Pattern[str
     if pattern is not None and not pattern.match(value):
         raise MachineError(f"{where}.{key} {value!r} is not valid")
     return value
+
+
+def check_model_choice(provider: str | None, model: str | None, subscription: bool, where: str) -> None:
+    if provider is None:
+        return
+    if PLACEHOLDER in provider or not NAME.match(provider):
+        raise MachineError(f"{where}: provider {provider!r} is not a Hermes provider id")
+    if provider == SUBSCRIPTION_PROVIDER:
+        raise MachineError(f"{where}: use claude_subscription (--claude-subscription) for the Claude subscription provider, not provider")
+    if not model:
+        raise MachineError(f"{where}: provider {provider} needs a model too; give the provider and its model together")
+    if subscription:
+        raise MachineError(f"{where}: provider {provider} conflicts with claude_subscription (--claude-subscription); choose one for this bot")
+
+
+def _model_choice(data: dict[str, object], model_key: str, provider_key: str, where: str, subscription: bool) -> tuple[str | None, str | None]:
+    model = _text(data, model_key, where, required=False)
+    provider = _text(data, provider_key, where, required=False)
+    check_model_choice(provider, model, subscription, f"{where}.{provider_key}")
+    return model, provider
 
 
 def parse_machine(data: object) -> Machine:
@@ -132,12 +157,15 @@ def parse_machine(data: object) -> Machine:
         where = f"projects[{i}]"
         entry = _mapping(item, where)
         every = {k: _text(entry, k, where, EVERY, required=False) for k in ("heartbeat_every", "incidents_every", "security_every")}
+        model, provider = _model_choice(entry, "model", "provider", where, subscription)
         projects.append(Project(bot=str(_text(entry, "bot", where, NAME)), project=str(_text(entry, "project", where, NAME)),
-                                repo=str(_text(entry, "repo", where, REPO)), model=_text(entry, "model", where, required=False), **every))
+                                repo=str(_text(entry, "repo", where, REPO)), model=model, provider=provider, **every))
     bots = [p.bot for p in projects]
     bootstrap = str(_text(top, "bootstrap_bot", "machine config", NAME))
+    bootstrap_model, bootstrap_provider = _model_choice(top, "bootstrap_model", "bootstrap_provider", "machine config", subscription)
     chief = _mapping(top.get("chief") or {}, "chief")
     chief_bot = _text(chief, "bot", "chief", NAME, required=False)
+    chief_model, chief_provider = _model_choice(chief, "model", "provider", "chief", subscription)
     names = [*bots, bootstrap, *([chief_bot] if chief_bot else [])]
     if len(set(names)) != len(names):
         raise MachineError("every bot needs its own profile name")
@@ -177,7 +205,8 @@ def parse_machine(data: object) -> Machine:
         raise MachineError("ci_runners lists a repository twice")
     return Machine(bootstrap_bot=bootstrap, trusted_authors=tuple(authors), ask_owner=ask_owner, max_in_flight_total=total,
                    claude_subscription=subscription, projects=tuple(projects), chief=chief_bot,
-                   chief_model=_text(chief, "model", "chief", required=False), webhook_url=url, tunnel=tunnel, slack=slack, kit_ref=kit_ref,
+                   chief_model=chief_model, chief_provider=chief_provider, bootstrap_model=bootstrap_model,
+                   bootstrap_provider=bootstrap_provider, webhook_url=url, tunnel=tunnel, slack=slack, kit_ref=kit_ref,
                    skills=tuple(dict.fromkeys(skills)), ci_runners=tuple(runners))
 
 
