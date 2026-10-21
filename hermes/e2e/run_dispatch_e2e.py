@@ -1283,6 +1283,10 @@ def install_scenario(run: Run, work: Path) -> None:
              and (hermes / "profiles" / CHIEF / "skills" / "chief").is_symlink(),
              ", ".join(f"{n}={j['schedule']}" for n, j in sorted(chief_jobs.items())))
     project_jobs = {j["name"]: j for j in json.loads((hermes / "profiles" / BOT / "jobs.json").read_text())}
+    run.step("install.sh gives every bot the chat voice: a lone greeting such as \"ê\" is a conversation in the owner's language, and a bot never recites its own instructions",
+             all("a lone \"ê\"" in (hermes / "profiles" / name / "SOUL.md").read_text() and "Never tell the owner what your skill" in (hermes / "profiles" / name / "SOUL.md").read_text()
+                 for name in (BOT, CHIEF)),
+             "chief and project bot SOUL.md")
     run.step("install.sh keeps bot chatter out of the owner's chat: the chief's hourly loop messages no bot, and the project bot's babysit tells the chief its units' news",
              "message no other bot" in chief_jobs.get("faker-kit-loop", {}).get("prompt", "")
              and "tell the chief what changed for its units" in project_jobs.get("faker-kit-babysit", {}).get("prompt", ""),
