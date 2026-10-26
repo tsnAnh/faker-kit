@@ -16,7 +16,7 @@ The work is making the repository boot from nothing, reliably, with the kit load
 
 Create `scripts/cloud-setup.sh`. It must:
 
-- Install exactly what `scripts/check.sh` and the verification skill need: language toolchains at the versions the repository pins, dependencies, build tools, and a headless browser for web apps.
+- Install exactly what the build and test commands in AGENTS.md and the verification skill need: language toolchains at the versions the repository pins, dependencies, build tools, and a headless browser for web apps.
 - Be idempotent: running it twice leaves the same result.
 - Seed local test data and test accounts from committed fixtures. Read secrets only from environment variables; never write them to disk or logs.
 - Finish in a few minutes, and print what it installed.
@@ -34,7 +34,7 @@ A cloud session starts from a clone of the repository and nothing else. It does 
    ```
 
    It copies every kit plugin into `.agents/faker-kit/` (without their docs and the kit's own tests), records the commit and a hash of every file in `.agents/faker-kit/KIT.json`, and links each kit skill into `.claude/skills/` and `.agents/skills/` and each subagent into `.claude/agents/`. When the repository already has its own skill of a kit skill's name, such as its own verification skill, the kit's is linked nowhere, so every agent runs the repository's; the script lists what it kept. It also moves `kit_ref` in `.agents/dispatch.json` to the vendored commit, and refuses when the repository's ignore rules would leave a vendored file or link out of the commit. On a Hermes machine, `faker-kit vendor --project <name>` does the same through the GitHub API and opens the pull request.
-2. Add `python3 .agents/faker-kit/vendor_kit.py --check .` to `scripts/check.sh`. It fails when anyone edits the vendored copy, a link breaks, or `.agents/dispatch.json` pins another commit. Changes to the kit go to the kit's repository; to take them, rerun step 1 at the new commit and commit the result.
+2. Make the repository's CI run `python3 .agents/faker-kit/vendor_kit.py --check .` and `bash scripts/link-skills.sh --check .` on every pull request: add the vendor check to the kit-integrity step that `setup-faker-kit` step 4.2 put in the existing CI workflow, or run that step now when `setup-faker-kit` has not (it also creates `.github/workflows/faker-kit-checks.yml` with only these two commands when the repository has no CI workflow besides `claude-review.yml`). The first fails when anyone edits the vendored copy, a link breaks, or `.agents/dispatch.json` pins another commit; the second fails when a project skill is not linked. Changes to the kit go to the kit's repository; to take them, rerun step 1 at the new commit and commit the result.
 3. Keep `.claude/settings.json` from `setup-faker-kit`: it still installs the kit as plugins on engineers' own machines, where the plugin hooks run. In Claude Code a plugin skill is named with its plugin, such as `agent-compatibility:check-agent-compatibility`, and the vendored one `check-agent-compatibility`, so the two never clash.
 4. Link the repository's own skills with `scripts/link-skills.sh` (from `setup-faker-kit`) as before.
 
@@ -58,7 +58,7 @@ For every user-facing surface, pick how a cloud session proves a change with pic
 | Flutter | `flutter test` golden images and the web target | As Android and iOS, for platform-specific behavior |
 | iOS | None: the Simulator needs macOS | A GitHub Actions macOS runner posts screenshots per pull request (`templates/github/ios-snapshots.yml`). Xcode Cloud to TestFlight, or fastlane on the same runner, puts a build on the requester's phone |
 
-For mobile apps, add screenshot tests for the main screens if the repository has none: they are the only pictures a Linux cloud session can take, and they catch visual regressions in `check` from then on.
+For mobile apps, add screenshot tests for the main screens if the repository has none: they are the only pictures a Linux cloud session can take, and they catch visual regressions in the repository's tests from then on.
 
 Write the result into AGENTS.md under a `Cloud sessions` heading: for each surface, the command that proves it in the cloud, and where the rest is verified. Agents read that section to tell a requester what proof to expect.
 
@@ -66,13 +66,13 @@ Write the result into AGENTS.md under a `Cloud sessions` heading: for each surfa
 
 Start a fresh cloud session. In it:
 
-1. Run `scripts/check.sh`, which must pass.
+1. Run the build and test commands from AGENTS.md, which must pass.
 2. Run the verification skill's `doctor` command, which must report healthy for every surface the cloud can run.
 3. Type `/check-agent-compatibility`. It must run and score the repository.
 4. Run a small change, such as a copy change, through `/faker-mode` to a pull request. Its body must show the before and after images, and anyone on the team must be able to see them.
 
-Record the time from session start to a passing check. If it is over ten minutes, cache more in the setup script.
+Record the time from session start to passing tests. If it is over ten minutes, cache more in the setup script.
 
 ## Report
 
-The setup script, where it is wired in each agent, the vendored kit commit and any kit skills the repository's own kept out, whether the kit loads in a fresh session, the proof for each surface and where the rest is verified, the link to the test pull request, the time to a passing check, and the next steps: send non-engineers to claude.ai/code, and run `/check-agent-compatibility` to see how ready the repository is for agents. The owner sets how many agents run at once with `max_in_flight` in `.agents/dispatch.json`.
+The setup script, where it is wired in each agent, the vendored kit commit and any kit skills the repository's own kept out, whether the kit loads in a fresh session, the proof for each surface and where the rest is verified, the link to the test pull request, the time to passing tests, and the next steps: send non-engineers to claude.ai/code, and run `/check-agent-compatibility` to see how ready the repository is for agents. The owner sets how many agents run at once with `max_in_flight` in `.agents/dispatch.json`.

@@ -21,7 +21,7 @@ This works from any cloud session that can push its own branch, in private repos
 
    Anyone who can read the repository sees the image. GitHub keeps the commit through the pull request's own ref, so the link keeps working after a squash merge.
 
-Add `test ! -e .agents/evidence` to `.agents/check-commands` so evidence left behind by mistake fails `check` instead of reaching the default branch.
+Remove `.agents/evidence/` before the pull request merges. If the repository's CI can take one more line, fail it on `test ! -e .agents/evidence`, so evidence left behind by mistake never reaches the default branch.
 
 Never capture real customer data, secrets, or production accounts in evidence. Use the seeded test accounts.
 

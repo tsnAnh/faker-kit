@@ -77,7 +77,7 @@ Then follow the section "The repository side" of .agents/faker-kit/plugins/trust
 - kit_ref: <kit_ref>
 - trusted_dispatchers: <the logins>
 - project: <project>
-Also follow section 4 (Review bots) of .agents/faker-kit/plugins/trust-ladder/skills/setup-faker-kit/SKILL.md so that every push to a pull request gets a Claude review whose formal review body has a line "Risk: low", "Risk: medium", or "Risk: high", and a second job that reviews the diff for security with the review-main-security skill's checklist and sets the commit status "security-review" on the head. The bot merges only when both pass.
+Also follow section 4 (Review bots) of .agents/faker-kit/plugins/trust-ladder/skills/setup-faker-kit/SKILL.md so that every push to a pull request gets a Claude review whose formal review body has a line "Risk: low", "Risk: medium", or "Risk: high", and a second job that reviews the diff for security with the review-main-security skill's checklist and sets the commit status "security-review" on the head. The repository must also have GitHub Actions CI in a workflow other than claude-review.yml and faker-kit-checks.yml that builds and tests every pull request, triggered by push or pull_request; if it filters by path, it filters at job level and keeps a job that always runs, because a workflow-level path filter leaves a docs-only pull request with no CI and the merge gate refuses it. The bot merges only when that CI, the review, and the security job pass.
 Open exactly one pull request. Never merge it.
 ```
 

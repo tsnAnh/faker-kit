@@ -2,7 +2,7 @@
 
 # Skills
 
-Every skill in the kit: 94 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 91 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
@@ -20,11 +20,6 @@ You rarely need the name. Claude Code picks a skill on its own when your request
 | [blast-radius](../../plugins/pstack/skills/blast-radius/SKILL.md) | pstack | Engineers | `/blast-radius this change to the session cache` | Find what a change could break somewhere else before it ships, beyond the diff, and prove the one fact it's safe because of by running real code instead of writing it up. |
 | [no-comments](../../plugins/pstack/skills/no-comments/SKILL.md) | pstack | Engineers | `/no-comments` | Spawn Comment Sicko, fix accepted findings, and offer encodings for claimed constraints. |
 | [typescript-best-practices](../../plugins/pstack/skills/typescript-best-practices/SKILL.md) | pstack | Engineers | `apply typescript-best-practices to this module` | TypeScript best practices. |
-| [kotlin-best-practices](../../plugins/trust-ladder/skills/kotlin-best-practices/SKILL.md) | trust-ladder | Engineers | `apply kotlin-best-practices to CartViewModel` | Kotlin best practices for Android, KMP, and JVM code. |
-| [swift-best-practices](../../plugins/trust-ladder/skills/swift-best-practices/SKILL.md) | trust-ladder | Engineers | `apply swift-best-practices to the checkout flow` | Swift best practices for iOS, macOS, and Swift packages. |
-| [rust-best-practices](../../plugins/trust-ladder/skills/rust-best-practices/SKILL.md) | trust-ladder | Engineers | `apply rust-best-practices to the parser crate` | Rust best practices for libraries, services, and CLIs. |
-| [python-best-practices](../../plugins/trust-ladder/skills/python-best-practices/SKILL.md) | trust-ladder | Engineers | `apply python-best-practices to the billing service` | Python best practices for services, scripts, and libraries. |
-| [dart-best-practices](../../plugins/trust-ladder/skills/dart-best-practices/SKILL.md) | trust-ladder | Engineers | `apply dart-best-practices to the cart feature` | Dart and Flutter best practices. |
 
 ## Layer 2: Static analysis
 
@@ -59,6 +54,7 @@ You rarely need the name. Claude Code picks a skill on its own when your request
 | [maintain-verification-skill](../../plugins/pstack/skills/maintain-verification-skill/SKILL.md) | pstack | Engineers | `/maintain-verification-skill` | Periodic pass that keeps a project's verification skill and feature map honest: parallel source readers per feature, one live session driving every feature, at most one PR of proven corrections. |
 | [create-formal-verification-skill](../../plugins/pstack/skills/create-formal-verification-skill/SKILL.md) | pstack | Engineers | `/create-formal-verification-skill model-check the retry queue's race conditions` | Generate a project-local skill that formally verifies the code where a bug costs the most and tests reach the least, in any language, with whichever verification tool fits. |
 | [maintain-formal-verification-skill](../../plugins/pstack/skills/maintain-formal-verification-skill/SKILL.md) | pstack | Engineers | `/maintain-formal-verification-skill is the model still true to the code?` | Bring a project's formal verification back in line with the code after the code changes: find the commits that touched verified code, update the model, harness, or properties to describe the code as it is now, rerun,... |
+| [statechart](../../plugins/pstack/skills/statechart/SKILL.md) | pstack | Engineers, Everyone | `/statechart what the user sees when they edit a note offline` | Draw how any system moves between states, such as a product flow, a protocol, or a service, as a Mermaid statechart from a TLA+ model. |
 | [control-mobile](../../plugins/trust-ladder/skills/control-mobile/SKILL.md) | trust-ladder | Engineers | `use control-mobile to reproduce the crash on the Android emulator and record it` | Build or adapt a local harness to drive and inspect an Android, iOS, Flutter, or Kotlin Multiplatform app on an emulator or simulator. |
 | [control-ui](../../plugins/team-workflows/skills/control-ui/SKILL.md) | team-workflows | Engineers | `use control-ui to take a trace of the settings page opening` | Build or adapt a local browser/CDP harness to drive and inspect a web, IDE, or Electron UI. |
 | [control-cli](../../plugins/team-workflows/skills/control-cli/SKILL.md) | team-workflows | Engineers | `use control-cli to drive the TUI and capture the transcript` | Build or adapt a local harness to drive, inspect, and profile an interactive CLI or TUI without external services. |
@@ -121,6 +117,7 @@ You rarely need the name. Claude Code picks a skill on its own when your request
 | [teach](../../plugins/pstack/skills/teach/SKILL.md) | pstack | Everyone | `/teach me why you implemented it this way and not with a cache. what were the tradeoffs?` | Explain a body of work plainly so a person actually understands it. |
 | [faker-help](../../plugins/pstack/skills/faker-help/SKILL.md) | pstack | Everyone | `/faker-help which skill should i use to review this branch?` | Guides users through pstack setup, /faker-mode, and picking the skill, playbook, or principle for a task. |
 | [ketchup](../../plugins/pstack/skills/ketchup/SKILL.md) | pstack | Everyone | `/ketchup` | Catch the user up on what changed in this chat since their last message, in plain words and small visuals. |
+| [ketchup-video](../../plugins/pstack/skills/ketchup-video/SKILL.md) | pstack | Everyone | `/ketchup-video` | Catch the user up like /ketchup, with a short silent video of slides for what happened and the waiting calls as text under it. |
 | [what-did-i-get-done](../../plugins/team-workflows/skills/what-did-i-get-done/SKILL.md) | team-workflows | Everyone | `/what-did-i-get-done this week` | Summarize authored commits over a user-specified time period into a concise update |
 | [weekly-review](../../plugins/team-workflows/skills/weekly-review/SKILL.md) | team-workflows | Everyone | `/weekly-review for every author on main` | Produce a weekly synthesis of authored commits with highlights by bugfix, tech debt, and net-new work |
 | [create-learning-path](../../plugins/teaching/skills/create-learning-path/SKILL.md) | teaching | Everyone | `/create-learning-path I want to review pull requests with confidence` | Build a personalized learning roadmap with milestones and practice checkpoints |

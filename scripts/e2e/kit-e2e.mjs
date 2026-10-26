@@ -9,9 +9,9 @@ import { fileURLToPath } from "node:url";
 const USAGE = `Usage: node scripts/e2e/kit-e2e.mjs [--artifact PATH]
 
 Runs the kit's plugin-side scripts and hooks for real in temp directories: the SessionStart and
-UserPromptSubmit hooks, link-skills.sh, the hook adapter (a stand-in plugin and the vendored advisor and
-continual-learning plugins), install-kit-skills.sh, install-pack.mjs for every
-pack, and the agnostic pack's agent-checks on its good and bad fixture repositories.
+UserPromptSubmit hooks, link-skills.sh, the ratchet and import-boundaries checks on a clean and a bad repository,
+the hook adapter (a stand-in plugin and the vendored advisor and continual-learning plugins), and
+install-kit-skills.sh, then installs every plugin into a clean Claude Code.
 
 Writes a JSON transcript to --artifact (default: kit-e2e-transcript.json in the temp run folder). Its digest
 is the SHA-256 of every step name, result, and observed value with temp paths normalized, so two runs of the
@@ -23,10 +23,10 @@ const TRUST_LADDER = path.join(KIT, "plugins", "trust-ladder");
 const HOOK = path.join(TRUST_LADDER, "hooks", "faker-kit-hook.mjs");
 const SETUP_SCRIPTS = path.join(TRUST_LADDER, "skills", "setup-faker-kit", "scripts");
 const LINK_SKILLS = path.join(SETUP_SCRIPTS, "link-skills.sh");
-const INSTALL_PACK = path.join(SETUP_SCRIPTS, "install-pack.mjs");
 const INSTALL_KIT_SKILLS = path.join(TRUST_LADDER, "skills", "setup-cloud-agents", "scripts", "install-kit-skills.sh");
+const RATCHET = path.join(KIT, "scripts", "agent-checks", "ratchet.mjs");
+const IMPORT_BOUNDARIES = path.join(KIT, "scripts", "agent-checks", "import-boundaries.mjs");
 const ADAPTER = path.join(KIT, "upstream", "agent-hooks", "hook-adapter.mjs");
-const PACKS = path.join(TRUST_LADDER, "packs");
 const COMPAT_START = "<!-- faker-kit:compat:start -->";
 const COMPAT_END = "<!-- faker-kit:compat:end -->";
 
@@ -147,6 +147,45 @@ step("link-skills.sh refuses to replace a real skill directory and reports the c
   for (const root of [".claude/skills", ".agents/skills"]) write(path.join(repo, root, "verify-app", "SKILL.md"), "---\nname: verify-app\ndescription: x\n---\n");
   const done = run(LINK_SKILLS, [repo]);
   return { ok: done.status === 1 && done.stderr.includes("conflict: .claude/skills/verify-app and .agents/skills/verify-app"), observed: { status: done.status, stderr: done.stderr.trim() } };
+});
+
+step("ratchet.mjs and import-boundaries.mjs pass a clean repository and fail an added suppression, an added GraphQL read, and a forbidden import", () => {
+  const repo = tmp("repo");
+  git(repo, "init", "-q");
+  for (const config of ["ratchet.json", "import-boundaries.json"]) write(path.join(repo, ".agents", config), read(KIT, ".agents", config));
+  write(path.join(repo, ".agents", "ratchet-baseline.json"), JSON.stringify({ "python-noqa": { total: 1, perFile: { "hermes/lib/faker_kit_merge.py": 1 } } }));
+  const lib = "hermes/lib/faker_kit_merge.py";
+  const guard = "hermes/plugin/faker_kit_guard/__init__.py";
+  write(path.join(repo, lib), "import json  # noqa\n");
+  write(path.join(repo, guard), "import json\n");
+  write(path.join(repo, "hermes", "bin", "faker_kit.py"), "from faker_kit_merge import decide\n");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-qm", "clean");
+  const summary = (done) => ({ status: done.status, stdout: done.stdout.trim(), stderr: done.stderr.trim().split("\n") });
+  const ratchet = () => summary(run("node", [RATCHET, "check"], { cwd: repo }));
+  const boundaries = () => summary(run("node", [IMPORT_BOUNDARIES], { cwd: repo }));
+  const withEdit = (file, text, check) => {
+    fs.appendFileSync(path.join(repo, file), text);
+    const found = check();
+    git(repo, "checkout", "--", ".");
+    return found;
+  };
+  const clean = { ratchet: ratchet(), boundaries: boundaries() };
+  const suppression = withEdit(lib, "x = 1  # noqa\n", ratchet);
+  const graphql = withEdit(lib, 'subprocess.run(["gh", "pr", "view", "1"])\n', ratchet);
+  const guardImport = withEdit(guard, "import faker_kit_merge\n", boundaries);
+  const libImport = withEdit(lib, "from faker_kit import main\n", boundaries);
+  const again = { ratchet: ratchet(), boundaries: boundaries() };
+  const silent = (found) => found.status === 0 && found.stderr.join("") === "";
+  const reports = (found, text) => found.status === 1 && found.stderr.some((line) => line.includes(text));
+  return {
+    ok: silent(clean.ratchet) && silent(again.ratchet) && silent(clean.boundaries) && silent(again.boundaries) && clean.boundaries.stdout === "import-boundaries: 2 rule(s) hold"
+      && reports(suppression, "python-noqa: 2 found, baseline allows 1.") && reports(suppression, `${lib} (1 -> 2)`)
+      && reports(graphql, "gh-graphql-read: 1 found, baseline allows 0.")
+      && reports(guardImport, `${guard}:2: imports faker_kit_merge [hermes-guard-stands-alone]`)
+      && reports(libImport, `${lib}:2: imports faker_kit [hermes-lib-below-commands]`),
+    observed: { clean, suppression, graphql, guardImport, libImport, again },
+  };
 });
 
 function adapter(pluginRoot, event, input, project, data, env = {}) {
@@ -380,71 +419,6 @@ step("with the real claude CLI every plugin id in the settings template installs
     ok: added.status === 0 && known.includes("faker-kit") && installs.every((status) => status === 0) && installed.join() === [...ids].sort().join(),
     observed: { installed },
   };
-});
-
-const packNames = fs.readdirSync(PACKS).filter((name) => exists(PACKS, name, "pack.json")).sort();
-const installPack = (...argv) => run("node", [INSTALL_PACK, ...argv]);
-
-step("every pack has a valid manifest, a test, fixtures, a README, and installs into an empty repository", () => {
-  const problems = [];
-  const installs = {};
-  for (const pack of packNames) {
-    const manifest = JSON.parse(read(PACKS, pack, "pack.json"));
-    if (manifest.name !== pack) problems.push(`${pack}: name`);
-    if (!(manifest.check?.length > 0)) problems.push(`${pack}: check`);
-    if (typeof manifest.baseline !== "string") problems.push(`${pack}: baseline`);
-    for (const file of ["test.sh", "README.md"]) if (!exists(PACKS, pack, file)) problems.push(`${pack}: ${file}`);
-    for (const kind of ["bad", "good"]) if (!exists(PACKS, pack, "fixtures", kind)) problems.push(`${pack}: fixtures/${kind}`);
-    if (pack !== "agnostic" && !exists(PACKS, pack, manifest.ci)) problems.push(`${pack}: ci`);
-    for (const merge of manifest.merge ?? []) if (!exists(PACKS, pack, merge.from)) problems.push(`${pack}: merge ${merge.from}`);
-    const repo = tmp("repo");
-    const done = installPack(pack, "--repo", repo);
-    installs[pack] = done.status;
-    if (done.status !== 0) problems.push(`${pack}: install exited ${done.status}`);
-    else if (!read(repo, ".agents", "check-commands").includes(manifest.check[0])) problems.push(`${pack}: check not registered`);
-  }
-  return { ok: packNames.length > 0 && problems.length === 0, observed: { packs: packNames, problems } };
-});
-
-step("install-pack.mjs copies files, registers checks once, and keeps executable bits", () => {
-  const repo = tmp("repo");
-  const first = installPack("agnostic", "--repo", repo, "--with", "locale-keys");
-  const commands = read(repo, ".agents", "check-commands");
-  const second = installPack("agnostic", "--repo", repo, "--with", "locale-keys");
-  const after = read(repo, ".agents", "check-commands");
-  return {
-    ok: first.status === 0 && first.stdout.includes("scripts/check.sh") && (fs.statSync(path.join(repo, "scripts", "check.sh")).mode & 0o111) !== 0
-      && commands.includes("node scripts/agent-checks/ratchet.mjs check") && commands.includes("node scripts/agent-checks/locale-keys.mjs") && second.status === 0 && !second.stdout.includes("Copied:")
-      && after === commands && (after.match(/ratchet\.mjs check/g) ?? []).length === 1,
-    observed: { checks: commands.trim().split("\n").filter((line) => !line.startsWith("#")) },
-  };
-});
-
-step("install-pack.mjs leaves an existing different file alone and says to merge it", () => {
-  const repo = tmp("repo");
-  write(path.join(repo, "clippy.toml"), "too-many-arguments-threshold = 9\n");
-  const done = installPack("rust", "--repo", repo);
-  return {
-    ok: done.status === 0 && read(repo, "clippy.toml") === "too-many-arguments-threshold = 9\n" && done.stdout.includes("clippy.toml already exists") && done.stdout.includes("merge/cargo-lints.toml into Cargo.toml"),
-    observed: { status: done.status },
-  };
-});
-
-step("install-pack.mjs --dry-run writes nothing, and unknown packs and optional checks fail with a clear message", () => {
-  const repo = tmp("repo");
-  const dry = installPack("python", "--repo", repo, "--dry-run");
-  const unknownPack = installPack("cobol", "--repo", tmp("repo"));
-  const unknownCheck = installPack("agnostic", "--repo", tmp("repo"), "--with", "spellcheck");
-  return {
-    ok: dry.status === 0 && dry.stdout.includes("ruff.toml") && fs.readdirSync(repo).length === 0 && unknownPack.status === 1 && unknownPack.stderr.includes('no pack named "cobol"')
-      && unknownCheck.status === 1 && unknownCheck.stderr.includes("no optional check named spellcheck"),
-    observed: { unknownPack: unknownPack.stderr.trim().slice(0, 40), unknownCheck: unknownCheck.stderr.trim() },
-  };
-});
-
-step("the agnostic pack's agent-checks (ratchet, import boundaries, rule fixtures, no new comments, locale keys) fail on the bad fixture repository and pass on the good one", () => {
-  const done = run("bash", [path.join(PACKS, "agnostic", "test.sh")]);
-  return { ok: done.status === 0 && done.stdout.trim() === "agnostic pack: bad fixture fails, good fixture passes", observed: { stdout: done.stdout.trim(), stderr: done.stderr.trim().slice(0, 300) } };
 });
 
 const failed = steps.filter((s) => !s.ok);

@@ -23,7 +23,7 @@ It then:
 1. **Finds the mistake classes:** it reads recent commits, reverts, review comments, agent instruction files, and comments that explain workarounds, and groups the mistakes. A class counts once it has happened twice.
 2. **Fixes each class at the highest level that works:**
    1. **Architecture:** one owner for each piece of state and one supported way to do each task; internals hidden so the wrong import fails; old ways an agent would copy deleted. When callers must move, migrate them and delete the old API in the same change.
-   2. **Types**, so the bad state cannot be written. Where bad code still compiles, a **lint or CI check** whose error names what to use instead (written in the repository's own linter, or the agnostic checks). If the pattern is already common, it fails only when a change adds more.
+   2. **Types**, so the bad state cannot be written. Where bad code still compiles, a **lint or CI check** whose error names what to use instead (written in the repository's own linter). If the pattern is already common, it fails only when a change adds more.
    3. **A test** of the behavior.
    4. **Docs or agent rules last**, only for judgment calls: nothing fails when an agent skips them. Human review is not a level.
 3. **Proves it:** each new check fails on a real past mistake, and runs the same way locally and in CI. Exceptions go on the offending line with a reason, an expiry date, and a human's approval.
@@ -35,28 +35,22 @@ It replies with each class, its evidence, the level it picked, and why a higher 
 
 | Correction | Where it lands |
 |---|---|
-| Kotlin: "stop using `!!`" | detekt `UnsafeCallOnNullableType` as an error (already in the kotlin-android pack) |
+| Kotlin: "stop using `!!`" | detekt `UnsafeCallOnNullableType` as an error |
 | Kotlin: "use `AppLog`, not `android.util.Log`" | detekt `ForbiddenImport` with a message naming `AppLog` |
-| KMP: "no Android imports in commonMain" | The kmp pack's commonMain import rule, then expect/actual declarations |
-| Rust: "no `unwrap()` outside tests" | `clippy::unwrap_used = "deny"` (rust pack) |
+| KMP: "no Android imports in commonMain" | A forbidden-import rule on `commonMain`, then expect/actual declarations |
+| Rust: "no `unwrap()` outside tests" | `clippy::unwrap_used = "deny"` |
 | Python: "UI layer must not import the database" | An import-linter layers contract |
-| Swift: "no `print` for logging" | The swift-ios pack's ast-grep rule `swift-no-print` |
-| Dart: "don't fire and forget futures" | `discarded_futures` as an error (flutter-dart pack) |
-| Any stack: "stop explaining workarounds in comments" | The agnostic pack's `no-new-comments` check |
-| Any stack: "every string needs all languages" | The agnostic pack's `locale-keys` check |
+| Swift: "no `print` for logging" | A SwiftLint custom rule that bans `print` |
+| Dart: "don't fire and forget futures" | `discarded_futures` as an error in `analysis_options.yaml` |
+| Any stack: "stop explaining workarounds in comments" | A CI check that fails when a change adds a comment; `/no-comments` clears the existing ones |
+| Any stack: "every string needs all languages" | A CI check that compares every locale file's keys with the template locale |
 | "Error messages should sound calm" | A STYLE.md entry, then a review guideline once the wording is settled |
 
 [The trust ladder reference](../../plugins/trust-ladder/references/trust-ladder.md) has more routing examples.
 
 ## Stop a pattern from spreading before it is banned
 
-Sometimes a pattern is bad but too widespread to fix in one change. The agnostic pack's ratchet counts it and fails CI only when the count goes up:
-
-```json
-{ "id": "no-new-date-helpers", "pattern": "fun format\\w*Date\\(", "files": ["*.kt"], "message": "Use DateFormatter from :core:time." }
-```
-
-Add the rule to `.agents/ratchet.json`, then run `node scripts/agent-checks/ratchet.mjs update` to record today's count. Each cleanup lowers the count; nobody can raise it.
+Sometimes a pattern is bad but too widespread to fix in one change. `/correct` then adds a check to the repository's own CI that counts the pattern and fails only when a change adds more, with a message that names what to use instead, such as `Use DateFormatter from :core:time`. Each cleanup lowers the count; nobody can raise it.
 
 ## See the climb
 

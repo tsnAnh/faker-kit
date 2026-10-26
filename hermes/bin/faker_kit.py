@@ -250,16 +250,22 @@ class Kit:
         if vendored != local:
             raise Refused(f"the vendored kit {str(vendored)[:12]} differs from this machine's kit {local[:12]}; run faker-kit vendor --project <project>")
 
-    def evidence(self, gh: Gh, pr: int, head: str, default: str) -> Evidence:
+    def evidence(self, gh: Gh, pr: int, head: str, default: str, pull: dict) -> Evidence:
+        head_info = pull.get("head") or {}
+        ref = str(head_info.get("ref") or "")
+        owner = str(((head_info.get("repo") or {}).get("owner") or {}).get("login") or str(head_info.get("label") or "").partition(":")[0])
         statuses = gh.statuses(head)
         run_id = security_run_id(statuses, gh.repo)
         try:
             rules = dispatch_rules(gh.file_text(".agents/dispatch.json", default))
         except ValueError as err:
             raise Refused(str(err)) from None
+        head_tree = gh.workflows_tree(head)
         return Evidence(gh.check_runs(head), statuses, gh.reviews(pr), gh.pull_files(pr), rules,
                         gh.actions_run(run_id) if run_id else None, gh.actions_jobs(run_id) if run_id else None,
-                        gh.head_pulls(head), gh.head_jobs(head, REVIEW_WORKFLOW, SECURITY_JOB))
+                        gh.head_pulls(head), gh.head_jobs(head, REVIEW_WORKFLOW, SECURITY_JOB), gh.head_runs(head),
+                        ref, gh.branch_pulls(owner, ref) if owner and ref else None, gh.timeline(pr), str(pull.get("created_at") or ""),
+                        head_tree is not None and head_tree == gh.workflows_tree(default))
 
     def ping_owner(self, bot: Bot, pr: int) -> None:
         repo = str(bot.repo)
@@ -303,7 +309,7 @@ class Kit:
             raise Refused(f"{cord.describe()}; nothing merges until the owner clears it")
         store = WindowStore(self.home, bot.name)
         with store.locked():
-            verdict = decide(pr, head, self.evidence(gh, pr, head, default), repo, default, store.get(pr), self.now())
+            verdict = decide(pr, head, self.evidence(gh, pr, head, default, data), repo, default, store.get(pr), self.now())
             if verdict.window is not None:
                 try:
                     self.ping_owner(bot, pr)
@@ -362,7 +368,7 @@ class Kit:
         detail = gh.pull(number)
         head = str((detail.get("head") or {}).get("sha") or "")
         who = re.sub(r"[^A-Za-z0-9_\[\]-]", "?", str((pull.get("user") or {}).get("login") or "ghost"))[:40]
-        verdict = decide(number, head, self.evidence(gh, number, head, default), gh.repo, default, store.get(number), self.now())
+        verdict = decide(number, head, self.evidence(gh, number, head, default, detail), gh.repo, default, store.get(number), self.now())
         gate = {"merge": "ready to merge", "wait": verdict.message, "refuse": f"blocked: {verdict.message}"}[verdict.action]
         mergeable = {True: "mergeable", False: "conflicts", None: "mergeable unknown"}[detail.get("mergeable")]
         unit = UNIT_LINE.match(str(detail.get("body") or ""))

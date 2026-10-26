@@ -67,7 +67,7 @@ GRAPHQL_WRITES = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|d
 GITHUB_MENTION = re.compile(r"github|\bgh\b|\brepos/", re.I)
 GITHUB_WRITE_PATHS = re.compile(
     r"pulls/{1,8}.{0,60}?/{1,8}(?:merge|reviews)\b|/merges\b|/statuses/|/check-runs\b|/check-suites\b|\bgit/{1,8}refs\b|/contents/"
-    r"|actions/{1,8}(?:runs|jobs)/{1,8}.{0,40}?/{1,8}(?:rerun|cancel|force-cancel)", re.I)
+    r"|actions/{1,8}(?:runs|jobs)/{1,8}.{0,40}?/{1,8}(?:rerun|cancel|force-cancel)|/dispatches\b", re.I)
 WRITE_INTENT = re.compile(
     r"\b(?:put|post|patch|delete)\b|(?<![\w-])-[A-Za-z]*[XfF]|--method\b|--(?:field|raw-field|input)\b|\bmethod\s*[=:]|\b(?:data|json)=|\bbody\s*:", re.I)
 CODE_BLOCKS = (
@@ -640,6 +640,8 @@ def github_write_problem(method: str, path: str, fields: dict[str, str] | None) 
         return "a bot never writes a commit status or a check run, which are the merge gate's evidence"
     if rest[:1] == ["actions"] and rest[1:2] in (["runs"], ["jobs"]) and rest[-1:] and rest[-1].startswith(("rerun", "cancel", "force-cancel")):
         return "a bot never re-runs or cancels a workflow run, because the security verdict on a head must stick"
+    if rest == ["dispatches"] or (rest[:2] == ["actions", "workflows"] and rest[-1:] == ["dispatches"]):
+        return "a bot never starts a workflow run, because the merge gate counts only the runs GitHub starts for a push or a pull request"
     if REVIEW_DISMISSAL.match(tail):
         return "a bot never dismisses a review, which is the merge gate's evidence"
     if rest[:2] == ["git", "refs"]:

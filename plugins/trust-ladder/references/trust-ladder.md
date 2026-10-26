@@ -35,7 +35,7 @@ Agents copy the code around them. A codebase with one clean pattern per concern 
 | "UI code must not call the network" | 1, then 2 | Move networking into a data module the UI module cannot depend on; add a Konsist, import-linter, or import-boundary test so the rule survives refactors |
 | "commonMain must not import Android APIs" (KMP) | 1 | expect/actual declarations; the compiler rejects platform imports in commonMain |
 | "Use our `DateFormatter` wrapper, not three new helpers" | 1, then 2 | `/correct`: migrate callers, delete the helpers, ban the raw API with a lint message that names the wrapper |
-| "Stop explaining workarounds in comments" | 2 | The `no-new-comments` check, plus `/no-comments` before review |
+| "Stop explaining workarounds in comments" | 2 | A check in the repository's own CI that fails on comments added in the diff, plus `/no-comments` before review |
 | "Every user-facing string needs all locales" | 2 | A CI check that every locale file has the same keys |
 | "Prove it works before saying done" | 4, then 3 | A verification skill that drives the real app (`/create-verification-skill`), and an AGENTS.md rule that PRs carry its evidence |
 | "Screens must match the design system spacing" | 1, then 4 | Spacing tokens as the only public API, plus the visual-parity playbook with screenshots |

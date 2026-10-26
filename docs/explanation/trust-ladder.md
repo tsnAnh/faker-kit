@@ -24,7 +24,7 @@ Patterns spread both ways. A codebase that is clean and conventional teaches eve
 
 The answer is an agent-friendly framework. Agents take shortcuts, so the framework makes the shortcut the right path: features live in one place, what runs where is enforced through the import graph, and even comments are banned because agents used them to justify papering over problems. A codebase like that can be annoying for people. For agents, especially ones with little context, it is the environment where the right thing happens by default.
 
-The kit's version: `/correct` to leave one blessed way per concern and migrate callers, and [lint packs](../reference/lint-packs.md) that ban the escape hatches agents reach for.
+The kit's version: `/correct` to leave one blessed way per concern and migrate callers, and the targeted lints it adds to the repository's own CI, which ban the escape hatches agents reach for.
 
 ## When you cannot fix it today
 

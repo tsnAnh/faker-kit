@@ -39,9 +39,9 @@ def make_kit(root: Path) -> tuple[Path, str]:
         target = kit / "plugins" / "trust-ladder" / dropped
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("dropped")
-    fixture = kit / "plugins" / "trust-ladder" / "packs" / "agnostic" / "test"
-    fixture.mkdir(parents=True)
-    (fixture / "bad.txt").write_text("fixture")
+    nested_test = kit / "plugins" / "trust-ladder" / "skills" / "shared" / "test"
+    nested_test.mkdir(parents=True)
+    (nested_test / "kept.txt").write_text("fixture")
     tool = kit / "plugins" / "pstack" / "skills" / "faker-mode" / "run.sh"
     tool.write_text("#!/bin/sh\n")
     tool.chmod(0o755)
@@ -85,7 +85,7 @@ def vendor_scenario(root: Path, step: Step) -> None:
          done.returncode == 0 and result["kit_ref"] == ref and result["skipped"] == [".claude/skills/check-agent-compatibility", ".agents/skills/check-agent-compatibility"]
          and (vendored / "plugins/trust-ladder/LICENSE").read_text() == "MIT trust-ladder\n" and (vendored / "LICENSE").read_text() == "MIT kit\n"
          and not (vendored / "plugins/trust-ladder/docs").exists() and not (vendored / "plugins/trust-ladder/assets").exists() and not (vendored / "plugins/trust-ladder/test").exists()
-         and (vendored / "plugins/trust-ladder/packs/agnostic/test/bad.txt").exists() and os.access(vendored / "plugins/pstack/skills/faker-mode/run.sh", os.X_OK)
+         and (vendored / "plugins/trust-ladder/skills/shared/test/kept.txt").exists() and os.access(vendored / "plugins/pstack/skills/faker-mode/run.sh", os.X_OK)
          and link.is_symlink() and link.readlink().as_posix() == "../../.agents/faker-kit/plugins/pstack/skills/faker-mode"
          and (repo / ".claude/skills/shared/SKILL.md").read_text().endswith("from trust-ladder\n")
          and (repo / ".claude/agents/faker-agent.md").readlink().as_posix() == "../../.agents/faker-kit/plugins/pstack/agents/faker-agent.md"

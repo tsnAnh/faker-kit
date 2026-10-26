@@ -19,7 +19,7 @@ of that name is linked in none of them, so every agent runs the same one. Runnin
 commit replaces the copy and its links, removes stale ones, and moves kit_ref in .agents/dispatch.json.
 
   python3 vendor_kit.py --kit <kit checkout> --into <repository>    write or refresh the copy
-  python3 .agents/faker-kit/vendor_kit.py --check .                  verify it (add to scripts/check.sh)
+  python3 .agents/faker-kit/vendor_kit.py --check .                  verify it; CI runs this on every pull request
 
 Standard library only, Python 3.9+.
 """

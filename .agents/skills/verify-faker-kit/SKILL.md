@@ -19,7 +19,7 @@ python3 hermes/e2e/run_dispatch_e2e.py --artifact .verify-evidence/hermes-e2e.js
 
 It prints one line per step and ends with the transcript path and a sha256 digest of the step names and results. Run it twice: the digest must match. A change to how the kit talks to Hermes, GitHub, or Claude (a new `gh`, `hermes`, or `claude` call) needs the stub in that file to model the real CLI first; say so in the verdict if it does not.
 
-The plugin side has its own run, `node scripts/e2e/kit-e2e.mjs --artifact .verify-evidence/kit-e2e.json`: the hooks, the hook adapter (a stand-in plugin plus the real advisor and continual-learning hooks), `link-skills.sh`, `install-kit-skills.sh`, `install-pack.mjs` for every pack, and the agnostic pack's checks. Run it twice too: the digest must match.
+The plugin side has its own run, `node scripts/e2e/kit-e2e.mjs --artifact .verify-evidence/kit-e2e.json`: the hooks, the hook adapter (a stand-in plugin plus the real advisor and continual-learning hooks), `link-skills.sh`, `install-kit-skills.sh`, and the install of every plugin into a clean Claude Code. Run it twice too: the digest must match.
 
 Features without the Hermes module (plugin loading, upstream sync) run in this checkout directly; their files in `features/` say how.
 

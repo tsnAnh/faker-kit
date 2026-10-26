@@ -19,7 +19,7 @@ A codebase that agents extend well is locked down enough that the easy path is t
 | Android (Kotlin) | Gradle modules per layer (`:feature:*`, `:core:data`, `:core:ui`); `implementation` over `api` | Konsist architecture tests; Android Lint and detekt forbidden imports |
 | Kotlin Multiplatform | `commonMain` for shared logic, `expect`/`actual` for platform APIs; `explicitApi()` in library modules | The compiler rejects platform imports in `commonMain`; Konsist for layer rules |
 | iOS (Swift) | Swift Package targets per layer; `internal` by default, `public` only at the package edge | The build fails on undeclared target dependencies; SwiftLint custom rules for banned imports |
-| Flutter (Dart) | `lib/features/<feature>/` folders; a `core/` package for shared code | The import-boundary check in the flutter-dart lint pack |
+| Flutter (Dart) | `lib/features/<feature>/` folders; a `core/` package for shared code | An import-boundary check in CI: a lint rule or a script over `package:` imports |
 | Rust | Crates per layer in a workspace; `pub(crate)` by default | Cargo refuses undeclared dependencies; `cargo deny` bans crates |
 | Python | Packages per layer | import-linter layer and forbidden contracts |
 | Web or Electron | Separate entry points per process (main, renderer, worker) | Import-graph rules in the linter; a CI check on the bundle graph |

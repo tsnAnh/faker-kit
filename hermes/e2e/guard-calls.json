@@ -326,6 +326,8 @@
     {"tool": "terminal", "args": {"command": "gh api repos/o/r/commits/abc/statuses"}},
     {"tool": "terminal", "args": {"command": "gh api repos/o/r/commits/abc/check-runs"}},
     {"tool": "terminal", "args": {"command": "gh api repos/o/r/pulls/3/reviews"}},
+    {"tool": "terminal", "args": {"command": "gh api repos/o/r/actions/workflows/ci.yml/runs"}},
+    {"tool": "terminal", "args": {"command": "gh api repos/o/r/actions/runs -f head_sha=abc --method GET"}},
     {"tool": "terminal", "args": {"command": "gh api -X POST repos/o/r/git/refs -f ref=refs/heads/dispatch/x -f sha=abc"}},
     {"tool": "terminal", "args": {"command": "gh api -X PATCH repos/o/r/git/refs/heads/dispatch/x -f sha=abc"}},
     {"tool": "terminal", "args": {"command": "gh api -X PATCH repos/o/r/git/refs/heads/dispatch/x -f sha=abc -f force=false"}},
@@ -442,7 +444,9 @@
     {"tool": "cronjob_create", "args": {"script": "subprocess.run('gh api graphql -f query=\"mutation { updateRef(input: {}) { clientMutationId } }\"', shell=True)"}},
     {"tool": "cronjob_create", "args": {"script": "post('graphql', {'query': 'mutation { createCommitOnBranch(input: {}) { commit { oid } } }'})"}},
     {"tool": "cronjob_create", "args": {"script": "gh.graphql('mutation { dismissPullRequestReview(input: {}) { clientMutationId } }')"}},
-    {"tool": "cronjob_create", "args": {"script": "gh.graphql('mutation { deleteRef(input: {}) { clientMutationId } }')"}}
+    {"tool": "cronjob_create", "args": {"script": "gh.graphql('mutation { deleteRef(input: {}) { clientMutationId } }')"}},
+    {"tool": "cronjob_create", "args": {"script": "requests.post('https://api.github.com/repos/o/r/actions/workflows/9/dispatches', json={'ref': 'main'})"}},
+    {"tool": "execute_code", "args": {"code": "subprocess.run(['gh', 'api', '-X', 'POST', 'repos/o/r/dispatches', '-f', 'event_type=build'])"}}
   ]},
   {"name": "GitHub writes from interpreter code in the shell", "policy": "ask", "profiles": ["meo-beo"], "expect": "block", "calls": [
     {"tool": "terminal", "args": {"command": "python3 -c \"import requests; requests.put('https://api.github.com/repos/o/r/pulls/1/merge')\""}},
@@ -457,6 +461,18 @@
     {"tool": "terminal", "args": {"command": "gh api -X POST repos/o/r/actions/runs/9/rerun-failed-jobs"}},
     {"tool": "terminal", "args": {"command": "gh api -X POST repos/o/r/actions/jobs/9/rerun"}},
     {"tool": "terminal", "args": {"command": "gh api -X POST repos/o/r/actions/runs/9/cancel"}},
+    {"tool": "terminal", "args": {"command": "gh api -X POST repos/o/r/actions/workflows/9/dispatches -f ref=main"}},
+    {"tool": "terminal", "args": {"command": "gh api --method POST repos/o/r/actions/workflows/ci.yml/dispatches -f ref=main"}},
+    {"tool": "terminal", "args": {"command": "gh api repos/o/r/actions/workflows/ci.yml/dispatches -f ref=main"}},
+    {"tool": "terminal", "args": {"command": "gh api repos/o/r/actions/workflows/ci.yml/dispatches --input body.json"}},
+    {"tool": "terminal", "args": {"command": "gh api -X POST repos/o/r/dispatches -f event_type=build"}},
+    {"tool": "terminal", "args": {"command": "gh api --method=POST repos/o/r/dispatches -f event_type=build"}},
+    {"tool": "terminal", "args": {"command": "gh api repos/o/r/dispatches -F event_type=build"}},
+    {"tool": "terminal", "args": {"command": "gh api -X POST repos/o/r/actions//workflows/9/./dispatches -f ref=main"}},
+    {"tool": "terminal", "args": {"command": "curl -X POST https://api.github.com/repos/o/r/actions/workflows/9/dispatches -d '{\"ref\":\"main\"}'"}},
+    {"tool": "terminal", "args": {"command": "curl https://api.github.com/repos/o/r/dispatches -d '{\"event_type\":\"build\"}'"}},
+    {"tool": "terminal", "args": {"command": "python3 -c \"import requests; requests.post('https://api.github.com/repos/o/r/actions/workflows/9/dispatches', json={'ref': 'main'})\""}},
+    {"tool": "terminal", "args": {"command": "gh workflow run ci.yml"}},
     {"tool": "terminal", "args": {"command": "gh run rerun 9"}}
   ]},
   {"name": "GitHub reads and unrelated posts from code", "policy": "quiet", "profiles": ["meo-beo"], "expect": "allow", "calls": [

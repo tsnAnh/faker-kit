@@ -1,7 +1,6 @@
 # Lint and type-check configuration for the kit's own Python: hermes/ and plugins/trust-ladder/.
-# Installed from the trust-ladder python lint pack, then fitted to this repository. scripts/check.sh runs
-# `ruff check` and `mypy`; legacy violations carry a `faker-kit baseline` marker that .agents/ratchet.json
-# only lets go down.
+# scripts/check.sh runs `ruff check` and `mypy`; legacy violations carry a `faker-kit baseline` marker that
+# .agents/ratchet.json only lets go down.
 
 [tool.ruff]
 # The kit's code is written to long lines; 200 keeps the rule meaningful without rewrapping every file.
@@ -20,8 +19,6 @@ extend-exclude = [
   "plugins/teaching",
   "plugins/team-workflows",
   "plugins/thermos",
-  # Fixtures that must fail the packs' own linters.
-  "plugins/trust-ladder/packs/*/fixtures",
 ]
 
 [tool.ruff.lint]

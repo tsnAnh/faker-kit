@@ -166,6 +166,15 @@ class Gh:
     def head_pulls(self, head: str) -> list[dict]:
         return self.pages(f"repos/{self.repo}/commits/{head}/pulls")
 
+    def branch_pulls(self, owner: str, branch: str) -> list[dict]:
+        return self.pages(f"repos/{self.repo}/pulls", {"state": "all", "head": f"{owner}:{branch}"})
+
+    def timeline(self, number: int) -> list[dict]:
+        return self.pages(f"repos/{self.repo}/issues/{int(number)}/timeline")
+
+    def head_runs(self, head: str) -> list[dict]:
+        return self.pages(f"repos/{self.repo}/actions/runs", {"head_sha": head}, key="workflow_runs")
+
     def head_jobs(self, head: str, workflow: str, job: str) -> list[dict]:
         try:
             runs = self.pages(f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow.rsplit('/', 1)[-1])}/runs", {"head_sha": head}, key="workflow_runs")
@@ -188,6 +197,16 @@ class Gh:
             return base64.b64decode(str(data.get("content") or "")).decode()
         except (binascii.Error, UnicodeDecodeError):
             raise Refused(f"{path} on {ref} is not text") from None
+
+    def workflows_tree(self, ref: str) -> str | None:
+        query = urllib.parse.urlencode({"ref": ref})
+        data = json.loads(self.page(f"repos/{self.repo}/contents/.github?{query}")[0])
+        if not isinstance(data, list):
+            raise Refused(f"gh api returned no list for .github on {ref}")
+        for entry in data:
+            if isinstance(entry, dict) and entry.get("name") == "workflows" and entry.get("type") == "dir" and entry.get("sha"):
+                return str(entry["sha"])
+        return None
 
     def default_branch(self) -> str:
         return str(self.json(f"repos/{self.repo}").get("default_branch") or "")

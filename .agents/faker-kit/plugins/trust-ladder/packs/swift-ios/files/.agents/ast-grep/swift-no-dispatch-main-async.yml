@@ -1,6 +1,0 @@
-id: swift-no-dispatch-main-async
-language: swift
-severity: error
-message: Mark the code @MainActor, or use `await MainActor.run { }`, instead of DispatchQueue.main.async.
-rule:
-  pattern: DispatchQueue.main.async { $$$BODY }
