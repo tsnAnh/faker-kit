@@ -12,8 +12,7 @@
   "scripts": {
     "sync": "node scripts/sync-upstream.mjs",
     "sync:check": "node scripts/sync-upstream.mjs --check",
-    "validate": "node scripts/validate.mjs",
-    "test:packs": "bash scripts/test-packs.sh"
+    "validate": "node scripts/validate.mjs"
   },
   "engines": {
     "node": ">=22"

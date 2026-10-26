@@ -27,5 +27,5 @@ Entries in STYLE.md are review rules too. Cite the entry id, for example `[nit] 
 
 ## Out of scope
 
-- Formatting, import order, and anything else `scripts/check.sh` enforces.
+- Formatting, import order, and anything else CI enforces.
 - Rewrites unrelated to the change.

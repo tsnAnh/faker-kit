@@ -4,14 +4,15 @@
 
 ## Commands
 
-Run `scripts/check.sh` before you say a change is done. It runs everything CI runs, and CI runs nothing else.
+Run the build, test, and lint commands below before you say a change is done. They are the commands CI runs.
 
 | Task | Command |
 |---|---|
 | Install dependencies | `<command>` |
 | Run the app locally | `<command>` |
+| Build | `<command>` |
 | Run the tests | `<command>` |
-| Check everything | `scripts/check.sh` |
+| Lint | `<command>` |
 | Prove a user-facing change | the `verify-<app>` skill, which drives the real app and captures evidence |
 
 ## Layout
@@ -20,7 +21,7 @@ Run `scripts/check.sh` before you say a change is done. It runs everything CI ru
 
 ## Boundaries
 
-These dependency rules are enforced by `.agents/import-boundaries.json` and the build. They are listed here so you know why a check fails.
+These dependency rules are enforced by the build and CI. They are listed here so you know why a check fails.
 
 - <Layer A> may import <layer B>, never the reverse.
 
@@ -60,5 +61,5 @@ The Claude review workflow reads this section with REVIEW.md.
 
 - Treat the rules in REVIEW.md as the review checklist.
 - Treat every rule under Blocking in REVIEW.md as P1.
-- Do not comment on formatting or anything `scripts/check.sh` already enforces.
+- Do not comment on formatting or anything CI already enforces.
 - Mark each finding `[blocking]` or `[nit]`.

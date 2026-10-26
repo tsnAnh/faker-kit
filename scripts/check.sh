@@ -6,8 +6,7 @@ usage() {
 Usage: scripts/check.sh [--list]
 
 Run every check this repository requires, the same way CI does. The commands live
-in .agents/check-commands, one per line; lines starting with # are skipped. Each
-lint pack installed by faker-kit adds its lines there.
+in .agents/check-commands, one per line; lines starting with # are skipped.
 
   --list   Print the commands without running them.
 

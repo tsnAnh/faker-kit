@@ -1,18 +1,18 @@
 ---
 name: setup-faker-kit
-description: Prepare a repository so agents can work in it unattended and anyone on the team can use the kit. Writes AGENTS.md, CLAUDE.md, REVIEW.md and STYLE.md; installs the lint pack for each stack with a baseline; wires the CI gate and the Claude review workflow; links project skills for Claude Code; adds team settings so teammates get the kit automatically; and starts the corrections ledger. Use for /setup-faker-kit, "set this repo up for agents", "install a lint pack", "set up PR review", or a repo with no AGENTS.md.
+description: Prepare a repository so agents can work in it unattended and anyone on the team can use the kit. Writes AGENTS.md, CLAUDE.md, REVIEW.md and STYLE.md around the repository's own build, test, and lint commands; wires the Claude review workflow; links project skills for Claude Code; adds team settings so teammates get the kit automatically; and starts the corrections ledger. It adds no check script or lint configuration of its own; the one CI step it adds checks the kit's own links and vendored copy. Use for /setup-faker-kit, "set this repo up for agents", "set up PR review", or a repo with no AGENTS.md.
 ---
 
 # Set up faker-kit in a repository
 
-Work on a new branch. Everything here lands as one reviewable PR. Paths below starting with `templates/`, `packs/`, or `references/` are in the trust-ladder plugin, two directories above this skill.
+Work on a new branch. Everything here lands as one reviewable PR. Paths below starting with `templates/` or `references/` are in the trust-ladder plugin, two directories above this skill.
 
 ## 1. Inspect the repository
 
 Answer from the files, not from the user:
 
-- **Stacks.** `settings.gradle(.kts)` with Android plugins means kotlin-android. A `kotlin("multiplatform")` or `org.jetbrains.kotlin.multiplatform` plugin means kmp. `Cargo.toml` means rust. `pyproject.toml`, `setup.cfg`, or `requirements*.txt` means python. `pubspec.yaml` means flutter-dart. `Package.swift` or `*.xcodeproj` means swift-ios. Every repository also gets the agnostic pack.
-- **Commands.** How to install, build, test, lint, and run the app. Prefer the repo's own scripts (Makefile, package scripts, Gradle tasks, `justfile`).
+- **Stacks.** The languages and build tools in use: Gradle with Android or Kotlin Multiplatform plugins, `Cargo.toml`, `pyproject.toml` or `requirements*.txt`, `pubspec.yaml`, `Package.swift` or `*.xcodeproj`, `package.json`.
+- **Commands.** How to install, build, test, lint, and run the app, exactly as the repository already defines them (Makefile, package scripts, Gradle tasks, `justfile`, its CI workflows). These are the validation commands; setup does not add another.
 - **What exists.** AGENTS.md, CLAUDE.md, other editors' rule folders, `.claude/`, CI workflows, linters, CODEOWNERS, `.github/pull_request_template.md`.
 - **Surfaces.** What a user touches: mobile app, web app, desktop app, CLI, or service.
 
@@ -20,41 +20,13 @@ If the repository does not build or its tests do not pass as they are, stop and 
 
 ## 2. Write the instruction files
 
-1. **AGENTS.md** from `templates/AGENTS.md`. Fill every section from step 1: one `check` command that runs everything CI runs, the layout, the boundaries, the paved paths, the never-list, and `## Review guidelines`. Delete a section rather than leave a placeholder. If AGENTS.md exists, merge: keep its content and add only the missing sections.
+1. **AGENTS.md** from `templates/AGENTS.md`. Fill every section from step 1: the repository's own install, build, test, lint, and run commands as they exist today, the layout, the boundaries, the paved paths, the never-list, and `## Review guidelines`. Record existing commands; do not add a wrapper script or a lint configuration. The only CI addition is the kit-integrity step in step 4. Delete a section rather than leave a placeholder. If AGENTS.md exists, merge: keep its content and add only the missing sections.
 2. **The compat block.** Copy the text between the markers in `references/compat.md`, markers included, to the end of AGENTS.md. With it in place, the SessionStart hook stops injecting it.
 3. **CLAUDE.md.** If it does not exist, create it containing only `@AGENTS.md`. If it exists, add `@AGENTS.md` as its first line and move anything that applies to every agent into AGENTS.md.
-4. **Rules from other tools.** Port rule files from other editors (such as `*.mdc` rules) into AGENTS.md sections, or into nested AGENTS.md files for rules scoped to one directory. Then run `correct` on each rule to see whether it can move down to a lint rule.
+4. **Rules from other tools.** Port rule files from other editors (such as `*.mdc` rules) into AGENTS.md sections, or into nested AGENTS.md files for rules scoped to one directory. Then run pstack's `/correct` on each rule to see whether it can move down to a targeted lint in the repository's own CI.
 5. **REVIEW.md and STYLE.md** from `templates/`. Seed STYLE.md with rules the team already repeats in review. Leave it short; `style-guide-from-reviews` fills it from real review comments.
 
-## 3. Static analysis: install a lint pack per stack
-
-Each pack in the trust-ladder plugin's `packs/` directory is proven: its `test.sh` shows the configuration fails on a bad fixture and passes on a good one. Installing one gives a repository strict static analysis on day one without breaking the build on old code. Do this section once per detected stack, agnostic included, or alone when someone asks to install a pack.
-
-1. **Choose packs.** Always install `agnostic` first; it provides `scripts/check.sh` and the ratchet the other packs rely on. Then add one pack per stack found. Each pack's `pack.json` lists how to detect it under `detect`. `kmp` needs `kotlin-android` installed first.
-2. **Install.** From this skill's directory, for each pack:
-
-   ```bash
-   node scripts/install-pack.mjs <pack> --repo <repository>
-   ```
-
-   The script copies the pack's files, appends its check commands to `.agents/check-commands`, and prints the remaining steps. It never overwrites a file that already exists with different content; it reports the file so you can merge by hand. Add `--dry-run` first on a repository with existing configuration.
-
-   For the agnostic pack, choose the optional checks:
-
-   - `--with locale-keys` when the repository has translation files. Then write `.agents/locales.json`.
-   - `--with no-new-comments` when the team agrees to explain code without comments. Start with `"mode": "warn"` in `.agents/no-new-comments.json` for a week if the team is unsure.
-3. **Do the printed manual steps.** Merge configuration fragments (Cargo lints, Gradle snippets, `.importlinter` packages, xcconfig) exactly as `install-pack.mjs` prints them. Install the tools it lists at the versions it names.
-4. **Baseline existing violations.** Run the full check once. Existing violations must not fail CI on day one, and they must not grow either. Use the pack's `baseline` method from `pack.json`:
-   - Native baselines (detekt, Android Lint, ktlint, SwiftLint): generate the file and commit it.
-   - No native baseline (clippy, ruff, Dart): mark each existing violation with a suppression whose reason is `faker-kit baseline`, then add a ratchet rule that counts that marker and run `node scripts/agent-checks/ratchet.mjs update`.
-
-   Never turn a rule off to get green. Fixing a handful of violations is better than baselining them; baseline only when the count is large.
-5. **Wire CI.** Add the job from the pack's `ci/github-actions.yml`, or make the existing CI run `scripts/check.sh`. One command locally and in CI means an agent can prove a change the same way CI will.
-6. **Prove it.** `scripts/check.sh` passes on the repository. Paste one of the pack's bad fixture lines into a real file: `scripts/check.sh` must fail with the rule's message. Revert. Add one row per pack to the `## Rules and what enforces them` table in AGENTS.md: the pack, and `scripts/check.sh` as what enforces it.
-
-To add a rule for a mistake no pack covers, run pstack's `/correct`; it writes the rule in the strongest layer that can hold it and registers its fixtures.
-
-## 4. Review bots
+## 3. Review bots
 
 Every pull request gets an automatic Claude review that follows the repository's own REVIEW.md, the AGENTS.md review guidelines, and STYLE.md. It runs on the Claude GitHub app and the team's subscription; the repository needs no `ANTHROPIC_API_KEY` secret. Never write a key into a file.
 
@@ -75,26 +47,41 @@ Every pull request gets an automatic Claude review that follows the repository's
 4. **Set up triage.** Bots catch real bugs and also file noise. The pstack babysit playbook handles review comments with a fix, dismiss, or ask rubric (`references/bugbot-triage.md` in the pstack plugin; "Bugbot" there means any review bot). Copy `templates/review-bot-patterns.md` to `.agents/review-bot-patterns.md`; that file collects this repository's learned dismissal patterns so each agent does not relearn them. When the same `[blocking]` comment appears on two pull requests, it is a rule that belongs in a check. Run `/correct` on it.
 5. **Prove it.** Open a throwaway pull request that breaks one REVIEW.md rule, for example a user-facing string added in one locale only. The review must flag it as `[blocking]`. Close the pull request.
 
-## 5. Skills
+## 4. Skills
 
-1. Copy `scripts/link-skills.sh` from this skill to the repository's `scripts/`, then run `bash scripts/link-skills.sh .`. It links every project skill into `.claude/skills` and `.agents/skills`. Add `bash scripts/link-skills.sh --check .` to `.agents/check-commands`, so a skill added later without its links fails `check`.
-2. If the repository has a user-facing surface and no verification skill, recommend `/create-verification-skill` next. It is the most valuable skill the repository can have: it lets an agent prove its own work. For Android, iOS, Flutter, or KMP apps, point it at `control-mobile` and `references/verification-drivers.md`.
+1. Copy `scripts/link-skills.sh` from this skill to the repository's `scripts/`, then run `bash scripts/link-skills.sh .`. It links every project skill into `.claude/skills` and `.agents/skills`. Run it again whenever a project skill is added, and `bash scripts/link-skills.sh --check .` to confirm every link resolves.
+2. Keep the kit intact in CI. Add one step to the repository's existing CI workflow that runs on every pull request, running `bash scripts/link-skills.sh --check .` and, when `.agents/faker-kit/vendor_kit.py` exists (the kit is vendored: always for a Hermes project, otherwise once `setup-cloud-agents` has run), `python3 .agents/faker-kit/vendor_kit.py --check .`. The first fails when a project skill is not linked; the second when the vendored kit was edited, a link broke, or `.agents/dispatch.json` pins another commit. If the repository has no CI workflow besides `claude-review.yml`, create `.github/workflows/faker-kit-checks.yml` with only these steps, and drop the second command while the kit is not vendored. Replace `<runs-on of claude-review.yml>` with the `runs-on` value of the `review` job in the repository's `.github/workflows/claude-review.yml`, copied exactly (a label list stays a list), so the workflow never runs on a runner that file does not use:
 
-## 6. Team settings
+   ```yaml
+   name: faker-kit-checks
+   on:
+     pull_request:
+   jobs:
+     kit:
+       runs-on: <runs-on of claude-review.yml>
+       steps:
+         - uses: actions/checkout@v4
+         - run: bash scripts/link-skills.sh --check .
+         - run: python3 .agents/faker-kit/vendor_kit.py --check .
+   ```
+
+   That workflow checks the kit only. `faker-kit merge` does not count it as CI, so a repository whose only CI is this workflow still needs one that builds and tests every pull request before a Hermes bot can merge (`setup-hermes-project` stops without it).
+3. If the repository has a user-facing surface and no verification skill, recommend `/create-verification-skill` next. It is the most valuable skill the repository can have: it lets an agent prove its own work. For Android, iOS, Flutter, or KMP apps, point it at `control-mobile` and `references/verification-drivers.md`.
+
+## 5. Team settings
 
 So that every teammate gets the kit without setup:
 
 - `.claude/settings.json` from `templates/claude-settings.json`: adds this marketplace, enables the plugins, and denies destructive commands.
 - Cloud sessions do not install the plugins this file enables. `setup-cloud-agents` vendors the kit into the repository for them.
-- `CODEOWNERS` and the branch-protection checklist in `templates/branch-protection.md`: the required check, resolved review conversations, and one human approval, so changes from anyone, including non-engineers, pass the same gates.
+- `CODEOWNERS` and the branch-protection checklist in `templates/branch-protection.md`: the repository's own CI checks, resolved review conversations, and one human approval, so changes from anyone, including non-engineers, pass the same gates.
 
-## 7. Start the records
+## 6. Start the records
 
-Keep the template's `## Rules and what enforces them` table in AGENTS.md; `/correct` (pstack) fills it as mistakes get fixed. Run `/check-agent-compatibility` and put its report in the pull request as the baseline the team improves on.
+Keep the template's `## Rules and what enforces them` table in AGENTS.md; `/correct` (pstack) fills it as mistakes get fixed. When agents keep repeating a mistake, `/correct` picks the strongest layer that can stop it and, when that is a lint, adds a targeted one to the repository's own CI. Setup installs no lint configuration of its own, and no CI job beyond the kit-integrity step. Run `/check-agent-compatibility` and put its report in the pull request as the baseline the team improves on.
 
-## 8. Verify and open the PR
+## 7. Verify and open the PR
 
-1. Run `check`. It must pass.
-2. Break one rule on purpose, confirm `check` fails with a useful message, then revert.
-3. Run `scripts/link-skills.sh --check .`.
-4. Open one PR titled `chore(agents): set up faker-kit`. The body lists what was added, the baseline counts per pack, the `/check-agent-compatibility` report, the CI job added, what the user must turn on after merging (the Claude GitHub app, the `CLAUDE_CODE_OAUTH_TOKEN` secret, and branch protection), links to the review from step 4.5, and the recommended next step (usually `/create-verification-skill`).
+1. Run the build, test, and lint commands recorded in AGENTS.md. They must pass as they did in step 1.
+2. Run `scripts/link-skills.sh --check .`, and `python3 .agents/faker-kit/vendor_kit.py --check .` when the kit is vendored, the same two commands the CI step runs.
+3. Open one PR titled `chore(agents): set up faker-kit`. The body lists what was added, the `/check-agent-compatibility` report, what the user must turn on after merging (the Claude GitHub app, the `CLAUDE_CODE_OAUTH_TOKEN` secret, and branch protection), links to the review from step 3.5, and the recommended next step (usually `/create-verification-skill`).

@@ -80,7 +80,16 @@
       ],
       "from": "pstack@cursor-plugins",
       "to": "pstack@faker-kit",
-      "count": 3
+      "count": 4
+    },
+    {
+      "id": "neutral-claude-marketplace-name",
+      "files": [
+        "harness/pstack/claude-code/README.md"
+      ],
+      "from": "select `cursor-plugins`, and choose",
+      "to": "select `faker-kit`, and choose",
+      "count": 1
     },
     {
       "id": "neutral-readme-adapter-names",
@@ -179,7 +188,7 @@
       ],
       "from": "~/.cursor/",
       "to": "~/.agents/",
-      "count": 20
+      "count": 21
     },
     {
       "id": "neutral-project-dir",
@@ -188,7 +197,7 @@
       ],
       "from": ".cursor/",
       "to": ".agents/",
-      "count": 41
+      "count": 42
     },
     {
       "id": "neutral-plugin-root-env",

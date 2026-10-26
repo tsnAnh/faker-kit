@@ -39,13 +39,12 @@ Designers, marketers, and founders install nothing. Give each one a seat on the 
 | Share of rules a check enforces | The AGENTS.md rule table | Up |
 | Rules nothing enforces | The AGENTS.md rule table | Zero |
 | Agent-readiness report | `/check-agent-compatibility`, run monthly | Up, with its main problems fixed |
-| Time for `scripts/check.sh` | Timed by hand on each change | Under 15 minutes |
-| Ratchet counts | `.agents/ratchet-baseline.json` | Down |
+| Time for CI to pass | A pull request's CI run | Under 15 minutes |
 | Pull requests merged with verification evidence | Pull request descriptions | Up, toward all of them |
 
 ## More repositories
 
-Run `/setup-faker-kit` in each one. Repositories that share a stack share the same lint pack, so a rule encoded in one can be copied to the others; the corrections ledger shows which ones are worth copying.
+Run `/setup-faker-kit` in each one. Repositories that share a stack tend to hit the same mistakes, so a lint `/correct` adds to one can be copied to the others; the corrections ledger shows which ones are worth copying.
 
 ## Keeping the kit current
 

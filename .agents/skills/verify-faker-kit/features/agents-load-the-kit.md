@@ -5,7 +5,7 @@ Teams install the kit as a plugin marketplace. Claude Code must accept every plu
 ## Sub-features
 
 - `claude-validate`: Claude Code validates the marketplace and each plugin.
-- `plugin-scripts`: the SessionStart and UserPromptSubmit hooks, the hook adapter, `link-skills.sh`, `install-kit-skills.sh`, `install-pack.mjs`, and the agnostic pack's checks run for real.
+- `plugin-scripts`: the SessionStart and UserPromptSubmit hooks, the hook adapter, `link-skills.sh`, and `install-kit-skills.sh` run for real, and every plugin installs.
 
 ## How to get to it (user POV)
 

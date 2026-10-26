@@ -72,6 +72,11 @@ def fail(message, code=1):
     sys.exit(code)
 
 
+def read_fails(name):
+    if name in state.get("fail_reads", []):
+        fail("gh: Internal Server Error (HTTP 500)")
+
+
 def answer(body):
     text = json.dumps(body)
     if "--include" in args:
@@ -106,7 +111,8 @@ def pull_row(pull):
         "number": pull["number"], "html_url": f"https://github.com/{state['repo']}/pull/{pull['number']}",
         "state": pull["state"], "merged_at": pull.get("merged_at"), "draft": pull.get("draft", False),
         "user": {"login": pull["author"]}, "mergeable": pull["mergeable"], "body": pull.get("body"),
-        "head": {"sha": pull["head"], "ref": pull["branch"], "repo": {"full_name": pull.get("head_repo", state["repo"])}},
+        "created_at": pull.get("created_at", "2026-10-01T00:00:00Z"),
+        "head": {"sha": pull["head"], "ref": pull["branch"], "repo": {"full_name": pull.get("head_repo", state["repo"]), "owner": {"login": pull.get("head_repo", state["repo"]).split("/")[0]}}},
         "base": {"ref": "main", "repo": {"full_name": state["repo"]}},
     }
 
@@ -197,13 +203,28 @@ if args[0] == "api":
             hook["config"], hook["events"] = body["config"], body["events"]
         save()
         print("{}")
+    elif route == prefix + "/contents/.github":
+        read_fails("workflows_tree")
+        wanted = urllib.parse.parse_qs(split.query).get("ref", [""])[0]
+        sha = state.get("workflow_trees", {}).get(wanted, "workflows-main")
+        answer([{"name": "workflows", "type": "dir", "sha": sha}] if sha else [{"name": "CODEOWNERS", "type": "file", "sha": "co"}])
     elif route.startswith(prefix + "/contents/"):
         name = route[len(prefix + "/contents/"):]
         if name not in state["files"]:
             fail("gh: Not Found (HTTP 404)")
         answer({"content": base64.b64encode(state["files"][name].encode()).decode()})
     elif route == prefix + "/pulls":
-        answer([pull_row(p) for p in state["pulls"] if p["state"] == "open"])
+        query = urllib.parse.parse_qs(split.query)
+        if query.get("state", ["open"])[0] == "all":
+            read_fails("branch_pulls")
+            owner, _, branch = query.get("head", [""])[0].partition(":")
+            own = [] if state.get("branch_query_misses") else [pull_row(p) for p in state["pulls"] if p["branch"] == branch and pull_row(p)["head"]["repo"]["owner"]["login"] == owner]
+            answer(own + [p for p in state.get("branch_pulls", []) if p["head"]["ref"] == branch and p["head"].get("owner", state["repo"].split("/")[0]) == owner])
+        else:
+            answer([pull_row(p) for p in state["pulls"] if p["state"] == "open"])
+    elif route.startswith(prefix + "/issues/") and route.endswith("/timeline") and method == "GET":
+        read_fails("timeline")
+        answer(state.get("timelines", {}).get(route.split("/")[-2], []))
     elif route.startswith(prefix + "/pulls/") and route.endswith("/files"):
         answer(state["pull_files"].get(route.split("/")[-2], [{"filename": "README.md"}]))
     elif route.startswith(prefix + "/pulls/") and route.endswith("/reviews"):
@@ -219,7 +240,11 @@ if args[0] == "api":
         if state.get("no_review_workflow"):
             fail("gh: Not Found (HTTP 404)")
         head = urllib.parse.parse_qs(split.query).get("head_sha", [""])[0]
-        answer({"workflow_runs": [r for r in state["runs"].values() if r["head_sha"] == head]})
+        answer({"workflow_runs": [r for r in state["runs"].values() if r["head_sha"] == head and r["path"].split("@")[0] == ".github/workflows/claude-review.yml"]})
+    elif route == prefix + "/actions/runs":
+        read_fails("head_runs")
+        head = urllib.parse.parse_qs(split.query).get("head_sha", [""])[0]
+        answer({"total_count": len(state["runs"]), "workflow_runs": [r for r in state["runs"].values() if r["head_sha"] == head] + state.get("stray_runs", [])})
     elif route.startswith(prefix + "/commits/") and route.endswith("/statuses"):
         answer(state["statuses"].get(route.split("/")[-2], []))
     elif route.startswith(prefix + "/actions/runs/") and route.endswith("/jobs"):
@@ -521,9 +546,18 @@ def security_status(run_id: int = 101, state: str = "success", creator: str = "g
             "target_url": f"https://github.com/{REPO}/actions/runs/{run_id}"}
 
 
-def workflow_run(head: str, path: str = REVIEW_PATH, event: str = "pull_request", repo: str = REPO, pulls: tuple[tuple[int, str], ...] = ((1, "main"),)) -> dict:
-    return {"id": 101, "path": path, "head_sha": head, "event": event, "repository": {"full_name": repo},
+CI_PATH = ".github/workflows/ci.yml"
+
+
+def workflow_run(head: str, path: str = REVIEW_PATH, event: str = "pull_request", repo: str = REPO, pulls: tuple[tuple[int, str], ...] = ((1, "main"),), run_id: int = 101,
+                 branch: str = "dispatch/unit-1") -> dict:
+    return {"id": run_id, "head_branch": branch, "check_suite_id": run_id * 100, "path": path, "head_sha": head, "event": event, "repository": {"full_name": repo},
+            "head_repository": {"full_name": repo}, "created_at": "2026-10-02T00:00:00Z",
             "pull_requests": [{"number": number, "base": {"ref": base}} for number, base in pulls]}
+
+
+def check_run(name: str, suite: int | None, conclusion: str = "success", status: str = "completed") -> dict:
+    return {"name": name, "status": status, "conclusion": conclusion, **({"check_suite": {"id": suite}} if suite is not None else {})}
 
 
 def security_job(head: str, run_id: int = 101, name: str = "security", status: str = "completed", conclusion: str | None = "success") -> dict:
@@ -532,14 +566,20 @@ def security_job(head: str, run_id: int = 101, name: str = "security", status: s
 
 def open_gates(run: Run, pr: int, head: str, risk: str = "low") -> None:
     def change(state: dict) -> None:
-        state["check_runs"][head] = [{"name": "check", "status": "completed", "conclusion": "success"},
-                                     {"name": "review", "status": "completed", "conclusion": "success"}]
+        state["check_runs"][head] = [check_run("check", 20100), check_run("review", 10100)]
         state["statuses"][head] = [security_status()]
-        state["runs"]["101"] = workflow_run(head, pulls=((pr, "main"),))
+        state["runs"]["101"] = workflow_run(head, pulls=((pr, "main"),), branch=f"dispatch/unit-{pr}")
+        state["runs"]["201"] = workflow_run(head, path=CI_PATH, pulls=((pr, "main"),), run_id=201, branch=f"dispatch/unit-{pr}")
+        state["branch_pulls"] = []
+        state["branch_query_misses"] = False
+        state["fail_reads"] = []
+        state["timelines"] = {}
+        state["workflow_trees"] = {}
         state["jobs"]["101"] = [security_job(head)]
         state["runs"].pop("102", None)
         state["jobs"].pop("102", None)
         state["head_pulls"] = {}
+        state["stray_runs"] = []
         state["reviews"][str(pr)] = [review("claude[bot]", "APPROVED", head, f"Looks right.\n\nRisk: {risk}")]
     run.update_gh(change)
 
@@ -726,6 +766,124 @@ def merge_scenario(run: Run) -> None:
     result = run.merge(1)
     run.step("merge refuses a head security-review has not reported on", refused(result, "has not reported"), result[2].strip())
 
+    ci_needle = "needs GitHub Actions CI that builds and tests every pull request"
+
+    def untouched(result: tuple[int, str, str]) -> bool:
+        return result[1] == "" and not run.merged() and not (run.team / "merge" / f"{BOT}.json").exists()
+
+    def review_only_checks(*extra: dict) -> Callable[[dict], None]:
+        return lambda state: state["check_runs"].__setitem__(head, [check_run("review", 10100), check_run("security", 10100), *extra])
+
+    def ci_run(**fields: object) -> Callable[[dict], None]:
+        return lambda state: state["runs"].__setitem__("201", {**workflow_run(head, path=CI_PATH, run_id=201), **fields})
+
+    def stray_ci_run(**fields: object) -> Callable[[dict], None]:
+        def change(state: dict) -> None:
+            state["runs"].pop("201")
+            state["stray_runs"].append({**workflow_run(head, path=CI_PATH, pulls=((1, "main"),), run_id=201), **fields})
+        return change
+
+    closed_evil = {"number": 2, "state": "closed", "head": {"sha": head, "ref": "dispatch/unit-1"}, "base": {"ref": "evil"}}
+
+    def pulls_of(*pairs: tuple[int, str]) -> list[dict]:
+        return [{"number": number, "base": {"ref": base}} for number, base in pairs]
+
+    open_gates(run, 1, head, "medium")
+    run.update_gh(review_only_checks())
+    result = run.merge(1)
+    run.step("merge refuses a head whose only checks are the review workflow's own jobs",
+             refused(result, ci_needle) and refused(result, REVIEW_PATH) and untouched(result), result[2].strip())
+    run.update_gh(lambda state: state["check_runs"][head].append(check_run("check", 20100)))
+    code, out, err = run.kit("status")
+    line = next((row for row in out.splitlines() if row.startswith("#1 ")), "")
+    run.step("a passing check run of a pull_request run pinned to this pull request and the default branch lets the gate pass the CI check",
+             code == 0 and "has not started" in line and ci_needle not in line, line or err.strip())
+    run.update_gh(ci_run(event="push", pull_requests=[]))
+    code, out, err = run.kit("status")
+    line = next((row for row in out.splitlines() if row.startswith("#1 ")), "")
+    run.step("a passing check run of a push run on the head lets the gate pass the CI check", code == 0 and "has not started" in line and ci_needle not in line, line or err.strip())
+    not_ci = [
+        ("a passing check run that names no workflow", review_only_checks(check_run("build", None))),
+        ("a passing check run in a suite no workflow run of the head owns", review_only_checks(check_run("build", 30000))),
+        ("a check run named like CI inside the review workflow's own suite", review_only_checks(check_run("build", 10100))),
+        ("a skipped check run of another workflow", review_only_checks(check_run("check", 20100, "skipped"))),
+        ("a neutral check run of another workflow", review_only_checks(check_run("check", 20100, "neutral"))),
+        ("a workflow run of another commit that the API listed anyway", stray_ci_run(head_sha=sha("9"))),
+        ("a workflow_dispatch run", ci_run(event="workflow_dispatch")),
+        ("a pull_request_target run", ci_run(event="pull_request_target")),
+        ("a workflow_run run", ci_run(event="workflow_run")),
+        ("a run with no event", ci_run(event=None)),
+        ("a pull_request run attached to another pull request", ci_run(pull_requests=pulls_of((9, "main")))),
+        ("a pull_request run from a throwaway branch at the same commit that GitHub also attached to this pull request", ci_run(head_branch="throwaway")),
+        ("a pull_request run that lists this pull request but has no branch", ci_run(head_branch=None)),
+        ("a pull_request run against a branch other than the default", ci_run(pull_requests=pulls_of((1, "evil")))),
+        ("a pull_request run attached to no pull request", ci_run(pull_requests=[])),
+        ("a workflow run of another repository", ci_run(repository={"full_name": "evil/shop"})),
+        ("a pull_request run created before the pull request opened", ci_run(created_at="2026-09-30T23:59:59Z")),
+        ("a pull_request run with no creation time", ci_run(created_at=None)),
+        ("a pull_request run with an unparseable creation time", ci_run(created_at="yesterday")),
+        ("a pull_request run from a fork's branch of the same name", ci_run(head_repository={"full_name": "evil/shop"})),
+        ("a pull_request run with no head repository", ci_run(head_repository=None)),
+        ("a push run from a fork", ci_run(event="push", pull_requests=[], head_repository={"full_name": "evil/shop"})),
+        ("a workflow run whose file is outside .github/workflows", ci_run(path="scripts/ci.yml")),
+        ("a workflow run with no file", ci_run(path="")),
+        ("a run of the workflow that only runs the kit's own checks", ci_run(path=".github/workflows/faker-kit-checks.yml")),
+        ("a run of the review workflow at another ref", ci_run(path=f"{REVIEW_PATH}@refs/pull/1/merge")),
+    ]
+    for name, change in not_ci:
+        open_gates(run, 1, head, "medium")
+        run.update_gh(change)
+        result = run.merge(1)
+        run.step(f"merge refuses {name} as the CI that builds and tests the head", refused(result, ci_needle) and untouched(result), result[2].strip())
+
+    def stale(sha: str | None) -> Callable[[dict], None]:
+        return lambda state: state.__setitem__("workflow_trees", {head: sha})
+
+    push_only = ci_run(event="push", pull_requests=[])
+    rebase_hint = "workflows differ from main; rebase onto main"
+    for name, tree in (("workflows that differ from the default branch's", "workflows-stale"), ("no workflows folder", None)):
+        open_gates(run, 1, head, "medium")
+        run.update_gh(push_only)
+        run.update_gh(stale(tree))
+        result = run.merge(1)
+        run.step(f"merge refuses a push run of a head with {name}, with the rebase hint",
+                 refused(result, ci_needle) and refused(result, rebase_hint) and untouched(result), result[2].strip())
+    open_gates(run, 1, head, "medium")
+    run.update_gh(stale("workflows-stale"))
+    code, out, err = run.kit("status")
+    line = next((row for row in out.splitlines() if row.startswith("#1 ")), "")
+    run.step("a passing pull_request run still counts when the head's workflows differ from the default branch's",
+             code == 0 and "has not started" in line and ci_needle not in line, line or err.strip())
+
+    base_cases = [
+        ("a closed pull request from this branch into another base", lambda state: state["branch_pulls"].append(closed_evil), "pull request #2 from this branch targets evil, not main"),
+        ("a pull request whose base was changed after it opened", lambda state: state["timelines"].__setitem__("1", [{"event": "labeled"}, {"event": "base_ref_changed"}]),
+         "base of #1 was changed"),
+        ("a pull request whose base was changed automatically", lambda state: state["timelines"].__setitem__("1", [{"event": "automatic_base_change_succeeded"}]),
+         "base of #1 was changed"),
+        ("a branch query that does not list this pull request", lambda state: state.__setitem__("branch_query_misses", True), "do not include #1 against main"),
+        ("a branch query that lists this pull request against another base",
+         lambda state: (state.__setitem__("branch_query_misses", True),
+                        state["branch_pulls"].append({"number": 1, "state": "open", "head": {"sha": head, "ref": "dispatch/unit-1"}, "base": {"ref": "evil"}})),
+         "do not include #1 against main"),
+    ]
+    for name, change, needle in base_cases:
+        open_gates(run, 1, head, "medium")
+        run.update_gh(change)
+        result = run.merge(1)
+        code, out, err = run.kit("status")
+        line = next((row for row in out.splitlines() if row.startswith("#1 ")), "")
+        run.step(f"merge and status refuse {name}, with every run listing #1 against main", refused(result, needle) and untouched(result) and needle in line, result[2].strip() + " | " + line)
+
+    for read in ("branch_pulls", "timeline", "head_runs", "workflows_tree"):
+        open_gates(run, 1, head, "medium")
+        run.update_gh(lambda state, read=read: state.__setitem__("fail_reads", [read]))
+        result = run.merge(1)
+        code, out, err = run.kit("status")
+        line = next((row for row in out.splitlines() if row.startswith("#1 ")), "")
+        run.step(f"merge refuses when GitHub fails the {read} read and leaves the window untouched", result[0] != 0 and "HTTP 500" in result[2] and untouched(result) and "has not started" not in line,
+                 result[2].strip() + " | " + line)
+
     forged = [
         ("a success whose run is another workflow", lambda state: state["runs"].__setitem__("101", workflow_run(head, path=".github/workflows/ci.yml")),
          "does not come from"),
@@ -733,6 +891,15 @@ def merge_scenario(run: Run) -> None:
          "was not a run for #1"),
         ("a success whose run was against a branch other than the default", lambda state: state["runs"].__setitem__("101", workflow_run(head, pulls=((1, "evil"),))),
          "was not a run for #1"),
+        ("a success whose run came from a throwaway branch at the same commit", lambda state: state["runs"].__setitem__("101", workflow_run(head, branch="throwaway")),
+         "was not a run for #1"),
+        ("a success whose run was created before the pull request opened",
+         lambda state: state["runs"].__setitem__("101", {**workflow_run(head), "created_at": "2026-09-30T00:00:00Z"}), "was not a run for #1"),
+        ("a success whose run came from a fork", lambda state: state["runs"].__setitem__("101", {**workflow_run(head), "head_repository": {"full_name": "evil/shop"}}),
+         "was not a run for #1"),
+        ("a success while a closed pull request from this branch targets another base", lambda state: state["branch_pulls"].append(closed_evil), "targets evil, not main"),
+        ("a success on a pull request whose base was changed after it opened", lambda state: state["timelines"].__setitem__("1", [{"event": "labeled"}, {"event": "base_ref_changed"}]),
+         "base of #1 was changed"),
         ("a success whose run is of another commit", lambda state: state["runs"].__setitem__("101", workflow_run(sha("9"))), "does not come from"),
         ("a success whose run is not a pull_request run", lambda state: state["runs"].__setitem__("101", workflow_run(head, event="workflow_dispatch")),
          "does not come from"),
@@ -871,7 +1038,7 @@ def merge_scenario(run: Run) -> None:
     run.update_gh(lambda state: state["pull_files"].pop("3"))
     saved = {}
     run.update_gh(lambda state: (saved.update(statuses=state["statuses"], runs=state["runs"], jobs=state["jobs"]),
-                                 state.update(no_review_workflow=True, statuses={}, runs={}, jobs={})))
+                                 state.update(no_review_workflow=True, statuses={}, runs={"201": state["runs"]["201"]}, jobs={})))
     merges = len(run.merged())
     code, out, err = run.kit("status")
     result = run.merge(3)

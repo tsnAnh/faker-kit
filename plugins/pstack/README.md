@@ -25,6 +25,8 @@ in claude code:
 /plugin install pstack@faker-kit
 ```
 
+claude code leaves auto-update off for third-party marketplaces, so pstack stays on the version you installed. to turn it on, run `/plugin`, open the **marketplaces** tab, select `faker-kit`, and choose **enable auto-update**. to update once by hand, run `claude plugin update pstack@faker-kit`.
+
 claude code prefixes plugin commands and agents, so `/faker-mode` is `/pstack:faker-mode`. the [claude code adapter](./docs/harness/claude-code.md) maps every other name pstack skills use. in claude code, `/pstack:setup-pstack` writes your model choices to `~/.claude/rules/pstack-models.md`, and a step that needs an editor-only feature, such as bugbot or automations, is skipped with a one-line note.
 
 ## get started
@@ -128,6 +130,7 @@ to keep [`/faker-mode`](./skills/faker-mode/SKILL.md) on across turns, pick it f
 | [`/why`](./skills/why/SKILL.md) | you want to know why something was built this way. discovers available MCPs at run time and queries each evidence category in parallel (source control, issue tracker, long-form docs, real-time chat, infra observability, error tracking, analytics warehouse). |
 | [`/recall`](./skills/recall/SKILL.md) | you're starting or resuming work and want your recent context on a topic rebuilt from your own chat history and the shared record, handed back as a tight current-state brief. |
 | [`/ketchup`](./skills/ketchup/SKILL.md) | you want what changed in this chat since your last message, in plain words and small visuals, with every item waiting on you listed and decidable from the reply alone, even when that makes the reply long. |
+| [`/ketchup-video`](./skills/ketchup-video/SKILL.md) | you want the `/ketchup` catch-up as a short silent video of slides, with the calls waiting on you as text under it. |
 | [`/blast-radius`](./skills/blast-radius/SKILL.md) | you have a small-looking change and want to know what else it could break, with the one fact it's safe because of proven by running code, not asserted. |
 | [`/architect`](./skills/architect/SKILL.md) | you're about to write code that crosses a function boundary and want the caller's usage, types, and module shape settled first. |
 | [`/arena`](./skills/arena/SKILL.md) | you want N parallel attempts at the same thing, then to grab the best parts of each. |
@@ -148,6 +151,7 @@ to keep [`/faker-mode`](./skills/faker-mode/SKILL.md) on across turns, pick it f
 | [`/maintain-verification-skill`](./skills/maintain-verification-skill/SKILL.md) | your verify skill's feature map has drifted from the app. source wave + one live pass, at most one PR of proven corrections. |
 | [`/create-formal-verification-skill`](./skills/create-formal-verification-skill/SKILL.md) | tests can't reach the case that breaks a race, retry, state machine, parser, or unsafe code. verifies one property with the tool that fits and generates a project-local skill to recheck it on every change. |
 | [`/maintain-formal-verification-skill`](./skills/maintain-formal-verification-skill/SKILL.md) | code your formal verification covers has changed since it was last checked. updates the model, harness, or properties to match the code, reruns, and says whether each failure is drift in the verification or a bug in the code. |
+| [`/statechart`](./skills/statechart/SKILL.md) | someone who owns the behavior needs to see it, not read a spec. draws what the user sees as a mermaid statechart generated from a tla+ model, marks each state works, still wrong, or fixed by your open pr, and draws each bug tlc finds as a numbered path. also turns an agreed chart into a tla+ skeleton, or audits the code against an existing spec. |
 | [`/unslop`](./skills/unslop/SKILL.md) | you're cleaning up writing. removes AI tells. |
 | [`/bro`](./skills/bro/SKILL.md) | you want the last message restated in plain human language, no jargon. |
 | [`/technical-writing`](./skills/technical-writing/SKILL.md) | layered doc standard (Diátaxis + Google developer style + STE + Global English) for docs, RFCs, readmes, PR descriptions, commit messages. |

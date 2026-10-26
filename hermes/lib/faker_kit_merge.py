@@ -9,6 +9,7 @@ import re
 import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 WINDOW_SECONDS = 3600
@@ -17,6 +18,10 @@ REVIEWER = "claude[bot]"
 SECURITY_CHECK = "security-review"
 SECURITY_JOB = "security"
 REVIEW_WORKFLOW = ".github/workflows/claude-review.yml"
+KIT_CHECKS_WORKFLOW = ".github/workflows/faker-kit-checks.yml"
+NOT_CI_WORKFLOWS = (REVIEW_WORKFLOW, KIT_CHECKS_WORKFLOW)
+WORKFLOW_FOLDER = ".github/workflows/"
+BASE_CHANGE_EVENTS = ("base_ref_changed", "automatic_base_change_succeeded", "automatic_base_change_failed")
 STICKY_FAILURES = ("failure", "timed_out")
 OWNER_ONLY_PATHS = (
     ".github/workflows/",
@@ -53,6 +58,12 @@ class Evidence:
     security_jobs: list[dict] | None = field(default=None)
     head_pulls: list[dict] | None = field(default=None)
     head_jobs: list[dict] | None = field(default=None)
+    head_runs: list[dict] | None = field(default=None)
+    head_ref: str = ""
+    branch_pulls: list[dict] | None = field(default=None)
+    timeline: list[dict] | None = field(default=None)
+    opened: str = ""
+    workflows_match: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,7 +90,58 @@ def is_bot(review: dict) -> bool:
     return (review.get("user") or {}).get("type") == "Bot"
 
 
-def checks_problem(check_runs: list[dict], statuses: list[dict]) -> str | None:
+def workflow_path(run: dict) -> str:
+    return str(run.get("path") or "").split("@")[0]
+
+
+def instant(text: object) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else None
+
+
+def from_repo(run: dict, repo: str) -> bool:
+    return str((run.get("head_repository") or {}).get("full_name") or "").lower() == repo.lower()
+
+
+def run_for_pull(run: dict, pr: int, default: str, ref: str, repo: str, opened: str) -> bool:
+    attached = run.get("pull_requests")
+    pulls = attached if isinstance(attached, list) else []
+    pinned = any(isinstance(p, dict) and p.get("number") == pr and (p.get("base") or {}).get("ref") == default for p in pulls)
+    started, created = instant(run.get("created_at")), instant(opened)
+    return (bool(ref) and run.get("head_branch") == ref and pinned and from_repo(run, repo)
+            and started is not None and created is not None and started >= created)
+
+
+def ci_run_counts(run: dict, head: str, repo: str, pr: int, default: str, ref: str, opened: str, workflows_match: bool) -> bool:
+    event = run.get("event")
+    return (isinstance(run.get("check_suite_id"), int) and run.get("head_sha") == head
+            and str((run.get("repository") or {}).get("full_name") or "").lower() == repo.lower()
+            and workflow_path(run).startswith(WORKFLOW_FOLDER) and workflow_path(run) not in NOT_CI_WORKFLOWS
+            and from_repo(run, repo)
+            and ((event == "push" and workflows_match) or (event == "pull_request" and run_for_pull(run, pr, default, ref, repo, opened))))
+
+
+def ci_suites(head_runs: list[dict], head: str, repo: str, pr: int, default: str, ref: str, opened: str, workflows_match: bool) -> set[int]:
+    return {run["check_suite_id"] for run in head_runs if ci_run_counts(run, head, repo, pr, default, ref, opened, workflows_match)}
+
+
+def ci_missing(check_runs: list[dict], head_runs: list[dict] | None, head: str, repo: str, pr: int, default: str, ref: str, opened: str, workflows_match: bool) -> str | None:
+    if head_runs is None:
+        return "the workflow runs on this head could not be read"
+    suites = ci_suites(head_runs, head, repo, pr, default, ref, opened, workflows_match)
+    if any((run.get("check_suite") or {}).get("id") in suites and run.get("status") == "completed"
+           and str(run.get("conclusion") or "").lower() == "success" for run in check_runs):
+        return None
+    hint = "" if workflows_match else f"; the branch's workflows differ from {default}; rebase onto {default}"
+    return (f"no check run of a push or pull_request run of a CI workflow from this branch of {repo}, started after #{pr} opened against {default}, succeeded on the head "
+            f"({REVIEW_WORKFLOW} and {KIT_CHECKS_WORKFLOW} do not count); "
+            "the repository needs GitHub Actions CI that builds and tests every pull request" + hint)
+
+
+def checks_problem(check_runs: list[dict], statuses: list[dict], head_runs: list[dict] | None, head: str, repo: str, pr: int, default: str, ref: str, opened: str, workflows_match: bool) -> str | None:
     failed = pending = 0
     statuses = [s for s in statuses if s.get("context") != SECURITY_CHECK]
     for run in check_runs:
@@ -92,10 +154,10 @@ def checks_problem(check_runs: list[dict], statuses: list[dict]) -> str | None:
         pending += state == "pending"
         failed += state not in ("success", "pending")
     if not check_runs and not statuses:
-        return "GitHub reports no checks on the head"
+        return "GitHub reports no checks on the head; the repository needs GitHub Actions CI that builds and tests every pull request"
     if failed or pending:
         return f"checks have not all passed ({failed} failed, {pending} pending)"
-    return None
+    return ci_missing(check_runs, head_runs, head, repo, pr, default, ref, opened, workflows_match)
 
 
 def security_status(statuses: list[dict]) -> dict | None:
@@ -112,7 +174,7 @@ def security_run_id(statuses: list[dict], repo: str) -> int | None:
     return int(found.group(1)) if found else None
 
 
-def security_problem(statuses: list[dict], run: dict | None, jobs: list[dict] | None, head: str, repo: str, pr: int, default: str) -> str | None:
+def security_problem(statuses: list[dict], run: dict | None, jobs: list[dict] | None, head: str, repo: str, pr: int, default: str, ref: str, opened: str) -> str | None:
     status = security_status(statuses)
     if status is None:
         return f"{SECURITY_CHECK} has not reported on the head"
@@ -121,13 +183,12 @@ def security_problem(statuses: list[dict], run: dict | None, jobs: list[dict] | 
     run_id = security_run_id(statuses, repo)
     if run_id is None:
         return f"the {SECURITY_CHECK} status does not point at a run of this repository's review workflow"
-    workflow = str((run or {}).get("path") or "").split("@")[0]
+    workflow = workflow_path(run or {})
     run_repo = str(((run or {}).get("repository") or {}).get("full_name") or "").lower()
     if run is None or run.get("id") != run_id or workflow != REVIEW_WORKFLOW or run.get("head_sha") != head or run.get("event") != "pull_request" or run_repo != repo.lower():
         return f"the {SECURITY_CHECK} status does not come from a {REVIEW_WORKFLOW} run on this head"
-    attached = [p for p in run.get("pull_requests") or [] if isinstance(p, dict)]
-    if not any(p.get("number") == pr and (p.get("base") or {}).get("ref") == default for p in attached):
-        return f"the {SECURITY_CHECK} run was not a run for #{pr} against {default}"
+    if not run_for_pull(run, pr, default, ref, repo, opened):
+        return f"the {SECURITY_CHECK} run was not a run for #{pr} from {token(ref)} in {repo} against {default} that started after the pull request opened"
     found = [j for j in jobs or [] if j.get("name") == SECURITY_JOB]
     if len(found) != 1 or found[0].get("run_id") != run_id or found[0].get("head_sha") != head:
         return f"run {run_id} of {REVIEW_WORKFLOW} has no single {SECURITY_JOB} job on this head"
@@ -147,6 +208,20 @@ def head_problem(pulls: list[dict] | None, jobs: list[dict] | None, pr: int, hea
         return f"another open pull request (#{others[0]}) has the same head, so its runs could stand in for #{pr}'s; close it or push a new commit"
     if any(j.get("status") == "completed" and j.get("conclusion") in STICKY_FAILURES for j in jobs):
         return f"a {SECURITY_JOB} job failed on this head, and a failed verdict sticks; push a new commit"
+    return None
+
+
+def base_problem(pulls: list[dict] | None, timeline: list[dict] | None, pr: int, default: str) -> str | None:
+    if pulls is None or timeline is None:
+        return "the pull requests from this branch and this pull request's timeline could not be read"
+    if not any(p.get("number") == pr and (p.get("base") or {}).get("ref") == default for p in pulls):
+        return f"the pull requests from this branch do not include #{pr} against {default}, so the branch query did not match"
+    for pull in sorted(pulls, key=lambda p: int(p["number"]) if isinstance(p.get("number"), int) else 0):
+        base = str((pull.get("base") or {}).get("ref") or "")
+        if base != default:
+            return f"pull request #{pull.get('number')} from this branch targets {token(base)}, not {default}; a run from it could carry another base's workflows; the owner merges it"
+    if any(event.get("event") in BASE_CHANGE_EVENTS for event in timeline):
+        return f"the base of #{pr} was changed after it was opened, so earlier runs may have used another base's workflows; open a fresh pull request"
     return None
 
 
@@ -217,8 +292,10 @@ def requested_changes(reviews: list[dict]) -> int:
 
 
 def decide(pr: int, head: str, evidence: Evidence, repo: str, default: str, window: Window | None, now: float) -> Verdict:
-    problem = (owner_path_problem(evidence.files, evidence.rules) or checks_problem(evidence.check_runs, evidence.statuses)
-               or review_problem(evidence.reviews, head) or security_problem(evidence.statuses, evidence.security_run, evidence.security_jobs, head, repo, pr, default)
+    ref = evidence.head_ref
+    problem = (owner_path_problem(evidence.files, evidence.rules) or base_problem(evidence.branch_pulls, evidence.timeline, pr, default)
+               or checks_problem(evidence.check_runs, evidence.statuses, evidence.head_runs, head, repo, pr, default, ref, evidence.opened, evidence.workflows_match)
+               or review_problem(evidence.reviews, head) or security_problem(evidence.statuses, evidence.security_run, evidence.security_jobs, head, repo, pr, default, ref, evidence.opened)
                or head_problem(evidence.head_pulls, evidence.head_jobs, pr, head))
     if problem:
         return Verdict("refuse", problem)

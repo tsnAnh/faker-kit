@@ -200,7 +200,7 @@ function checkOwnPathReferences() {
   for (const dir of skillDirs(pluginRoot)) {
     const file = path.join(dir, "SKILL.md");
     const text = fs.readFileSync(file, "utf8");
-    for (const match of text.matchAll(/`((?:templates|references|packs)\/[^`\s]+)`/g)) {
+    for (const match of text.matchAll(/`((?:templates|references)\/[^`\s]+)`/g)) {
       const target = match[1].replace(/[<{].*$/, "");
       const bases = [dir, pluginRoot, ...vendoredSkillDirs];
       if (!bases.some((base) => fs.existsSync(path.join(base, target)))) report(rel(file), `\`${match[1]}\` does not exist`);

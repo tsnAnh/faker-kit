@@ -14,7 +14,7 @@ In the repository, on a new branch:
 /setup-faker-kit
 ```
 
-It writes AGENTS.md (with one `scripts/check.sh` that runs everything CI runs), installs the lint pack for each stack it detects with a baseline so only new violations fail, adds the Claude PR review workflow, and links project skills. It opens one pull request. Details: [Set up a repository](../how-to/set-up-a-repo.md).
+It writes AGENTS.md (with the repository's own build, test, and lint commands), adds the Claude PR review workflow, and links project skills. It adds no check script or lint configuration, and one CI step that checks the kit's links and vendored copy. It opens one pull request. Details: [Set up a repository](../how-to/set-up-a-repo.md).
 
 ## 3. Build a verification skill (20 minutes, then ongoing)
 

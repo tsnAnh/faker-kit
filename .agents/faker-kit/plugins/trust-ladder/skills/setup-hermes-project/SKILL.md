@@ -112,11 +112,11 @@ The repository must work for unattended cloud agents:
 
 - The kit is vendored at `kit_ref`: `.agents/faker-kit/KIT.json` names that commit, and `python3 .agents/faker-kit/vendor_kit.py --check .` passes. Cloud sessions get the kit's skills only from this copy. If it is missing or names another commit, stop: the owner vendors it first (the bootstrap bot's `faker-kit vendor --project <project>`), because this session cannot fetch the kit. Never edit `.agents/faker-kit/`.
 - `setup-faker-kit` is done.
-- `setup-cloud-agents` is done: `scripts/check.sh` exists, runs the vendored kit's `--check`, and passes in a fresh cloud session.
-- CI runs `scripts/check.sh` on every pull request.
-- With several apps, `scripts/check.sh` and CI check only the apps a change touches (a workspace tool's affected-only run, or path filters), so a web change does not wait for the mobile build. The top trust layer needs `check` under 15 minutes.
+- `setup-cloud-agents` is done: the build and test commands in AGENTS.md pass in a fresh cloud session.
+- The repository's own CI is GitHub Actions: a workflow other than `.github/workflows/claude-review.yml` and `.github/workflows/faker-kit-checks.yml` (that one only checks the kit) that runs its build and test commands on every pull request, triggered by `push` or `pull_request` (`faker-kit merge` counts only those runs, for the pull request's own head). Filter by path at job level (a change-detection job or per-job conditions), never in the workflow's `on.pull_request.paths`, and keep at least one job that always runs: a workflow-level path filter leaves a docs-only pull request with no CI run, and `faker-kit merge` refuses it. If the repository has none, stop: `faker-kit merge` refuses every pull request of a repository whose only checks are the review workflow's, so the project bot could never land work. The owner adds CI that builds and tests every pull request first; add no check runner of your own.
+- With several apps, CI checks only the apps a change touches (a workspace tool's affected-only run, or job-level path filters, per the CI rule above), so a web change does not wait for the mobile build. The top trust layer needs CI under 15 minutes.
 
-If one is missing, do that skill or change now, on the same branch, so the one pull request carries it. If it cannot be done from here (a CI secret, for example), do the rest and list what is left under "Owner to do" in the pull request.
+If `setup-faker-kit` or `setup-cloud-agents` is not done, do that skill now, on the same branch, so the one pull request carries it. If something else cannot be done from here (a CI secret, for example), do the rest and list what is left under "Owner to do" in the pull request. The vendored kit and the build-and-test CI are the exceptions: stop on those, as above.
 
 ### R2. Describe the layout in `AGENTS.md`
 
@@ -153,7 +153,7 @@ One branch, such as `faker-kit/setup-dispatch`, and one pull request to the defa
 
 - the values used, and the `max_in_flight` the owner gave,
 - every file it adds or changes,
-- the CI check name that runs `scripts/check.sh`, which the owner may make required in the repository's settings,
+- the names of the repository's CI checks, which the owner may make required in the repository's settings,
 - "Owner to do", for anything this session could not do.
 
-Run `scripts/check.sh` before you push, and put its result in the pull request. Report the pull request link, the CI check name, the `/check-agent-compatibility` result, and the "Owner to do" list.
+Run the build, test, and lint commands from AGENTS.md before you push, and put their result in the pull request. Report the pull request link, the CI check names, the `/check-agent-compatibility` result, and the "Owner to do" list.

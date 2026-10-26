@@ -1,6 +1,6 @@
 {
   "repo": "https://github.com/cursor/plugins.git",
-  "ref": "88d47514b82e7c44f00f2b2a72ff6dd12158038c",
+  "ref": "99b609a72323b70204eab407c622f436e858e112",
   "manifestDir": ".cursor-plugin",
   "plugins": [
     "pstack",
