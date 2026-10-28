@@ -15,7 +15,7 @@ The pstack, team-workflows, thermos, advisor, continual-learning, agent-compatib
 | Automations, Grok Bot (overrides the adapter's skip row) | Hermes cron and webhook jobs, which run while the gateway runs |
 | Bugbot, agentic security review (overrides the adapter's Bugbot row) | The Claude GitHub review app, set up with `setup-faker-kit` (Review bots) |
 
-When you spawn `faker-agent`, start the prompt with `/faker-mode`. The `faker-mode` skill is `disable-model-invocation`, so the subagent cannot load it through the Skill tool; a user-style command is what runs it. Any prompt that hands work to a coding agent, such as the cloud session `faker-kit launch` starts for a Hermes project bot, always starts with `/faker-mode`.
+Spawn `faker-agent` with the task brief and the absolute path of the `faker-mode` skill's `SKILL.md`; it reads that file itself, so the prompt does not need to start with `/faker-mode`. The cloud session `faker-kit launch` starts for a Hermes project bot is a top-level session, so its brief still starts with `/faker-mode`.
 
 ### Models
 
