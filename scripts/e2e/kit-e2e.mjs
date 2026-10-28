@@ -136,10 +136,10 @@ step("the hook refuses an unknown event", () => {
   return { ok: done.status === 1 && done.stderr.includes('unknown event "pre-commit"'), observed: { status: done.status, stderr: done.stderr.trim() } };
 });
 
-step("faker-agent and the compat block tell agents to run /faker-mode as a command", () => {
+step("faker-agent reads the faker-mode SKILL.md itself and nothing requires a /faker-mode prompt prefix", () => {
   const agent = read(KIT, "plugins", "pstack", "agents", "faker-agent.md");
   const compat = read(TRUST_LADDER, "references", "compat.md");
-  return { ok: agent.includes("`/faker-mode`") && compat.includes("`/faker-mode`"), observed: null };
+  return { ok: agent.includes("`SKILL.md` in full") && !agent.includes("run `/faker-mode`") && !compat.includes("start the prompt with `/faker-mode`"), observed: null };
 });
 
 step("link-skills.sh refuses to replace a real skill directory and reports the conflict", () => {

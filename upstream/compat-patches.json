@@ -2,15 +2,6 @@
   "$comment": "Frontmatter-only edits that a vendored file needs to load or be invoked in Claude Code. Same shape as model-map.json.",
   "rules": [
     {
-      "id": "claude-faker-agent-invoke-skill-disable-model-invocation",
-      "files": [
-        "harness/pstack/claude-code/agents/poteto-agent.md"
-      ],
-      "from": "Read the `poteto-mode` skill's `SKILL.md` in full before doing any work, including its inline Principles index.",
-      "to": "The `faker-mode` skill is `disable-model-invocation`, so the Skill tool refuses it. Your first action is to run `/faker-mode` as a user-style command, then read the `faker-mode` skill's `SKILL.md` in full before doing any work, including its inline Principles index.",
-      "count": 1
-    },
-    {
       "id": "claude-faker-agent-plugin-search",
       "files": [
         "harness/pstack/claude-code/agents/poteto-agent.md"
