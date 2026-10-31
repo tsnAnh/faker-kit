@@ -11,6 +11,7 @@ import os
 import platform
 import plistlib
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -20,6 +21,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import gate_scenario
 import guard_scenario
 import tooling_scenario
 
@@ -392,14 +394,18 @@ elif args[:1] == ["cron"]:
             print(f"  {job['id']} [{'active' if job['enabled'] else 'paused'}]")
             print(f"    Name:      {job['name']}")
             print(f"    Schedule:  {job.get('schedule', '')}")
+            if job.get("script"):
+                print(f"    Script:    {job['script']}")
     elif args[1] == "create":
         jobs.append({"id": f"job-{len(jobs)}", "name": option("--name"), "schedule": args[2], "prompt": args[3], "skill": option("--skill"),
-                     "deliver": option("--deliver"), "enabled": "--paused" not in args})
+                     "deliver": option("--deliver"), "script": option("--script"), "enabled": "--paused" not in args})
     elif args[1] in ("edit", "pause", "resume"):
         job = next(j for j in jobs if j["id"] == args[2])
         if args[1] == "edit":
             job["schedule"] = option("--schedule") or job["schedule"]
             job["prompt"] = option("--prompt") or job["prompt"]
+            if "--script" in args:
+                job["script"] = option("--script") or None
         else:
             job["enabled"] = args[1] == "resume"
     jobs_path.write_text(json.dumps(jobs, sort_keys=True))
@@ -1416,6 +1422,18 @@ def install_scenario(run: Run, work: Path) -> None:
 
     env = {**run.env(), "HOME": str(home), "FAKER_KIT_HOME": str(state)}
     env.pop("HERMES_HOME", None)
+    gate_bin = work / "gate-bin"
+    gate_bin.mkdir()
+    gate_gh = gate_bin / "gh"
+    gate_gh.write_text("\n".join([
+        "#!/bin/sh",
+        f"printf '%s\\n%s\\n' \"$HOME\" \"$PATH\" > {shlex.quote(str(gate_bin / 'env.log'))}",
+        f"export E2E_GH_STATE={shlex.quote(env['E2E_GH_STATE'])} E2E_GH_LOG={shlex.quote(env['E2E_GH_LOG'])}",
+        f'exec {shlex.quote(str(run.bin / "gh"))} "$@"',
+        "",
+    ]))
+    gate_gh.chmod(0o755)
+    env["PATH"] = f"{gate_bin}:{env['PATH']}"
     services = faker_kit.Services(home, platform.system())
 
     def install() -> subprocess.CompletedProcess[str]:
@@ -1488,6 +1506,7 @@ def install_scenario(run: Run, work: Path) -> None:
     before = tree(hermes)
     again = install()
     run.step("running install.sh again changes nothing", again.returncode == 0 and tree(hermes) == before, (again.stdout + again.stderr).strip()[-200:])
+    gate_scenario.gate_scenario(run, hermes, BOT, install, env, work)
     launched = subprocess.run([str(hermes / "bin" / "faker-kit"), "andon", "show"], env={**env, "HERMES_HOME": str(hermes / "profiles" / BOOTSTRAP)}, capture_output=True, text=True)
     run.step("the installed wrapper runs the command and sees the machine cord",
              launched.returncode == 0 and json.loads(launched.stdout)["reason"] == "cloud bill spike", launched.stdout.strip() or launched.stderr.strip())

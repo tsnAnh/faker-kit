@@ -326,13 +326,15 @@ class Kit:
             store.put(pr, None)
         return {"pr": pr, "merged": True, "head": head, "method": MERGE_METHOD}
 
-    def incidents(self, bot: Bot, ack: str | None) -> dict:
+    def incidents(self, bot: Bot, ack: str | None, last: bool) -> dict:
         try:
             env = parse_env_file(self.root / "profiles" / bot.name / ".env")
         except EnvFileError as err:
             raise Refused(str(err)) from None
         watch = Watch(Gh(self.home, bot.name, str(bot.repo), self.run), IncidentStore(self.home, bot.name), self.policy().alert_hosts, env, SECRET_SHAPES,
                       self.fetch_api, self.fetch_url, self.now)
+        if last:
+            return watch.last()
         return watch.acknowledge(ack) if ack else watch.run()
 
     def issues(self, bot: Bot, claim: int | None) -> dict:
@@ -753,7 +755,9 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("issues")
     cmd.add_argument("--claim", type=int)
     cmd = sub.add_parser("incidents")
-    cmd.add_argument("--ack")
+    mode = cmd.add_mutually_exclusive_group()
+    mode.add_argument("--ack")
+    mode.add_argument("--last", action="store_true")
     cmd = sub.add_parser("handoff")
     cmd.add_argument("--project", required=True)
     cmd.add_argument("--part", required=True)
@@ -817,7 +821,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     if args.command == "incidents":
         if caller is None or caller.role != "project":
             raise Refused("incidents runs in a project bot's chat or job")
-        return kit.incidents(caller, args.ack)
+        return kit.incidents(caller, args.ack, args.last)
     if args.command in ("handoff", "loop"):
         if caller is None or caller.role != "chief":
             raise Refused(f"{args.command} runs in the chief of staff's chat or job")

@@ -16,7 +16,7 @@ Code keeps only what the model cannot talk past:
 
 The andon cord and "a separate agent verified it" are instructions in the skills. The cord is a local record plus an open `agent:andon` issue per repository; the briefs tell cloud agents to check for it before every push.
 
-Each project bot has four agent jobs, all running the `dispatch` skill and delivering to the bot's chat: `faker-kit-babysit` (woken by pull request, review, and check events, hourly fallback), `faker-kit-security` (woken by a push to the default branch, six-hourly fallback; launches a `review-main-security` session on the new commits), `faker-kit-incidents` (every 10 minutes; runs `faker-kit incidents` and launches `triage-incident` for each new incident), and `faker-kit-issues` (woken when a collaborator adds the `faker:fix` label to an issue, hourly fallback; launches one session from `templates/fix-issue-brief.md` per listed issue).
+Each project bot has four agent jobs, all running the `dispatch` skill and delivering to the bot's chat: `faker-kit-babysit` (woken by pull request, review, and check events, hourly fallback), `faker-kit-security` (woken by a push to the default branch, six-hourly fallback; launches a `review-main-security` session on the new commits), `faker-kit-incidents` (every 10 minutes; a gate script runs `faker-kit incidents` and wakes the agent only when something is new, resolved, or unreadable, which then launches `triage-incident` for each new incident), and `faker-kit-issues` (woken when a collaborator adds the `faker:fix` label to an issue, hourly fallback; launches one session from `templates/fix-issue-brief.md` per listed issue).
 
 ## The command
 

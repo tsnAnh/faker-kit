@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import re
+import time
 from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -257,11 +258,23 @@ class Watch:
         secrets = alert_secrets(conf.sources, self.env)
         with self.store.locked():
             data = self.store.read()
-            report = advance(data, observed, unreadable, head, self.now())
+            clock = self.now()
+            ran_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock))
+            report = advance(data, observed, unreadable, head, clock)
             said = {key: problem for key, problem in unreadable.items() if data["problems"].get(key) != problem}
             data["problems"] = unreadable
+            stop = conf.andon_on_red and MAIN_KEY in data["open"]
+            out = {"ran_at": ran_at, "branch": default, "new": report.new, "resolved": report.resolved, "open": len(data["open"]),
+                   "unreadable": [{"source": key, "problem": problem} for key, problem in sorted(said.items())], "stop_the_line": stop}
+            redacted: dict = json.loads(redact(json.dumps(out), secrets, self.shapes))
+            if report.new or report.resolved or said:
+                data["last"] = redacted
             self.store.write(data)
-        stop = conf.andon_on_red and MAIN_KEY in data["open"]
-        out = {"branch": default, "new": report.new, "resolved": report.resolved, "open": len(data["open"]),
-               "unreadable": [{"source": key, "problem": problem} for key, problem in sorted(said.items())], "stop_the_line": stop}
-        return json.loads(redact(json.dumps(out), secrets, self.shapes))
+        return redacted
+
+    def last(self) -> dict:
+        with self.store.locked():
+            last = self.store.read().get("last")
+        if not isinstance(last, dict):
+            raise Refused("no incidents report is stored yet; the next incidents run stores one")
+        return last
