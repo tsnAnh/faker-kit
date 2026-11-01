@@ -11,7 +11,7 @@ from pathlib import Path
 from faker_kit_env import CLAUDE_CONFIG_DIR, parse_env_file, set_env
 from faker_kit_gh import Refused
 from faker_kit_machine import SUBSCRIPTION_PROVIDER
-from install_config import InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, mapping, profile_home, value_at
+from install_config import KIT_GATE_SCRIPT, InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, mapping, profile_home, value_at
 
 PLUGIN = "faker_kit_guard"
 KIT_SKILL_DIRS = ("skills", "external_dirs")
@@ -20,6 +20,7 @@ SUBSCRIPTION_PLUGIN = "claude-subscription-directsdk"
 SUBSCRIPTION_MIN_CLI = (2, 1, 284)
 SUBSCRIPTION_DEFAULT_MODEL = "sonnet"
 PLUGIN_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
+KIT_OWNED_MARK = "\nKIT_OWNED = True\n"
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
 SCHEDULE_FIELDS = {"faker-kit-babysit": "heartbeat_every", "faker-kit-incidents": "incidents_every", "faker-kit-security": "security_every",
                    "faker-kit-issues": "heartbeat_every"}
@@ -130,24 +131,52 @@ class Profiles:
 
     def ensure_jobs(self, bot: str, spec: str, intervals: dict[str, str], slack_channel: str | None, enabled: bool) -> list[str]:
         existing = cron_jobs(hermes("-p", bot, "cron", "list", "--all"))
+        jobs = cron_spec(self.pkg / "cron" / spec, bot)
+        scripts = {job["name"]: self.job_script(bot, job["script"]) for job in jobs if job["script"]}
         created = []
-        for job in cron_spec(self.pkg / "cron" / spec, bot):
+        for job in jobs:
             schedule = f"every {intervals[SCHEDULE_FIELDS[job['name']]]}" if intervals else job["schedule"]
             deliver = f"{job['deliver']},slack:{slack_channel}" if slack_channel else job["deliver"]
             current = existing.get(job["name"])
+            script_args = ["--script", self.write_job_script(*scripts[job["name"]])] if job["script"] else []
             if current is None:
                 args = ["-p", bot, "cron", "create", schedule, job["prompt"], "--name", job["name"], "--deliver", deliver, "--continuity"]
                 if job["skill"]:
                     args += ["--skill", job["skill"]]
+                args += script_args
                 if not enabled:
                     args += ["--paused", "--paused-reason", JOBS_PAUSED_REASON]
                 hermes(*args)
                 created.append(job["name"])
                 continue
-            hermes("-p", bot, "cron", "edit", current["id"], "--schedule", schedule, "--prompt", job["prompt"])
+            if not job["script"] and KIT_GATE_SCRIPT.match(Path(str(current.get("script") or "")).name):
+                script_args = ["--script", ""]
+            hermes("-p", bot, "cron", "edit", current["id"], "--schedule", schedule, "--prompt", job["prompt"], *script_args)
             if enabled and not current["enabled"]:
                 hermes("-p", bot, "cron", "resume", current["id"])
         return created
+
+    def job_script(self, bot: str, name: str) -> tuple[Path, str]:
+        source = self.pkg / "cron" / "scripts" / name
+        if not source.is_file():
+            raise InstallError(f"cron script {name} is not in the kit at {source}")
+        text = source.read_text()
+        for placeholder, value in (("@WRAPPER@", str(self.root / "bin" / "faker-kit")), ("@HERMES_HOME@", str(self.home(bot))),
+                                   ("@PATH@", os.environ.get("PATH", ""))):
+            text = text.replace(f'"{placeholder}"', json.dumps(value))
+        target = self.home(bot) / "scripts" / name
+        if target.is_symlink() or (target.exists() and not target.is_file()) or (target.is_file() and KIT_OWNED_MARK.encode() not in target.read_bytes()):
+            raise Refused(f"{target} was not written by the kit; move it aside, then run the install again")
+        return target, text
+
+    def write_job_script(self, target: Path, text: str) -> str:
+        if not target.is_file() or target.read_text() != text:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
+            temp.write_text(text)
+            temp.chmod(0o600)
+            temp.replace(target)
+        return target.name
 
     def kit_skills(self, profiles: list[str], plugins_dir: Path, wanted: list[str]) -> list[str]:
         plugins = plugins_dir.resolve()

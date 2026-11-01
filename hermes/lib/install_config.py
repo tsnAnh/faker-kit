@@ -120,6 +120,7 @@ def cron_jobs(text: str) -> dict[str, dict]:
 
 
 JOB_NAME = re.compile(r"\Afaker-kit-[a-z][a-z0-9-]*\Z")
+KIT_GATE_SCRIPT = re.compile(r"\Afaker-kit-[a-z0-9-]+-gate\.py\Z")
 
 
 def cron_spec(source: Path, bot: str) -> list[dict]:
@@ -130,12 +131,15 @@ def cron_spec(source: Path, bot: str) -> list[dict]:
             raise InstallError(f"cron job name {name!r} must look like faker-kit-<word>")
 
         def field(key: str, optional: bool = False, block: str = block, name: str = name) -> str | None:
-            match = re.search(rf"^{key}: `([^`]+)`", block, re.M)
+            match = re.search(rf"^{key}: `(.+)`[ \t]*$", block, re.M)
             if match is None:
                 if optional:
                     return None
                 raise InstallError(f"missing cron {key} field for {name}")
             return match.group(1).replace("{bot}", bot)
 
-        out.append({"name": name, "schedule": field("Schedule"), "deliver": field("Deliver"), "prompt": field("Prompt"), "skill": field("Skill", optional=True)})
+        script = field("Script", optional=True)
+        if script is not None and not KIT_GATE_SCRIPT.match(script):
+            raise InstallError(f"cron Script {script!r} for {name} must be a bare file name like faker-kit-<word>-gate.py")
+        out.append({"name": name, "schedule": field("Schedule"), "deliver": field("Deliver"), "prompt": field("Prompt"), "skill": field("Skill", optional=True), "script": script})
     return out
