@@ -111,9 +111,12 @@ class Host:
                 else:
                     os.environ[key] = value
 
+    def shown(self, args: dict) -> str:
+        return json.dumps(args, sort_keys=True, ensure_ascii=False).replace(str(self.root), "<run>")[:160]
+
     def tool(self, tool: str, args: dict, profile: str = "meo-beo", session: str = "s0", turn: str = "t1", label: str = "") -> dict | None:
         verdict = self.call("pre_tool_call", profile, tool_name=tool, args=args, session_id=session, turn_id=turn)
-        self.record({"case": label, "profile": profile, "tool": tool, "input": text_of(args), "verdict": action(verdict)})
+        self.record({"case": label, "profile": profile, "tool": tool, "input": self.shown(args), "verdict": action(verdict)})
         assert verdict is None or isinstance(verdict, dict)
         return verdict
 
@@ -122,7 +125,7 @@ class Host:
 
     def result(self, tool: str, args: dict, text: str, profile: str = "meo-beo", session: str = "s0", turn: str = "t1") -> str | None:
         out = self.call("transform_tool_result", profile, tool_name=tool, args=args, result=text, session_id=session, turn_id=turn)
-        self.record({"case": "result", "profile": profile, "tool": tool, "input": text_of(args), "verdict": "wrapped" if out else "plain"})
+        self.record({"case": "result", "profile": profile, "tool": tool, "input": self.shown(args), "verdict": "wrapped" if out else "plain"})
         assert out is None or isinstance(out, str)
         return out
 
@@ -287,6 +290,93 @@ def taint_flow(host: Host) -> None:
         if (host.merge_verdict(chat, "t1") == "block") is not untrusted:
             wrong.append(f"{tool} {text_of(args)}")
     host.step("guard: any result strangers could have written taints the turn, and a faker-kit result does not", not wrong, f"{len(table)} results" if not wrong else wrong[0])
+
+
+LOCAL_READ_TRUSTED = (
+    "faker-kit status", "cd x && faker-kit status", "cd ~/src/x && faker-kit status 2>/dev/null | tail -n 5", "faker-kit status 2>&1 | head -50",
+    "faker-kit status | grep open", "faker-kit status | grep -i 'needs review'", "faker-kit status | head -n 20 | wc -l", "faker-kit status > /dev/null 2>&1",
+    "~/.hermes/bin/faker-kit status | jq .state", "faker-kit status | jq -r '.prs[0].title'", "faker-kit status --json", "faker-kit issues", "pwd", "date +%s", "date; pwd",
+    "faker-kit status || ~/.hermes/bin/faker-kit status", "~/.hermes/bin/faker-kit status; ~/.hermes/bin/faker-kit issues", "faker-kit loop\nfaker-kit status --all",
+    "faker-kit launch --brief-file ~/.hermes/faker-kit/briefs/meo-beo/security-1.md --effort medium", "faker-kit status && faker-kit merge --pr 33",
+)
+LOCAL_READ_UNTRUSTED = (
+    "cat x", "head -5 /tmp/x", "faker-kit status | head -5 /tmp/x", "grep foo /tmp/x", "faker-kit incidents", "faker-kit incidents | head", "gh pr view 1 | head",
+    "ls", "ls; cat x", "echo hi", "echo $(pwd)", "echo `date`", "echo $(cat /tmp/x)", 'echo "$(cat /tmp/x)"', "head < /tmp/x", "head <<< hi", "cat<x",
+    "git status", "git branch", "git -C repo rev-parse HEAD", "git status -v", "git branch -vv", "git log", "git diff",
+    "bash -c 'faker-kit status | head -3'", "fish -C 'cat F' -c true", "xargs -a /etc/hosts echo", "faker-kit status | xargs head", "./faker-kit status",
+    "faker-kit status | sed p", "faker-kit status | sed 's/a/b/' | wc -l", "faker-kit status | cut -d, -f1", "faker-kit status | sort", "faker-kit status | tail -n +2 /tmp/x",
+    "faker-kit status | grep -r foo", "faker-kit status | grep -f patterns", "faker-kit status | grep --directories=recurse X", "faker-kit status | grep -e foo /tmp/x",
+    "faker-kit status | rg --files", "faker-kit status | jq -n env", "faker-kit status | jq '$ENV'", "faker-kit status | jq -f prog", "faker-kit status | jq .a[0]",
+    "faker-kit status | head 5", "faker-kit status | head '>' /etc/hosts", "faker-kit status | head \\> F", "ls a#b; cat /etc/hosts", "faker-kit status a#b; cat /etc/hosts",
+    "faker-kit status # x", "faker-kit -- incidents", "faker-kit --json incidents", "faker-kit incidents=1", "PATH=/tmp faker-kit status", "GIT_DIR=x git status",
+    "x=1", "faker-kit status --x=$(cat /tmp/x)", "faker-kit status *", "faker-kit status\ncat /tmp/x", "cd $(cat x) && faker-kit status", "date -f /tmp/x",
+    "faker-kit status | sort --compress-program=sh", "faker-kit status; cat /tmp/x", "faker-kit status || faker-kit incidents", "faker-kit status && git status", "faker-kit status;\nls",
+    "faker-kit status >(cat /tmp/x)", "faker-kit status | grep -re.", "faker-kit status | grep '-re.'", "faker-kit status | grep -v -rle=",
+    "cd x && faker-kit status | grep -re. | head -n 50", "faker-kit status | grep -rf.netrc", "diff a b", "bash script.sh", "FOO=$(cat x) faker-kit status",
+)
+
+
+def local_reads(host: Host) -> None:
+    host.policy(ask=False)
+    host.skills(False)
+    own = host.team / "briefs" / "meo-beo"
+    other = host.team / "briefs" / "sep-crm"
+    kit = host.team / "kit" / "hermes" / "skills"
+    outside = host.root / "outside"
+    for folder in (own, other, kit, outside):
+        folder.mkdir(parents=True, exist_ok=True)
+    for file in (own / "t_1.md", other / "t_1.md", kit / "SKILL.md", outside / "x"):
+        file.write_text("text")
+    (kit / "escape").unlink(missing_ok=True)
+    (kit / "escape").symlink_to(outside / "x")
+    paths = {
+        "read_file": [(str(kit / "SKILL.md"), True), (str(kit / "x" / ".." / "SKILL.md"), True), (str(own / "t_1.md"), False), (str(other / "t_1.md"), False),
+                      (str(outside / "x"), False), (str(kit / "escape"), False),
+                      (str(host.team / "kit" / ".git" / "FETCH_HEAD"), False), (str(kit / ".." / ".." / ".." / "briefs" / "meo-beo" / "t_1.md"), False),
+                      ("hermes/skills/SKILL.md", False), ("", False)],
+        "search_files": [(str(kit), True), (str(own), False), (str(other), False), (str(outside), False), (str(host.team), False)],
+    }
+    cases = [(tool, {"path": path, "pattern": "x"}, trusted) for tool, rows in paths.items() for path, trusted in rows]
+    cases += [("terminal", {"command": c}, True) for c in LOCAL_READ_TRUSTED] + [("terminal", {"command": c}, False) for c in LOCAL_READ_UNTRUSTED]
+    wrong = []
+    for tool, args, trusted in cases:
+        chat = host.sid()
+        out = host.result(tool, args, "text", session=chat)
+        merge = host.merge_verdict(chat, "t1")
+        if (out is None) is not trusted or merge != ("allow" if trusted else "block"):
+            wrong.append(f"{tool} {host.shown(args)[:90]} -> {'plain' if out is None else 'wrapped'}, merge {merge}")
+    host.step("guard: reading the kit and the exact faker-kit status shapes leave a turn clean for faker-kit merge, and anything else, the bot's own briefs included, taints it",
+              not wrong, f"{len(cases)} reads" if not wrong else wrong[0])
+
+
+def policy_unreadable(host: Host) -> None:
+    host.skills(False)
+    host.policy(ask=False)
+    project = host.root / "project"
+    project.mkdir(exist_ok=True)
+    host.policy(guard="not: [valid")
+    chat = host.sid()
+    reads = [host.tool(t, a, session=chat, label="policy unreadable") for t, a in (
+        ("read_file", {"path": str(project / "src.py")}), ("search_files", {"path": str(project), "pattern": "x"}), ("skill_view", {"name": "dispatch"}),
+        ("skills_list", {}), ("session_search", {"query": "x"}), ("clarify", {}), ("todo_list", {}))]
+    secret = [host.tool(t, a, session=chat, label="policy unreadable") for t, a in (
+        ("read_file", {"path": "~/.ssh/id_rsa"}), ("search_files", {"path": "~", "pattern": "x"}), ("read_file", {"path": "~/.hermes/.env"}))]
+    commands = [host.terminal("faker-kit status", session=chat, label="policy unreadable"), host.tool("write_file", {"path": str(project / "a")}, session=chat, label="policy unreadable"),
+                host.tool("execute_code", {"code": "print(1)"}, session=chat, label="policy unreadable")]
+    host.step("guard: when the policy cannot be read, read-only tools on ordinary paths still run while secrets, commands, and writes stay blocked",
+              all(v is None for v in reads) and all(blocked(v, "blocked") for v in secret) and all(blocked(v) for v in commands),
+              " ".join(str([action(v) for v in group]) for group in (reads, secret, commands)))
+    tainted = host.sid()
+    out = host.result("read_file", {"path": str(project / "src.py")}, "text", session=tainted)
+    record = host.team / "tainted-turns" / "meo-beo" / tainted
+    recorded = record.exists()
+    after = host.terminal("git status", session=tainted, label="policy unreadable, tainted")
+    host.policy(ask=False)
+    merge = host.merge_verdict(tainted, "t1")
+    host.end(tainted, "t1")
+    host.step("guard: a result read while the policy cannot be read is wrapped and still records the tainted turn without any policy",
+              out is not None and out.startswith("<untrusted") and recorded and "could not record" not in str(after) and merge == "block", f"{recorded} {merge}")
+    host.policy()
 
 
 def custom_rules(host: Host) -> None:
@@ -522,6 +612,8 @@ def guard_scenario(root: Path, step: Step, record: Record) -> None:
     policy_failures(host)
     routed_profile(host)
     taint_flow(host)
+    local_reads(host)
+    policy_unreadable(host)
     custom_rules(host)
     merge_gate(host)
     chief_work(host)
