@@ -36,7 +36,7 @@ It prints one line per open pull request. Your repository is in your profile; re
 | Command | Does |
 |---|---|
 | `faker-kit status` | One line per open pull request: author, draft or ready, mergeable, and where its merge gate stands. Safe to read; it holds no free text |
-| `faker-kit launch --brief-file <path> [--model <m>] [--effort <e>]` | Starts one Claude Code cloud session whose first message is the brief, on the model and effort you chose for the task (see Choose the model). The file must be a `.md` directly in your briefs folder and start with `/faker-mode`. Prints `{repo, session, brief, model, effort}`. Refuses while the andon cord is pulled, when the repository's vendored kit is not this machine's kit, when the brief is over 60,000 characters, or when it looks like it holds a token |
+| `faker-kit launch --brief-file <path> [--model <m>] [--effort <e>]` | Starts one Claude Code cloud session whose first message is the brief, on the model and effort you chose for the task (see Choose the model). The file must be a `.md` directly in your briefs folder and start with `/faker-mode`. Prints `{repo, session, brief, model, effort}`, plus `kit_behind` when the repository's vendored kit is an older commit of this machine's kit. Refuses while the andon cord is pulled, when the repository's vendored kit is neither this machine's kit nor an older commit of it, when the brief is over 60,000 characters, or when it looks like it holds a token |
 | `faker-kit merge --pr <n>` | The merge gate, below. Refuses in a turn that read untrusted text |
 | `faker-kit andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows this project's andon cord |
 | `faker-kit incidents [--ack <key>]` | Polls the default branch's checks, the health URLs, and the alert sources in `.agents/dispatch.json`; prints only incidents not yet acknowledged, those resolved, and sources it could not read. Its output holds third-party alert text, so it taints the turn. `--ack <key>` records that you launched the triage |
@@ -109,7 +109,7 @@ Then launch:
 faker-kit launch --brief-file ~/.hermes/faker-kit/briefs/<bot>/<unit-id>.md --model <model> --effort <effort>
 ```
 
-Record the printed `session` in `units.tsv`. If it refuses, read the message: a pulled andon cord stops every launch until the owner clears it, a vendored kit that differs from this machine's needs the bootstrap bot to run `faker-kit vendor --project <p>` (send it a `message_agent`), and a trust prompt needs the owner to run `cd ~/.hermes/faker-kit/checkouts/<owner>__<repo>/repo && claude` once. A refusal is final for that attempt: never retry around it.
+Record the printed `session` in `units.tsv`. If it refuses, read the message: a pulled andon cord stops every launch until the owner clears it, a vendored kit that is newer than or unrelated to this machine's needs the bootstrap bot to run `faker-kit vendor --project <p>` (send it a `message_agent`), and a trust prompt needs the owner to run `cd ~/.hermes/faker-kit/checkouts/<owner>__<repo>/repo && claude` once. When the launch succeeds and prints `kit_behind`, the session went through on an older vendored kit: note it, and ask the bootstrap bot to run the `next` command when the repository has no open kit pull request. A refusal is final for that attempt: never retry around it.
 
 To steer a running session, send it one message: `claude --cloud <session id> -p` with the message on stdin. Do it to stop it, redirect it, or hand it a review finding. Never put a secret in the message.
 

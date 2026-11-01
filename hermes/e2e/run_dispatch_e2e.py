@@ -48,6 +48,7 @@ SLACK_CHANNEL = "C0123456789"
 SLACK_LINE = f"    slack_channel: {SLACK_CHANNEL}\n"
 BOTS_YAML = f"version: 1\nbots:\n  {BOOTSTRAP}:\n    role: bootstrap\n  {BOT}:\n    role: project\n    project: shop\n    repo: {REPO}\n" + "{slack}"
 REVIEW_PATH = ".github/workflows/claude-review.yml"
+KIT_REPO = "tsnAnh/faker-kit"
 
 
 def sha(letter: str) -> str:
@@ -133,6 +134,11 @@ if args[0] == "api":
         state["merges"].append({"pr": number, "sha": fields["sha"], "method": fields["merge_method"]})
         save()
         print(json.dumps({"merged": True}))
+    elif "/compare/" in route:
+        compare = state.get("compare") or {}
+        if route != f"repos/{compare.get('repo')}/compare/{compare.get('base')}...{compare.get('head')}" or compare.get("status") == "error":
+            fail("gh: Not Found (HTTP 404)")
+        answer({"status": compare["status"]})
     elif method == "POST" and route == prefix + "/actions/runners/generate-jitconfig":
         if state.get("jit_fail"):
             fail("gh: Resource not accessible by integration (HTTP 403)")
@@ -151,6 +157,7 @@ if args[0] == "api":
     elif route.startswith(prefix + "/git/commits/") and method == "GET":
         answer({"tree": {"sha": state["git"]["base_tree"]}})
     elif route.startswith(prefix + "/git/trees/") and method == "GET":
+        read_fails("vendor_listing")
         answer({"tree": state["git"]["tree"], "truncated": False})
     elif route.startswith(prefix + "/git/blobs/"):
         answer({"content": base64.b64encode(state["git"]["blobs"][route.rsplit("/", 1)[-1]].encode()).decode()})
@@ -163,13 +170,19 @@ if args[0] == "api":
         save()
         print(json.dumps({"sha": "posted-commit"}))
     elif method in ("POST", "PATCH") and "/git/refs" in route:
-        state["git"]["refs"][route] = json.loads(sys.stdin.read())
+        body = json.loads(sys.stdin.read())
+        branch = body["ref"][len("refs/heads/"):] if method == "POST" else route[len(prefix + "/git/refs/heads/"):]
+        state["git"]["refs"][branch] = body
         save()
         print("{}")
     elif method == "POST" and route == prefix + "/pulls":
-        state["git"]["posted_pull"] = json.loads(sys.stdin.read())
+        body = json.loads(sys.stdin.read())
+        state["git"]["posted_pull"] = body
+        number = 9 + len(state["git"].setdefault("opened", []))
+        url = f"https://github.com/{state['repo']}/pull/{number}"
+        state["git"]["opened"].append({"number": number, "html_url": url, "title": body["title"], "head": {"ref": body["head"], "repo": {"full_name": state["repo"]}}})
         save()
-        print(json.dumps({"html_url": f"https://github.com/{state['repo']}/pull/9"}))
+        print(json.dumps({"html_url": url}))
     elif route == prefix:
         answer({"default_branch": "main"})
     elif route == prefix + "/commits/main":
@@ -223,7 +236,8 @@ if args[0] == "api":
             own = [] if state.get("branch_query_misses") else [pull_row(p) for p in state["pulls"] if p["branch"] == branch and pull_row(p)["head"]["repo"]["owner"]["login"] == owner]
             answer(own + [p for p in state.get("branch_pulls", []) if p["head"]["ref"] == branch and p["head"].get("owner", state["repo"].split("/")[0]) == owner])
         else:
-            answer([pull_row(p) for p in state["pulls"] if p["state"] == "open"])
+            kit_rows = state["git"].get("opened", []) if "base" in query else []
+            answer([pull_row(p) for p in state["pulls"] if p["state"] == "open"] + kit_rows)
     elif route.startswith(prefix + "/issues/") and route.endswith("/timeline") and method == "GET":
         read_fails("timeline")
         answer(state.get("timelines", {}).get(route.split("/")[-2], []))
@@ -476,6 +490,7 @@ class Run:
         (self.team / "guard.yaml").write_text(guard)
         (self.team / "bots.yaml").write_text(
             BOTS_YAML.format(slack=SLACK_LINE))
+        (self.team / "kit-repo").write_text(KIT_REPO + "\n")
         kit = self.team / "kit"
         kit.mkdir()
         for argv in (["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "kit"]):
@@ -618,6 +633,8 @@ def launch_scenario(run: Run) -> None:
     code, out, err = run.kit("launch", "--brief-file", str(good))
     session = json.loads(out).get("session", "") if code == 0 else ""
     run.step("launch starts a cloud session from the brief", code == 0 and session.startswith("https://claude.ai/code/session_"), out.strip() or err.strip())
+    run.step("a vendored kit equal to the machine's kit launches with no kit_behind and no compare call",
+             code == 0 and "kit_behind" not in json.loads(out) and "/compare/" not in run.gh_log.read_text(), out.strip())
     calls = [json.loads(line) for line in run.claude_log.read_text().splitlines()]
     first = calls[-1]["argv"][1]
     run.step("the brief is the session's first message and carries the andon stop rule",
@@ -665,6 +682,56 @@ def launch_scenario(run: Run) -> None:
     cleared = run.kit("andon", "clear")
     run.step("clearing the cord lets work run again", cleared[0] == 0 and json.loads(cleared[1])["stopped"] is False, cleared[1].strip())
     run.update_gh(lambda state: (state["check_runs"].clear(), state["statuses"].clear(), state["reviews"].clear()))
+    kit_behind_scenario(run, good)
+
+
+def kit_behind_scenario(run: Run, brief: Path) -> None:
+    older = "1" * 40
+
+    def vendored(kit_ref: str, status: str | None = None) -> None:
+        def change(state: dict) -> None:
+            state["files"][".agents/faker-kit/KIT.json"] = json.dumps({"kit_ref": kit_ref})
+            state.pop("compare", None)
+            if status:
+                state["compare"] = {"repo": KIT_REPO, "base": kit_ref, "head": run.kit_ref, "status": status}
+        run.update_gh(change)
+
+    def compares() -> int:
+        return run.gh_log.read_text().count("/compare/")
+
+    launches = len(run.claude_log.read_text().splitlines())
+    vendored(older, "ahead")
+    asked = compares()
+    code, out, err = run.kit("launch", "--brief-file", str(brief))
+    behind = json.loads(out).get("kit_behind") if code == 0 else None
+    run.step("a vendored kit that is an ancestor of the machine's kit launches and reports kit_behind with the vendor command",
+             behind == {"vendored": older[:12], "machine": run.kit_ref[:12], "next": "faker-kit vendor --project shop"}
+             and len(run.claude_log.read_text().splitlines()) == launches + 1 and compares() == asked + 1, out.strip() or err.strip())
+    compare_call = [json.loads(line) for line in run.gh_log.read_text().splitlines() if "/compare/" in line][-1]
+    run.step("the ancestry check asks the kit's own repository to compare the vendored commit with the machine's",
+             any(arg.startswith(f"repos/{KIT_REPO}/compare/{older}...{run.kit_ref}") for arg in compare_call), " ".join(compare_call))
+    refusals = (("compare says behind", older, "behind", True), ("compare says diverged", older, "diverged", True), ("compare API errors", older, "error", True),
+                ("compare says identical", older, "identical", True), ("the vendored ref is not a sha", "not-a-sha", "ahead", False))
+    for name, kit_ref, status, asks in refusals:
+        vendored(kit_ref, status)
+        before = compares()
+        code, _, err = run.kit("launch", "--brief-file", str(brief))
+        run.step(f"launch refuses with today's message when {name}",
+                 code == 1 and f"the vendored kit {kit_ref[:12]} differs from this machine's kit {run.kit_ref[:12]}; run faker-kit vendor --project <project>" in err
+                 and len(run.claude_log.read_text().splitlines()) == launches + 1 and compares() == before + (1 if asks else 0), err.strip())
+    vendored(older, "ahead")
+    record = run.team / "kit-repo"
+    record.unlink()
+    before = compares()
+    code, _, err = run.kit("launch", "--brief-file", str(brief))
+    run.step("launch refuses an older vendored kit when no kit repository is recorded, without asking GitHub",
+             code == 1 and "differs from this machine's kit" in err and compares() == before and len(run.claude_log.read_text().splitlines()) == launches + 1, err.strip())
+    record.write_text("../etc/passwd\n")
+    code, _, err = run.kit("launch", "--brief-file", str(brief))
+    run.step("launch refuses an older vendored kit when the recorded kit repository is not OWNER/REPO",
+             code == 1 and "differs from this machine's kit" in err and compares() == before, err.strip())
+    record.write_text(KIT_REPO + "\n")
+    vendored(run.kit_ref)
 
 
 def webhook_scenario(run: Run) -> None:
@@ -949,7 +1016,8 @@ def merge_scenario(run: Run) -> None:
     run.step("a security job that succeeded on the head lets every gate pass", code == 0 and "has not started" in line, line or err.strip())
     for path, previous in ((".github/workflows/ci.yml", None), (".agents/dispatch.json", None), ("hermes/plugin/faker_kit_guard/policy.py", None), ("infra/main.tf", None),
                            ("billing/charge.py", None), ("deps/yarn.lock", None), ("web/sub/infra/main.tf", None),
-                           ("Hermes/plugin/Faker_Kit_Guard/policy.py", None), (".GitHub/Workflows/ci.yml", None), ("docs/ok.md", "infra/old.tf")):
+                           ("Hermes/plugin/Faker_Kit_Guard/policy.py", None), (".GitHub/Workflows/ci.yml", None), ("docs/ok.md", "infra/old.tf"),
+                           (".agents/faker-kit/KIT.json", None), (".agents/faker-kit/plugins/pstack/skills/x/SKILL.md", None)):
         entry = {"filename": path, **({"previous_filename": previous} if previous else {})}
         run.update_gh(lambda state, entry=entry: state["pull_files"].__setitem__("1", [{"filename": "README.md"}, entry]))
         result = run.merge(1)
@@ -1376,7 +1444,8 @@ def kit_source(work: Path) -> tuple[Path, str]:
     (source / "plugins" / "pstack" / "skills" / "faker-mode" / "SKILL.md").write_text("# faker-mode\n")
     scripts = source / "plugins" / "trust-ladder" / "skills" / "setup-cloud-agents" / "scripts"
     scripts.mkdir(parents=True)
-    shutil.copy2(KIT / "plugins" / "trust-ladder" / "skills" / "setup-cloud-agents" / "scripts" / "install-kit-skills.sh", scripts)
+    for script in ("install-kit-skills.sh", "vendor_kit.py"):
+        shutil.copy2(KIT / "plugins" / "trust-ladder" / "skills" / "setup-cloud-agents" / "scripts" / script, scripts)
     git = ["git", "-C", str(source), "-c", "user.name=t", "-c", "user.email=t@t"]
     for argv in (["init", "-q"], ["config", "uploadpack.allowAnySHA1InWant", "true"], ["add", "."], ["commit", "-qm", "kit"]):
         subprocess.run([*git, *argv], check=True, capture_output=True)
@@ -1439,13 +1508,26 @@ def install_scenario(run: Run, work: Path) -> None:
     env["PATH"] = f"{hermes_bin}:{gate_bin}:{env['PATH']}"
     services = faker_kit.Services(home, platform.system())
 
-    def install() -> subprocess.CompletedProcess[str]:
-        return subprocess.run(["bash", str(source / "hermes" / "install.sh"), "--ref", ref, "--source", str(source), "--no-gateway"],
-                              env=env, capture_output=True, text=True, timeout=300)
+    def install(*flags: str, source_url: str | None = None, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["bash", str(source / "hermes" / "install.sh"), "--ref", ref, "--source", source_url or str(source), "--no-gateway", *flags],
+                              env={**env, **(extra_env or {})}, capture_output=True, text=True, timeout=300)
+
+    def vendor_calls() -> int:
+        return run.gh_log.read_text().count("/git/trees/")
 
     done = install()
     new = state
     run.step("install.sh succeeds on a machine with a faker-kit tree", done.returncode == 0, (done.stdout + done.stderr).strip()[-300:])
+    opened = run.gh_now()["git"].get("opened", [])
+    short = ref[:12]
+    pr_line = f"vendored kit for shop: https://github.com/{REPO}/pull/9"
+    run.step("install.sh opens one vendor pull request per project bot and prints it",
+             len(opened) == 1 and opened[0]["title"] == f"chore(agents): vendor the kit {short}" and opened[0]["head"]["ref"] == f"faker-kit/kit-{short}"
+             and done.stdout.count("vendored kit for ") == 1 and pr_line in done.stdout.splitlines() and "warning" not in done.stderr,
+             done.stdout.strip()[-300:])
+    run.step("install.sh's closing line says older vendored kits still launch and points at the pull requests",
+             done.stdout.splitlines()[-1].startswith("Repositories on an older vendored kit still launch and report kit_behind; merge the vendor pull requests above"),
+             done.stdout.splitlines()[-1])
     run.step("install.sh keeps the briefs, checkouts, cords, and policy it did not write",
              (new / "briefs" / BOT / "typo.md").read_text().startswith("/faker-mode")
              and (new / "briefs" / BOT / "orchestrate" / "shop" / "units.tsv").exists() and (new / "checkouts" / "acme__shop" / "repo" / "marker").exists()
@@ -1509,6 +1591,36 @@ def install_scenario(run: Run, work: Path) -> None:
     before = tree(hermes)
     again = install()
     run.step("running install.sh again changes nothing", again.returncode == 0 and tree(hermes) == before, (again.stdout + again.stderr).strip()[-200:])
+    run.step("a second install.sh run opens no second vendor pull request and prints the first",
+             len(run.gh_now()["git"]["opened"]) == 1 and pr_line in again.stdout.splitlines() and "warning" not in again.stderr, again.stdout.strip()[-200:])
+    run.update_gh(lambda state: state.update({"fail_reads": ["vendor_listing"]}))
+    failed = install()
+    run.update_gh(lambda state: state.pop("fail_reads"))
+    warnings = [line for line in failed.stderr.splitlines() if "warning" in line]
+    run.step("a failing vendor call prints one warning line and install.sh still exits 0 and finishes",
+             failed.returncode == 0 and len(warnings) == 1 and "faker-kit vendor --project shop failed" in warnings[0] and "vendored kit for " not in failed.stdout
+             and "faker-kit Hermes module installed" in failed.stdout and len(run.gh_now()["git"]["opened"]) == 1, failed.stderr.strip()[-300:])
+    calls = vendor_calls()
+    skipped = install("--no-vendor")
+    run.step("install.sh --no-vendor skips the vendor step and says how to vendor by hand",
+             skipped.returncode == 0 and vendor_calls() == calls and "vendored kit for " not in skipped.stdout
+             and "run faker-kit vendor --project <project> for each" in skipped.stdout.splitlines()[-1], skipped.stdout.strip()[-200:])
+    helped = subprocess.run(["bash", str(source / "hermes" / "install.sh"), "--help"], env=env, capture_output=True, text=True)
+    run.step("install.sh --help documents --no-vendor", "--no-vendor" in helped.stdout, "--help")
+    redirect = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": f"url.{source}.insteadOf", "GIT_CONFIG_VALUE_0": "https://github.com/acme/faker-kit.git"}
+    github = install("--no-vendor", source_url="https://github.com/acme/faker-kit.git", extra_env=redirect)
+    recorded = (state / "kit-repo").read_text() if (state / "kit-repo").exists() else None
+    local = install("--no-vendor")
+    run.step("install.sh records a GitHub source's OWNER/REPO for the launch check and clears it for a local source",
+             github.returncode == 0 and recorded == "acme/faker-kit\n" and local.returncode == 0 and not (state / "kit-repo").exists(),
+             (github.stderr + local.stderr).strip()[-200:] or repr(recorded))
+    install("--no-vendor", source_url="https://github.com/acme/faker-kit.git", extra_env=redirect)
+    bare_install = subprocess.run([str(hermes / "bin" / "faker-kit"), "install"], env=env, capture_output=True, text=True, timeout=300)
+    kept = (state / "kit-repo").exists()
+    strict = install("--no-vendor", "--require-current-kit", source_url="https://github.com/acme/faker-kit.git", extra_env=redirect)
+    run.step("faker-kit install without --source keeps the recorded kit repository, and install.sh --require-current-kit clears it so only the exact kit launches",
+             bare_install.returncode == 0 and kept and strict.returncode == 0 and not (state / "kit-repo").exists() and "--require-current-kit" in helped.stdout,
+             (bare_install.stderr + strict.stderr).strip()[-200:] or str(kept))
     launcher = hermes_bin / "faker-kit"
     run.step("install.sh links faker-kit next to the hermes executable and reruns leave the link and the output alone",
              launcher.is_symlink() and launcher.readlink() == hermes / "bin" / "faker-kit" and "warning" not in done.stderr + again.stderr,

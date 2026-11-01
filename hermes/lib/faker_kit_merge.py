@@ -28,8 +28,7 @@ OWNER_ONLY_PATHS = (
     ".agents/dispatch.json",
     "hermes/plugin/faker_kit_guard/",
     "hermes/templates/guard.yaml",
-    ".agents/faker-kit/hermes/plugin/faker_kit_guard/",
-    ".agents/faker-kit/hermes/templates/guard.yaml",
+    ".agents/faker-kit/",
 )
 GLOB_CHARS = "*?["
 MAX_LISTED_FILES = 3000

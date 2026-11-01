@@ -58,6 +58,8 @@ from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slo
 from install_config import InstallError, config_set, hermes_send
 
 VENDOR_MANIFEST = ".agents/faker-kit/KIT.json"
+KIT_REPO_FILE = "kit-repo"
+GITHUB_SOURCE = re.compile(r"\A(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)([^/\s]+/[^/\s]+?)(?:\.git)?/?\Z")
 KIT_BRANCH_PREFIX = "faker-kit/kit-"
 BRIEF_START = "/faker-mode"
 MAX_BRIEF_CHARS = 60_000
@@ -80,7 +82,7 @@ ROLE_COMMANDS = {
     "bootstrap": {"add-project", "vendor", "launch", "status", "andon"},
     "chief": {"status", "handoff", "loop"},
 }
-OWNER_ONLY = {"install", "runner"}
+OWNER_ONLY = {"install", "runner", "projects"}
 ANDON_COLOR = "b60205"
 ANDON_DESCRIPTION = "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"
 SCHEDULE_DEFAULTS = {"heartbeat_every": DEFAULT_HEARTBEAT_EVERY, "incidents_every": DEFAULT_INCIDENTS_EVERY, "security_every": DEFAULT_SECURITY_EVERY}
@@ -104,6 +106,15 @@ def check_repo(value: str) -> None:
 def check_interval(value: str | None, what: str) -> None:
     if value is not None and not INTERVAL.match(value):
         raise Refused(f"{what} must be a positive interval like 10m or 1h")
+
+
+def real_repo(slug: str) -> str | None:
+    return slug if REPO.match(slug) and not any(set(part) == {"."} for part in slug.split("/")) else None
+
+
+def github_slug(source: str | None) -> str | None:
+    found = GITHUB_SOURCE.match(source or "")
+    return real_repo(found.group(1)) if found else None
 
 
 def slugify(text: str) -> str:
@@ -223,7 +234,7 @@ class Kit:
         if SECRET_SHAPES.search(text):
             raise Refused("the brief looks like it holds a token or key; a session's first message is a process argument, so no secret goes in it")
         repo = str(target.repo)
-        self.kit_matches(Gh(self.home, target.name, repo, self.run), repo)
+        behind = self.kit_matches(target)
         cord = self.cord(target.name)
         if cord:
             raise Refused(f"{cord.describe()}; nothing starts until it is cleared")
@@ -239,16 +250,48 @@ class Kit:
             session = self.cloud.start(repo, prompt, workdir, model, effort)
         except CloudError as err:
             raise Refused(f"launch failed: {err}") from err
-        return {"repo": repo, "session": session, "brief": digest, "model": model, "effort": effort}
+        return {"repo": repo, "session": session, "brief": digest, "model": model, "effort": effort, **({"kit_behind": behind} if behind else {})}
 
-    def kit_matches(self, gh: Gh, repo: str) -> None:
+    def record_kit_source(self, source: str | None, require_current: bool = False) -> None:
+        path = self.home / KIT_REPO_FILE
+        if source is None and not require_current:
+            return
+        slug = None if require_current else github_slug(source)
+        if slug is None:
+            path.unlink(missing_ok=True)
+            return
+        tmp = path.with_name(f".{KIT_REPO_FILE}.{os.getpid()}")
+        tmp.write_text(slug + "\n")
+        tmp.chmod(0o600)
+        tmp.replace(path)
+
+    def kit_repo(self) -> str | None:
+        try:
+            return real_repo((self.home / KIT_REPO_FILE).read_text().strip())
+        except OSError:
+            return None
+
+    def vendored_is_older(self, bot: str, vendored: object, local: str) -> bool:
+        kit_repo = self.kit_repo()
+        if kit_repo is None or not isinstance(vendored, str) or not SHA.match(vendored) or not SHA.match(local):
+            return False
+        try:
+            return Gh(self.home, bot, kit_repo, self.run).json(f"repos/{kit_repo}/compare/{vendored}...{local}?per_page=1").get("status") == "ahead"
+        except (Refused, ValueError):
+            return False
+
+    def kit_matches(self, target: Bot) -> dict | None:
+        repo = str(target.repo)
         local = self.kit_commit()
         try:
-            vendored = json.loads(base64.b64decode(gh.json(f"repos/{repo}/contents/{VENDOR_MANIFEST}")["content"])).get("kit_ref")
+            vendored = json.loads(base64.b64decode(Gh(self.home, target.name, repo, self.run).json(f"repos/{repo}/contents/{VENDOR_MANIFEST}")["content"])).get("kit_ref")
         except (Refused, ValueError, KeyError, TypeError, AttributeError):
             raise Refused(f"{repo} has no vendored kit, so cloud sessions would start without its skills; run faker-kit vendor --project <project>") from None
-        if vendored != local:
-            raise Refused(f"the vendored kit {str(vendored)[:12]} differs from this machine's kit {local[:12]}; run faker-kit vendor --project <project>")
+        if vendored == local:
+            return None
+        if self.vendored_is_older(target.name, vendored, local):
+            return {"vendored": str(vendored)[:12], "machine": local[:12], "next": f"faker-kit vendor --project {target.project}"}
+        raise Refused(f"the vendored kit {str(vendored)[:12]} differs from this machine's kit {local[:12]}; run faker-kit vendor --project <project>")
 
     def evidence(self, gh: Gh, pr: int, head: str, default: str, pull: dict) -> Evidence:
         head_info = pull.get("head") or {}
@@ -638,7 +681,11 @@ class Kit:
         if not kept.exists() or kept.read_text() != text:
             self.write_private(kept, text)
 
-    def install(self, config: Path | None, bootstrap: str | None, model: str | None, subscription: bool, provider: str | None = None) -> dict:
+    def project_names(self) -> list[str]:
+        return sorted(self.policy().projects())
+
+    def install(self, config: Path | None, bootstrap: str | None, model: str | None, subscription: bool, provider: str | None = None,
+                source: str | None = None, require_current: bool = False) -> dict:
         machine = load_machine(config) if config else None
         wanted = self.kit_skill_dirs(machine) if machine else []
         use_subscription = subscription or bool(machine and machine.claude_subscription)
@@ -656,6 +703,7 @@ class Kit:
         if machine:
             self.write_guard(edit_guard((self.home / "guard.yaml").read_text(), machine))
         config_dir = self.profiles.claude_login() if use_subscription else None
+        self.record_kit_source(source, require_current)
         data = self.bots_file()
         for name, role in ((bootstrap, "bootstrap"), (machine.chief if machine else None, "chief")):
             if name:
@@ -731,6 +779,9 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--model")
     cmd.add_argument("--provider")
     cmd.add_argument("--claude-subscription", action="store_true")
+    cmd.add_argument("--source")
+    cmd.add_argument("--require-current-kit", action="store_true")
+    cmd = sub.add_parser("projects")
     cmd = sub.add_parser("add-project")
     cmd.add_argument("repo")
     cmd.add_argument("--bot")
@@ -802,7 +853,9 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     if args.command == "status":
         return kit.status(caller, args.all)
     if args.command == "install":
-        return kit.install(args.config, args.bootstrap_bot, args.model, args.claude_subscription, args.provider)
+        return kit.install(args.config, args.bootstrap_bot, args.model, args.claude_subscription, args.provider, args.source, args.require_current_kit)
+    if args.command == "projects":
+        return kit.project_names()
     if args.command == "add-project":
         intervals = {key: getattr(args, key) for key in SCHEDULE_DEFAULTS}
         return kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider)
