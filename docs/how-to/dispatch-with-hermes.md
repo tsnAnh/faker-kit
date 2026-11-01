@@ -28,7 +28,7 @@ Bots on this machine talk to each other with Hermes Bot Mode's `message_agent`. 
 A unit has no GitHub issue and no label. The brief is the cloud session's first message, and the pull request is the only GitHub artifact.
 
 1. You state the work in the project bot's Bot Chat. It reads the repository's `AGENTS.md`, restates the units, and asks you to confirm (unless `ask_owner` is false).
-2. For each unit it writes a brief file (the first line is `/faker-mode`) and runs `faker-kit launch --brief-file <path>`. That starts a Claude Code cloud session from the project's kept launch checkout with the brief as its first message. The launch refuses while the andon cord is pulled or the repository's vendored kit is not this machine's.
+2. For each unit it writes a brief file (the first line is `/faker-mode`) and runs `faker-kit launch --brief-file <path>`. That starts a Claude Code cloud session from the project's kept launch checkout with the brief as its first message. The launch refuses while the andon cord is pulled or the repository's vendored kit is neither this machine's nor an older commit of it. On an older one it launches and reports `kit_behind`.
 3. The session works on a branch, proves the change on the real artifact, and opens a pull request.
 4. On every pull request, review, or check event (a webhook, with an hourly heartbeat as the fallback) the bot wakes and babysits: conflicts, review threads, red CI.
 5. A green pull request is verified by a separate cloud session that did not write it. This is an instruction in the bot's skill, not a code gate.
@@ -162,7 +162,8 @@ Then add the project bot in Bot Mode and ask it for one small change, such as a 
 ## Troubleshooting
 
 - **Every tool call is blocked.** `~/.hermes/faker-kit/guard.yaml` or `bots.yaml` is missing or does not parse. The block message names the problem.
-- **"kit commit ... differs from this machine's kit".** Ask the bootstrap bot to run `faker-kit vendor --project <project>` and merge its pull request.
+- **"the vendored kit ... differs from this machine's kit".** The repository's vendored kit is newer than or unrelated to this machine's, or this machine was installed with `--require-current-kit`. Ask the bootstrap bot to run `faker-kit vendor --project <project>` and merge its pull request.
+- **A launch prints `kit_behind`.** The session started on an older vendored kit. Merge the vendor pull request `install.sh` opened, or ask the bootstrap bot to run the `next` command it names.
 - **A cloud session says the kit's skills did not load.** Run `python3 .agents/faker-kit/vendor_kit.py --check .` in a clone, then vendor again.
 - **Nothing launches.** The andon cord is pulled. Ask the bot that pulled it to clear it.
 - **`faker-kit merge` refuses.** The message names the gate: checks, review, `Risk`, security status, window, conflict, fork, andon, or an untrusted read in the turn. `faker-kit status` shows each pull request's gate.

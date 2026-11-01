@@ -66,7 +66,7 @@ With `webhooks` in the machine config, GitHub calls the machine when a pull requ
 
 ## How cloud agents get the kit
 
-A cloud session starts from a clone of the repository and cannot fetch the kit. `faker-kit vendor` copies the kit at this machine's commit into the repository's `.agents/faker-kit/` in a pull request. A project bot refuses to launch in a repository whose vendored kit is not this machine's. To move to a new kit commit, rerun `install.sh --ref <commit>`, then ask the bootstrap bot to run `faker-kit vendor` for each project, and merge each pull request.
+A cloud session starts from a clone of the repository and cannot fetch the kit. `faker-kit vendor` copies the kit at this machine's commit into the repository's `.agents/faker-kit/` in a pull request. A project bot launches in a repository whose vendored kit is this machine's commit or an older commit of the same kit, and then reports `kit_behind`; it refuses a newer or unrelated one. To move to a new kit commit, rerun `install.sh --ref <commit>`: it opens a vendor pull request for each project, and you merge each one. `install.sh --require-current-kit` brings back the exact-match rule, for pulling a broken kit out of every repository.
 
 ## Review workflow
 
