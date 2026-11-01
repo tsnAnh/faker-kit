@@ -33,9 +33,11 @@ It writes, under ~/.hermes:
   faker-kit/guard.yaml      the policy, written once from hermes/templates/guard.yaml
   faker-kit/bots.yaml       each bot's role, project, and repository; only faker-kit writes it
   bin/faker-kit             the one command every bot and the owner run
+  faker-kit                 a symlink to it next to the hermes executable, which is on every bot terminal's PATH
   profiles/<bot>/           for each bot in bots.yaml: SOUL.md, config, the guard plugin, its skill
 
-It stops before changing anything if a file it did not write is at one of the bin/ paths.
+It stops before changing anything if a file it did not write is at one of the bin/ paths. A file it did not
+write next to the hermes executable is left alone with a warning.
 USAGE
 }
 
@@ -129,6 +131,34 @@ printf '#!/usr/bin/env bash\nexport FAKER_KIT_HOME=%s\npy=%s\n[ -x "$py" ] || py
   "$(shell_quote "$kit_home")" "$(shell_quote "$py")" "$(shell_quote "$pkg/bin/faker_kit.py")" > "$path.tmp.$$"
 chmod 755 "$path.tmp.$$"
 mv -f "$path.tmp.$$" "$path"
+
+link_on_hermes_path() {
+  local hermes_bin dir link home_dir
+  hermes_bin=$(command -v hermes)
+  case $hermes_bin in /*) ;; *) return 0 ;; esac
+  dir=$(CDPATH='' cd -- "$(dirname -- "$hermes_bin")" 2>/dev/null && pwd -P) || return 0
+  home_dir=$(CDPATH='' cd -- "$HOME" 2>/dev/null && pwd -P) || return 0
+  link=$dir/faker-kit
+  [ "$link" != "$(CDPATH='' cd -- "$(dirname -- "$path")" 2>/dev/null && pwd -P)/faker-kit" ] || return 0
+  case $dir/ in
+    "$home_dir"/*) ;;
+    *) printf 'install.sh: warning: %s is outside your home folder; not linking faker-kit there, so bots may not find it on their terminal PATH\n' "$dir" >&2
+       return 0 ;;
+  esac
+  if [ -L "$link" ] && [ "$(readlink "$link")" = "$path" ]; then
+    return 0
+  fi
+  if [ -L "$link" ] && [ ! -e "$link" ] && case $(readlink "$link") in */.hermes/bin/faker-kit) true ;; *) false ;; esac; then
+    rm -f "$link"
+  fi
+  if [ -e "$link" ] || [ -L "$link" ]; then
+    printf 'install.sh: warning: %s exists and is not the faker-kit launcher link; bots may not find faker-kit on their terminal PATH\n' "$link" >&2
+    return 0
+  fi
+  ln -s "$path" "$link" 2>/dev/null \
+    || printf 'install.sh: warning: cannot write %s; bots may not find faker-kit on their terminal PATH\n' "$dir" >&2
+}
+link_on_hermes_path
 
 export FAKER_KIT_HOME=$kit_home
 unset HERMES_HOME

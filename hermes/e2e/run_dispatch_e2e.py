@@ -1433,7 +1433,10 @@ def install_scenario(run: Run, work: Path) -> None:
         "",
     ]))
     gate_gh.chmod(0o755)
-    env["PATH"] = f"{gate_bin}:{env['PATH']}"
+    hermes_bin = home / "hermes-bin"
+    hermes_bin.mkdir()
+    shutil.copy2(run.bin / "hermes", hermes_bin / "hermes")
+    env["PATH"] = f"{hermes_bin}:{gate_bin}:{env['PATH']}"
     services = faker_kit.Services(home, platform.system())
 
     def install() -> subprocess.CompletedProcess[str]:
@@ -1506,6 +1509,40 @@ def install_scenario(run: Run, work: Path) -> None:
     before = tree(hermes)
     again = install()
     run.step("running install.sh again changes nothing", again.returncode == 0 and tree(hermes) == before, (again.stdout + again.stderr).strip()[-200:])
+    launcher = hermes_bin / "faker-kit"
+    run.step("install.sh links faker-kit next to the hermes executable and reruns leave the link and the output alone",
+             launcher.is_symlink() and launcher.readlink() == hermes / "bin" / "faker-kit" and "warning" not in done.stderr + again.stderr,
+             str(launcher.readlink()) if launcher.is_symlink() else "no link")
+    bare = subprocess.run(["faker-kit", "andon", "show"], env={**env, "PATH": f"{hermes_bin}:/usr/bin:/bin", "HERMES_HOME": str(hermes / "profiles" / BOOTSTRAP)}, capture_output=True, text=True)
+    run.step("a terminal whose PATH holds only the hermes executable's folder runs faker-kit by its bare name",
+             bare.returncode == 0 and json.loads(bare.stdout)["reason"] == "cloud bill spike", bare.stdout.strip() or bare.stderr.strip())
+    foreign_bin = home / "foreign-bin"
+    foreign_bin.mkdir()
+    shutil.copy2(run.bin / "hermes", foreign_bin / "hermes")
+    (foreign_bin / "faker-kit").write_text("#!/bin/sh\necho mine\n")
+    kept = subprocess.run(["bash", str(source / "hermes" / "install.sh"), "--ref", ref, "--source", str(source), "--no-gateway"],
+                          env={**env, "PATH": f"{foreign_bin}:{env['PATH']}"}, capture_output=True, text=True, timeout=300)
+    run.step("install.sh leaves a faker-kit file it did not write next to the hermes executable and warns once",
+             kept.returncode == 0 and not (foreign_bin / "faker-kit").is_symlink() and (foreign_bin / "faker-kit").read_text() == "#!/bin/sh\necho mine\n"
+             and kept.stderr.count("warning") == 1 and "not the faker-kit launcher link" in kept.stderr, kept.stderr.strip()[-200:])
+    locked_bin = home / "locked-bin"
+    locked_bin.mkdir()
+    shutil.copy2(run.bin / "hermes", locked_bin / "hermes")
+    locked_bin.chmod(0o555)
+    try:
+        locked = subprocess.run(["bash", str(source / "hermes" / "install.sh"), "--ref", ref, "--source", str(source), "--no-gateway"],
+                                env={**env, "PATH": f"{locked_bin}:{env['PATH']}"}, capture_output=True, text=True, timeout=300)
+    finally:
+        locked_bin.chmod(0o755)
+    run.step("install.sh warns and carries on when the hermes executable's folder is not writable",
+             locked.returncode == 0 and (os.geteuid() == 0 or ("cannot write" in locked.stderr and not (locked_bin / "faker-kit").exists())), locked.stderr.strip()[-200:] if os.geteuid() else "root")
+    shared_bin = work / "shared-bin"
+    shared_bin.mkdir()
+    shutil.copy2(run.bin / "hermes", shared_bin / "hermes")
+    shared = subprocess.run(["bash", str(source / "hermes" / "install.sh"), "--ref", ref, "--source", str(source), "--no-gateway"],
+                            env={**env, "PATH": f"{shared_bin}:{env['PATH']}"}, capture_output=True, text=True, timeout=300)
+    run.step("install.sh never links faker-kit into a folder outside the home folder, and says so",
+             shared.returncode == 0 and not (shared_bin / "faker-kit").exists() and "outside your home folder" in shared.stderr, shared.stderr.strip()[-200:])
     gate_scenario.gate_scenario(run, hermes, BOT, install, env, work)
     launched = subprocess.run([str(hermes / "bin" / "faker-kit"), "andon", "show"], env={**env, "HERMES_HOME": str(hermes / "profiles" / BOOTSTRAP)}, capture_output=True, text=True)
     run.step("the installed wrapper runs the command and sees the machine cord",

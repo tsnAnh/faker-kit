@@ -302,7 +302,10 @@ def parse_policy(data: object, bots: object = None, home: Path | None = None) ->
 
 
 def _yaml(path: Path, missing_ok: bool) -> object:
-    import yaml  # noqa: PLC0415
+    try:
+        import yaml  # noqa: PLC0415
+    except ImportError as err:
+        raise PolicyError("the Python running Hermes has no yaml module") from err
 
     try:
         return yaml.safe_load(path.read_text())
@@ -949,15 +952,43 @@ def call_digest(args: dict) -> str:
     return hashlib.sha256(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
+PLAIN_PATH = r"(?:~/)?[A-Za-z0-9_./-]+"
+FAKER_KIT_LAUNCHER = rf"(?:faker-kit|~/\.hermes/bin/faker-kit|{re.escape(str(Path.home()))}/\.hermes/bin/faker-kit)"
+TRUSTED_FILTER = (
+    r"head(?: +-n *[0-9]+| +-[0-9]+)?|tail(?: +-n *\+?[0-9]+| +-[0-9]+)?|wc +-l"
+    r"|grep(?: +-[icvE]+)? +(?:[A-Za-z0-9_.:=][A-Za-z0-9_.:=-]*|'[A-Za-z0-9 _.:=/][A-Za-z0-9 _.:=/-]*')"
+    r"|jq(?: +-[rc]+)? +(?:\.[A-Za-z0-9_.]*|'\.[A-Za-z0-9_.\[\]]*')"
+)
+TRUSTED_STEP = (
+    rf"(?:pwd|date(?: +-u)?(?: +\+[A-Za-z%:_-]+)?"
+    rf"|{FAKER_KIT_LAUNCHER} +(?!incidents(?![A-Za-z0-9_.=:,+~-]))[a-z][a-z-]*(?: +[A-Za-z0-9_./=:,+~-]+)*"
+    rf"(?: +(?:2>&1|2> */dev/null|> */dev/null))*(?: *\| *(?:{TRUSTED_FILTER}))*)"
+)
+TRUSTED_COMMAND = re.compile(rf"\A(?:cd +{PLAIN_PATH} +&& +)?{TRUSTED_STEP}(?: *(?:\|\||&&|;|\n) *{TRUSTED_STEP})*\Z")
+
+
+def kit_file(policy: Policy, args: dict) -> bool:
+    raw = str(args.get("path") or "")
+    if not raw or not Path(raw).expanduser().is_absolute():
+        return False
+    try:
+        target = Path(raw).expanduser().resolve()
+        kit = (policy.home / "kit").resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return (target == kit or kit in target.parents) and ".git" not in target.relative_to(kit).parts
+
+
 def reader_source(policy: Policy, tool_name: str, args: dict) -> str | None:
     segments = command_segments(str(args.get("command", "")))
     source = f"{tool_name}:{segments[0][:120]}" if segments else tool_name
     if any(rule.matches(tool_name, args) for rule in policy.untrusted_readers):
         return source
     if tool_name in ("terminal", "process_manage"):
-        commands = shell_commands(str(args.get("command", "")), keep_path=True)
-        trusted = commands and all(faker_kit_program(w[0]) and w[1:2] != ["incidents"] for w in commands)
-        return None if trusted else source
+        command = str(args.get("command", "")).strip()
+        return None if len(command) <= MAX_COMMAND_CHARS and TRUSTED_COMMAND.match(command) else source
+    if tool_name in ("read_file", "search_files"):
+        return None if kit_file(policy, args) else source
     return None if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in TRUSTED_RESULTS) else source
 
 

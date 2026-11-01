@@ -14,13 +14,26 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from .policy import Policy, PolicyError, block, decide, load_policy, reader_source, tainted_turn_marker, tainted_turn_record, wrap_untrusted
+from .policy import (
+    Policy,
+    PolicyError,
+    block,
+    decide,
+    faker_kit_home,
+    load_policy,
+    reader_source,
+    secret_reference,
+    tainted_turn_marker,
+    tainted_turn_record,
+    wrap_untrusted,
+)
 
 logger = logging.getLogger(__name__)
 
 DECISION_TIMEOUT_SECONDS = 5.0
 REMEMBERED_CHATS = 1024
 TAINTED_MESSAGE_SECONDS = 900
+READ_ONLY_WHEN_POLICY_FAILS = ("read_file", "search_files", "skills_list", "skill_view", "session_search", "clarify", "todo_list")
 NOTICE_MARKER = "faker-kit notice:"
 NOTICE_CONTEXT = (
     "This message is a faker-kit notice delivered into Bot Chat, not a request from the owner. "
@@ -108,14 +121,14 @@ class Guard:
                     self._unrecorded.add(self._turn(session_id, turn_id))
 
     def _write_turn_marker(self, session: str, turn: str) -> None:
-        record = tainted_turn_record(self._load().home, self._profile(), session)
+        record = tainted_turn_record(faker_kit_home(), self._profile(), session)
         record.parent.mkdir(parents=True, exist_ok=True)
         tmp = record.with_name(f".{record.name}.{os.getpid()}.{threading.get_ident()}")
         tmp.write_text(json.dumps({"session": session, "turn": turn, "at": self._now()}))
         tmp.replace(record)
 
     def _clear_turn_marker(self, sessions: tuple[str, ...] = (), turn: str = "") -> None:
-        folder = tainted_turn_marker(self._load().home, self._profile())
+        folder = tainted_turn_marker(faker_kit_home(), self._profile())
         for session in sessions:
             tainted_turn_record(folder.parent.parent, self._profile(), session).unlink(missing_ok=True)
         if not turn or not folder.is_dir():
@@ -143,11 +156,24 @@ class Guard:
         except concurrent.futures.TimeoutError:
             return block(f"policy check for {tool_name} timed out; blocked")
         except PolicyError as err:
-            return block(f"{err}; every tool call is blocked until guard.yaml and bots.yaml load")
+            return self._without_policy(tool_name, args or {}, block(f"{err}; every tool call is blocked until guard.yaml and bots.yaml load"), err)
         except Exception as err:
             logger.exception("faker-kit guard failed")
             return block(f"policy check for {tool_name} failed ({type(err).__name__}); blocked")
         return verdict
+
+    @staticmethod
+    def _without_policy(tool_name: str, args: dict, blocked: dict, err: PolicyError) -> dict | None:
+        if tool_name not in READ_ONLY_WHEN_POLICY_FAILS:
+            return blocked
+        try:
+            if secret_reference(tool_name, args) is not None:
+                return blocked
+        except Exception:
+            logger.exception("faker-kit guard could not check %s for secrets; blocked", tool_name)
+            return blocked
+        logger.warning("faker-kit guard could not decide %s (%s); allowing it as a read-only call, its result is still untrusted", tool_name, err)
+        return None
 
     def transform_tool_result(self, tool_name="", args=None, result=None, session_id="", turn_id="", **_):  # noqa: ANN001, ANN003, ANN201
         try:
@@ -213,7 +239,7 @@ class Guard:
         return {"context": NOTICE_CONTEXT}
 
     def _tainted_messages(self) -> Path:
-        return self._load().home / "tainted-messages"
+        return faker_kit_home() / "tainted-messages"
 
     def _mark_tainted_message(self, target: str) -> None:
         if not NAME_SHAPE.match(target):
