@@ -18,14 +18,10 @@ SUBSCRIPTION_PROVIDER = "claude-subscription-directsdk-experimental"
 
 WEBHOOK_HOST = "127.0.0.1"
 WEBHOOK_PORT = 8644
-RouteFilter = dict[str, object]
-ROUTE_JOBS: dict[str, tuple[str, tuple[str, ...], str, tuple[RouteFilter, ...]]] = {
+ROUTE_JOBS: dict[str, tuple[str, tuple[str, ...], str, tuple[dict[str, str], ...]]] = {
     "pr": ("faker-kit-babysit", ("pull_request", "pull_request_review", "check_suite", "status"),
            "GitHub event {event_type} ({action}) in {repository.full_name}. Pull request {pull_request.number}, "
            "check suite head {check_suite.head_sha}. Babysit the open pull requests.", ()),
-    "comments": ("faker-kit-babysit", ("issue_comment",),
-                 "GitHub event issue_comment ({action}) in {repository.full_name} on pull request {issue.number}. Babysit the open pull requests.",
-                 ({"field": "issue.pull_request", "exists": True}, {"field": "action", "equals": "created"})),
     "security": ("faker-kit-security", ("push",),
                  "GitHub event push to {ref} in {repository.full_name}, head {after}. Run the security review.", ()),
     "issues": ("faker-kit-issues", ("issues",),
@@ -42,7 +38,7 @@ class Route(TypedDict):
     cron_job: str
     deliver: str
     prompt: str
-    filters: list[RouteFilter]
+    filters: list[dict[str, str]]
 
 
 class MachineError(ValueError):
@@ -233,6 +229,15 @@ def routes(bot: str) -> dict[str, Route]:
 
 def route_url(base: str, bot: str, route: str) -> str:
     return f"{base}/p/{bot}/webhooks/{route}"
+
+
+def stale_route(name: str, bot: str) -> bool:
+    kind = re.fullmatch(re.escape(bot) + r"-([a-z]+)", name)
+    return kind is not None and kind.group(1) not in ROUTE_JOBS
+
+
+def stale_hook(url: str, base: str, bot: str) -> bool:
+    return stale_route(url.removeprefix(route_url(base, bot, "")), bot) if url.startswith(route_url(base, bot, "")) else False
 
 
 def cloudflared_config(tunnel_id: str, credentials: Path, hostname: str, machine: Machine) -> str:

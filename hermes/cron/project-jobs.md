@@ -31,4 +31,4 @@ Prompt: `Check this project for incidents. Follow the Incidents section of the d
 Schedule: `every 1h`
 Deliver: `bot-chat:{bot}`
 Skill: `dispatch`
-Prompt: `Handle bug reports. Follow the Bug reports section of the dispatch skill: run faker-kit issues; for each issue it lists, write a brief from the fix-issue template, start it with faker-kit launch on the model and effort the Choose the model section picks, and claim the issue with faker-kit issues --claim. When a pull request from one of those sessions opens, run the verifier swarm and the merge gate as that section says. Answer [SILENT] when it lists no issue and no pull request of this kind needs a step.`
+Prompt: `Handle bug reports. Follow the Bug reports section of the dispatch skill: run faker-kit issues; for each issue it lists, write a brief from the fix-issue template, start it with faker-kit launch on the model and effort the Choose the model section picks, and claim the issue with faker-kit issues --claim. When a pull request from one of those sessions opens, land it through the merge gate as that section says. Answer [SILENT] when it lists no issue and no pull request of this kind needs a step.`

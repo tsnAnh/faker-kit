@@ -1,6 +1,6 @@
 ---
 name: verify-faker-kit
-description: Verify a change to faker-kit the way its users meet it. Runs the real Hermes module (install.sh, the faker-kit command and its merge gate) from this commit in an end-to-end run with stubbed Hermes, GitHub, and Claude CLIs and a repeatable transcript, proves the plugins load in Claude Code, checks the upstream sync. Use to prove a faker-kit pull request before reporting done, from a verifier session, or when asked to verify faker-kit behavior.
+description: Verify a change to faker-kit the way its users meet it. Runs the real Hermes module (install.sh, the faker-kit command and its merge gate) from this commit in an end-to-end run with stubbed Hermes, GitHub, and Claude CLIs and a repeatable transcript, proves the plugins load in Claude Code, checks the upstream sync. Use to prove a faker-kit pull request before reporting done, or when asked to verify faker-kit behavior.
 ---
 
 # Verify faker-kit
