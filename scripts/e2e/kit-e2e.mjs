@@ -402,6 +402,14 @@ step("install-kit-skills.sh defaults to the faker-kit repository, upgrades an in
   };
 });
 
+step("cloud-setup.sh --help prints its usage and exits before installing anything", () => {
+  const help = run("bash", [path.join(KIT, "scripts", "cloud-setup.sh"), "--help"], { env: { PATH: "/usr/bin:/bin" } });
+  return {
+    ok: help.status === 0 && help.stdout.startsWith("Usage: scripts/cloud-setup.sh") && help.stdout.includes("changes nothing") && help.stderr === "",
+    observed: { status: help.status, firstLine: help.stdout.split("\n")[0] },
+  };
+});
+
 step("with the real claude CLI every plugin id in the settings template installs from this kit", () => {
   if (run("claude", ["--version"]).status !== 0) {
     if (process.env.CI) return { ok: false, observed: { error: "the claude CLI is not installed, and CI must run this step" } };

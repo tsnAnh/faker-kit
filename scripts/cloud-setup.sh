@@ -15,6 +15,7 @@ USAGE
 [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { usage; exit 0; }
 
 NODE_MAJOR=22
+BUN_VERSION=1.4.4
 TOOLS_VENV=/opt/faker-kit-tools
 PY_TOOLS=(ruff mypy types-PyYAML pyyaml)
 
@@ -66,9 +67,21 @@ if [ "$(node_major)" -lt "$NODE_MAJOR" ]; then
 fi
 
 if ! command -v bun >/dev/null 2>&1; then
-  curl -fsSL https://bun.sh/install | as_root env BUN_INSTALL=/usr/local bash >/dev/null
+  case "$(uname -m)" in
+    x86_64 | amd64) bun_arch=x64 bun_sha256=bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c ;;
+    aarch64 | arm64) bun_arch=aarch64 bun_sha256=baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e ;;
+    *) die "no pinned bun build for $(uname -m)" ;;
+  esac
+  bun_tmp=$(mktemp -d)
+  trap 'rm -rf "$bun_tmp"' EXIT
+  curl -fsSL -o "$bun_tmp/bun.zip" "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${bun_arch}.zip"
+  echo "$bun_sha256  $bun_tmp/bun.zip" | sha256sum -c --quiet - || die "bun ${BUN_VERSION} archive failed its checksum"
+  unzip -q "$bun_tmp/bun.zip" -d "$bun_tmp"
+  as_root install -m 0755 "$bun_tmp/bun-linux-${bun_arch}/bun" /usr/local/bin/bun
+  rm -rf "$bun_tmp"
+  trap - EXIT
   command -v bun >/dev/null 2>&1 || die "bun did not install"
-  say "installed bun $(bun --version)"
+  say "installed bun $(bun --version) (pinned ${BUN_VERSION}, checksum verified)"
 fi
 
 if [ ! -x "$TOOLS_VENV/bin/python" ]; then
