@@ -44,7 +44,7 @@
       ],
       "from": "poteto-mode",
       "to": "faker-mode",
-      "count": 253
+      "count": 252
     },
     {
       "id": "rename-poteto-agent",
@@ -161,7 +161,7 @@
       ],
       "from": "~/.cursor/rules/pstack-models.mdc",
       "to": "~/.agents/pstack-models.md",
-      "count": 10
+      "count": 9
     },
     {
       "id": "neutral-pstack-models-file",
@@ -242,7 +242,7 @@
       ],
       "from": "@cursor-skill/",
       "to": "@faker-kit/",
-      "count": 2
+      "count": 3
     },
     {
       "id": "neutral-review-bot-login",
@@ -314,7 +314,7 @@
       ],
       "from": "a Cursor restart",
       "to": "an agent restart",
-      "count": 2
+      "count": 1
     },
     {
       "id": "neutral-cloud-agent",
@@ -324,15 +324,6 @@
       "from": "Cursor cloud agent",
       "to": "cloud agent",
       "count": 4
-    },
-    {
-      "id": "neutral-cloud-dashboard",
-      "files": [
-        "harness/pstack/claude-code/**"
-      ],
-      "from": "in the Cursor dashboard",
-      "to": "in the cloud dashboard",
-      "count": 1
     },
     {
       "id": "neutral-models-api",

@@ -11,21 +11,30 @@
       "count": 1
     },
     {
-      "id": "pstack-interrogate-model-families",
-      "files": [
-        "harness/pstack/claude-code/skills/interrogate/SKILL.md"
-      ],
-      "from": "Families go by prefix: `claude-*`, and `grok-*` with `cursor-grok-*` and `composer-*`. A refused `composer-*` entry runs on Reviewer B's default.",
-      "to": "Families go by prefix: `claude-*` and `gpt-*`. A refused `gpt-*` entry runs on Reviewer B's default.",
-      "count": 1
-    },
-    {
       "id": "pstack-adapter-default-slugs",
       "files": [
         "harness/pstack/claude-code/docs/harness/claude-code.md"
       ],
       "from": "Map each default slug with the rows above: `claude-opus-5-5-xhigh` is `opus xhigh`, and `grok-4.7-xhigh-fast` is `inherit-parent`.",
       "to": "Map each default slug with the rows above. A default of `inherit-parent` stays `inherit-parent`.",
+      "count": 1
+    },
+    {
+      "id": "pstack-arena-cross-judge-missing-line",
+      "files": [
+        "harness/pstack/claude-code/skills/arena/SKILL.md"
+      ],
+      "from": "choose from `claude-opus-5-5-xhigh` and `grok-4.7-xhigh-fast`.",
+      "to": "choose from `claude-opus-5-5-max` and `gpt-6-sol-high`.",
+      "count": 1
+    },
+    {
+      "id": "pstack-arena-cross-judge-default-pool",
+      "files": [
+        "harness/pstack/claude-code/skills/arena/SKILL.md"
+      ],
+      "from": "With the default pool, a Claude parent gets `grok-4.7-xhigh-fast`. A parent from any other family gets `claude-opus-5-5-xhigh` first.",
+      "to": "With the default pool, a Claude parent gets `gpt-6-sol-high`. A parent from any other family gets `claude-opus-5-5-max` first.",
       "count": 1
     },
     {
@@ -36,7 +45,7 @@
       ],
       "from": "`claude-opus-5-5-xhigh` and `grok-4.7-xhigh-fast`",
       "to": "`inherit-parent` and `inherit-parent`",
-      "count": 3
+      "count": 2
     },
     {
       "id": "pstack-panel-role-lines",
@@ -46,33 +55,6 @@
       "from": "claude-opus-5-5-xhigh, grok-4.7-xhigh-fast",
       "to": "inherit-parent, inherit-parent, inherit-parent",
       "count": 4
-    },
-    {
-      "id": "pstack-arena-no-family-fallback",
-      "files": [
-        "harness/pstack/claude-code/skills/arena/SKILL.md"
-      ],
-      "from": "With no family match, use `claude-opus-5-5-xhigh`.",
-      "to": "With no family match, use `inherit-parent`.",
-      "count": 1
-    },
-    {
-      "id": "pstack-interrogate-reviewer-a",
-      "files": [
-        "harness/pstack/claude-code/skills/interrogate/SKILL.md"
-      ],
-      "from": "| Reviewer A | `claude-opus-5-5-xhigh` |",
-      "to": "| Reviewer A | `inherit-parent` |",
-      "count": 1
-    },
-    {
-      "id": "pstack-interrogate-reviewer-b",
-      "files": [
-        "harness/pstack/claude-code/skills/interrogate/SKILL.md"
-      ],
-      "from": "| Reviewer B | `grok-4.7-xhigh-fast` |",
-      "to": "| Reviewer B | `inherit-parent` |",
-      "count": 1
     },
     {
       "id": "pstack-budget-example",
