@@ -28,5 +28,5 @@ Features without the Hermes module (plugin loading, upstream sync) run in this c
 Every proof is a transcript: the command, its full output, and its exit code. Proof standards:
 
 - Exercise the path a user takes: `install.sh` and `faker-kit` as installed, never their Python functions directly.
-- Capture the action and the resulting state: after a command, read the side effect it promises (a merge call on the exact head, a window record, a moved state folder).
+- Capture the action and the resulting state: after a command, read the side effect it promises (a merge call on the exact head, a moved state folder).
 - Quote the evidence file paths, and the lines that prove each claim, in the verdict.

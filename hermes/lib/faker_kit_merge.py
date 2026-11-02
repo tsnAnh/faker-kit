@@ -4,7 +4,6 @@ import contextlib
 import fcntl
 import fnmatch
 import json
-import os
 import re
 import unicodedata
 from collections.abc import Iterator
@@ -12,7 +11,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-WINDOW_SECONDS = 3600
 MERGE_METHOD = "squash"
 REVIEWER = "claude[bot]"
 SECURITY_CHECK = "security-review"
@@ -36,14 +34,7 @@ PASSING_CONCLUSIONS = ("success", "neutral", "skipped")
 FORMAL_REVIEWS = ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
 ACCEPTED_RISK = ("low", "medium")
 RISK_LINE = re.compile(r"^[ \t]*Risk:[ \t]*(low|medium|high)[ \t]*$", re.I | re.M)
-NOTICE = "faker-kit notice:"
 TOKEN_CHARS = 40
-
-
-@dataclass(frozen=True)
-class Window:
-    head: str
-    at: float
 
 
 @dataclass(frozen=True)
@@ -69,8 +60,6 @@ class Evidence:
 class Verdict:
     action: str
     message: str
-    window: Window | None = None
-    notice: str | None = None
 
 
 def from_fork(pull: dict, repo: str) -> bool:
@@ -290,7 +279,7 @@ def requested_changes(reviews: list[dict]) -> int:
     return sum(state == "CHANGES_REQUESTED" for state in latest.values())
 
 
-def decide(pr: int, head: str, evidence: Evidence, repo: str, default: str, window: Window | None, now: float) -> Verdict:
+def decide(pr: int, head: str, evidence: Evidence, repo: str, default: str) -> Verdict:
     ref = evidence.head_ref
     problem = (owner_path_problem(evidence.files, evidence.rules) or base_problem(evidence.branch_pulls, evidence.timeline, pr, default)
                or checks_problem(evidence.check_runs, evidence.statuses, evidence.head_runs, head, repo, pr, default, ref, evidence.opened, evidence.workflows_match)
@@ -300,47 +289,16 @@ def decide(pr: int, head: str, evidence: Evidence, repo: str, default: str, wind
         return Verdict("refuse", problem)
     if requested_changes(evidence.reviews):
         return Verdict("refuse", "a reviewer requested changes; the author or the reviewer must resolve it")
-    if window is None or window.head != head:
-        fresh = Window(head, now)
-        return Verdict("wait", f"every gate passed; the {WINDOW_SECONDS // 60}-minute window for #{pr} has not started; faker-kit merge --pr {pr} starts it", fresh,
-                       f"{NOTICE} PR #{pr} merges in {WINDOW_SECONDS // 3600} hour unless you request changes")
-    left = window.at + WINDOW_SECONDS - now
-    if left > 0:
-        return Verdict("wait", f"#{pr}'s window has {int(left // 60) + 1} minutes left")
-    return Verdict("merge", "every gate passed and the window has run")
+    return Verdict("merge", "every gate passed")
 
 
-class WindowStore:
+class MergeLock:
     def __init__(self, home: Path, bot: str) -> None:
-        self.path = home / "merge" / f"{bot}.json"
+        self.path = home / "merge" / f"{bot}.lock"
 
     @contextlib.contextmanager
     def locked(self) -> Iterator[None]:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with self.path.with_name(f"{self.path.name}.lock").open("w") as handle:
+        with self.path.open("w") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
             yield
-
-    def read(self) -> dict[str, dict]:
-        try:
-            data = json.loads(self.path.read_text())
-        except (OSError, ValueError):
-            return {}
-        return data if isinstance(data, dict) else {}
-
-    def get(self, pr: int) -> Window | None:
-        row = self.read().get(str(pr))
-        if isinstance(row, dict) and isinstance(row.get("head"), str) and isinstance(row.get("at"), (int, float)):
-            return Window(row["head"], float(row["at"]))
-        return None
-
-    def put(self, pr: int, window: Window | None) -> None:
-        data = self.read()
-        if window is None:
-            data.pop(str(pr), None)
-        else:
-            data[str(pr)] = {"head": window.head, "at": window.at}
-        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}")
-        tmp.touch(mode=0o600)
-        tmp.write_text(json.dumps(data))
-        tmp.replace(self.path)

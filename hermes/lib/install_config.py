@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -19,16 +18,6 @@ def hermes(*args: str) -> str:
     if done.returncode:
         raise InstallError(f"hermes {' '.join(a for a in args[:4] if not a.startswith('-') or a == '-p')} failed")
     return done.stdout
-
-
-def hermes_send(profile: str, target: str, message: str, timeout: float = 60.0) -> None:
-    exe = shutil.which("hermes") or str(Path.home() / ".local" / "bin" / "hermes")
-    try:
-        done = subprocess.run([exe, "-p", profile, "send", "--to", target, "--quiet", message], capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired):
-        raise InstallError("hermes send did not finish") from None
-    if done.returncode:
-        raise InstallError(f"hermes send exited {done.returncode}")
 
 
 def profile_home(root: Path, profile: str) -> Path:

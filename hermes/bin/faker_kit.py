@@ -51,11 +51,11 @@ from faker_kit_incident_sources import FetchJson, fetch_json
 from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
 from faker_kit_loop import Loop, LoopError
-from faker_kit_machine import LOGIN, WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env
-from faker_kit_merge import MERGE_METHOD, NOTICE, REVIEW_WORKFLOW, SECURITY_JOB, WINDOW_SECONDS, Evidence, WindowStore, decide, dispatch_rules, from_fork, security_run_id
+from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env
+from faker_kit_merge import MERGE_METHOD, REVIEW_WORKFLOW, SECURITY_JOB, Evidence, MergeLock, decide, dispatch_rules, from_fork, security_run_id
 from faker_kit_profiles import Profiles
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
-from install_config import InstallError, config_set, hermes_send
+from install_config import InstallError, config_set
 
 VENDOR_MANIFEST = ".agents/faker-kit/KIT.json"
 KIT_REPO_FILE = "kit-repo"
@@ -67,7 +67,8 @@ SESSION_MODEL = re.compile(r"\A(?:opus|sonnet|haiku|fable|claude-[a-z0-9]+(?:-[a
 SESSION_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 UNIT_LINE = re.compile(r"\AUnit: ([a-z0-9][a-z0-9-]{0,63})[ \t]*\r?(?:\n|\Z)")
 STATUS_PRS = 30
-OWNER_PLACEHOLDER = "owner-login"
+MERGEABLE_READS = 5
+MERGEABLE_PAUSE_SECONDS = 5.0
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SECRET_SHAPES = re.compile(
     r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}"
@@ -123,8 +124,8 @@ def slugify(text: str) -> str:
 
 class Kit:
     def __init__(self, run: Runner = run_gh, cloud: Cloud | None = None, home: Path | None = None, now: Callable[[], float] = time.time,
-                 fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status) -> None:
-        self.run, self.now, self.fetch_api, self.fetch_url = run, now, fetch_api, fetch_url
+                 fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status, sleep: Callable[[float], None] = time.sleep) -> None:
+        self.run, self.now, self.fetch_api, self.fetch_url, self.sleep = run, now, fetch_api, fetch_url, sleep
         self.home = home or faker_kit_home()
         self.root = self.home.parent
         self.kit = self.home / "kit"
@@ -310,63 +311,40 @@ class Kit:
                         ref, gh.branch_pulls(owner, ref) if owner and ref else None, gh.timeline(pr), str(pull.get("created_at") or ""),
                         head_tree is not None and head_tree == gh.workflows_tree(default))
 
-    def ping_owner(self, bot: Bot, pr: int) -> None:
-        repo = str(bot.repo)
-        text = f"PR #{pr} in {repo} merges in {WINDOW_SECONDS // 3600} hour unless you request changes: https://github.com/{repo}/pull/{pr}"
-        if bot.slack_channel:
-            try:
-                hermes_send(bot.name, f"slack:{bot.slack_channel}", text)
-            except InstallError as err:
-                raise Refused(f"the Slack message to the owner was not delivered ({err})") from None
-            return
-        authors = sorted(self.policy().trusted_authors)
-        if not authors or any(not LOGIN.match(login) or login == OWNER_PLACEHOLDER for login in authors):
-            raise Refused("the bot has no Slack channel and guard.yaml trusted_authors does not list the owner's GitHub login")
-        owners = " ".join(f"@{login}" for login in authors)
-        try:
-            self.api(f"repos/{repo}/issues/{pr}/comments", "POST", {"body": f"{owners} {text}"})
-        except Refused as err:
-            raise Refused(f"the pull request comment to the owner was not posted ({err})") from None
+    def mergeable_pull(self, gh: Gh, repo: str, pr: int) -> tuple[dict, str, str]:
+        for read in range(MERGEABLE_READS):
+            data = gh.pull(pr)
+            head = str((data.get("head") or {}).get("sha") or "")
+            if not SHA.match(head):
+                raise Refused(f"#{pr} has no head commit GitHub reports")
+            if from_fork(data, repo):
+                raise Refused(f"#{pr} comes from a fork; only the owner merges or closes it on GitHub")
+            if data.get("state") != "open" or data.get("merged_at"):
+                raise Refused(f"#{pr} is already {'merged' if data.get('merged_at') else str(data.get('state'))}")
+            default = gh.default_branch()
+            if (data.get("base") or {}).get("ref") != default:
+                raise Refused(f"#{pr} targets another branch than the default branch {default}; only the owner merges it on GitHub")
+            if data.get("mergeable") is False:
+                raise Refused(f"#{pr} conflicts with its base branch; its author must update it first")
+            if data.get("mergeable") is True:
+                return data, head, default
+            if read < MERGEABLE_READS - 1:
+                self.sleep(MERGEABLE_PAUSE_SECONDS)
+        raise Refused(f"GitHub is still checking #{pr} for conflicts; run merge again in a minute")
 
     def merge(self, bot: Bot, pr: int) -> dict:
         self.refuse_after_untrusted_text(bot.name, "merge")
         repo = str(bot.repo)
         gh = Gh(self.home, bot.name, repo, self.run)
-        data = gh.pull(pr)
-        head = str((data.get("head") or {}).get("sha") or "")
-        if not SHA.match(head):
-            raise Refused(f"#{pr} has no head commit GitHub reports")
-        if from_fork(data, repo):
-            raise Refused(f"#{pr} comes from a fork; only the owner merges or closes it on GitHub")
-        if data.get("state") != "open" or data.get("merged_at"):
-            raise Refused(f"#{pr} is already {'merged' if data.get('merged_at') else str(data.get('state'))}")
-        default = gh.default_branch()
-        if (data.get("base") or {}).get("ref") != default:
-            raise Refused(f"#{pr} targets another branch than the default branch {default}; only the owner merges it on GitHub")
-        if data.get("mergeable") is False:
-            raise Refused(f"#{pr} conflicts with its base branch; its author must update it first")
-        if data.get("mergeable") is not True:
-            raise Refused(f"GitHub is still checking #{pr} for conflicts; run merge again in a minute")
-        cord = self.cord(bot.name)
-        if cord:
-            raise Refused(f"{cord.describe()}; nothing merges until the owner clears it")
-        store = WindowStore(self.home, bot.name)
-        with store.locked():
-            verdict = decide(pr, head, self.evidence(gh, pr, head, default, data), repo, default, store.get(pr), self.now())
-            if verdict.window is not None:
-                try:
-                    self.ping_owner(bot, pr)
-                except Refused as err:
-                    print(f"{NOTICE} PR #{pr} did not start its merge window because the owner could not be told")
-                    raise Refused(f"every gate passed, but the owner could not be told: {err}; #{pr}'s window did not start, so run merge again once the owner can be reached") from None
-                store.put(pr, verdict.window)
-                if verdict.notice:
-                    print(verdict.notice)
-                raise Refused(f"every gate passed; the owner was told and the {WINDOW_SECONDS // 60}-minute window for #{pr} has started")
+        with MergeLock(self.home, bot.name).locked():
+            data, head, default = self.mergeable_pull(gh, repo, pr)
+            cord = self.cord(bot.name)
+            if cord:
+                raise Refused(f"{cord.describe()}; nothing merges until the owner clears it")
+            verdict = decide(pr, head, self.evidence(gh, pr, head, default, data), repo, default)
             if verdict.action != "merge":
                 raise Refused(verdict.message)
             self.run(["api", "-X", "PUT", f"repos/{repo}/pulls/{pr}/merge", "-f", f"merge_method={MERGE_METHOD}", "-f", f"sha={head}"])
-            store.put(pr, None)
         return {"pr": pr, "merged": True, "head": head, "method": MERGE_METHOD}
 
     def incidents(self, bot: Bot, ack: str | None, last: bool) -> dict:
@@ -393,10 +371,9 @@ class Kit:
                 lines.append(self.project_line(bot))
             return lines or ["no projects"]
         gh = Gh(self.home, caller.name, str(caller.repo), self.run)
-        store = WindowStore(self.home, caller.name)
         default = gh.default_branch()
         own = [pull for pull in gh.open_pulls() if not from_fork(pull, gh.repo)]
-        return [self.pr_line(gh, store, pull, default) for pull in own[:STATUS_PRS]] or ["no open pull requests"]
+        return [self.pr_line(gh, pull, default) for pull in own[:STATUS_PRS]] or ["no open pull requests"]
 
     def project_line(self, bot: Bot) -> str:
         cord = self.andon.read(bot.name)
@@ -408,13 +385,13 @@ class Kit:
         drafts = sum(1 for p in pulls if p.get("draft"))
         return f"{head}: open {len(pulls)} (draft {drafts}, ready {len(pulls) - drafts})"
 
-    def pr_line(self, gh: Gh, store: WindowStore, pull: dict, default: str) -> str:
+    def pr_line(self, gh: Gh, pull: dict, default: str) -> str:
         number = int(pull["number"])
         detail = gh.pull(number)
         head = str((detail.get("head") or {}).get("sha") or "")
         who = re.sub(r"[^A-Za-z0-9_\[\]-]", "?", str((pull.get("user") or {}).get("login") or "ghost"))[:40]
-        verdict = decide(number, head, self.evidence(gh, number, head, default, detail), gh.repo, default, store.get(number), self.now())
-        gate = {"merge": "ready to merge", "wait": verdict.message, "refuse": f"blocked: {verdict.message}"}[verdict.action]
+        verdict = decide(number, head, self.evidence(gh, number, head, default, detail), gh.repo, default)
+        gate = {"merge": "ready to merge", "refuse": f"blocked: {verdict.message}"}[verdict.action]
         mergeable = {True: "mergeable", False: "conflicts", None: "mergeable unknown"}[detail.get("mergeable")]
         unit = UNIT_LINE.match(str(detail.get("body") or ""))
         return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready", mergeable, gate])
@@ -887,10 +864,11 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
 
 
 def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | None = None, bot: str | None = None,
-         now: Callable[[], float] = time.time, fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status) -> int:
+         now: Callable[[], float] = time.time, fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status,
+         sleep: Callable[[float], None] = time.sleep) -> int:
     args = parser().parse_args(argv)
     try:
-        out = run_command(args, Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url), bot or current_bot())
+        out = run_command(args, Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep), bot or current_bot())
     except (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError) as err:
         print(f"faker-kit: refused: {err}", file=sys.stderr)
         return 1
