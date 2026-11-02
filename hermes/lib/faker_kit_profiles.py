@@ -14,6 +14,8 @@ from faker_kit_machine import SUBSCRIPTION_PROVIDER
 from install_config import KIT_GATE_SCRIPT, InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, mapping, profile_home, value_at
 
 PLUGIN = "faker_kit_guard"
+AGENT_CONTEXT_ENV = "HERMES_AGENT_TOOL_CONTEXT"
+ROLE_SKILL_DIR = "kit-skills"
 KIT_SKILL_DIRS = ("skills", "external_dirs")
 ROLE_SKILL = {"project": "dispatch", "bootstrap": "bootstrap", "chief": "chief"}
 SUBSCRIPTION_PLUGIN = "claude-subscription-directsdk"
@@ -42,7 +44,15 @@ class Profiles:
 
     def ensure(self, bot: str) -> Path:
         if not self.live(bot):
-            hermes("-p", "default", "profile", "create", bot)
+            try:
+                hermes("-p", "default", "profile", "create", bot)
+            except InstallError as err:
+                if not os.environ.get(AGENT_CONTEXT_ENV):
+                    raise
+                raise Refused(
+                    f"bot {bot} has no Hermes profile, and Hermes will not create one from an agent's command without the owner's approval "
+                    f"({err}). Run `hermes profile create {bot}` yourself, which shows the owner an approval in this chat, then run this command again"
+                ) from err
             if not self.live(bot):
                 raise Refused(f"hermes profile create {bot} did not create a profile Hermes serves at {self.home(bot)}")
         return self.home(bot)
@@ -57,6 +67,24 @@ class Profiles:
             sys.stderr.write(f"conflict: {target} is a real directory; left as is\n")
             return
         target.symlink_to(self.pkg / "skills" / name)
+
+    def expose_skill(self, bot: str, home: Path, name: str) -> None:
+        folder = home / ROLE_SKILL_DIR
+        folder.mkdir(parents=True, exist_ok=True)
+        for stale in folder.iterdir():
+            if stale.name != name and stale.is_symlink():
+                stale.unlink()
+        target = folder / name
+        if target.is_symlink() and target.readlink() != self.pkg / "skills" / name:
+            target.unlink()
+        if not target.exists() and not target.is_symlink():
+            target.symlink_to(self.pkg / "skills" / name)
+        current = value_at(mapping(home / "config.yaml"), KIT_SKILL_DIRS)
+        listed = [current] if isinstance(current, str) else current
+        if listed is not None and not isinstance(listed, list):
+            raise Refused(f"{bot}: skills.external_dirs must be a folder or a list of folders")
+        if str(folder) not in (listed or []):
+            config_set(self.root, bot, KIT_SKILL_DIRS, [*(listed or []), str(folder)])
 
     def refresh(self, bot: str, role: str, ask_owner: bool, model: str | None, claude_config_dir: str | None, provider: str | None = None) -> Path:
         home = self.ensure(bot)
@@ -79,6 +107,7 @@ class Profiles:
         shutil.rmtree(plugin, ignore_errors=True)
         shutil.copytree(self.pkg / "plugin" / PLUGIN, plugin, ignore=shutil.ignore_patterns("__pycache__"))
         self.link_skill(home, ROLE_SKILL[role])
+        self.expose_skill(bot, home, ROLE_SKILL[role])
         return home
 
     def subscription_in_use(self, bot: str) -> bool:

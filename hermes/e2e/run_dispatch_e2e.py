@@ -394,6 +394,9 @@ def option(flag):
 
 
 if args[:2] == ["profile", "create"]:
+    if os.environ.get("HERMES_AGENT_TOOL_CONTEXT") and not os.environ.get("HERMES_PROFILE_ADMIN_GRANT"):
+        sys.stderr.write("Error: Creating or deleting bots needs your approval in an interactive session.\n")
+        sys.exit(1)
     (root / "profiles" / args[2]).mkdir(parents=True, exist_ok=True)
     (root / "profiles" / args[2] / ".profile-identity").write_text(args[2])
 elif args[:2] == ["profile", "show"]:
@@ -2102,6 +2105,111 @@ def vendor_api_scenario(run: Run, work: Path) -> None:
              and ".claude/skills/verify-shop/SKILL.md" not in entries and retired_file in result["removed"], err.strip() or out[:200])
 
 
+PROFILE_MACHINE_YAML = f"""version: 1
+bootstrap_bot: {BOOTSTRAP}
+claude_subscription: false
+guard:
+  trusted_authors:
+    - {OWNER}
+  ask_owner: false
+  max_in_flight_total: 3
+projects:
+  - bot: {BOT}
+    project: shop
+    repo: {REPO}
+webhooks:
+  url: {WEBHOOK_BASE}
+  tunnel: hermes
+"""
+AGENT_TURN = {"HERMES_AGENT_TOOL_CONTEXT": "1"}
+APPROVED_TURN = {**AGENT_TURN, "HERMES_PROFILE_ADMIN_GRANT": "0" * 64}
+
+
+def value_at_path(config: dict, keys: tuple[str, ...]) -> dict:
+    for key in keys:
+        config = config[key]
+    return config
+
+
+def profile_approval_scenario(run: Run, work: Path) -> None:
+    other = Run(work)
+    other.steps, other.verdicts = run.steps, run.verdicts
+    other.build()
+    crm = ("add-project", "acme/crm", "--bot", "crm-bot", "--project", "crm")
+    (other.team / "machine.yaml").write_text(PROFILE_MACHINE_YAML)
+
+    def snapshot() -> str:
+        return json.dumps([tree(other.hermes), other.gh_now()], sort_keys=True)
+
+    other.update_gh(lambda state: state.update({"repo": "acme/crm"}))
+    before = snapshot()
+    code, out, err = other.kit(*crm, bot=BOOTSTRAP, env=AGENT_TURN)
+    run.step("add-project in a bot's turn without a profile refuses with Hermes's own reason and what to run, and changes nothing",
+             code == 1 and "Creating or deleting bots needs your approval in an interactive session" in err and "Run `hermes profile create crm-bot` yourself" in err
+             and "then run this command again" in err and err.count("\n") == 1 and snapshot() == before, err.strip())
+    run.step("the refusal leaves no bots.yaml entry, no label, and no checkout",
+             "crm-bot" not in (other.team / "bots.yaml").read_text() and other.gh_now()["labels"] == [] and not (other.team / "checkouts" / "acme__crm").exists()
+             and not (other.hermes / "profiles" / "crm-bot").exists(), err.strip())
+
+    created = subprocess.run(["hermes", "profile", "create", "crm-bot"], env={**other.env(), **APPROVED_TURN}, capture_output=True, text=True)
+    code, out, err = other.kit(*crm, bot=BOOTSTRAP, env=AGENT_TURN)
+    added = json.loads(out) if code == 0 else {}
+    bots = yaml.safe_load((other.team / "bots.yaml").read_text())["bots"]
+    run.step("after the approved profile create, add-project in the same bot's turn completes: profile, entry, labels, jobs, checkout",
+             created.returncode == 0 and code == 0 and bots["crm-bot"] == {"role": "project", "project": "crm", "repo": "acme/crm"}
+             and {"agent:andon", "faker:fix"} <= {label["name"] for label in other.gh_now()["labels"]} and added["jobs_active"] is True
+             and Path(added["launch_checkout"]).is_dir(), err.strip() or out[:200])
+
+    crm_home = other.hermes / "profiles" / "crm-bot"
+    exposed = crm_home / "kit-skills"
+    listed = yaml.safe_load((crm_home / "config.yaml").read_text()).get("skills", {}).get("external_dirs")
+    run.step("a new project bot gets its role skill, and only that one, through a folder Hermes reads even when a shared skill catalog is active",
+             exposed.is_dir() and sorted(p.name for p in exposed.iterdir()) == ["dispatch"] and (exposed / "dispatch").readlink() == other.team / "kit" / "hermes" / "skills" / "dispatch"
+             and listed == [str(exposed)], json.dumps(listed))
+    refreshed = other.kit(*crm, bot=BOOTSTRAP, env=AGENT_TURN)
+    run.step("running add-project again leaves the skill folder and its config entry as they were",
+             refreshed[0] == 0 and yaml.safe_load((crm_home / "config.yaml").read_text()).get("skills", {}).get("external_dirs") == [str(exposed)], refreshed[2].strip())
+
+    hooks = sorted(h["config"]["url"] for h in other.gh_now()["hooks"])
+    run.step("add-project refreshes the new project's own webhook routes when the machine keeps a webhook url",
+             hooks == [f"{WEBHOOK_BASE}/p/crm-bot/webhooks/crm-bot-{kind}" for kind in ("issues", "pr", "security")], json.dumps(hooks))
+
+    code, status, err = other.kit("status", bot=BOOTSTRAP)
+    crm_line = [line for line in status.splitlines() if line.startswith("crm (crm-bot, acme/crm)")]
+    run.step("faker-kit status shows a set-up project without a warning", code == 0 and len(crm_line) == 1 and "NOT SET UP" not in crm_line[0], status.strip())
+
+    seeded = yaml.safe_load((other.team / "bots.yaml").read_text())
+    seeded["bots"]["half-bot"] = {"role": "project", "project": "half", "repo": "acme/half"}
+    (other.team / "bots.yaml").write_text(yaml.safe_dump(seeded, sort_keys=True))
+    code, status, err = other.kit("status", bot=BOOTSTRAP)
+    flagged = [line for line in status.splitlines() if line.startswith("half (half-bot, acme/half)")]
+    run.step("faker-kit status says in plain words that a project whose bot has no profile is not set up and what to run",
+             code == 0 and len(flagged) == 1 and "NOT SET UP: bot half-bot has no Hermes profile" in flagged[0]
+             and "hermes profile create half-bot, then faker-kit add-project acme/half" in flagged[0]
+             and "NOT SET UP" not in "".join(line for line in status.splitlines() if "crm-bot" in line), status.strip() or err.strip())
+
+    other.update_gh(lambda state: state.update({"repo": "acme/half"}))
+    code, out, err = other.kit("add-project", "acme/half", "--bot", "half-bot", "--project", "half", bot=None)
+    code_status, status, _ = other.kit("status", bot=BOOTSTRAP)
+    run.step("re-running add-project over a bots.yaml entry that has no profile creates the profile from the owner's shell and repairs the project",
+             code == 0 and (other.hermes / "profiles" / "half-bot" / ".profile-identity").is_file() and json.loads(out)["jobs_active"] is True
+             and code_status == 0 and "NOT SET UP: bot half-bot" not in status and "half (half-bot, acme/half)" in status, err.strip() or status.strip())
+
+    routes_before = value_at_path(yaml.safe_load((other.hermes / "config.yaml").read_text()), ("platforms", "webhook", "extra", "routes"))
+    other.update_gh(lambda state: state.update({"repo": REPO}))
+    code, out, err = other.kit("install", "--config", str(other.team / "machine.yaml"), bot=None)
+    routes_after = value_at_path(yaml.safe_load((other.hermes / "config.yaml").read_text()), ("platforms", "webhook", "extra", "routes"))
+    again = yaml.safe_load((other.team / "bots.yaml").read_text())["bots"]
+    after_hooks = sorted(h["config"]["url"] for h in other.gh_now()["hooks"])
+    run.step("a later install with a machine.yaml that does not list an added project keeps its entry, profile, skill, jobs, and webhook routes",
+             code == 0 and again["crm-bot"] == bots["crm-bot"] and again["half-bot"]["repo"] == "acme/half"
+             and (other.hermes / "profiles" / "crm-bot" / ".profile-identity").is_file() and (exposed / "dispatch").is_symlink()
+             and len(json.loads((crm_home / "jobs.json").read_text())) == len(json.loads((other.hermes / "profiles" / BOT / "jobs.json").read_text()))
+             and set(hooks) <= set(after_hooks) and {f"crm-bot-{kind}" for kind in ("issues", "pr", "security")} <= set(routes_after)
+             and {name: routes_after[name] for name in routes_before if name.startswith("crm-bot-")} == {name: routes_before[name] for name in routes_before if name.startswith("crm-bot-")},
+             err.strip() or out[:200])
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Stubbed end-to-end run of the faker-kit coordinator path")
     ap.add_argument("--artifact", type=Path, help="where to write the JSON transcript; defaults to a file in the run directory")
@@ -2123,6 +2231,7 @@ def main(argv: list[str] | None = None) -> int:
         provider_scenario(run, root / "provider")
         runner_scenario(run, root / "runner")
         vendor_api_scenario(run, root / "vendor-api")
+        profile_approval_scenario(run, root / "profile-approval")
         tooling_scenario.vendor_scenario(root / "vendor-script", run.step)
         tooling_scenario.ratchet_scenario(root / "ratchet", run.step)
         guard_scenario.guard_scenario(root / "guard", run.step, run.verdicts.append)

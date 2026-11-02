@@ -16,7 +16,8 @@ class InstallError(Exception):
 def hermes(*args: str) -> str:
     done = subprocess.run(["hermes", *args], capture_output=True, text=True)
     if done.returncode:
-        raise InstallError(f"hermes {' '.join(a for a in args[:4] if not a.startswith('-') or a == '-p')} failed")
+        reason = " ".join(done.stderr.split())[:300]
+        raise InstallError(f"hermes {' '.join(a for a in args[:4] if not a.startswith('-') or a == '-p')} failed" + (f": {reason}" if reason else ""))
     return done.stdout
 
 

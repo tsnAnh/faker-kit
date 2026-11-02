@@ -272,6 +272,13 @@ def taint_flow(host: Host) -> None:
     host.result("web_extract", {"url": "u"}, "x", session=web)
     merge = host.terminal("gh pr merge 1", session=web, label="deny in tainted turn")
     host.step("guard: a hard block beats an approval in a tainted turn", blocked(merge, "blocked for every bot"), action(merge))
+    clean_create = host.terminal("hermes profile create shop", "ong-xay", host.sid(), label="profile create in a clean turn")
+    read = host.sid()
+    host.result("web_extract", {"url": "u"}, "x", profile="ong-xay", session=read)
+    tainted_create = host.terminal("hermes profile create shop", "ong-xay", read, label="profile create in a tainted turn")
+    refused_when_tainted = blocked(tainted_create, "runs only in a turn that read nothing untrusted")
+    host.step("guard: the bootstrap bot creates a profile only in a turn that read nothing untrusted", clean_create is None and refused_when_tainted,
+              f"{action(clean_create)} {action(tainted_create)}")
     plain = host.sid()
     left_alone = [host.result("clarify", {}, "answer", session=plain), host.result("terminal", {"command": "faker-kit status"}, '{"status": "done"}', session=plain)]
     host.step("guard: other tool results are left alone and do not taint", left_alone == [None, None] and host.tool("write_file", brief, session=plain) is None, "")

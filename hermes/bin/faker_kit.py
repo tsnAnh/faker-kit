@@ -378,6 +378,8 @@ class Kit:
     def project_line(self, bot: Bot) -> str:
         cord = self.andon.read(bot.name)
         head = f"{bot.project} ({bot.name}, {bot.repo})" + (f" ANDON: {cord.reason}" if cord else "")
+        if not self.profiles.live(bot.name):
+            head += f" NOT SET UP: bot {bot.name} has no Hermes profile, so this project does nothing yet. Run hermes profile create {bot.name}, then faker-kit add-project {bot.repo}"
         try:
             pulls = Gh(self.home, bot.name, str(bot.repo), self.run).open_pulls()
         except Refused as err:
@@ -607,13 +609,14 @@ class Kit:
         inherited = subscription if subscription is not None else any(self.profiles.subscription_in_use(b) for b in self.bots_file()["bots"])
         use_subscription = not provider and inherited
         config_dir = self.profiles.claude_login() if use_subscription else None
+        self.profiles.ensure(name)
         data = self.bots_file()
         self.register_project(data, repo, name, slug, {key: wanted.get(key) for key in SCHEDULE_DEFAULTS}, slack_channel)
         policy = self.policy_from(data)
         project_bot = policy.bot(name)
         self.run(["label", "create", LABEL, "-R", repo, "--color", ANDON_COLOR, "--description", ANDON_DESCRIPTION, "--force"])
-        for name, (color, description) in LABELS.items():
-            self.run(["label", "create", name, "-R", repo, "--color", color, "--description", description, "--force"])
+        for label, (color, description) in LABELS.items():
+            self.run(["label", "create", label, "-R", repo, "--color", color, "--description", description, "--force"])
         self.write_bots(data)
         out = self.sync_bot(project_bot, policy.ask_owner, model, config_dir, provider)
         owner, repo_name = repo.split("/")

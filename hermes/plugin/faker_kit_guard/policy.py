@@ -106,6 +106,9 @@ BRIEFS_PATH = re.compile(r"faker-kit/briefs(?![\w-])", re.I)
 LINK_CALL = r"(?:symlink\w*|hardlink_to|os\.link|fs\.link\w*)"
 LINK_IN_CODE = re.compile(rf"(?s){LINK_CALL}.{{0,300}}faker-kit/briefs|faker-kit/briefs.{{0,300}}{LINK_CALL}", re.I)
 PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|faker-kit/kit)(?![\w-])", re.I)
+PROFILE_CREATE = re.compile(r"hermes profile create (?:--no-alias ([a-z0-9][a-z0-9_-]{0,63})|([a-z0-9][a-z0-9_-]{0,63})(?: --no-alias)?)")
+PROFILE_ADMIN_WORDS = frozenset({"profile", "bot"})
+PROFILE_CREATE_TURN = "hermes profile create"
 CLEAN_TURN_TEXT = re.compile(r"\bfaker-kit\W+(merge|handoff)\b")
 TAINTED_TURN_SECONDS = 3600
 TAINT_BLOCKED_TOOLS = ("delegate_task", "cronjob*")
@@ -842,6 +845,8 @@ def command_problem(policy: Policy, words: list[str]) -> str | None:
         chosen = chosen or next((w.split("=", 1)[1] for w in words if w.startswith("--profile=")), None)
         if chosen not in policy.bots or chosen == "default":
             return "a bot runs hermes only with -p naming a faker-kit bot, never the default Hermes agent"
+        if PROFILE_ADMIN_WORDS.intersection(words[1:]):
+            return "creating, importing, deleting, or listing bots and profiles is the owner's; the bootstrap bot may run only `hermes profile create <bot>` alone on the command line"
     if any(PROTECTED_KIT.search(w) for w in words[1:]) and program not in (*KIT_READERS, PROGRAM):
         reading = program == "git" and any(w in KIT_GIT_READS for w in words[1:4])
         reading = reading or (program == "find" and not {"-delete", "-exec", "-execdir", "-ok"} & set(words))
@@ -936,9 +941,19 @@ def secret_reference(tool_name: str, args: dict) -> str | None:
     return None
 
 
+def profile_create_name(tool_name: str, args: dict) -> str | None:
+    if tool_name != "terminal":
+        return None
+    found = PROFILE_CREATE.fullmatch(str(args.get("command", "")).strip())
+    name = (found.group(1) or found.group(2)) if found else None
+    return name if name and name not in RESERVED_NAMES else None
+
+
 def clean_turn_command(tool_name: str, args: dict) -> str | None:
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in TAINT_BLOCKED_TOOLS):
         return tool_name
+    if profile_create_name(tool_name, args):
+        return PROFILE_CREATE_TURN
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
         return None
     if tool_name in ("terminal", "process_manage"):
@@ -949,7 +964,9 @@ def clean_turn_command(tool_name: str, args: dict) -> str | None:
 
 
 def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bool) -> dict | None:
-    why = hard_block(policy, tool_name, args)
+    known = policy.bots.get(profile)
+    creating = known is not None and known.role == "bootstrap" and profile_create_name(tool_name, args) is not None
+    why = None if creating else hard_block(policy, tool_name, args)
     if why:
         return block(f"{tool_name} is blocked for every bot: {why}")
     for rule in policy.deny:
@@ -967,6 +984,8 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
     gated = clean_turn_command(tool_name, args) if tainted else None
     if gated:
         return block(f"{gated} runs only in a turn that read nothing untrusted; the owner or the chief of staff must ask for it in a new message, or a new wake must start it")
+    if creating:
+        return None
     read_only = tool_name in policy.read_only_tools
     if not policy.ask_owner:
         return None
