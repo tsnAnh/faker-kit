@@ -636,6 +636,7 @@
   "omit": [
     "*/.cursor-plugin/**",
     "harness/pstack/claude-code/skills/make-bot-ui/**",
+    "harness/pstack/claude-code/skills/statechart/scripts/test/**",
     "harness/pstack/claude-code/plugin.json"
   ],
   "forbidden": {
