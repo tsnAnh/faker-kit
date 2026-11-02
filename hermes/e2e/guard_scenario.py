@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import types
@@ -598,6 +599,62 @@ def speed(host: Host) -> None:
     host.step("guard: a command too long to check is blocked and crafted long input stays fast", blocked(long) and fast_alias and fast_code, action(alias))
 
 
+NO_PYYAML_PROBE = r"""
+import importlib.util, json, sys
+from pathlib import Path
+had_pyyaml = importlib.util.find_spec("yaml") is not None
+target = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("hermes_plugins_faker_kit_guard", target / "__init__.py", submodule_search_locations=[str(target)])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+sys.dont_write_bytecode = True
+spec.loader.exec_module(module)
+hooks = {}
+class Context:
+    def register_hook(self, hook, callback):
+        hooks[hook] = callback
+module.register(Context())
+verdicts = {label: hooks["pre_tool_call"](tool_name="terminal", args={"command": command}, session_id="s-" + label, turn_id="t1")
+            for label, command in (("status", "git status"), ("push", "git push origin main"))}
+print(json.dumps({"had_pyyaml": had_pyyaml, "global_yaml": "yaml" in sys.modules, "verdicts": verdicts}))
+"""
+
+
+def no_pyyaml_run(root: Path, kit: bool, guard: str | None = None) -> dict:
+    home = root / "home"
+    team = home / ".hermes" / "faker-kit"
+    profile = home / ".hermes" / "profiles" / "meo-beo"
+    team.mkdir(parents=True)
+    shutil.copytree(HERMES / "plugin" / "faker_kit_guard", profile / "plugins" / "faker_kit_guard", ignore=shutil.ignore_patterns("__pycache__"))
+    text = GUARD_TEMPLATE.read_text().replace("  - OWNER-LOGIN", "  - Codertocat").replace("ask_owner: true", "ask_owner: false")
+    (team / "guard.yaml").write_text(guard if guard is not None else text)
+    (team / "bots.yaml").write_text(BOTS_YAML)
+    if kit:
+        shutil.copytree(HERMES / "vendor", team / "kit" / "hermes" / "vendor", ignore=shutil.ignore_patterns("__pycache__"))
+    env = {"HOME": str(home), "HERMES_HOME": str(profile), "FAKER_KIT_HOME": str(team), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+    done = subprocess.run([sys.executable, "-I", "-S", "-c", NO_PYYAML_PROBE, str(profile / "plugins" / "faker_kit_guard")],
+                          env=env, capture_output=True, text=True, timeout=60, check=False)
+    if done.returncode != 0:
+        return {"error": done.stderr.strip()[-300:]}
+    return json.loads(done.stdout)
+
+
+def no_pyyaml(host: Host) -> None:
+    base = host.root / "no-pyyaml"
+    vendored = no_pyyaml_run(base / "vendored", kit=True)
+    verdicts = vendored.get("verdicts", {})
+    host.step("guard: in a Hermes Python without PyYAML the guard loads the policy with the kit's vendored copy and adds no global yaml module",
+              vendored.get("had_pyyaml") is False and vendored.get("global_yaml") is False
+              and verdicts.get("status") is None and blocked(verdicts.get("push")) and "until guard.yaml" not in str(verdicts.get("push")),
+              json.dumps(vendored)[:300])
+    missing = no_pyyaml_run(base / "missing", kit=False).get("verdicts", {})
+    host.step("guard: without PyYAML and without the kit's vendored copy every command stays blocked and says why",
+              blocked(missing.get("status"), "no yaml module") and blocked(missing.get("push")), json.dumps(missing)[:300])
+    broken = no_pyyaml_run(base / "broken", kit=True, guard="not: [valid").get("verdicts", {})
+    host.step("guard: a malformed guard.yaml read with the vendored copy blocks commands as unreadable instead of crashing",
+              blocked(broken.get("status"), "cannot read") and blocked(broken.get("push")), json.dumps(broken)[:300])
+
+
 def guard_scenario(root: Path, step: Step, record: Record) -> None:
     host = Host(root, step, record)
     host.policy()
@@ -619,4 +676,5 @@ def guard_scenario(root: Path, step: Step, record: Record) -> None:
     chief_work(host)
     skill_reminders(host)
     turn_records(host)
+    no_pyyaml(host)
     speed(host)

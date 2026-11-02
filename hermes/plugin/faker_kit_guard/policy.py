@@ -4,11 +4,15 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import html
+import importlib.util
 import json
 import os
 import posixpath
 import re
 import shlex
+import sys
+import threading
+import types
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -301,12 +305,43 @@ def parse_policy(data: object, bots: object = None, home: Path | None = None) ->
     )
 
 
-def _yaml(path: Path, missing_ok: bool) -> object:
+VENDORED_YAML = "faker_kit_guard_vendored_yaml"
+_vendored_yaml_lock = threading.Lock()
+
+
+def _vendored_yaml(home: Path) -> types.ModuleType:
+    package = (home / "kit" / "hermes" / "vendor" / "yaml").resolve()
+    name = f"{VENDORED_YAML}_{hashlib.sha256(str(package).encode()).hexdigest()[:16]}"
+    with _vendored_yaml_lock:
+        loaded = sys.modules.get(name)
+        if loaded is not None:
+            return loaded
+        spec = importlib.util.spec_from_file_location(name, package / "__init__.py", submodule_search_locations=[str(package)])
+        if spec is None or spec.loader is None or not (package / "__init__.py").is_file():
+            raise PolicyError("the Python running Hermes has no yaml module and the kit's vendored copy is missing")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException as err:
+            for partial in [n for n in sys.modules if n == name or n.startswith(name + ".")]:
+                del sys.modules[partial]
+            if not isinstance(err, Exception):
+                raise
+            raise PolicyError(f"the kit's vendored yaml module failed to load: {type(err).__name__}") from err
+        return module
+
+
+def _yaml_module(home: Path) -> types.ModuleType:
     try:
         import yaml  # noqa: PLC0415
-    except ImportError as err:
-        raise PolicyError("the Python running Hermes has no yaml module") from err
+    except ImportError:
+        return _vendored_yaml(home)
+    return yaml
 
+
+def _yaml(path: Path, missing_ok: bool, home: Path) -> object:
+    yaml = _yaml_module(home)
     try:
         return yaml.safe_load(path.read_text())
     except FileNotFoundError:
@@ -319,7 +354,7 @@ def _yaml(path: Path, missing_ok: bool) -> object:
 
 def load_policy(home: Path | None = None) -> Policy:
     home = home or faker_kit_home()
-    return parse_policy(_yaml(home / "guard.yaml", False), _yaml(home / "bots.yaml", True), home)
+    return parse_policy(_yaml(home / "guard.yaml", False, home), _yaml(home / "bots.yaml", True, home), home)
 
 
 def block(message: str) -> dict:
