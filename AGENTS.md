@@ -99,6 +99,15 @@ The Claude review workflow reads this section with REVIEW.md.
 
 `.agents/dispatch.json` and `.agents/dispatch.md` configure Hermes dispatch to cloud coding agents. Cloud sessions prove their work with `scripts/check.sh` and the `verify-faker-kit` skill (the `verification_skill`).
 
+## Cloud sessions
+
+A Claude Code cloud session (claude.ai/code, the Claude desktop and mobile apps, `claude --cloud`, `faker-kit launch`) starts from a clone of this repository. The cloud environment's setup script installs the toolchain once and the result is cached: `scripts/cloud-setup.sh` holds the same script for a clean container test (`docker run --rm -v "$PWD:/src:ro" ubuntu:24.04 bash -c 'cp -a /src /repo && cd /repo && bash scripts/cloud-setup.sh && bash scripts/check.sh'`). The kit's skills and subagents load from the vendored copy in `.agents/faker-kit/`, linked into `.claude/skills/` and `.claude/agents/`, so `/faker-mode` and every kit skill resolve with no plugin install; plugin hooks do not run there.
+
+| Surface | Proof in a cloud session | Where the rest is verified |
+|---|---|---|
+| Kit plugins, hooks, scripts, the `faker-kit` command, the guard | `scripts/check.sh`: the two e2e runs write JSON transcripts with stable digests to `artifacts/`; quote the digests and failing steps in the pull request | `claude plugin validate .` and the real-CLI plugin install step run in CI's `check` job |
+| Hermes bots on a live machine | The hermes e2e transcript | The `verify-faker-kit` skill on the owner's Hermes machine |
+
 ## Learned User Preferences
 
 - The owner wants Hermes bots to act without asking (guard.yaml `ask_owner: false`, Hermes approvals off) and unrestricted (every Hermes tool and a full shell), limited only by hard blocks in the guard's code (secret reads, repository deletion, push to main or force-push, raw `gh pr merge`, wiping / or home); keep new bot flows free of owner confirmation steps and do not add per-role tool or command limits back.
