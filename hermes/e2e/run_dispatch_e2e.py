@@ -317,6 +317,15 @@ if len(args) == 2 and args[0] == "--cloud":
     if not os.isatty(1):
         print("Error: --cloud requires an interactive terminal.")
         sys.exit(1)
+    config = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.environ["HOME"], ".claude.json")
+    if os.path.exists(config):
+        try:
+            projects = json.load(open(config)).get("projects") or {}
+        except ValueError:
+            projects = {}
+        if (projects.get(os.path.realpath(os.getcwd())) or {}).get("hasTrustDialogAccepted") is not True:
+            print("Do you trust this folder? 1. Yes, proceed 2. No, exit", flush=True)
+            sys.exit(1)
     with open(os.environ["E2E_CLAUDE_LOG"], "a") as out:
         out.write(json.dumps({"argv": args, "cwd": os.getcwd(), **chosen}) + "\n")
     print("Created cloud session: Task", flush=True)
@@ -469,7 +478,7 @@ class Run:
     def env(self) -> dict[str, str]:
         return {
             "HOME": str(self.home), "PATH": f"{self.bin}:/usr/bin:/bin", "TMPDIR": str(self.root), "LANG": "C.UTF-8",
-            "FAKER_KIT_HOME": str(self.team), "E2E_GH_STATE": str(self.gh_state), "E2E_GH_LOG": str(self.gh_log),
+            "FAKER_KIT_HOME": str(self.team), "CLAUDE_CONFIG_DIR": "", "E2E_GH_STATE": str(self.gh_state), "E2E_GH_LOG": str(self.gh_log),
             "E2E_CLAUDE_LOG": str(self.claude_log), "E2E_ORIGIN": str(self.root / "origin"), "E2E_SEND_FAIL": str(self.send_fail),
             "E2E_TOOL_LOG": str(self.root / "tool-calls.log"), "E2E_NO_IMAGE": str(self.root / "no-image"),
             "E2E_DOCKER_STDIN": str(self.root / "docker-stdin"), "E2E_DOCKER_ONCE": str(self.root / "docker-once"),
@@ -522,9 +531,10 @@ class Run:
         change(state)
         self.set_gh(state)
 
-    def kit(self, *argv: str, bot: str | None = BOT) -> tuple[int, str, str]:
-        saved = {key: os.environ.get(key) for key in self.env()}
-        os.environ.update(self.env())
+    def kit(self, *argv: str, bot: str | None = BOT, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        wanted = {**self.env(), **(env or {})}
+        saved = {key: os.environ.get(key) for key in wanted}
+        os.environ.update(wanted)
         out, err = io.StringIO(), io.StringIO()
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -1436,6 +1446,62 @@ def issues_scenario(run: Run) -> None:
              and all(0 < len(label["description"]) < 100 and label["force"] for label in labels.values()), err.strip() or ", ".join(sorted(labels)))
 
 
+def trust_scenario(run: Run) -> None:
+    config = run.home / ".claude.json"
+    trust_step = "trusts the launch checkout once"
+
+    def add() -> tuple[int, dict, str]:
+        code, out, err = run.kit("add-project", REPO, "--bot", BOT, "--project", "shop", bot=BOOTSTRAP)
+        return code, json.loads(out) if code == 0 else {}, err
+
+    config.write_text("{not json")
+    code, out, err = add()
+    run.step("add-project leaves an unreadable Claude Code config untouched and never asks the owner to trust anything",
+             code == 0 and config.read_text() == "{not json" and not any(trust_step in s for s in out["next"]), err.strip() or json.dumps(out["next"]))
+    checkout = str(Path(out["launch_checkout"]).resolve())
+    config.unlink()
+    code, out, err = add()
+    run.step("add-project creates no Claude Code config where Claude Code was never set up and never asks the owner to trust anything",
+             code == 0 and not config.exists() and not any(trust_step in s for s in out["next"]), err.strip() or json.dumps(out["next"]))
+    seeded = {"numStartups": 7, "projects": {"/elsewhere": {"hasTrustDialogAccepted": False, "allowedTools": ["Read"]},
+                                             checkout: {"allowedTools": ["Bash(git status)"]}}}
+    config.write_text(json.dumps(seeded))
+    config.chmod(0o600)
+    code, out, err = add()
+    written = json.loads(config.read_text())
+    entry = written["projects"].get(checkout, {})
+    run.step("add-project marks exactly the launch checkout trusted in Claude Code's config, keeps every other key and the file mode, and never asks the owner to trust anything",
+             code == 0 and entry == {"allowedTools": ["Bash(git status)"], "hasTrustDialogAccepted": True}
+             and written["projects"]["/elsewhere"] == seeded["projects"]["/elsewhere"] and written["numStartups"] == 7
+             and (config.stat().st_mode & 0o777) == 0o600 and not any(trust_step in s for s in out["next"]),
+             err.strip() or json.dumps({"entry": entry, "next": out.get("next")}))
+    before = config.read_bytes()
+    code, out, err = add()
+    run.step("add-project does not rewrite Claude Code's config when the launch checkout is already trusted",
+             code == 0 and config.read_bytes() == before, err.strip())
+    private = run.root / "claude-dir"
+    private.mkdir()
+    (private / ".claude.json").write_text(json.dumps({"projects": {}}))
+    config.write_text(json.dumps({"projects": {}}))
+    code, out, err = run.kit("add-project", REPO, "--bot", BOT, "--project", "shop", bot=BOOTSTRAP, env={"CLAUDE_CONFIG_DIR": str(private)})
+    run.step("add-project trusts the launch checkout in the Claude Code config CLAUDE_CONFIG_DIR names, not the home one",
+             code == 0 and json.loads((private / ".claude.json").read_text())["projects"].get(checkout) == {"hasTrustDialogAccepted": True}
+             and json.loads(config.read_text()) == {"projects": {}}, err.strip())
+    bot_config = private / ".claude.json"
+    bot_config.write_text(json.dumps({"numStartups": 2, "projects": {}}))
+    brief = run.brief("trust.md", "/faker-mode\n\nGOAL: fix the CONTRIBUTING typo.\nSCOPE: CONTRIBUTING.md only.\n")
+    code, out, err = run.kit("launch", "--brief-file", str(brief))
+    written = json.loads(bot_config.read_text())
+    run.step("launch trusts the launch checkout in the bot's Claude Code config before starting Claude Code, so a checkout trusted nowhere yet starts without asking the owner",
+             code == 0 and json.loads(out).get("session", "").startswith("https://claude.ai/code/session_")
+             and written["projects"].get(checkout) == {"hasTrustDialogAccepted": True} and written["numStartups"] == 2, out.strip() or err.strip())
+    bot_config.write_text("{broken")
+    broken = run.brief("trust-broken.md", "/faker-mode\n\nGOAL: fix the LICENSE typo.\nSCOPE: LICENSE only.\n")
+    code, out, err = run.kit("launch", "--brief-file", str(broken))
+    run.step("a launch whose Claude Code config cannot be read refuses with that cause and never tells the owner to trust the folder by hand",
+             code == 1 and "missing or unreadable" in err and "&& claude" not in err and bot_config.read_text() == "{broken", err.strip())
+
+
 def kit_source(work: Path) -> tuple[Path, str]:
     source = work / "source"
     ignore = shutil.ignore_patterns("__pycache__", "e2e")
@@ -1972,6 +2038,7 @@ def main(argv: list[str] | None = None) -> int:
         merge_scenario(run)
         incident_scenario(run)
         issues_scenario(run)
+        trust_scenario(run)
         loop_scenario(run)
         install_scenario(run, root / "install")
         provider_scenario(run, root / "provider")

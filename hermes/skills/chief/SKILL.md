@@ -138,7 +138,7 @@ When the owner wants a repository set up that `faker-kit status --all` does not 
 
 1. Take the repository as `OWNER/REPO` from the owner's words. Ask with `clarify` only if the repository is unclear.
 2. Message the bootstrap bot: "Work from the chief of staff: set up OWNER/REPO as a project", adding a project slug or bot name only if the owner gave one.
-3. Relay its reply in one sentence: the bootstrap bot sets the project up and tells the owner the few steps only they can do (merging the kit pull request, trusting the launch checkout); bots share this machine's GitHub login, so there is no token to make. If the machine has no bootstrap bot, say that the owner runs `hermes/install.sh --bootstrap-bot <name>` once; that is the only command to give them.
+3. Relay its reply in one sentence: the bootstrap bot sets the project up and tells the owner the few steps only they can do (merging the kit pull request); bots share this machine's GitHub login, so there is no token to make. If the machine has no bootstrap bot, say that the owner runs `hermes/install.sh --bootstrap-bot <name>` once; that is the only command to give them.
 
 Once the project exists, message its bot like any other project.
 

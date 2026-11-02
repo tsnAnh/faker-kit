@@ -133,7 +133,7 @@ Use this only on private repositories: on a public one anyone's pull request wou
 
 Run `/setup-hermes-project` in Claude Code on this machine, or open the bootstrap bot in Hermes Desktop Bot Mode and say "set up project shop for acme/shop". Either runs:
 
-1. `faker-kit add-project acme/shop` creates the project bot, its four agent jobs (`faker-kit-babysit`, `faker-kit-security`, `faker-kit-incidents`, `faker-kit-issues`), the `agent:andon` and bug-report labels, the webhook routes (when the machine config is kept), and the launch checkout. Trust the checkout once in your own terminal (`cd <path> && claude`, choose yes, then `/exit`).
+1. `faker-kit add-project acme/shop` creates the project bot, its four agent jobs (`faker-kit-babysit`, `faker-kit-security`, `faker-kit-incidents`, `faker-kit-issues`), the `agent:andon` and bug-report labels, the webhook routes (when the machine config is kept), and the launch checkout. faker-kit marks the checkout trusted in Claude Code for you.
 2. `faker-kit vendor --project shop` opens the pull request that copies the kit into the repository's `.agents/faker-kit/`. You review and merge it.
 3. `faker-kit launch --project shop --brief-file <setup brief>` starts one cloud session that sets the repository up for dispatch and for the review workflow, and opens one pull request. You review and merge it.
 
