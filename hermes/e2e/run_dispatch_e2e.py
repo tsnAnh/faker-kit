@@ -317,7 +317,8 @@ if len(args) == 2 and args[0] == "--cloud":
     if not os.isatty(1):
         print("Error: --cloud requires an interactive terminal.")
         sys.exit(1)
-    config = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.environ["HOME"], ".claude.json")
+    legacy = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ["HOME"], ".claude"), ".config.json")
+    config = legacy if os.path.exists(legacy) else os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.environ["HOME"], ".claude.json")
     if os.path.exists(config):
         try:
             projects = json.load(open(config)).get("projects") or {}
@@ -1495,6 +1496,13 @@ def trust_scenario(run: Run) -> None:
     run.step("launch trusts the launch checkout in the bot's Claude Code config before starting Claude Code, so a checkout trusted nowhere yet starts without asking the owner",
              code == 0 and json.loads(out).get("session", "").startswith("https://claude.ai/code/session_")
              and written["projects"].get(checkout) == {"hasTrustDialogAccepted": True} and written["numStartups"] == 2, out.strip() or err.strip())
+    legacy = private / ".config.json"
+    legacy.write_text(json.dumps({"projects": {}}))
+    legacy_brief = run.brief("trust-legacy.md", "/faker-mode\n\nGOAL: fix the CHANGELOG typo.\nSCOPE: CHANGELOG.md only.\n")
+    code, out, err = run.kit("launch", "--brief-file", str(legacy_brief))
+    run.step("where Claude Code still reads the older .config.json, launch trusts the checkout there and starts without asking the owner",
+             code == 0 and json.loads(legacy.read_text())["projects"].get(checkout) == {"hasTrustDialogAccepted": True}, out.strip() or err.strip())
+    legacy.unlink()
     bot_config.write_text("{broken")
     broken = run.brief("trust-broken.md", "/faker-mode\n\nGOAL: fix the LICENSE typo.\nSCOPE: LICENSE only.\n")
     code, out, err = run.kit("launch", "--brief-file", str(broken))
