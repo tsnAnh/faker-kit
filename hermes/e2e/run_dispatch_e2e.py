@@ -2305,6 +2305,20 @@ def profile_validation_scenario(run: Run, other: Run) -> None:
     run.step("add-project refuses every reserved or shadowing bot name before it creates anything, so no approval is spent",
              all(code == 1 and said for _, code, said in reserved) and state() == before, json.dumps(reserved)[:300])
 
+    repo("acme/faker-kit")
+    (other.hermes / "profiles" / "faker-kit").mkdir(parents=True, exist_ok=True)
+    tracked = other.team / "bots.yaml"
+    held = yaml.safe_load(tracked.read_text())
+    held["bots"]["faker-kit"] = {"role": "project", "project": "faker-kit", "repo": "acme/faker-kit"}
+    tracked.write_text(yaml.safe_dump(held))
+    code, out, err = other.kit("status", bot=BOOTSTRAP)
+    again, _, again_err = other.kit("add-project", "acme/faker-kit", "--bot", "faker-kit", "--project", "faker-kit", bot=None)
+    held = yaml.safe_load(tracked.read_text())
+    run.step("a bot that already holds a tool's name keeps working, so a machine's guard policy stays valid after an upgrade",
+             code == 0 and "faker-kit (faker-kit, acme/faker-kit)" in out and again == 0, (err or again_err or out).strip()[:300])
+    held["bots"].pop("faker-kit")
+    tracked.write_text(yaml.safe_dump(held))
+
     folder = other.hermes / "profiles" / "crm-bot" / "kit-skills"
     link = folder / "dispatch"
     target = link.readlink()

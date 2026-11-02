@@ -39,6 +39,7 @@ from faker_kit_guard.policy import (
     INTERVAL,
     REPO,
     RESERVED_NAMES,
+    SHADOWING_BOT_NAMES,
     TAINTED_TURN_SECONDS,
     Bot,
     Policy,
@@ -606,6 +607,8 @@ class Kit:
         name = bot or slug
         check_name(name, "bot")
         check_name(slug, "project")
+        if name in SHADOWING_BOT_NAMES and name not in self.bots_file()["bots"]:
+            raise Refused(f"bot {name!r} is a reserved name: its Hermes alias would shadow the {name} tool; name the bot with --bot")
         wanted = intervals or {}
         for key, value in wanted.items():
             check_interval(value, key)

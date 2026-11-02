@@ -38,7 +38,8 @@ SEGMENT_SPLIT = re.compile(r"\|\||&&|[;|&\n]|\$\(|`|\)")
 ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
 
 NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
-RESERVED_NAMES = frozenset({"default", "hermes", "test", "tmp", "root", "sudo", "gh", "git", "claude", "faker-kit", "python", "node", "uv"})
+RESERVED_NAMES = frozenset({"default", "hermes", "test", "tmp", "root", "sudo"})
+SHADOWING_BOT_NAMES = frozenset({"gh", "git", "claude", "faker-kit", "python", "node", "uv"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SLACK_CHANNEL = re.compile(r"\A[CG][A-Z0-9]{8,}\Z")
 BOOTSTRAP_READ_ONLY = ("status",)
@@ -1081,7 +1082,7 @@ def profile_create_name(tool_name: str, args: dict) -> str | None:
         return None
     found = PROFILE_CREATE.fullmatch(str(args.get("command", "")).strip())
     name = (found.group(1) or found.group(2)) if found else None
-    return name if name and name not in RESERVED_NAMES else None
+    return name if name and name not in RESERVED_NAMES and name not in SHADOWING_BOT_NAMES else None
 
 
 def clean_turn_command(tool_name: str, args: dict) -> str | None:
