@@ -4,4 +4,4 @@ approvals:
   cron_mode: deny
 plugins:
   enabled: [faker_kit_guard]
-timezone: Asia/Saigon
+timezone: Asia/Ho_Chi_Minh
