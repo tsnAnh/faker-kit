@@ -18,10 +18,14 @@ SUBSCRIPTION_PROVIDER = "claude-subscription-directsdk-experimental"
 
 WEBHOOK_HOST = "127.0.0.1"
 WEBHOOK_PORT = 8644
-ROUTE_JOBS: dict[str, tuple[str, tuple[str, ...], str, tuple[dict[str, str], ...]]] = {
-    "pr": ("faker-kit-babysit", ("pull_request", "pull_request_review", "check_suite", "status", "issue_comment"),
+RouteFilter = dict[str, object]
+ROUTE_JOBS: dict[str, tuple[str, tuple[str, ...], str, tuple[RouteFilter, ...]]] = {
+    "pr": ("faker-kit-babysit", ("pull_request", "pull_request_review", "check_suite", "status"),
            "GitHub event {event_type} ({action}) in {repository.full_name}. Pull request {pull_request.number}, "
-           "issue {issue.number}, check suite head {check_suite.head_sha}. Babysit the open pull requests.", ()),
+           "check suite head {check_suite.head_sha}. Babysit the open pull requests.", ()),
+    "comments": ("faker-kit-babysit", ("issue_comment",),
+                 "GitHub event issue_comment ({action}) in {repository.full_name} on pull request {issue.number}. Babysit the open pull requests.",
+                 ({"field": "issue.pull_request", "exists": True}, {"field": "action", "equals": "created"})),
     "security": ("faker-kit-security", ("push",),
                  "GitHub event push to {ref} in {repository.full_name}, head {after}. Run the security review.", ()),
     "issues": ("faker-kit-issues", ("issues",),
@@ -38,7 +42,7 @@ class Route(TypedDict):
     cron_job: str
     deliver: str
     prompt: str
-    filters: list[dict[str, str]]
+    filters: list[RouteFilter]
 
 
 class MachineError(ValueError):
