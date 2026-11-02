@@ -83,7 +83,7 @@ ANDON_FOOTER = (
 ROLE_COMMANDS = {
     "project": {"launch", "merge", "status", "andon", "incidents", "issues"},
     "bootstrap": {"add-project", "vendor", "launch", "status", "andon"},
-    "chief": {"status", "handoff", "loop"},
+    "chief": {"status", "handoff", "loop", "add-project"},
 }
 OWNER_ONLY = {"install", "runner", "projects"}
 ANDON_COLOR = "b60205"
@@ -652,9 +652,15 @@ class Kit:
 
     def check_repo_readable(self, repo: str) -> None:
         try:
-            self.run(["api", f"repos/{repo}", "--jq", ".full_name"])
+            answer = self.run(["api", f"repos/{repo}", "--jq", "{permissions}"])
         except Refused as err:
             raise Refused(f"{repo} is not readable on GitHub with this machine's gh login ({err})") from err
+        try:
+            permissions = json.loads(answer).get("permissions")
+        except (ValueError, AttributeError):
+            permissions = None
+        if not isinstance(permissions, dict) or permissions.get("push") is not True:
+            raise Refused(f"this machine's gh login cannot push to {repo}, so the project's labels and pull requests could not be made; sign gh in as an account with write access")
 
     def kit_skill_dirs(self, machine: Machine) -> list[str]:
         wanted = []
@@ -860,6 +866,8 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     caller = None if who == "default" else kit.policy().bot(who)
     if caller is not None and args.command not in ROLE_COMMANDS[caller.role]:
         raise Refused(f"{caller.name} is a {caller.role} bot; faker-kit {args.command} is not one of its commands")
+    if args.command == "add-project" and caller is not None and caller.role == "chief" and not args.check:
+        raise Refused(f"{caller.name} is a chief bot; it may run faker-kit add-project only with --check, and the bootstrap bot sets the project up")
     if args.command == "status":
         return kit.status(caller, args.all)
     if args.command == "install":

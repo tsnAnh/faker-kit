@@ -185,7 +185,7 @@ if args[0] == "api":
         save()
         print(json.dumps({"html_url": url}))
     elif route == prefix or (re.fullmatch(r"repos/[^/]+/[^/]+", route) and route[len("repos/"):] not in state.get("unreadable_repos", [])):
-        answer({"default_branch": "main", "full_name": route[len("repos/"):]})
+        answer({"default_branch": "main", "full_name": route[len("repos/"):], "permissions": {"push": route[len("repos/"):] not in state.get("readonly_repos", [])}})
     elif route == prefix + "/commits/main":
         answer({"sha": state["main_head"]})
     elif route.startswith(prefix + "/check-runs/") and route.endswith("/annotations"):
@@ -2297,6 +2297,30 @@ def profile_validation_scenario(run: Run, other: Run) -> None:
         refused.append((argv[-1] if argv[0] == "nonsense" else argv[1:], code, bool(err.strip()), out))
     run.step("add-project --check refuses a taken project, a repository GitHub cannot read, a reserved name, and a bad repository, and writes nothing",
              all(code == 1 and said and not out for _, code, said, out in refused) and state() == before, json.dumps(refused)[:300])
+
+    repo("acme/readonly")
+    other.update_gh(lambda gh: gh.update({"readonly_repos": ["acme/readonly"]}))
+    read_only = []
+    for extra in (("--check",), ()):
+        code, out, err = other.kit("add-project", "acme/readonly", "--bot", "ro-bot", "--project", "ro", *extra, bot=BOOTSTRAP)
+        read_only.append((extra, code, "cannot push" in err, out))
+    run.step("add-project and add-project --check refuse a repository the machine's login can read but not push to, before any profile, entry, or label",
+             all(code == 1 and said and not out for _, code, said, out in read_only) and state() == before, json.dumps(read_only)[:300])
+
+    original_bots = bots_path.read_text()
+    held_bots = yaml.safe_load(original_bots)
+    held_bots["bots"][CHIEF] = {"role": "chief"}
+    bots_path.write_text(yaml.safe_dump(held_bots))
+    with_chief = state()
+    repo("acme/chiefchk")
+    code, out, err = other.kit("add-project", "acme/chiefchk", "--check", bot=CHIEF)
+    checked = json.loads(out) if code == 0 else {}
+    code_write, out_write, err_write = other.kit("add-project", "acme/chiefchk", bot=CHIEF)
+    code_other, _, err_other = other.kit("vendor", "--project", "crm", bot=CHIEF)
+    run.step("the chief of staff runs add-project only with --check, which writes nothing; without it add-project refuses and writes nothing",
+             code == 0 and checked.get("profile") == "missing" and code_write == 1 and "--check" in err_write and not out_write
+             and code_other == 1 and "not one of its commands" in err_other and state() == with_chief, (err or err_write or out).strip()[:300])
+    bots_path.write_text(original_bots)
 
     reserved = []
     for name in ("hermes", "test", "tmp", "root", "sudo", "gh", "git", "claude", "faker-kit", "python", "node", "uv", "default"):

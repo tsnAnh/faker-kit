@@ -103,9 +103,12 @@ class Host:
         saved = {key: os.environ.get(key) for key in ("HERMES_HOME", "FAKER_KIT_HOME")}
         os.environ["HERMES_HOME"] = str(self.home / ".hermes" / "profiles" / profile)
         os.environ["FAKER_KIT_HOME"] = str(self.team)
+        previous = Path.cwd()
+        os.chdir(self.root)
         try:
             return self.hooks[hook](**kwargs)
         finally:
+            os.chdir(previous)
             for key, value in saved.items():
                 if value is None:
                     os.environ.pop(key, None)
@@ -161,6 +164,48 @@ def corpus_step(host: Host, group: dict) -> None:
             if not good:
                 wrong.append(f"{profile} {call['tool']} {text_of(call['args'])[:100]} -> {action(verdict)}")
     host.step(f"guard: {group['name']}", not wrong, f"{total} calls as {group['expect']}" if not wrong else f"{len(wrong)} wrong, first: {wrong[0]}")
+
+
+def check_and_repair_contract(host: Host) -> None:
+    host.policy()
+    wrong = []
+    for command, want in (
+        ("faker-kit add-project acme/x --check", None), ("~/.hermes/bin/faker-kit add-project acme/x --bot x-bot --project x --check", None),
+        ("faker-kit add-project acme/x --check && faker-kit status", None),
+        ("faker-kit add-project acme/x # --check", "approve"), ("faker-kit add-project acme/x --model 'x --check y'", "approve"),
+        ("faker-kit add-project acme/x --check; faker-kit add-project acme/y", "approve"), ("faker-kit add-project acme/x --check > out.txt", "approve"),
+        ("faker-kit add-project acme/x", "approve"),
+    ):
+        got = host.terminal(command, "ong-xay", label="bootstrap check")
+        if (got is None and want is not None) or (got is not None and action(got) != want):
+            wrong.append(f"{command} -> {action(got)}")
+    host.step("guard: only a plain add-project command ending in --check skips the bootstrap bot's approval", not wrong, "; ".join(wrong))
+    wrong = []
+    tainted = host.sid()
+    host.result("web_extract", {"url": "u"}, "x", profile="chanh-van", session=tainted)
+    for command, want in (("faker-kit add-project acme/x --check", None), ("faker-kit add-project acme/x # --check", "approve"), ("faker-kit add-project acme/x", "approve")):
+        got = host.terminal(command, "chanh-van", session=tainted, label="chief check, tainted turn")
+        if (got is None and want is not None) or (got is not None and action(got) != want):
+            wrong.append(f"{command} -> {action(got)}")
+    host.step("guard: the chief of staff runs add-project --check after untrusted text without an approval, and nothing else of add-project", not wrong, "; ".join(wrong))
+    held = BOTS_YAML + "  faker-kit: {role: project, project: faker-kit, repo: acme/faker-kit}\n"
+    host.policy(bots=held)
+    wrong = []
+    for profile in ("ong-xay", "chanh-van"):
+        for command, want in (
+            ("hermes profile create faker-kit", None), ("hermes profile create --no-alias faker-kit", None),
+            ("hermes profile create gh", "block"), ("hermes profile create hermes", "block"),
+        ):
+            got = host.terminal(command, profile, label="repair a missing shadowing profile")
+            if (got is None and want is not None) or (got is not None and action(got) != want):
+                wrong.append(f"{profile} {command} -> {action(got)}")
+    host.step("guard: a missing profile of a bot that already holds a tool's name can be created again, and no new shadowing name can", not wrong, "; ".join(wrong))
+    host.policy()
+    before = [action(host.terminal(c, "meo-beo", label="bare hermes target")) for c in ("cp /tmp/x hermes", "touch hermes", "tee hermes")]
+    (host.root / "hermes").mkdir()
+    inside = [action(host.terminal(c, "meo-beo", label="bare hermes target, hermes is a folder here")) for c in ("cp /tmp/x hermes", "touch hermes", "tee hermes")]
+    (host.root / "hermes").rmdir()
+    host.step("guard: a bare hermes target is refused unless it names a folder that exists where the command runs", before == ["block"] * 3 and inside == ["allow"] * 3, f"{before} then {inside}")
 
 
 def policy_failures(host: Host) -> None:
@@ -690,6 +735,7 @@ def guard_scenario(root: Path, step: Step, record: Record) -> None:
     host.step("the shipped guard.yaml adds no deny rules and loads with three cloud sessions at once", "\ndeny: []\n" in sample and "max_in_flight_total: 3" in sample and "version: 2" in sample, "")
     for group in json.loads(CORPUS.read_text()):
         corpus_step(host, group)
+    check_and_repair_contract(host)
     policy_failures(host)
     routed_profile(host)
     taint_flow(host)

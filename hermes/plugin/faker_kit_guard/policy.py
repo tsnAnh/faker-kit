@@ -5,6 +5,7 @@ import fnmatch
 import hashlib
 import html
 import importlib.util
+import itertools
 import json
 import os
 import posixpath
@@ -14,6 +15,7 @@ import sys
 import threading
 import types
 import urllib.parse
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -109,7 +111,6 @@ LINK_IN_CODE = re.compile(rf"(?s){LINK_CALL}.{{0,300}}faker-kit/briefs|faker-kit
 PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|faker-kit/kit)(?![\w-])", re.I)
 PROFILE_CREATE = re.compile(r"hermes profile create (?:--no-alias ([a-z0-9][a-z0-9_-]{0,63})|([a-z0-9][a-z0-9_-]{0,63})(?: --no-alias)?)")
 PROFILE_ADMIN_WORDS = frozenset({"profile", "bot"})
-PROFILE_VERBS = frozenset({"create", "delete", "import", "install", "rename", "use", "export", "list", "show", "remove", "update"})
 PROFILE_CREATE_TURN = "hermes profile create"
 PROFILE_CREATORS = ("bootstrap", "chief")
 PROFILE_ADMIN_REFUSAL = (
@@ -120,17 +121,22 @@ HERMES_PROGRAMS = ("hermes", "hermes-agent")
 HERMES_MODULES = ("hermes_cli", "hermes_cli.main")
 HERMES_VALUE_FLAGS = frozenset({"-p", "--profile", "-z", "--oneshot", "--usage-file", "-m", "--model", "--provider", "--reasoning", "-t", "--toolsets",
                                 "-r", "--resume", "--in", "-s", "--skills"})
+HERMES_OPTIONAL_VALUE_FLAGS = ("-c", "--continue")
+HERMES_WORDS = frozenset(HERMES_SUBCOMMANDS) | PROFILE_ADMIN_WORDS
 PACKAGE_RUNNERS = ("uv", "uvx", "pipx")
 PYTHON = re.compile(r"python[\d.]*\Z")
 SHADOWED_TOOLS = ("hermes", "faker-kit", "gh")
 SHADOWING_FILE = "hermes"
-PATH_ASSIGN = re.compile(r"\A(?:PATH|path)\+?=")
+PATH_ASSIGN = re.compile(r"\APATH\+?=")
 ASSIGNMENT = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\+?=")
 PATH_ASSIGNERS = ("export", "declare", "typeset", "readonly", "local", "env", "setenv")
 FILE_WRITERS_LAST = ("cp", "mv", "ln", "install", "rsync")
 FILE_WRITERS_ANY = ("tee", "touch")
 DOWNLOAD_OUTPUT = {"curl": ("-o", "--output"), "wget": ("-O", "--output-document")}
-REDIRECT = re.compile(r"""\d*>>?\|?\s*(["']?)([^\s"';&|()<>]+)\1""")
+REDIRECT_CHARS = frozenset("<>&|")
+SHELL_KEYWORDS = frozenset({"then", "do", "else", "elif", "if", "while", "until", "{", "!"})
+HEREDOC_OPERATOR = re.compile(r"""-?[ \t]*\\?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
+SHELL_FED_LINE = re.compile(r"(?<![\w./-])(?:sh|bash|zsh|dash|fish|eval|source|xargs)(?![\w-])")
 CLEAN_TURN_TEXT = re.compile(r"\bfaker-kit\W+(merge|handoff)\b")
 TAINTED_TURN_SECONDS = 3600
 TAINT_BLOCKED_TOOLS = ("delegate_task", "cronjob*")
@@ -477,13 +483,111 @@ def shell_parts(words: list[str]) -> tuple[str | None, str | None]:
     return (rest if runs_script else None), (None if runs_script else rest)
 
 
+def scan_shell(text: str) -> tuple[list[str], str]:
+    text = (text or "").replace("\\\n", "")
+    segments: list[str] = []
+    current: list[str] = []
+    clean: list[str] = []
+    quote, nested, line_start, i, size = "", 0, 0, 0, len(text)
+    pending: list[str] = []
+
+    def put(chunk: str) -> None:
+        current.append(chunk)
+        clean.append(chunk)
+
+    def cut(chunk: str) -> None:
+        segments.append("".join(current))
+        current.clear()
+        clean.append(chunk)
+
+    while i < size:
+        char = text[i]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif quote in ('"', "$'"):
+            if char == "\\":
+                put(text[i:i + 2])
+                i += 2
+                continue
+            if char == quote[-1]:
+                quote = ""
+            elif quote == '"' and text.startswith("$(", i):
+                nested += 1
+                cut("$(")
+                i += 2
+                continue
+            elif quote == '"' and char == "`":
+                cut(char)
+                i += 1
+                continue
+            elif quote == '"' and char == ")" and nested:
+                nested -= 1
+                cut(char)
+                i += 1
+                continue
+        elif char == "\\":
+            put(text[i:i + 2])
+            i += 2
+            continue
+        elif char in "'\"":
+            quote = "$'" if char == "'" and i and text[i - 1] == "$" else char
+        elif char == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
+            end = text.find("\n", i)
+            end = size if end < 0 else end
+            put(text[i:end])
+            i = end
+            continue
+        elif text.startswith("<<<", i):
+            put("<<<")
+            i += 3
+            continue
+        elif text.startswith("<<", i):
+            found = HEREDOC_OPERATOR.match(text, i + 2)
+            if found:
+                pending.append(found.group(2))
+                put(text[i:found.end()])
+                i = found.end()
+                continue
+        elif text.startswith(("&&", "||"), i):
+            cut(text[i:i + 2])
+            i += 2
+            continue
+        elif text.startswith("$(", i):
+            cut("$(")
+            i += 2
+            continue
+        elif char in ";|&`)":
+            cut(char)
+            i += 1
+            continue
+        elif char == "\n":
+            cut(char)
+            opening = text[line_start:i]
+            line_start = i + 1
+            if pending and not SHELL_FED_LINE.search(opening):
+                for delimiter in pending:
+                    closing = re.compile(rf"^[ \t]*{re.escape(delimiter)}[ \t]*$", re.M).search(text, line_start)
+                    line_start = closing.end() if closing else size
+                i = line_start
+                line_start += 1
+                pending.clear()
+                continue
+            pending.clear()
+            i += 1
+            continue
+        put(char)
+        i += 1
+    segments.append("".join(current))
+    return segments, "".join(clean)
+
+
 def shell_words(segment: str, keep_path: bool = False) -> list[str]:
     words = split_words(segment)
     for _ in range(MAX_WRAPPERS):
         if not words:
             break
         program = Path(words[0]).name
-        if ENV_ASSIGN.match(words[0]):
+        if ENV_ASSIGN.match(words[0]) or words[0] in SHELL_KEYWORDS:
             words.pop(0)
         elif program in WRAPPERS:
             rest = unwrap(program, words[1:])
@@ -499,11 +603,22 @@ def shell_words(segment: str, keep_path: bool = False) -> list[str]:
     return words
 
 
-def shell_commands(text: str, depth: int = 0, keep_path: bool = False, raw_out: list[list[str]] | None = None) -> list[list[str]]:
+def without_keywords(words: list[str]) -> list[str]:
+    start = 0
+    while start < len(words) and words[start] in SHELL_KEYWORDS:
+        start += 1
+    return words[start:]
+
+
+def shell_commands(text: str, depth: int = 0, keep_path: bool = False, raw_out: list[list[str]] | None = None,
+                   texts_out: list[str] | None = None) -> list[list[str]]:
     out: list[list[str]] = []
-    for raw in SEGMENT_SPLIT.split(text or ""):
+    segments, clean = scan_shell(text)
+    if texts_out is not None:
+        texts_out.append(clean)
+    for raw in segments:
         if raw_out is not None:
-            raw_out.append(split_words(raw.strip()))
+            raw_out.append(without_keywords(split_words(raw.strip())))
         words = shell_words(raw.strip(), keep_path)
         if not words:
             continue
@@ -512,7 +627,7 @@ def shell_commands(text: str, depth: int = 0, keep_path: bool = False, raw_out: 
         if script == UNCHECKABLE or (script is not None and depth >= 3):
             out.append([UNCHECKABLE, *words])
         elif script is not None:
-            out += shell_commands(script, depth + 1, keep_path, raw_out)
+            out += shell_commands(script, depth + 1, keep_path, raw_out, texts_out)
         else:
             out.append(words)
     return out
@@ -538,8 +653,8 @@ def heredoc_body(command: str, delimiter: str, start: int) -> tuple[str, int]:
     return command[line_end + 1:end], end
 
 
-def interpreter_code(command: str) -> list[str]:
-    tokens = shell_tokens(command)
+def interpreter_code(command: str, clean: str) -> list[str]:
+    tokens = shell_tokens(clean)
     if tokens is None:
         return [command]
     code, running, read_to = [], False, 0
@@ -845,13 +960,17 @@ def hermes_subcommand(args: list[str]) -> str | None:
             return args[i + 1] if i + 1 < len(args) else None
         if not word.startswith("-"):
             return word
-        i += 2 if word in HERMES_VALUE_FLAGS else 1
+        following = args[i + 1] if i + 1 < len(args) else ""
+        if word in HERMES_OPTIONAL_VALUE_FLAGS:
+            i += 1 if not following or following.startswith("-") or following in HERMES_WORDS else 2
+        else:
+            i += 2 if word in HERMES_VALUE_FLAGS else 1
     return None
 
 
 def hermes_arguments(policy: Policy, words: list[str]) -> list[str] | None:
     program = Path(words[0]).name
-    if program in HERMES_PROGRAMS or program in policy.bots or "$" in program:
+    if program in HERMES_PROGRAMS or program in policy.bots:
         return words[1:]
     if PYTHON.match(program):
         module = next((words[i + 1] for i, w in enumerate(words[:-1]) if w == "-m"), None)
@@ -872,14 +991,6 @@ def hermes_arguments(policy: Policy, words: list[str]) -> list[str] | None:
     return None
 
 
-def profile_verb_form(args: list[str]) -> bool:
-    first = hermes_subcommand(args)
-    if first != "profile":
-        return False
-    after = args[args.index("profile") + 1:]
-    return bool(after) and after[0] in PROFILE_VERBS
-
-
 def shadowing_problem(words: list[str]) -> str | None:
     first = words[0]
     if (first.endswith("(") and first[:-1] in SHADOWED_TOOLS) or (first in SHADOWED_TOOLS and words[1:2] == ["("]):
@@ -893,19 +1004,35 @@ def shadowing_problem(words: list[str]) -> str | None:
     return None
 
 
+def path_directories() -> set[str]:
+    listed = [*os.environ.get("PATH", "").split(":"), "~/.hermes/bin", "~/.local/bin"]
+    return {str(Path(os.path.expandvars(entry)).expanduser()) for entry in listed if entry}
+
+
+def shadows_hermes(target: str, sources: list[str]) -> bool:
+    if Path(target).name != SHADOWING_FILE or target.endswith("/"):
+        return False
+    written = Path(os.path.expandvars(target)).expanduser()
+    if written.is_dir():
+        return False
+    on_path = written.parent.name in ("bin", "sbin") or str(written.parent) in path_directories()
+    return on_path or not any(Path(source).name == SHADOWING_FILE for source in sources)
+
+
 def writes_shadowing_file(words: list[str]) -> bool:
     program, rest = Path(words[0]).name, list(words[1:])
     operands = [w for w in rest if not w.startswith("-")]
     targets: list[str] = []
+    sources: list[str] = []
     if program in FILE_WRITERS_ANY:
         targets = operands
     elif program in FILE_WRITERS_LAST:
-        targets = operands[-1:]
+        targets, sources = operands[-1:], operands[:-1]
     elif program == "dd":
         targets = [w[3:] for w in rest if w.startswith("of=")]
     elif program in DOWNLOAD_OUTPUT:
         targets = [rest[i + 1] for i, w in enumerate(rest[:-1]) if w in DOWNLOAD_OUTPUT[program]]
-    return any(Path(target).name == SHADOWING_FILE for target in targets)
+    return any(shadows_hermes(target, sources) for target in targets)
 
 
 def path_rebinding(tokens: list[str]) -> bool:
@@ -927,10 +1054,15 @@ def path_rebinding(tokens: list[str]) -> bool:
     return False
 
 
-def rebinding_problem(command: str, raw: list[list[str]]) -> str | None:
+def redirect_targets(text: str) -> list[str]:
+    tokens = shell_tokens(text) or []
+    return [after for token, after in itertools.pairwise(tokens) if ">" in token and set(token) <= REDIRECT_CHARS]
+
+
+def rebinding_problem(texts: list[str], raw: list[list[str]]) -> str | None:
     if any(path_rebinding(tokens) for tokens in raw):
         return "assigning PATH would let a later command run something other than the real hermes, faker-kit, or gh"
-    if any(Path(match.group(2)).name == SHADOWING_FILE for match in REDIRECT.finditer(command)):
+    if any(Path(target).name == SHADOWING_FILE for text in texts for target in redirect_targets(text)):
         return "a file named hermes could run in place of the real hermes in later commands"
     return None
 
@@ -975,7 +1107,7 @@ def command_problem(policy: Policy, words: list[str]) -> str | None:
         first = hermes_subcommand(launched)
         if first in PROFILE_ADMIN_WORDS or (first is not None and "$" in first):
             return PROFILE_ADMIN_REFUSAL
-    elif profile_verb_form(words[1:]):
+    elif "$" in program and words[1:2] and words[1] in PROFILE_ADMIN_WORDS:
         return PROFILE_ADMIN_REFUSAL
     if any(PROTECTED_KIT.search(w) for w in words[1:]) and program not in (*KIT_READERS, PROGRAM):
         reading = program == "git" and any(w in KIT_GIT_READS for w in words[1:4])
@@ -1007,8 +1139,10 @@ def terminal_problem(policy: Policy, command: str, depth: int = 0) -> str | None
     if re.search(r">\s*\S*" + PROTECTED_KIT.pattern, command, re.I):
         return "bots never change the kit or ~/.hermes/bin"
     raw: list[list[str]] = []
-    commands = shell_commands(command, keep_path=True, raw_out=raw)
-    why = rebinding_problem(command, raw)
+    texts: list[str] = []
+    commands = shell_commands(command, keep_path=True, raw_out=raw, texts_out=texts)
+    clean = scan_shell(command)[1]
+    why = rebinding_problem(texts, raw)
     if why:
         return why
     for words in commands:
@@ -1017,11 +1151,11 @@ def terminal_problem(policy: Policy, command: str, depth: int = 0) -> str | None
             return why
     if BRIEFS_PATH.search(command) and any(Path(words[0]).name == "ln" for words in commands):
         return "a link inside a briefs folder can point at files a brief must never read"
-    for kind, value in shell_inputs(command):
+    for kind, value in shell_inputs(clean):
         why = value if kind == "block" else terminal_problem(policy, value, depth + 1) if depth < 3 else command_problem(policy, [UNCHECKABLE])
         if why:
             return why
-    return code_problem(interpreter_code(command), hermes=True)
+    return code_problem(interpreter_code(command, clean), hermes=True)
 
 
 def github_code_write(text: str) -> bool:
@@ -1077,18 +1211,20 @@ def secret_reference(tool_name: str, args: dict) -> str | None:
     return None
 
 
-def profile_create_name(tool_name: str, args: dict) -> str | None:
+def profile_create_name(tool_name: str, args: dict, bots: Iterable[str] = ()) -> str | None:
     if tool_name != "terminal":
         return None
     found = PROFILE_CREATE.fullmatch(str(args.get("command", "")).strip())
     name = (found.group(1) or found.group(2)) if found else None
-    return name if name and name not in RESERVED_NAMES and name not in SHADOWING_BOT_NAMES else None
+    if name and name not in RESERVED_NAMES and (name not in SHADOWING_BOT_NAMES or name in bots):
+        return name
+    return None
 
 
-def clean_turn_command(tool_name: str, args: dict) -> str | None:
+def clean_turn_command(policy: Policy, tool_name: str, args: dict) -> str | None:
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in TAINT_BLOCKED_TOOLS):
         return tool_name
-    if profile_create_name(tool_name, args):
+    if profile_create_name(tool_name, args, policy.bots):
         return PROFILE_CREATE_TURN
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
         return None
@@ -1099,15 +1235,20 @@ def clean_turn_command(tool_name: str, args: dict) -> str | None:
     return found_text.group(1) if found_text else None
 
 
-def bootstrap_read(words: list[str]) -> bool:
-    if words[0] != PROGRAM or not words[1:2]:
-        return False
-    return words[1] in BOOTSTRAP_READ_ONLY or (words[1] == "add-project" and "--check" in words[2:])
+def reads_only(command: str, verbs: tuple[str, ...]) -> bool:
+    parts = [part.strip() for part in SEGMENT_SPLIT.split(command) if part.strip()]
+    for part in parts:
+        if ADD_PROJECT_CHECK.fullmatch(part):
+            continue
+        words = [w.split() for w in command_segments(part)]
+        if not (len(words) == 1 and words[0][0] == PROGRAM and words[0][1:2] and words[0][1] in verbs):
+            return False
+    return bool(parts)
 
 
 def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bool) -> dict | None:
     known = policy.bots.get(profile)
-    creating = known is not None and known.role in PROFILE_CREATORS and profile_create_name(tool_name, args) is not None
+    creating = known is not None and known.role in PROFILE_CREATORS and profile_create_name(tool_name, args, policy.bots) is not None
     why = None if creating else hard_block(policy, tool_name, args)
     if why:
         return block(f"{tool_name} is blocked for every bot: {why}")
@@ -1123,7 +1264,7 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
     default = default_agent_use(policy, profile, tool_name, args)
     if default:
         return block(default)
-    gated = clean_turn_command(tool_name, args) if tainted else None
+    gated = clean_turn_command(policy, tool_name, args) if tainted else None
     if gated:
         return block(f"{gated} runs only in a turn that read nothing untrusted; the owner or the chief of staff must ask for it in a new message, or a new wake must start it")
     if creating:
@@ -1131,14 +1272,14 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
     read_only = tool_name in policy.read_only_tools
     if not policy.ask_owner:
         return None
-    segments = [s.split() for s in command_segments(str(args.get("command", "")))] if tool_name == "terminal" else []
-    bootstrap_reads = bool(segments) and all(bootstrap_read(w) for w in segments)
+    command = str(args.get("command", "")) if tool_name == "terminal" else ""
+    bootstrap_reads = reads_only(command, BOOTSTRAP_READ_ONLY)
     if bot.role == "bootstrap" and not read_only and not bootstrap_reads:
         return approve(
             f"The bootstrap bot changes this machine or GitHub. Approve {tool_name} only if you asked for it.",
             tool_name, args, "bootstrap",
         )
-    chief_loop = bool(segments) and all(w[0] == PROGRAM and w[1:2] and w[1] in CHIEF_NO_APPROVAL for w in segments)
+    chief_loop = reads_only(command, CHIEF_NO_APPROVAL)
     if tainted and not read_only and not (bot.role == "chief" and chief_loop):
         return approve(f"This turn read untrusted content. Approve {tool_name} only if you asked for it.", tool_name, args, "taint")
     return None
@@ -1160,6 +1301,7 @@ TRUSTED_STEP = (
     rf"|{FAKER_KIT_LAUNCHER} +(?!incidents(?![A-Za-z0-9_.=:,+~-]))[a-z][a-z-]*(?: +[A-Za-z0-9_./=:,+~-]+)*"
     rf"(?: +(?:2>&1|2> */dev/null|> */dev/null))*(?: *\| *(?:{TRUSTED_FILTER}))*)"
 )
+ADD_PROJECT_CHECK = re.compile(rf"{FAKER_KIT_LAUNCHER} +add-project(?: +[A-Za-z0-9_./=:,+~-]+)* +--check")
 TRUSTED_COMMAND = re.compile(rf"\A(?:cd +{PLAIN_PATH} +&& +)?{TRUSTED_STEP}(?: *(?:\|\||&&|;|\n) *{TRUSTED_STEP})*\Z")
 
 
@@ -1182,7 +1324,7 @@ def reader_source(policy: Policy, tool_name: str, args: dict) -> str | None:
         return source
     if tool_name in ("terminal", "process_manage"):
         command = str(args.get("command", "")).strip()
-        if profile_create_name(tool_name, args):
+        if profile_create_name(tool_name, args, policy.bots):
             return None
         return None if len(command) <= MAX_COMMAND_CHARS and TRUSTED_COMMAND.match(command) else source
     if tool_name in ("read_file", "search_files"):

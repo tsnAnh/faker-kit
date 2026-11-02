@@ -644,7 +644,6 @@
     {"tool": "terminal", "args": {"command": "x=profile; hermes $x create shop"}},
     {"tool": "terminal", "args": {"command": "hermes -m opus profile create shop"}},
     {"tool": "terminal", "args": {"command": "ong-xay -p meo-beo bot create shop"}},
-    {"tool": "terminal", "args": {"command": "foo profile create shop"}},
     {"tool": "terminal", "args": {"command": "bash -c 'meo-beo profile delete y'"}}
   ]},
   {"name": "-p keeps working for other hermes subcommands that only mention profile or bot", "policy": "quiet", "profiles": ["meo-beo"], "expect": "allow", "calls": [
@@ -677,5 +676,66 @@
     {"tool": "terminal", "args": {"command": "faker-kit add-project acme/shop --check"}},
     {"tool": "terminal", "args": {"command": "faker-kit add-project acme/shop --bot shop --project shop --check"}},
     {"tool": "terminal", "args": {"command": "~/.hermes/bin/faker-kit add-project acme/shop --check"}}
+  ]},
+{"name": "quoted or heredoc text that mentions hermes, PATH, or an alias is not a redirect or an assignment", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "allow", "calls": [
+    {"tool": "terminal", "args": {"command": "git commit -m \"route guard -> hermes\""}},
+    {"tool": "terminal", "args": {"command": "gh pr comment 3 --body \"moved from kit -> hermes\""}},
+    {"tool": "terminal", "args": {"command": "gh pr comment 3 --body-file - <<'EOF'\nmoved from kit > hermes\nEOF"}},
+    {"tool": "terminal", "args": {"command": "awk '$1 > hermes' notes.txt"}},
+    {"tool": "terminal", "args": {"command": "gh pr comment 3 --body \"steps:\nexport PATH=/x\""}},
+    {"tool": "terminal", "args": {"command": "git commit -m \"a; alias gh=x\""}},
+    {"tool": "terminal", "args": {"command": "# don't touch this\nls"}},
+    {"tool": "terminal", "args": {"command": "if true; then echo ok; fi"}},
+    {"tool": "terminal", "args": {"command": "for f in a b; do cat $f; done"}}
+  ]},
+{"name": "a folder named hermes is a target like any other", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "allow", "calls": [
+    {"tool": "terminal", "args": {"command": "cp x hermes/"}},
+    {"tool": "terminal", "args": {"command": "mv a.py hermes/"}},
+    {"tool": "terminal", "args": {"command": "rsync -a src/ hermes/"}},
+    {"tool": "terminal", "args": {"command": "ln -s ../x hermes/"}},
+    {"tool": "terminal", "args": {"command": "cp -R hermes /tmp/backup/hermes"}},
+    {"tool": "terminal", "args": {"command": "cp -a hermes/ /tmp/backup/hermes"}}
+  ]},
+{"name": "commands that only say profile are not profile admin", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "allow", "calls": [
+    {"tool": "terminal", "args": {"command": "aws --x profile list"}},
+    {"tool": "terminal", "args": {"command": "claude profile list"}},
+    {"tool": "terminal", "args": {"command": "nix profile list"}},
+    {"tool": "terminal", "args": {"command": "nix profile install x"}},
+    {"tool": "terminal", "args": {"command": "echo profile list"}},
+    {"tool": "terminal", "args": {"command": "grep -i profile list"}},
+    {"tool": "terminal", "args": {"command": "rg profile show"}},
+    {"tool": "terminal", "args": {"command": "cat profile list"}},
+    {"tool": "terminal", "args": {"command": "pytest -q profile show"}}
+  ]},
+{"name": "lowercase path variables are not PATH", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "allow", "calls": [
+    {"tool": "terminal", "args": {"command": "path=src/a.py; cat \"$path\""}},
+    {"tool": "terminal", "args": {"command": "f() { local path=$1; echo $path; }"}},
+    {"tool": "terminal", "args": {"command": "path=$(pwd)"}}
+  ]},
+{"name": "running a program held in a variable is allowed unless it starts profile or bot admin", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "allow", "calls": [
+    {"tool": "terminal", "args": {"command": "$PY \"$SCRIPT\""}},
+    {"tool": "terminal", "args": {"command": "\"$SHELL\" \"$F\""}},
+    {"tool": "terminal", "args": {"command": "$CC $CFLAGS -o x y.c"}}
+  ]},
+{"name": "shell keywords do not hide a hermes profile command, a PATH assignment, or a hermes file", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "block", "message": "blocked for every bot", "calls": [
+    {"tool": "terminal", "args": {"command": "{ hermes -p meo-beo profile delete x; }"}},
+    {"tool": "terminal", "args": {"command": "! hermes -p meo-beo profile delete x"}},
+    {"tool": "terminal", "args": {"command": "then hermes -p meo-beo profile delete x"}},
+    {"tool": "terminal", "args": {"command": "do hermes -p meo-beo profile delete x"}},
+    {"tool": "terminal", "args": {"command": "if hermes -p meo-beo profile list; then :; fi"}},
+    {"tool": "terminal", "args": {"command": "{ PATH=/x; }"}},
+    {"tool": "terminal", "args": {"command": "while true; do PATH=/x; done"}},
+    {"tool": "terminal", "args": {"command": "hermes -p meo-beo -c foo profile delete x"}},
+    {"tool": "terminal", "args": {"command": "hermes -p meo-beo --continue foo profile delete x"}},
+    {"tool": "terminal", "args": {"command": "h=hermes; $h bot create shop"}},
+    {"tool": "terminal", "args": {"command": "echo x >hermes"}},
+    {"tool": "terminal", "args": {"command": "cat <<EOF > hermes\nx\nEOF"}},
+    {"tool": "terminal", "args": {"command": "bash <<EOF\nhermes -p meo-beo profile delete x\nEOF"}},
+    {"tool": "terminal", "args": {"command": "echo $'it\\'s'; hermes -p meo-beo profile delete x"}},
+    {"tool": "terminal", "args": {"command": "# it's fine\nhermes -p meo-beo profile delete x"}},
+    {"tool": "terminal", "args": {"command": "cp x /usr/local/bin/hermes"}},
+    {"tool": "terminal", "args": {"command": "cp -a x /usr/local/bin/hermes"}},
+    {"tool": "terminal", "args": {"command": "cp -R x ~/bin/hermes"}},
+    {"tool": "terminal", "args": {"command": "mv x hermes"}}
   ]}
 ]
