@@ -23,7 +23,7 @@ Every time you correct an agent, `/correct` puts the fix in the strongest layer 
 
 | Layer | Holds a rule as | Kit skills and tools |
 |---|---|---|
-| 1. Codebase | Types, boundaries, one blessed way per concern | Language best-practice skills, `/architect` |
+| 1. Codebase | Types, boundaries, one blessed way per concern | `/architect`, `/blast-radius` |
 | 2. Static analysis | Lint rules, compiler settings, CI checks, ratchets | `/correct`, which adds a targeted lint to the repository's own CI |
 | 3. Rules and review bots | AGENTS.md; Claude review on every PR | `setup-faker-kit`, `/thermos`, `/interrogate` |
 | 4. Skills | Procedures, above all a verification skill that runs the app and proves changes | `/create-verification-skill`, `control-mobile`, `/faker-mode` and its playbooks |

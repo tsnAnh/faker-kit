@@ -18,18 +18,11 @@ Only a person starts it; an agent does not run it on its own. A one-off misunder
 
 Run it with no argument and it finds the mistake classes from history on its own.
 
-It then:
+The pstack guide's [Fix the environment with `/correct`](../../plugins/pstack/docs/guide/09-make-it-yours.md#fix-the-environment-with-correct) explains the steps: it finds the mistake classes, fixes each at the highest level that works (architecture, then types or a lint or CI check, then a test, then docs), and proves each new check fails on a real past mistake.
 
-1. **Finds the mistake classes:** it reads recent commits, reverts, review comments, agent instruction files, and comments that explain workarounds, and groups the mistakes. A class counts once it has happened twice.
-2. **Fixes each class at the highest level that works:**
-   1. **Architecture:** one owner for each piece of state and one supported way to do each task; internals hidden so the wrong import fails; old ways an agent would copy deleted. When callers must move, migrate them and delete the old API in the same change.
-   2. **Types**, so the bad state cannot be written. Where bad code still compiles, a **lint or CI check** whose error names what to use instead (written in the repository's own linter). If the pattern is already common, it fails only when a change adds more.
-   3. **A test** of the behavior.
-   4. **Docs or agent rules last**, only for judgment calls: nothing fails when an agent skips them. Human review is not a level.
-3. **Proves it:** each new check fails on a real past mistake, and runs the same way locally and in CI. Exceptions go on the offending line with a reason, an expiry date, and a human's approval.
-4. **Keeps the rule table:** the `## Rules and what enforces them` table in AGENTS.md pairs each rule with what enforces it. A rule that is already there with nothing enforcing it is a repeat, and gets fixed at a higher level in the same change.
+In this kit it also keeps the `## Rules and what enforces them` table in AGENTS.md. The table pairs each rule with what enforces it. A rule that is already there with nothing enforcing it is a repeat, and gets fixed at a higher level in the same change. Between runs, agents do their part: when corrected, they fix the mistake and add the rule to the table, as the AGENTS.md template tells them.
 
-It replies with each class, its evidence, the level it picked, and why a higher level did not work. Between runs, agents do their part: when corrected, they fix the mistake and add the rule to the table, as the AGENTS.md template tells them.
+Exceptions to a check go on the offending line with a reason, an expiry date, and a human's approval.
 
 ## Examples by stack
 
