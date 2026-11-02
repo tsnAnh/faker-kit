@@ -152,7 +152,7 @@ FUTURE_SKEW_SECONDS = 60
 TURN_ID_ENV = "HERMES_TURN_ID"
 ORIGIN_OWNER = "owner"
 ORIGIN_UNSUPPORTED = "unsupported"
-ORIGIN_NO_MERGE_ASK = "the owner's message did not ask for a merge"
+ORIGIN_NO_MERGE_ASK = "the owner's message did not ask for a merge; if they asked while you were working, ask them to send it again"
 ORIGIN_UNCLEAR = ("the owner's wording was not an unambiguous merge request; ask the owner to say it plainly, for example "
                   "\"merge #5\", and do not guess the pull request")
 ORIGIN_EXPANDED = "the owner's message was expanded with a file, image or other context, so the guard cannot tell the owner's words from it"
@@ -168,7 +168,7 @@ RELAYED_TURN = re.compile(rf"\A\s*(?:{re.escape(RELAY_BOT_STAMP)}|{NOTICE_STAMP}
 MERGE_VERB = re.compile(r"(?<!\w)(?:merge|land|gộp)(?!\w)", re.I)
 REQUEST_TEXT_LIMIT = 300
 REQUEST_VERBS = frozenset({"merge", "land", "gộp"})
-REQUEST_LEAD = frozenset({"please", "pls", "ok", "okay", "yes", "go", "ahead", "and", "just", "cứ", "now", "anh", "em"})
+REQUEST_LEAD = frozenset({"please", "pls", "ok", "okay", "yes", "go", "ahead", "and", "just", "cứ", "now"})
 REQUEST_CONNECTORS = frozenset({"and", "&", "và", "va", "+"})
 REQUEST_POINTERS = frozenset({"it", "this", "that", "the", "pr", "pull", "request", "nó"})
 REQUEST_PLACES = frozenset({"in", "on", "for", "of"})
@@ -182,7 +182,7 @@ REQUEST_HEDGES = frozenset({
     "might", "perhaps", "should", "would", "could", "whether", "think", "wonder", "probably", "đừng", "không", "chưa", "khoan", "thôi", "dừng", "chớ",
 })
 BARE_POINTERS = frozenset({(), ("it",), ("nó",), ("this",), ("that",), ("this", "pr"), ("that", "pr"), ("the", "pr")})
-REFERENCE = re.compile(r"(?:#|pr)([0-9]{1,7})")
+REFERENCE = re.compile(r"(?:#|pr[#-]?)([0-9]{1,7})")
 BARE_NUMBER = re.compile(r"[0-9]{1,7}")
 
 
@@ -257,7 +257,7 @@ def request_parts(tokens: list[str], words: Mapping[str, Sequence[str]]) -> tupl
         reference = REFERENCE.fullmatch(token)
         if reference:
             prs.append(int(reference.group(1)))
-        elif BARE_NUMBER.fullmatch(token) and (previous == verb or previous in ("pr", "pull") or (previous == "request" and before == "pull")):
+        elif BARE_NUMBER.fullmatch(token) and (previous == verb or previous in ("pr", "pull") or (previous == "request" and before == "pull") or (prs and previous in REQUEST_CONNECTORS)):
             prs.append(int(token))
         elif token in REQUEST_POINTERS:
             pointers.append(token)
@@ -313,10 +313,10 @@ def merge_request(typed: str, project_words: Mapping[str, Sequence[str]]) -> Mer
             requested = attach = True
         elif attached is not None:
             prs.extend(attached)
-        elif not requested and not polite_only(tokens):
-            return None
-        else:
+        elif polite_only(tokens):
             attach = False
+        else:
+            return None
     if not requested:
         return None
     return MergeRequest(tuple(dict.fromkeys(prs)), tuple(dict.fromkeys(projects)))
@@ -358,10 +358,6 @@ def turn_origin(hook: dict[str, object], project_words: Mapping[str, Sequence[st
     if request is None:
         return (ORIGIN_UNCLEAR if MERGE_VERB.search(unicodedata.normalize("NFC", typed)) else ORIGIN_NO_MERGE_ASK), None
     return ORIGIN_OWNER, request
-
-
-def context_was_added(hook: Mapping[str, object]) -> bool:
-    return isinstance(hook.get("typed_message"), str) and "context_expanded" in hook and hook["context_expanded"] is not False
 
 
 def kit_flag_in(text: str) -> bool:

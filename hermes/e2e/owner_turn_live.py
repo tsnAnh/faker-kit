@@ -355,7 +355,7 @@ def run_cases(live: Live, stub: StubModel, gateway: Gateway) -> list[dict]:
 
     expanded_text = "summarize @file:x"
     expanded = run_turn("file reference", expanded_text)
-    refused_case(expanded, "read nothing untrusted", "an owner message that pulls in a file saying merge #7 with an @ reference")
+    refused_case(expanded, "was expanded", "an owner message that pulls in a file saying merge #7 with an @ reference")
     seen = live.observed(expanded_text)
     live.step("for that message the hook gets the text exactly as typed, flags the context as expanded, and its expanded prompt does carry the file's merge #7",
               len(seen) == 1 and seen[0].get("context_expanded") is True and seen[0].get("expanded_text_has_file_content") is True and seen[0].get("typed_message") == expanded_text,

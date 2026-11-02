@@ -41,6 +41,7 @@ from faker_kit_guard.policy import (
     RESERVED_NAMES,
     SHADOWING_BOT_NAMES,
     TAINTED_TURN_SECONDS,
+    TURN_ID_ENV,
     Bot,
     Policy,
     PolicyError,
@@ -188,17 +189,20 @@ class Kit:
             raise Refused(f"no project {project}; create it with add-project first")
         return bot
 
-    def refuse_after_untrusted_text(self, bot: str, action: str) -> None:
+    def refuse_after_untrusted_text(self, bot: str, action: str, only_turn: str | None = None) -> None:
         folder = tainted_turn_marker(self.home, bot)
         for record in sorted(folder.iterdir()) if folder.is_dir() else []:
             if record.name.startswith("."):
                 continue
             try:
-                at = float(json.loads(record.read_text())["at"])
+                data = json.loads(record.read_text())
+                at = float(data["at"])
             except FileNotFoundError:
                 continue
             except (OSError, ValueError, KeyError, TypeError):
                 raise Refused(f"{action} could not read this bot's tainted-turn record; ask again in a new message") from None
+            if only_turn is not None and str(data.get("turn")) != only_turn:
+                continue
             if self.now() - at < TAINTED_TURN_SECONDS:
                 raise Refused(f"this bot read text strangers wrote in its current turn, so it may not {action}; the owner or the chief of staff asks again in a new message")
 
@@ -353,7 +357,7 @@ class Kit:
 
     def merge(self, bot: Bot, pr: int, owner_approved: bool = False, caller: Bot | None = None, project: str | None = None) -> dict:
         asker = caller or bot
-        self.refuse_after_untrusted_text(asker.name, "merge")
+        self.refuse_after_untrusted_text(asker.name, "merge", os.environ.get(TURN_ID_ENV, "").strip() if owner_approved else None)
         implied = project is None
         claim = claim_owner_turn(self.home, asker.name, pr, project or bot.project, self.policy(), self.now(), os.environ, implied) if owner_approved else None
         sent: list[bool] = []

@@ -26,7 +26,6 @@ from .policy import (
     Policy,
     PolicyError,
     block,
-    context_was_added,
     decide,
     faker_kit_home,
     load_policy,
@@ -233,8 +232,6 @@ class Guard:
 
     def check_message(self, user_message="", session_id="", turn_id="", **hook):  # noqa: ANN001, ANN003, ANN201
         out = self._message_verdict(str(user_message or ""), session_id, turn_id, hook.get("turn_author"))
-        if context_was_added(hook):
-            self.taint(session_id, turn_id)
         self._record_origin(session_id, turn_id, hook)
         if self._markers and not self.is_tainted(session_id, turn_id):
             try:
