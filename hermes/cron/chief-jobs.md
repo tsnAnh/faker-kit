@@ -1,6 +1,6 @@
 # Chief of staff scheduled jobs
 
-`faker-kit install` creates these jobs in the chief of staff's profile from this file, the same way `project-jobs.md` gives each project bot its jobs: each `##` heading is the job name, and its schedule, delivery, skill, and prompt come from the lines under it. `{bot}` becomes the chief's profile name. The schedules are cron expressions in the profile's `timezone`, Asia/Saigon, and run on weekdays only. Edit them here, then run `hermes/install.sh` again; it rewrites each job's schedule and prompt in place.
+`faker-kit install` creates these jobs in the chief of staff's profile from this file, the same way `project-jobs.md` gives each project bot its jobs: each `##` heading is the job name, and its schedule, delivery, skill, and prompt come from the lines under it. `{bot}` becomes the chief's profile name. The schedules are cron expressions in the profile's `timezone`, Asia/Ho_Chi_Minh, and run on weekdays only. Edit them here, then run `hermes/install.sh` again; it rewrites each job's schedule and prompt in place.
 
 Both are agent jobs: a model turn in the chief's profile with the `chief` skill loaded. The chief owns the loop for every part it handed out, hears from project bots when a part changes instead of polling them, and stays quiet while that work is healthy: it speaks only when a part is blocked, ready for the owner to merge, or done, and batches everything else into the morning digest.
 
