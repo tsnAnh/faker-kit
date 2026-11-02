@@ -50,9 +50,9 @@ class Host:
         self.team = self.home / ".hermes" / "faker-kit"
         self.hooks: dict[str, Callable[..., object]] = {}
         self.ids = itertools.count(1)
-        self.team.mkdir(parents=True)
+        self.team.mkdir(parents=True, exist_ok=True)
         for bot in ("meo-beo", "ong-xay", "chanh-van", "sep-crm"):
-            (self.home / ".hermes" / "profiles" / bot).mkdir(parents=True)
+            (self.home / ".hermes" / "profiles" / bot).mkdir(parents=True, exist_ok=True)
 
     def policy(self, ask: bool = True, deny: list[str] | None = None, readers: list[str] | None = None, guard: str | None = None, bots: str | None = None) -> None:
         text = GUARD_TEMPLATE.read_text().replace("  - OWNER-LOGIN", "  - Codertocat\n  - meo-beo-gh")
@@ -74,7 +74,7 @@ class Host:
     def load(self) -> None:
         profile = self.home / ".hermes" / "profiles" / "meo-beo"
         target = profile / "plugins" / "faker_kit_guard"
-        shutil.copytree(HERMES / "plugin" / "faker_kit_guard", target, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(HERMES / "plugin" / "faker_kit_guard", target, ignore=shutil.ignore_patterns("__pycache__"), dirs_exist_ok=True)
         name = "hermes_plugins_faker_kit_guard"
         spec = importlib.util.spec_from_file_location(name, target / "__init__.py", submodule_search_locations=[str(target)])
         assert spec is not None and spec.loader is not None
@@ -95,6 +95,10 @@ class Host:
                 hooks[hook] = callback
 
         module.register(Context())
+
+    @staticmethod
+    def turn_id(session: str, turn: str) -> str:
+        return turn if turn.startswith("t-") else f"{session}:{turn}"
 
     def sid(self) -> str:
         return f"s{next(self.ids)}"
@@ -119,7 +123,7 @@ class Host:
         return json.dumps(args, sort_keys=True, ensure_ascii=False).replace(str(self.root), "<run>")[:160]
 
     def tool(self, tool: str, args: dict, profile: str = "meo-beo", session: str = "s0", turn: str = "t1", label: str = "") -> dict | None:
-        verdict = self.call("pre_tool_call", profile, tool_name=tool, args=args, session_id=session, turn_id=turn)
+        verdict = self.call("pre_tool_call", profile, tool_name=tool, args=args, session_id=session, turn_id=self.turn_id(session, turn))
         self.record({"case": label, "profile": profile, "tool": tool, "input": self.shown(args), "verdict": action(verdict)})
         assert verdict is None or isinstance(verdict, dict)
         return verdict
@@ -128,19 +132,19 @@ class Host:
         return self.tool("terminal", {"command": command}, profile, session, turn, label)
 
     def result(self, tool: str, args: dict, text: str, profile: str = "meo-beo", session: str = "s0", turn: str = "t1") -> str | None:
-        out = self.call("transform_tool_result", profile, tool_name=tool, args=args, result=text, session_id=session, turn_id=turn)
+        out = self.call("transform_tool_result", profile, tool_name=tool, args=args, result=text, session_id=session, turn_id=self.turn_id(session, turn))
         self.record({"case": "result", "profile": profile, "tool": tool, "input": self.shown(args), "verdict": "wrapped" if out else "plain"})
         assert out is None or isinstance(out, str)
         return out
 
     def message(self, text: str, profile: str = "meo-beo", session: str = "s0", turn: str = "t1", **extra: object) -> dict | None:
-        out = self.call("pre_llm_call", profile, user_message=text, session_id=session, turn_id=turn, **extra)
+        out = self.call("pre_llm_call", profile, user_message=text, session_id=session, turn_id=self.turn_id(session, turn), **extra)
         self.record({"case": "message", "profile": profile, "tool": "message", "input": text[:120], "verdict": "context" if out else "none"})
         assert out is None or isinstance(out, dict)
         return out
 
     def end(self, session: str, turn: str, profile: str = "meo-beo") -> None:
-        self.call("on_session_end", profile, session_id=session, turn_id=turn)
+        self.call("on_session_end", profile, session_id=session, turn_id=self.turn_id(session, turn))
 
     def merge_verdict(self, session: str, turn: str, profile: str = "meo-beo") -> str:
         return action(self.terminal("faker-kit merge --pr 12", profile, session, turn, "merge"))
@@ -637,8 +641,8 @@ def turn_records(host: Host) -> None:
     child_kept = (folder / "r1").exists()
     host.message("merge #12 now", session="r1", turn="t2")
     cleared = not (folder / "r1").exists()
-    host.result("web_extract", {"url": "u"}, "x", session="r3", turn="t3")
-    host.end("r3-renamed", "t3")
+    host.result("web_extract", {"url": "u"}, "x", session="r3", turn="t-r3")
+    host.end("r3-renamed", "t-r3")
     by_turn = not (folder / "r3").exists()
     host.step("guard: each tainted chat leaves its own record until its turn ends or a clean message follows",
               set(record) == {"session", "turn", "at"} and record["session"] == "r1" and kept and child_kept and cleared and by_turn, json.dumps(sorted(record)))

@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import fnmatch
 import hashlib
 import html
@@ -14,8 +16,9 @@ import shlex
 import sys
 import threading
 import types
+import unicodedata
 import urllib.parse
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,6 +39,7 @@ CHAT_TOOLS = ("message_agent", "clarify", "todo_*", "skills_list", "skill_view",
 TRUSTED_RESULTS = (*CHAT_TOOLS, "write_file", "patch")
 PATH_ARGS = {"write_file": ("path",), "patch": ("path",), "read_file": ("path",), "search_files": ("path",)}
 PROGRAM = "faker-kit"
+QUOTING = re.compile(r"""["'`\\]""")
 SEGMENT_SPLIT = re.compile(r"\|\||&&|[;|&\n]|\$\(|`|\)")
 ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
 
@@ -51,10 +55,11 @@ SECRET_TEXT = re.compile(
     r"(?<![\w.-])\.env(?:\.(?!example(?![\w-])|sample(?![\w-])|template(?![\w-])|dist(?![\w-]))[\w-]+)*(?![\w.-])"
     r"|\.ssh(?![\w-])|\.config/gh(?![\w-])|\.git-credentials|\.netrc(?![\w-])|\.aws/credentials|\bid_(?:rsa|ed25519|ecdsa)(?![\w-])"
     r"|login\.keychain|\.hermes(?!/bin(?![\w-])|/faker-kit/kit(?![\w-])|/faker-kit/briefs(?![\w-]))(?![\w-])|\.hermes/\S*\.\."
+    r"|(?<![\w-])(?:tainted|owner)-turns(?![\w-])"
     r"|\bHERMES_HOME\b|\bFAKER_KIT_HOME\b",
     re.I,
 )
-WRITE_PROTECTED = re.compile(r"\.hermes(?!/faker-kit/briefs(?![\w-]))(?![\w-])", re.I)
+WRITE_PROTECTED = re.compile(r"\.hermes(?!/faker-kit/briefs(?![\w-]))(?![\w-])|(?<![\w-])(?:tainted|owner)-turns(?![\w-])", re.I)
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
 SECRET_SEGMENTS = re.compile(
     r"\A(?:gh auth token\b|gh auth status\b.*(?:\s-t\b|--show-token)|security (?:find-|dump-keychain|export)|git credential\b"
@@ -140,6 +145,57 @@ SHELL_FED_LINE = re.compile(r"(?<![\w./-])(?:sh|bash|zsh|dash|fish|eval|source|x
 CLEAN_TURN_TEXT = re.compile(r"\bfaker-kit\W+(merge|handoff)\b")
 TAINTED_TURN_SECONDS = 3600
 TAINT_BLOCKED_TOOLS = ("delegate_task", "cronjob*")
+OWNER_FLAG = "--owner-approved"
+OWNER_PLATFORMS = ("desktop", "tui")
+OWNER_TURN_SECONDS = 1800
+FUTURE_SKEW_SECONDS = 60
+TURN_ID_ENV = "HERMES_TURN_ID"
+ORIGIN_OWNER = "owner"
+ORIGIN_UNSUPPORTED = "unsupported"
+ORIGIN_NO_MERGE_ASK = "the owner's message did not ask for a merge"
+ORIGIN_UNCLEAR = ("the owner's wording was not an unambiguous merge request; ask the owner to say it plainly, for example "
+                  "\"merge #5\", and do not guess the pull request")
+ORIGIN_EXPANDED = "the owner's message was expanded with a file, image or other context, so the guard cannot tell the owner's words from it"
+ORIGIN_NO_TEXT = "the guard was not given the text the owner typed"
+HERMES_TURN_FIELDS = ("turn_author", "synthetic_turn", "typed_message", "context_expanded")
+RELAY_HANDLE = r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}"
+RELAY_STAMP = rf"Message from (?:(?!\(@)[^\n]){{0,240}}? \(@(?P<sender>{RELAY_HANDLE})\): "
+RELAY_MARK = re.compile(rf"\(@{RELAY_HANDLE}\): ")
+NOTICE_STAMP = (r"\[IMPORTANT: |\[System: |\[ASYNC (?:DELEGATION )?(?:BATCH )?(?:TASK )?(?:COMPLETE|FAILED)|\[Heartbeat"
+                r"|A background (?:fan-out of \d+ subagent\(s\)|subagent) you dispatched earlier has finished\.")
+RELAY_BOT_STAMP = "Message from \U0001f916 "
+RELAYED_TURN = re.compile(rf"\A\s*(?:{re.escape(RELAY_BOT_STAMP)}|{NOTICE_STAMP})")
+MERGE_VERB = re.compile(r"(?<!\w)(?:merge|land|gộp)(?!\w)", re.I)
+REQUEST_TEXT_LIMIT = 300
+REQUEST_VERBS = frozenset({"merge", "land", "gộp"})
+REQUEST_LEAD = frozenset({"please", "pls", "ok", "okay", "yes", "go", "ahead", "and", "just", "cứ", "now", "anh", "em"})
+REQUEST_CONNECTORS = frozenset({"and", "&", "và", "va", "+"})
+REQUEST_POINTERS = frozenset({"it", "this", "that", "the", "pr", "pull", "request", "nó"})
+REQUEST_PLACES = frozenset({"in", "on", "for", "of"})
+REQUEST_TAIL = frozenset({"please", "pls", "now", "one", "đi", "nhé", "nha", "giúp", "hộ", "luôn", "anh", "em"})
+CLAUSE_SPLIT = re.compile(r"[.,;!\n]")
+PULL_URL = re.compile(r"https?://github\.com/([^\s/]+)/([^\s/]+)/pull/([0-9]{1,7})(?:/[^\s?#]*)?")
+REQUEST_FORBIDDEN = re.compile(r"[\"\u201c\u201d\u00ab\u00bb`<>:?]|[0-9][.,;][0-9]")
+REQUEST_HEDGES = frozenset({
+    "no", "not", "nope", "never", "don't", "dont", "except", "but", "unless", "yet", "if", "actually", "wait", "hold", "stop", "cancel", "kidding",
+    "joking", "jk", "nvm", "nevermind", "sorry", "wrong", "oops", "undo", "revert", "later", "tomorrow", "instead", "rather", "without", "only", "maybe",
+    "might", "perhaps", "should", "would", "could", "whether", "think", "wonder", "probably", "đừng", "không", "chưa", "khoan", "thôi", "dừng", "chớ",
+})
+BARE_POINTERS = frozenset({(), ("it",), ("nó",), ("this",), ("that",), ("this", "pr"), ("that", "pr"), ("the", "pr")})
+REFERENCE = re.compile(r"(?:#|pr)([0-9]{1,7})")
+BARE_NUMBER = re.compile(r"[0-9]{1,7}")
+
+
+def relay_sender(match: re.Match[str], text: str, author: object) -> str:
+    claimed = match.group("sender")
+    if isinstance(author, dict):
+        identity = str(author.get("id") or "")
+        if author.get("is_bot") is not True or not identity.startswith("bot:") or identity[4:] != claimed:
+            return ""
+    elif author is not None:
+        return ""
+    first_line = text.split("\n", 1)[0]
+    return claimed if len(RELAY_MARK.findall(first_line)) == 1 else ""
 
 
 def faker_kit_program(word: str) -> bool:
@@ -152,6 +208,175 @@ def tainted_turn_marker(home: Path, profile: str) -> Path:
 
 def tainted_turn_record(home: Path, profile: str, session: str) -> Path:
     return tainted_turn_marker(home, profile) / (re.sub(r"[^A-Za-z0-9_.-]", "_", session)[:120] or "unknown")
+
+
+def owner_turn_marker(home: Path, profile: str) -> Path:
+    return home / "owner-turns" / profile
+
+
+def owner_turn_record(home: Path, profile: str, session: str) -> Path:
+    return owner_turn_marker(home, profile) / (re.sub(r"[^A-Za-z0-9_.-]", "_", session)[:120] or "unknown")
+
+
+@dataclass(frozen=True)
+class MergeRequest:
+    prs: tuple[int, ...]
+    projects: tuple[str, ...]
+
+
+def project_words(policy: Policy) -> dict[str, tuple[str, ...]]:
+    words: dict[str, list[str]] = {}
+    for slug, bot in sorted(policy.projects().items()):
+        repo = (bot.repo or "").lower()
+        for word in {slug.lower(), bot.name.lower(), repo.split("/")[-1], repo} - {""}:
+            words.setdefault(word, []).append(slug)
+    return {word: tuple(slugs) for word, slugs in words.items()}
+
+
+def dangling_place(rest: list[str], words: Mapping[str, Sequence[str]]) -> bool:
+    return any(token in REQUEST_PLACES and not (index + 1 < len(rest) and rest[index + 1] in words) for index, token in enumerate(rest))
+
+
+def request_parts(tokens: list[str], words: Mapping[str, Sequence[str]]) -> tuple[list[int], list[str]] | None:
+    start = 0
+    while start < len(tokens):
+        if tokens[start] in REQUEST_LEAD:
+            start += 1
+        elif tokens[start : start + 2] == ["làm", "ơn"]:
+            start += 2
+        else:
+            break
+    if start >= len(tokens) or tokens[start] not in REQUEST_VERBS:
+        return None
+    verb, rest = tokens[start], tokens[start + 1 :]
+    prs: list[int] = []
+    projects: list[str] = []
+    pointers: list[str] = []
+    previous, before = verb, ""
+    for token in rest:
+        reference = REFERENCE.fullmatch(token)
+        if reference:
+            prs.append(int(reference.group(1)))
+        elif BARE_NUMBER.fullmatch(token) and (previous == verb or previous in ("pr", "pull") or (previous == "request" and before == "pull")):
+            prs.append(int(token))
+        elif token in REQUEST_POINTERS:
+            pointers.append(token)
+        elif token in words:
+            projects.extend(words[token])
+        elif token not in REQUEST_CONNECTORS | REQUEST_PLACES | REQUEST_TAIL:
+            return None
+        before, previous = previous, token
+    if prs:
+        if rest[-1] in REQUEST_CONNECTORS | REQUEST_PLACES:
+            return None
+    elif tuple(pointers) not in BARE_POINTERS or any(token in REQUEST_CONNECTORS for token in rest) or dangling_place(rest, words):
+        return None
+    if verb == "land" and not prs and not pointers:
+        return None
+    return prs, projects
+
+
+def polite_only(tokens: list[str]) -> bool:
+    return all(token in REQUEST_LEAD | REQUEST_TAIL or token in ("làm", "ơn") for token in tokens)
+
+
+def references_only(tokens: list[str]) -> list[int] | None:
+    found = [REFERENCE.fullmatch(token) for token in tokens if token not in REQUEST_CONNECTORS]
+    if not found or not all(found):
+        return None
+    return [int(match.group(1)) for match in found if match]
+
+
+def merge_request(typed: str, project_words: Mapping[str, Sequence[str]]) -> MergeRequest | None:
+    text = unicodedata.normalize("NFC", typed).lower().replace("\u2019", "'")
+    if len(text) > REQUEST_TEXT_LIMIT or "```" in text or "~~~" in text or "?" in text:
+        return None
+    if any(line.lstrip().startswith(">") for line in text.split("\n")):
+        return None
+    text = PULL_URL.sub(lambda found: f" #{found.group(3)} {found.group(1)}/{found.group(2)} " if f"{found.group(1)}/{found.group(2)}" in project_words else found.group(0), text)
+    if REQUEST_FORBIDDEN.search(text):
+        return None
+    prs: list[int] = []
+    projects: list[str] = []
+    requested = attach = False
+    for clause in CLAUSE_SPLIT.split(text):
+        tokens = clause.split()
+        if not tokens:
+            continue
+        if any(token in REQUEST_HEDGES for token in tokens):
+            return None
+        parts = request_parts(tokens, project_words)
+        attached = references_only(tokens) if attach and parts is None else None
+        if parts is not None:
+            prs.extend(parts[0])
+            projects.extend(parts[1])
+            requested = attach = True
+        elif attached is not None:
+            prs.extend(attached)
+        elif not requested and not polite_only(tokens):
+            return None
+        else:
+            attach = False
+    if not requested:
+        return None
+    return MergeRequest(tuple(dict.fromkeys(prs)), tuple(dict.fromkeys(projects)))
+
+
+@contextlib.contextmanager
+def owner_turn_lock(folder: Path) -> Iterator[None]:
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (folder / ".lock").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+def write_owner_record(path: Path, data: dict) -> None:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
+    tmp.write_text(json.dumps(data))
+    tmp.replace(path)
+
+
+def turn_origin(hook: dict[str, object], project_words: Mapping[str, Sequence[str]]) -> tuple[str, MergeRequest | None]:
+    if any(field not in hook for field in HERMES_TURN_FIELDS):
+        return ORIGIN_UNSUPPORTED, None
+    platform = str(hook.get("platform") or "").strip().lower()
+    author = hook["turn_author"]
+    if platform not in OWNER_PLATFORMS:
+        return f"it came through {platform or 'an unknown platform'}, which is not an owner UI", None
+    if author is not None and (not isinstance(author, dict) or author.get("is_bot") is not False):
+        return "a bot wrote it", None
+    if hook["synthetic_turn"] is not False:
+        return "Hermes injected it, the owner did not type it", None
+    typed = hook["typed_message"]
+    if not isinstance(typed, str):
+        return ORIGIN_NO_TEXT, None
+    if hook["context_expanded"] is not False:
+        return ORIGIN_EXPANDED, None
+    if RELAYED_TURN.match(typed) or RELAY_BOT_STAMP in typed or RELAY_MARK.search(typed):
+        return "it was relayed from another sender", None
+    request = merge_request(typed, project_words)
+    if request is None:
+        return (ORIGIN_UNCLEAR if MERGE_VERB.search(unicodedata.normalize("NFC", typed)) else ORIGIN_NO_MERGE_ASK), None
+    return ORIGIN_OWNER, request
+
+
+def context_was_added(hook: Mapping[str, object]) -> bool:
+    return isinstance(hook.get("typed_message"), str) and "context_expanded" in hook and hook["context_expanded"] is not False
+
+
+def kit_flag_in(text: str) -> bool:
+    return OWNER_FLAG in text and ("faker-kit" in text or "faker_kit" in text)
+
+
+def owner_approved_use(tool_name: str, args: dict) -> bool:
+    if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
+        return False
+    texts = strings(args)
+    if kit_flag_in(" ".join(texts)):
+        return True
+    if any(kit_flag_in(QUOTING.sub("", text)) for text in texts):
+        return True
+    return any(kit_flag_in(" ".join(words)) for text in texts for words in shell_commands(text, keep_path=True))
 
 
 class PolicyError(ValueError):

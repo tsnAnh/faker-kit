@@ -54,7 +54,8 @@ from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
 from faker_kit_loop import Loop, LoopError
 from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
-from faker_kit_merge import MERGE_METHOD, REVIEW_WORKFLOW, SECURITY_JOB, Evidence, MergeLock, decide, dispatch_rules, from_fork, security_run_id
+from faker_kit_merge import MERGE_METHOD, REVIEW_WORKFLOW, SECURITY_JOB, Evidence, MergeLock, Verdict, decide, dispatch_rules, from_fork, security_run_id
+from faker_kit_owner_turn import claim_owner_turn
 from faker_kit_profiles import Profiles
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
 from install_config import InstallError, config_set, hermes, mapping, value_at
@@ -83,7 +84,7 @@ ANDON_FOOTER = (
 ROLE_COMMANDS = {
     "project": {"launch", "merge", "status", "andon", "incidents", "issues"},
     "bootstrap": {"add-project", "vendor", "launch", "status", "andon"},
-    "chief": {"status", "handoff", "loop", "add-project"},
+    "chief": {"status", "handoff", "loop", "add-project", "merge"},
 }
 OWNER_ONLY = {"install", "runner", "projects"}
 ANDON_COLOR = "b60205"
@@ -122,6 +123,10 @@ def github_slug(source: str | None) -> str | None:
 
 def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9_-]+", "-", text.lower()).strip("-")[:63]
+
+
+class PutFailed(Refused):
+    pass
 
 
 class Kit:
@@ -334,8 +339,41 @@ class Kit:
                 self.sleep(MERGEABLE_PAUSE_SECONDS)
         raise Refused(f"GitHub is still checking #{pr} for conflicts; run merge again in a minute")
 
-    def merge(self, bot: Bot, pr: int) -> dict:
-        self.refuse_after_untrusted_text(bot.name, "merge")
+    def merge_command(self, caller: Bot | None, pr: int, project: str | None, owner_approved: bool) -> dict:
+        if caller is None or caller.role not in ("project", "chief"):
+            raise Refused("merge runs in a project bot's chat or the chief of staff's chat")
+        if caller.role == "chief":
+            if not project or not owner_approved:
+                raise Refused("the chief of staff merges only when the owner asks: faker-kit merge --project <project> --pr <number> --owner-approved")
+            policy = self.policy()
+            return self.merge(self.project_bot(policy, project), pr, True, caller, project)
+        if project and project != caller.project:
+            raise Refused(f"{caller.name} merges only its own project's pull requests; the chief of staff merges for another project")
+        return self.merge(caller, pr, owner_approved)
+
+    def merge(self, bot: Bot, pr: int, owner_approved: bool = False, caller: Bot | None = None, project: str | None = None) -> dict:
+        asker = caller or bot
+        self.refuse_after_untrusted_text(asker.name, "merge")
+        implied = project is None
+        claim = claim_owner_turn(self.home, asker.name, pr, project or bot.project, self.policy(), self.now(), os.environ, implied) if owner_approved else None
+        sent: list[bool] = []
+        try:
+            head, verdict = self.land(bot, pr, owner_approved, sent)
+        except BaseException:
+            if claim and not sent:
+                claim.release()
+            raise
+        landed: dict[str, object] = {"pr": pr, "merged": True, "head": head, "method": MERGE_METHOD}
+        if owner_approved:
+            landed.update(owner_approved=True, bypassed=list(verdict.bypassed))
+        if claim:
+            try:
+                claim.commit()
+            except (Refused, OSError, ValueError) as err:
+                landed["warning"] = f"#{pr} merged, but the owner's approval record could not be updated ({type(err).__name__}); it ends with this turn"
+        return landed
+
+    def land(self, bot: Bot, pr: int, owner_approved: bool, sent: list[bool]) -> tuple[str, Verdict]:
         repo = str(bot.repo)
         gh = Gh(self.home, bot.name, repo, self.run)
         with MergeLock(self.home, bot.name).locked():
@@ -343,11 +381,35 @@ class Kit:
             cord = self.cord(bot.name)
             if cord:
                 raise Refused(f"{cord.describe()}; nothing merges until the owner clears it")
-            verdict = decide(pr, head, self.evidence(gh, pr, head, default, data), repo, default)
+            verdict = decide(pr, head, self.evidence(gh, pr, head, default, data), repo, default, owner_approved)
             if verdict.action != "merge":
                 raise Refused(verdict.message)
-            self.run(["api", "-X", "PUT", f"repos/{repo}/pulls/{pr}/merge", "-f", f"merge_method={MERGE_METHOD}", "-f", f"sha={head}"])
-        return {"pr": pr, "merged": True, "head": head, "method": MERGE_METHOD}
+            sent.append(True)
+            try:
+                self.run(["api", "-X", "PUT", f"repos/{repo}/pulls/{pr}/merge", "-f", f"merge_method={MERGE_METHOD}", "-f", f"sha={head}"])
+            except Refused as err:
+                landed = self.landed_after_error(gh, pr, head)
+                if landed:
+                    return head, verdict
+                raise PutFailed(self.put_failure(pr, landed, err)) from err
+        return head, verdict
+
+    @staticmethod
+    def landed_after_error(gh: Gh, pr: int, head: str) -> bool | None:
+        try:
+            data = gh.pull(pr)
+        except (Refused, ValueError):
+            return None
+        if data.get("merged_at"):
+            return (data.get("head") or {}).get("sha") == head or None
+        return False if data.get("state") == "open" else None
+
+    @staticmethod
+    def put_failure(pr: int, landed: bool | None, err: Refused) -> str:
+        if landed is False:
+            return f"the merge request for #{pr} was sent and GitHub refused it ({err}); #{pr} is still open, and this approval is used up, so the owner asks again in a new message"
+        return (f"the merge request for #{pr} was sent and the result could not be confirmed ({err}): #{pr} may or may not have merged; "
+                f"this approval is used up, so check #{pr} on GitHub before the owner asks again")
 
     def incidents(self, bot: Bot, ack: str | None, last: bool) -> dict:
         try:
@@ -817,8 +879,10 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--project")
     cmd.add_argument("--model")
     cmd.add_argument("--effort")
-    cmd = sub.add_parser("merge")
+    cmd = sub.add_parser("merge", allow_abbrev=False)
     cmd.add_argument("--pr", type=int, required=True)
+    cmd.add_argument("--project")
+    cmd.add_argument("--owner-approved", action="store_true")
     cmd = sub.add_parser("issues")
     cmd.add_argument("--claim", type=int)
     cmd = sub.add_parser("incidents")
@@ -882,9 +946,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     if args.command == "launch":
         return kit.launch(caller, args.project, args.brief_file, args.model, args.effort)
     if args.command == "merge":
-        if caller is None or caller.role != "project":
-            raise Refused("merge runs in a project bot's chat")
-        return kit.merge(caller, args.pr)
+        return kit.merge_command(caller, args.pr, args.project, args.owner_approved)
     if args.command == "issues":
         if caller is None or caller.role != "project":
             raise Refused("issues runs in a project bot's chat or job")
@@ -913,6 +975,11 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
     except (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError) as err:
         print(f"faker-kit: refused: {err}", file=sys.stderr)
         return 1
+    if isinstance(out, dict) and out.get("owner_approved"):
+        bypassed = ", ".join(str(gate) for gate in out.get("bypassed") or []) or "none"
+        print(f"faker-kit: owner-approved merge of #{out.get('pr')}; gates bypassed: {bypassed}", file=sys.stderr)
+    if isinstance(out, dict) and out.get("warning"):
+        print(f"faker-kit: warning: {out['warning']}", file=sys.stderr)
     print("\n".join(out) if isinstance(out, list) else json.dumps(out, ensure_ascii=False))
     return 0
 
