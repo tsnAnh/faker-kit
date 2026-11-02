@@ -19,9 +19,9 @@ SUBSCRIPTION_PROVIDER = "claude-subscription-directsdk-experimental"
 WEBHOOK_HOST = "127.0.0.1"
 WEBHOOK_PORT = 8644
 ROUTE_JOBS: dict[str, tuple[str, tuple[str, ...], str, tuple[dict[str, str], ...]]] = {
-    "pr": ("faker-kit-babysit", ("pull_request", "pull_request_review", "check_suite", "status"),
+    "pr": ("faker-kit-babysit", ("pull_request", "pull_request_review", "check_suite", "status", "issue_comment"),
            "GitHub event {event_type} ({action}) in {repository.full_name}. Pull request {pull_request.number}, "
-           "check suite head {check_suite.head_sha}. Babysit the open pull requests.", ()),
+           "issue {issue.number}, check suite head {check_suite.head_sha}. Babysit the open pull requests.", ()),
     "security": ("faker-kit-security", ("push",),
                  "GitHub event push to {ref} in {repository.full_name}, head {after}. Run the security review.", ()),
     "issues": ("faker-kit-issues", ("issues",),

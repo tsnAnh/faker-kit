@@ -70,6 +70,7 @@ STATUS_PRS = 30
 MERGEABLE_READS = 5
 MERGEABLE_PAUSE_SECONDS = 5.0
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
+VERDICT_LINE = re.compile(r"\Averdict: (PASS\+NOTES|PASS|FAIL)\s*\Z")
 SECRET_SHAPES = re.compile(
     r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}"
     r"|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
@@ -394,7 +395,23 @@ class Kit:
         gate = {"merge": "ready to merge", "refuse": f"blocked: {verdict.message}"}[verdict.action]
         mergeable = {True: "mergeable", False: "conflicts", None: "mergeable unknown"}[detail.get("mergeable")]
         unit = UNIT_LINE.match(str(detail.get("body") or ""))
-        return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready", mergeable, gate])
+        return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready", mergeable, gate,
+                          self.trusted_verdict(gh, number, head)])
+
+    def trusted_verdict(self, gh: Gh, number: int, head: str) -> str:
+        if not SHA.match(head):
+            return "unverified"
+        trusted = self.policy().trusted_authors
+        found: tuple[str, str] | None = None
+        for comment in gh.issue_comments(number):
+            body = str(comment.get("body") or "")
+            first = VERDICT_LINE.match(body.splitlines()[0].strip()) if body.strip() else None
+            if str((comment.get("user") or {}).get("login") or "").lower() not in trusted or first is None or head not in body:
+                continue
+            at = str(comment.get("created_at") or "")
+            if found is None or at >= found[0]:
+                found = (at, first.group(1))
+        return f"verdict {found[1]}" if found else "unverified"
 
     def handoff(self, caller: Bot, project: str, part: str) -> dict:
         self.refuse_after_untrusted_text(caller.name, "hand out work")

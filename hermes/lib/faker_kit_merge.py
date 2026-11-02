@@ -299,6 +299,8 @@ class MergeLock:
     @contextlib.contextmanager
     def locked(self) -> Iterator[None]:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for obsolete in (self.path.with_name(f"{self.path.stem}.json"), self.path.with_name(f"{self.path.stem}.json.lock")):
+            obsolete.unlink(missing_ok=True)
         with self.path.open("w") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
             yield
