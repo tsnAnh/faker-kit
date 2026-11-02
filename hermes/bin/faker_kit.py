@@ -51,11 +51,11 @@ from faker_kit_incident_sources import FetchJson, fetch_json
 from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
 from faker_kit_loop import Loop, LoopError
-from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env
+from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
 from faker_kit_merge import MERGE_METHOD, REVIEW_WORKFLOW, SECURITY_JOB, Evidence, MergeLock, decide, dispatch_rules, from_fork, security_run_id
 from faker_kit_profiles import Profiles
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
-from install_config import InstallError, config_set
+from install_config import InstallError, config_set, hermes, mapping, value_at
 
 VENDOR_MANIFEST = ".agents/faker-kit/KIT.json"
 KIT_REPO_FILE = "kit-repo"
@@ -70,9 +70,6 @@ STATUS_PRS = 30
 MERGEABLE_READS = 5
 MERGEABLE_PAUSE_SECONDS = 5.0
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
-VERDICT_LINE = re.compile(r"\Averdict: (PASS\+NOTES|PASS|FAIL)\Z")
-HEAD_LINE = re.compile(r"\Ahead: ([0-9a-f]{40})\Z", re.IGNORECASE)
-VERDICT_RANK = ("FAIL", "PASS+NOTES", "PASS")
 SECRET_SHAPES = re.compile(
     r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}"
     r"|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
@@ -376,7 +373,7 @@ class Kit:
         gh = Gh(self.home, caller.name, str(caller.repo), self.run)
         default = gh.default_branch()
         own = [pull for pull in gh.open_pulls() if not from_fork(pull, gh.repo)]
-        return [self.pr_line(gh, pull, default, policy.trusted_authors) for pull in own[:STATUS_PRS]] or ["no open pull requests"]
+        return [self.pr_line(gh, pull, default) for pull in own[:STATUS_PRS]] or ["no open pull requests"]
 
     def project_line(self, bot: Bot) -> str:
         cord = self.andon.read(bot.name)
@@ -388,7 +385,7 @@ class Kit:
         drafts = sum(1 for p in pulls if p.get("draft"))
         return f"{head}: open {len(pulls)} (draft {drafts}, ready {len(pulls) - drafts})"
 
-    def pr_line(self, gh: Gh, pull: dict, default: str, trusted: frozenset[str]) -> str:
+    def pr_line(self, gh: Gh, pull: dict, default: str) -> str:
         number = int(pull["number"])
         detail = gh.pull(number)
         head = str((detail.get("head") or {}).get("sha") or "")
@@ -397,26 +394,7 @@ class Kit:
         gate = {"merge": "ready to merge", "refuse": f"blocked: {verdict.message}"}[verdict.action]
         mergeable = {True: "mergeable", False: "conflicts", None: "mergeable unknown"}[detail.get("mergeable")]
         unit = UNIT_LINE.match(str(detail.get("body") or ""))
-        return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready", mergeable, gate,
-                          self.trusted_verdict(gh, number, head, trusted)])
-
-    def trusted_verdict(self, gh: Gh, number: int, head: str, trusted: frozenset[str]) -> str:
-        if not SHA.match(head):
-            return "unverified"
-        try:
-            comments = gh.issue_comments(number)
-        except Refused:
-            return "unverified"
-        found: set[str] = set()
-        for comment in comments:
-            lines = str(comment.get("body") or "").splitlines()[:2]
-            first = VERDICT_LINE.match(lines[0].strip()) if lines else None
-            named = HEAD_LINE.match(lines[1].strip()) if len(lines) > 1 else None
-            login = str((comment.get("user") or {}).get("login") or "").lower()
-            if login not in trusted or first is None or named is None or named.group(1).lower() != head or comment.get("updated_at") != comment.get("created_at"):
-                continue
-            found.add(first.group(1))
-        return next((f"verdict {kind}" for kind in VERDICT_RANK if kind in found), "unverified")
+        return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready", mergeable, gate])
 
     def handoff(self, caller: Bot, project: str, part: str) -> dict:
         self.refuse_after_untrusted_text(caller.name, "hand out work")
@@ -751,12 +729,20 @@ class Kit:
                     config_set(self.root, "default", (*listener, "extra", "routes", name, field), value)
                 url = route_url(base_url, bot, name)
                 done.append({"repo": repo, "url": url, "hook": self.github_hook(repo, url, route["events"], secret)})
-            prefix = route_url(base_url, bot, "")
+            self.prune_routes(bot, listener)
             for hook in json.loads(self.run(["api", f"repos/{repo}/hooks?per_page=100"]) or "[]"):
                 url = str((hook.get("config") or {}).get("url") or "")
-                if url.startswith(prefix) and url not in {d["url"] for d in done if d["repo"] == repo}:
+                if stale_hook(url, base_url, bot):
                     self.run(["api", "-X", "DELETE", f"repos/{repo}/hooks/{int(hook['id'])}"])
+                    print(f"faker-kit: pruned GitHub hook {url} on {repo}", file=sys.stderr)
         return done
+
+    def prune_routes(self, bot: str, listener: tuple[str, str]) -> None:
+        current = value_at(mapping(self.root / "config.yaml"), (*listener, "extra", "routes"))
+        for name in sorted(current if isinstance(current, dict) else {}):
+            if stale_route(str(name), bot):
+                hermes("-p", "default", "config", "unset", ".".join((*listener, "extra", "routes", str(name))))
+                print(f"faker-kit: pruned webhook route {name}", file=sys.stderr)
 
     def github_hook(self, repo: str, url: str, events: list[str], secret: str) -> str:
         hooks = json.loads(self.run(["api", f"repos/{repo}/hooks?per_page=100"]) or "[]")
