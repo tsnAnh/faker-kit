@@ -66,7 +66,9 @@ with open(os.environ["E2E_GH_LOG"], "a") as log:
 
 
 def save():
-    state_path.write_text(json.dumps(state))
+    staged = state_path.with_name(f".{state_path.name}.{os.getpid()}")
+    staged.write_text(json.dumps(state))
+    os.replace(staged, state_path)
 
 
 def fail(message, code=1):
