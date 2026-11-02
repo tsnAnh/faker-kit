@@ -6,12 +6,13 @@ import { execFileSync } from "node:child_process";
 const USAGE = `Usage: node scripts/check-commit-messages.mjs [--base <ref>]
 
 Fail when a commit on this branch credits an AI or an agent session in its message:
-a Co-Authored-By line naming an AI, a "Generated with/by" line, or a Claude-Session link.
+a Co-Authored-By line naming an AI, a "Generated with/by" line, a Claude Code footer line, or a Claude-Session link.
 Checks <base>..HEAD, where <base> defaults to the merge base with origin/main.`;
 
 const RULES = [
   [/^co-authored-by:.*\b(claude|anthropic|openai|codex|chatgpt|gpt-?\d|copilot|gemini)\b/im, "a Co-Authored-By line naming an AI"],
   [/^.*\bgenerated (with|by)\b.*\b(claude|chatgpt|codex|copilot|gemini|ai)\b/im, "a \"generated with\" line"],
+  [/^[ \t]*\u{1F916}.*$|^.*\bgenerated with \[claude code\].*$/imu, "a Claude Code footer line"],
   [/^claude-session:/im, "a Claude-Session link"],
 ];
 

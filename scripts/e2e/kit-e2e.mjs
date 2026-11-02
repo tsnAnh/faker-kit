@@ -188,6 +188,42 @@ step("ratchet.mjs and import-boundaries.mjs pass a clean repository and fail an 
   };
 });
 
+step("check-commit-messages.mjs passes a clean message and fails a Claude Code footer line, a Co-Authored-By line naming an AI, and a Claude-Session link", () => {
+  const repo = tmp("repo");
+  git(repo, "init", "-q");
+  git(repo, "commit", "-q", "--allow-empty", "-m", "base");
+  const base = git(repo, "rev-parse", "HEAD").stdout.trim();
+  const robot = String.fromCodePoint(0x1f916);
+  const messages = {
+    clean: "fix: handle empty input\n\nThe parser returned early on an empty string.\n",
+    fullFooter: `fix: handle empty input\n\n${robot} Generated with [Claude Code](https://claude.com/claude-code)\n`,
+    emojiLine: `fix: handle empty input\n\n${robot} anything at all\n`,
+    emojiLineIndented: `fix: handle empty input\n\n  ${robot}\n`,
+    bracketedLine: "fix: handle empty input\n\nGenerated with [Claude Code]\n",
+    coAuthor: "fix: handle empty input\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+    session: "fix: handle empty input\n\nClaude-Session: https://claude.ai/code/session_1\n",
+    emojiMidLine: `fix: handle empty input ${robot} quickly\n`,
+  };
+  const results = {};
+  for (const [name, message] of Object.entries(messages)) {
+    const file = path.join(tmp("message"), "message.txt");
+    write(file, message);
+    git(repo, "commit", "-q", "--allow-empty", "-F", file);
+    const done = run("node", [path.join(KIT, "scripts", "check-commit-messages.mjs"), "--base", base], { cwd: repo });
+    git(repo, "reset", "-q", "--hard", base);
+    results[name] = { status: done.status, stdout: done.stdout.trim(), stderr: done.stderr.trim().replace(/^[0-9a-f]{12}/gm, "<sha>").split("\n") };
+  }
+  const failsWith = (name, text) => results[name].status === 1 && results[name].stderr.some((line) => line.includes(text));
+  return {
+    ok: results.clean.status === 0 && results.clean.stderr.join("") === "" && results.clean.stdout === "commit-messages: 1 commit(s) on this branch carry no AI references"
+      && failsWith("fullFooter", "has a Claude Code footer line:") && failsWith("emojiLine", `has a Claude Code footer line: ${robot} anything at all`)
+      && failsWith("emojiLineIndented", `has a Claude Code footer line: ${robot}`) && failsWith("bracketedLine", "has a Claude Code footer line: Generated with [Claude Code]")
+      && failsWith("coAuthor", "has a Co-Authored-By line naming an AI:") && failsWith("session", "has a Claude-Session link:")
+      && results.emojiMidLine.status === 0,
+    observed: results,
+  };
+});
+
 function adapter(pluginRoot, event, input, project, data, env = {}) {
   const done = run("node", [path.join(pluginRoot, "agent-hooks", "hook-adapter.mjs"), event], {
     input: JSON.stringify(input),
