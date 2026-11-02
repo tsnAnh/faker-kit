@@ -20,7 +20,7 @@ Everything under these directories is copied from an MIT-licensed upstream plugi
 The copies are byte-identical to upstream with five exceptions, all applied by [`scripts/sync-upstream.mjs`](scripts/sync-upstream.mjs) and listed occurrence by occurrence in [`upstream/CHANGES.md`](upstream/CHANGES.md):
 
 1. **Model names.** [`upstream/model-map.json`](upstream/model-map.json) rewrites LLM model names, and the sentences that describe them, to the models this team uses.
-2. **Two load fixes.** [`upstream/compat-patches.json`](upstream/compat-patches.json) edits pstack's agent file so `faker-agent` runs `/faker-mode` as a command and searches Claude Code's plugin folder.
+2. **One load fix.** [`upstream/compat-patches.json`](upstream/compat-patches.json) edits pstack's agent file so `faker-agent` searches Claude Code's plugin folder for the `faker-mode` skill.
 3. **Team renames.** [`upstream/renames.json`](upstream/renames.json) renames pstack's `poteto-mode` skill to `faker-mode`, its `poteto-agent` to `faker-agent`, and one plugin to `team-workflows`, in file names and text. The credit to poteto (Lauren Tan) for the style stays.
 4. **No editor name.** The same file keeps the upstream editor's name out of the kit: its project folders become `.agents/`, its environment variables become the ones Claude Code sets, and sentences that named it are reworded. The `LICENSE` files are not changed. The sync fails if the name comes back anywhere else.
 5. **Files added and left out.** Each plugin gains a generated `.claude-plugin/plugin.json`, so Claude Code can install it, and plugins with upstream hooks gain `agent-hooks/`, which runs those hooks as Claude Code hooks. The upstream editor's own plugin manifests are not copied.
