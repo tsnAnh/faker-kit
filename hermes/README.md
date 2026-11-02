@@ -92,12 +92,12 @@ Under `~/.hermes/faker-kit/`: `kit/` (the kit at the pinned commit), `guard.yaml
 
 - Merge pull requests the gate refuses (`Risk: high`, forks) and each project's kit-vendoring pull request.
 - Sign `gh` in on the machine once (`gh auth login`); every bot shares that login. No bot ever sees a token in chat.
-- Sign Claude Code in on the machine, and trust each launch checkout once: `cd <launch_checkout> && claude`, choose yes, then `/exit`.
+- Sign Claude Code in on the machine. `faker-kit add-project` and every `faker-kit launch` mark the launch checkout trusted in Claude Code's config, so nobody trusts a folder by hand.
 - Install the Claude GitHub app on each project repository and add the `CLAUDE_CODE_OAUTH_TOKEN` secret.
 
 ## Troubleshooting
 
-- **"Claude Code asks whether to trust <path>".** Run `cd <path> && claude`, choose yes, then `/exit`, and launch again.
+- **"Claude Code asks whether to trust <path>".** faker-kit marks each launch checkout trusted itself, so this means the Claude Code config the launch uses is missing or unreadable, or the launch read another config than the one named in the message. Sign Claude Code in on this machine (with the same `CLAUDE_CONFIG_DIR` the bot uses) and launch again.
 - **A Claude launch exits with "Not logged in" or "requires an interactive terminal".** The gateway runs `claude` without your shell. Check that the project bot's `.env` has `CLAUDE_CONFIG_DIR` pointing at your `claude` login, and rerun `faker-kit add-project` from a shell where it is exported.
 - **"the kit update <pull request> conflicts with its base branch".** Ask the bootstrap bot to run `faker-kit vendor --project <project>`; it rebuilds the pull request on the current branch.
 - **Merge keeps refusing.** `faker-kit status` shows the gate that is closed for each pull request.

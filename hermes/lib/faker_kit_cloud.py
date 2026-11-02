@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import json
 import os
 import re
 import select
@@ -15,11 +16,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from faker_kit_env import CLAUDE_CONFIG_DIR
+
 SESSION = re.compile(r"https://claude\.ai/code/[A-Za-z0-9_-]+|\b(?:session|cse)_[A-Za-z0-9]{6,}\b")
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[PX^_][^\x1b]*\x1b\\|\x1b[ -/]*[0-~]")
 TRUST_QUESTION = re.compile(r"trust\s*this\s*folder", re.I)
 KEEP_SECONDS = 3 * 24 * 3600
 CHECKOUT = "repo"
+CLAUDE_GLOBAL_CONFIG = ".claude.json"
+CLAUDE_LEGACY_CONFIG = ".config.json"
 REDACTED_PROMPT = "[redacted prompt]"
 GIT_TIMEOUT_SECONDS = 120
 
@@ -52,6 +57,40 @@ def read_available(fd: int, timeout: float) -> bytes:
 
 def acquire_terminal() -> None:
     fcntl.ioctl(1, termios.TIOCSCTTY, 0)
+
+
+def claude_global_config(config_dir: str) -> Path:
+    legacy = (Path(config_dir) if config_dir else Path.home() / ".claude") / CLAUDE_LEGACY_CONFIG
+    return legacy if legacy.exists() else (Path(config_dir) if config_dir else Path.home()) / CLAUDE_GLOBAL_CONFIG
+
+
+def trust_checkout(checkout: Path, config_dir: str) -> Path | None:
+    try:
+        config = claude_global_config(config_dir).resolve(strict=True)
+        data = json.loads(config.read_text())
+        mode = config.stat().st_mode & 0o777
+    except (OSError, ValueError):
+        return None
+    projects = data.setdefault("projects", {}) if isinstance(data, dict) else None
+    entry = projects.setdefault(str(checkout.resolve()), {}) if isinstance(projects, dict) else None
+    if not isinstance(entry, dict):
+        return None
+    if entry.get("hasTrustDialogAccepted") is True:
+        return config
+    entry["hasTrustDialogAccepted"] = True
+    temp = config.with_name(f".{config.name}.{os.getpid()}.trust")
+    try:
+        with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode), "w") as out:
+            json.dump(data, out, indent=2)
+            out.flush()
+            os.fsync(out.fileno())
+        temp.chmod(mode)
+        temp.replace(config)
+    except OSError:
+        with contextlib.suppress(OSError):
+            temp.unlink()
+        return None
+    return config
 
 
 def child_env() -> dict[str, str]:
@@ -106,8 +145,9 @@ class Cloud:
         workdir.parent.mkdir(parents=True, exist_ok=True)
         self.prune(workdir.parent)
         checkout = self.checkout(repo, workdir.parent / CHECKOUT)
+        trusted_in = trust_checkout(checkout, os.environ.get(CLAUDE_CONFIG_DIR, ""))
         chosen = [*(["--model", model] if model else []), *(["--effort", effort] if effort else [])]
-        return self.launch(["claude", *chosen, "--cloud", prompt], checkout, workdir.with_name(workdir.name + ".log"), prompt)
+        return self.launch(["claude", *chosen, "--cloud", prompt], checkout, workdir.with_name(workdir.name + ".log"), prompt, trusted_in)
 
     def checkout(self, repo: str, path: Path) -> Path:
         if not (path / ".git").exists():
@@ -123,7 +163,7 @@ class Cloud:
                 raise CloudError(f"git {args[0]} failed in {path}: {done.stderr.strip()[:200]}")
         return path
 
-    def launch(self, argv: list[str], cwd: Path, log: Path, prompt: str) -> str:
+    def launch(self, argv: list[str], cwd: Path, log: Path, prompt: str, trusted_in: Path | None = None) -> str:
         log.write_text("", encoding="utf-8")
         master, slave = os.openpty()
         keep_master = False
@@ -146,7 +186,9 @@ class Cloud:
                 if TRUST_QUESTION.search(text):
                     stop(proc)
                     write_log(log, text, prompt)
-                    raise CloudError(f"Claude Code asks whether to trust {cwd}; trust it once: cd {cwd} && claude, choose yes, then /exit")
+                    why = (f"faker-kit marked it trusted in {trusted_in}, but Claude Code read another config; check the launch's CLAUDE_CONFIG_DIR"
+                           if trusted_in else "faker-kit could not mark it trusted because Claude Code's config is missing or unreadable; sign Claude Code in on this machine")
+                    raise CloudError(f"Claude Code asks whether to trust {cwd}: {why}")
                 code = proc.poll()
                 if code is not None:
                     text = clean_terminal_text(raw + read_available(master, 0.05))

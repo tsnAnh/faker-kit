@@ -39,8 +39,8 @@ This repository's pull requests come from agents, and it has no human review com
 ### S3. Write a skill or doc step as one instruction a cold agent can follow
 
 - Why: skills are read mid-task by an agent with no chat history, often with no human watching. A step that hedges ("you might want to"), bundles several actions, or relies on context the reader lacks gets skipped or guessed.
-- Bad: "You may want to make sure the checkout is trusted before you try launching, if that seems needed."
-- Good: "Trust the launch checkout once: `cd <launch_checkout> && claude`, choose yes, then `/exit`."
+- Bad: "You may want to make sure the kit is vendored before you try launching, if that seems needed."
+- Good: "Vendor the kit: `faker-kit vendor --project <project>`, then wait until the owner says its pull request is merged."
 - Promotion: style-only
 - Source: AGENTS.md "Write for an agent reading the file cold"; the owner's setup sessions, where each unclear step became a question.
 

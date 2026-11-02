@@ -28,8 +28,8 @@ if (HERE.parent / "vendor").is_dir() and str(HERE.parent / "vendor") not in sys.
 
 import yaml
 from faker_kit_andon import LABEL, MACHINE, Andon, AndonError, Cord, clean_reason, issue_body
-from faker_kit_cloud import CHECKOUT, Cloud, CloudError
-from faker_kit_env import EnvFileError, parse_env_file, set_env, use_bot_env
+from faker_kit_cloud import CHECKOUT, Cloud, CloudError, trust_checkout
+from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
 from faker_kit_gh import NAME, Gh, Refused, Runner, run_gh
 from faker_kit_guard.policy import (
     DEFAULT_HEARTBEAT_EVERY,
@@ -648,8 +648,8 @@ class Kit:
         webhook_url = load_machine(kept).webhook_url if refresh_webhooks and kept.exists() else None
         if webhook_url:
             out["webhooks"] = self.webhooks(webhook_url, [(name, repo)])
-        steps = [f"The owner trusts the launch checkout once: cd {checkout} && claude, choose yes, then /exit",
-                 f"faker-kit vendor --project {slug}, then the owner merges its pull request"]
+        trust_checkout(checkout, os.environ.get(CLAUDE_CONFIG_DIR, ""))
+        steps = [f"faker-kit vendor --project {slug}, then the owner merges its pull request"]
         if not out["jobs_active"]:
             again = f"{repo} --provider {provider} --model {model}" if provider else repo
             steps.append(f"The owner signs gh in on this machine (gh auth login), then runs faker-kit add-project {again} again to start the jobs")
