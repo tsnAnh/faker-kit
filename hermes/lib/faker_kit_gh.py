@@ -172,6 +172,9 @@ class Gh:
     def timeline(self, number: int) -> list[dict]:
         return self.pages(f"repos/{self.repo}/issues/{int(number)}/timeline")
 
+    def issue_comments(self, number: int) -> list[dict]:
+        return self.pages(f"repos/{self.repo}/issues/{int(number)}/comments")
+
     def head_runs(self, head: str) -> list[dict]:
         return self.pages(f"repos/{self.repo}/actions/runs", {"head_sha": head}, key="workflow_runs")
 
