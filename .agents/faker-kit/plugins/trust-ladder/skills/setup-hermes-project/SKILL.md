@@ -1,6 +1,6 @@
 ---
 name: setup-hermes-project
-description: Connect a GitHub repository to this machine's Hermes dispatch. Two parts. The machine side, run from the owner's own Claude Code: checks the Hermes install, creates the project bot and the checkout its Claude Code sessions launch from, has the owner trust that checkout once, vendors the kit, and starts the setup session. The repository side, run by that setup session inside the repository: writes .agents/dispatch.json and .agents/dispatch.md, describes the layout in AGENTS.md, and fills in the kit setup the repository still lacks, in one pull request. The owner only answers a few questions, trusts one folder, and merges two pull requests. Use for /setup-hermes-project, "add this repo to Hermes", "set up faker-kit dispatch for OWNER/REPO", "set up this repo for Hermes dispatch", or after a dispatch refusal about the kit pin or dispatch.json.
+description: Connect a GitHub repository to this machine's Hermes dispatch. Two parts. The machine side, run from the owner's own Claude Code: checks the Hermes install, creates the project bot and the checkout its Claude Code sessions launch from (faker-kit marks it trusted in Claude Code itself), vendors the kit, and starts the setup session. The repository side, run by that setup session inside the repository: writes .agents/dispatch.json and .agents/dispatch.md, describes the layout in AGENTS.md, and fills in the kit setup the repository still lacks, in one pull request. The owner only answers a few questions and merges two pull requests. Use for /setup-hermes-project, "add this repo to Hermes", "set up faker-kit dispatch for OWNER/REPO", "set up this repo for Hermes dispatch", or after a dispatch refusal about the kit pin or dispatch.json.
 ---
 
 # Set up a repository for Hermes dispatch
@@ -53,15 +53,9 @@ Run this from the owner's own shell, with the `CLAUDE_CONFIG_DIR` their `claude`
 
 It creates the bot's profile, its four agent jobs, the andon and bug-report labels in the repository, and the **launch checkout**: one kept clone of the repository that every Claude Code session for this project starts from. It prints that path as `launch_checkout`. The jobs start once `gh` is signed in on this machine; if the output says they are paused, the owner runs `gh auth login` once and you run `add-project` again.
 
-## 4. The owner trusts the checkout
+## 4. The checkout is trusted for you
 
-Ask the owner to do this in **their own terminal**, not through you. Claude Code asks once per folder whether to trust it, and a launch cannot answer:
-
-```bash
-cd <launch_checkout> && claude
-```
-
-Choose yes, then type `/exit`.
+`add-project` and every `launch` mark the launch checkout trusted in the Claude Code config the launch uses. Never ask the owner to trust a folder.
 
 ## 5. Vendor the kit
 
@@ -79,7 +73,7 @@ Write a setup brief into the owner's own briefs folder, `~/.hermes/faker-kit/bri
 ~/.hermes/bin/faker-kit launch --project <project> --brief-file ~/.hermes/faker-kit/briefs/default/setup-<project>.md
 ```
 
-This is the first real launch, so a refusal names what is wrong: a checkout not trusted yet, or a `claude` not logged in. Give the owner the session link and, once it appears, the pull request; wait until it is merged. The repository also needs the Claude GitHub app and a `CLAUDE_CODE_OAUTH_TOKEN` secret for the review jobs.
+This is the first real launch, so a refusal names what is wrong, such as a `claude` that is not logged in. Give the owner the session link and, once it appears, the pull request; wait until it is merged. The repository also needs the Claude GitHub app and a `CLAUDE_CODE_OAUTH_TOKEN` secret for the review jobs.
 
 ## 7. Hand over
 
