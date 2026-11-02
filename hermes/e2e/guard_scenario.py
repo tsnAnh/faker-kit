@@ -279,6 +279,23 @@ def taint_flow(host: Host) -> None:
     refused_when_tainted = blocked(tainted_create, "runs only in a turn that read nothing untrusted")
     host.step("guard: the bootstrap bot creates a profile only in a turn that read nothing untrusted", clean_create is None and refused_when_tainted,
               f"{action(clean_create)} {action(tainted_create)}")
+    chief_turn = host.sid()
+    chief_first = host.terminal("hermes profile create shop", "chanh-van", chief_turn, label="chief profile create in a clean turn")
+    chief_result = host.result("terminal", {"command": "hermes profile create shop"}, "Profile 'shop' created", profile="chanh-van", session=chief_turn)
+    chief_second = host.terminal("hermes profile create --no-alias crm", "chanh-van", chief_turn, label="chief second profile create in the same turn")
+    chief_tell = host.tool("message_agent", {"target": "ong-xay", "message": "Work from the chief of staff: set up acme/shop --bot shop"}, profile="chanh-van", session=chief_turn,
+                           label="chief hands the repository to the bootstrap bot after the create")
+    chief_read = host.sid()
+    host.result("web_extract", {"url": "u"}, "x", profile="chanh-van", session=chief_read)
+    chief_tainted = host.terminal("hermes profile create shop", "chanh-van", chief_read, label="chief profile create in a tainted turn")
+    project_create = host.terminal("hermes profile create shop", "meo-beo", host.sid(), label="project bot profile create")
+    host.step("guard: the chief creates a profile in a clean turn, the create does not taint it, a tainted turn and a project bot are refused",
+              chief_first is None and chief_result is None and chief_second is None and chief_tell is None
+              and blocked(chief_tainted, "runs only in a turn that read nothing untrusted") and blocked(project_create, "blocked for every bot"),
+              " ".join(action(v) for v in (chief_first, chief_second, chief_tell, chief_tainted, project_create)))
+    rebinding = [host.terminal(c, profile, read, label="rebinding in a tainted turn")
+                 for profile in ("ong-xay", "chanh-van", "meo-beo") for c in ("hermes() { :; }", "export PATH=/tmp/evil:$PATH", "alias gh=true", "echo x > /tmp/evil/hermes")]
+    host.step("guard: rebinding hermes, faker-kit, or gh is blocked in a tainted turn too", all(blocked(v, "blocked for every bot") for v in rebinding), f"{len(rebinding)} calls")
     plain = host.sid()
     left_alone = [host.result("clarify", {}, "answer", session=plain), host.result("terminal", {"command": "faker-kit status"}, '{"status": "done"}', session=plain)]
     host.step("guard: other tool results are left alone and do not taint", left_alone == [None, None] and host.tool("write_file", brief, session=plain) is None, "")

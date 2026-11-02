@@ -55,7 +55,7 @@ def sha(letter: str) -> str:
 
 
 FAKE_GH = r'''
-import base64, json, os, subprocess, sys, urllib.parse
+import base64, json, os, re, subprocess, sys, urllib.parse
 from pathlib import Path
 
 state_path = Path(os.environ["E2E_GH_STATE"])
@@ -184,8 +184,8 @@ if args[0] == "api":
         state["git"]["opened"].append({"number": number, "html_url": url, "title": body["title"], "head": {"ref": body["head"], "repo": {"full_name": state["repo"]}}})
         save()
         print(json.dumps({"html_url": url}))
-    elif route == prefix:
-        answer({"default_branch": "main"})
+    elif route == prefix or (re.fullmatch(r"repos/[^/]+/[^/]+", route) and route[len("repos/"):] not in state.get("unreadable_repos", [])):
+        answer({"default_branch": "main", "full_name": route[len("repos/"):]})
     elif route == prefix + "/commits/main":
         answer({"sha": state["main_head"]})
     elif route.startswith(prefix + "/check-runs/") and route.endswith("/annotations"):
@@ -394,13 +394,23 @@ def option(flag):
 
 
 if args[:2] == ["profile", "create"]:
+    if os.environ.get("E2E_HERMES_CREATE_FAIL"):
+        print("Error: could not write ghp_" + "a" * 30 + " " + "while preparing the profile " * 40 + "disk full at the end")
+        sys.exit(1)
     if os.environ.get("HERMES_AGENT_TOOL_CONTEXT") and not os.environ.get("HERMES_PROFILE_ADMIN_GRANT"):
-        sys.stderr.write("Error: Creating or deleting bots needs your approval in an interactive session.\n")
+        print("Error: Creating or deleting bots needs your approval in an interactive session.")
         sys.exit(1)
     (root / "profiles" / args[2]).mkdir(parents=True, exist_ok=True)
     (root / "profiles" / args[2] / ".profile-identity").write_text(args[2])
 elif args[:2] == ["profile", "show"]:
+    if os.environ.get("E2E_HERMES_SHOW") == "fail":
+        sys.stderr.write("Traceback: the profile registry is locked\n")
+        sys.exit(2)
+    if os.environ.get("E2E_HERMES_SHOW") == "hang":
+        import time
+        time.sleep(8)
     if not (root / "profiles" / args[2] / ".profile-identity").is_file():
+        print(f"Error: Profile '{args[2]}' does not exist.")
         sys.exit(1)
     print(f"Profile: {args[2]}")
 elif args[:2] == ["config", "set"]:
@@ -423,6 +433,9 @@ elif args[:2] == ["config", "unset"]:
 elif args[:1] == ["cron"]:
     jobs_path = base / "jobs.json"
     jobs = json.loads(jobs_path.read_text()) if jobs_path.exists() else []
+    if args[1] == "list" and os.environ.get("E2E_HERMES_CRON_FAIL"):
+        sys.stderr.write("cron store unreadable, token ghp_" + "b" * 30 + "\n")
+        sys.exit(3)
     if args[1] == "list":
         for job in jobs:
             print(f"  {job['id']} [{'active' if job['enabled'] else 'paused'}]")
@@ -2144,9 +2157,9 @@ def profile_approval_scenario(run: Run, work: Path) -> None:
     other.update_gh(lambda state: state.update({"repo": "acme/crm"}))
     before = snapshot()
     code, out, err = other.kit(*crm, bot=BOOTSTRAP, env=AGENT_TURN)
-    run.step("add-project in a bot's turn without a profile refuses with Hermes's own reason and what to run, and changes nothing",
-             code == 1 and "Creating or deleting bots needs your approval in an interactive session" in err and "Run `hermes profile create crm-bot` yourself" in err
-             and "then run this command again" in err and err.count("\n") == 1 and snapshot() == before, err.strip())
+    run.step("add-project in a bot's turn without a profile refuses with the next command for the bot, and changes nothing",
+             code == 1 and "creating one needs the owner's approval" in err and "Your next command is `hermes profile create crm-bot`, alone on the command line" in err
+             and "Then run this command again" in err and "interactive session" not in err and "yourself" not in err and err.count("\n") == 1 and snapshot() == before, err.strip())
     run.step("the refusal leaves no bots.yaml entry, no label, and no checkout",
              "crm-bot" not in (other.team / "bots.yaml").read_text() and other.gh_now()["labels"] == [] and not (other.team / "checkouts" / "acme__crm").exists()
              and not (other.hermes / "profiles" / "crm-bot").exists(), err.strip())
@@ -2183,10 +2196,11 @@ def profile_approval_scenario(run: Run, work: Path) -> None:
     (other.team / "bots.yaml").write_text(yaml.safe_dump(seeded, sort_keys=True))
     code, status, err = other.kit("status", bot=BOOTSTRAP)
     flagged = [line for line in status.splitlines() if line.startswith("half (half-bot, acme/half)")]
-    run.step("faker-kit status says in plain words that a project whose bot has no profile is not set up and what to run",
-             code == 0 and len(flagged) == 1 and "NOT SET UP: bot half-bot has no Hermes profile" in flagged[0]
-             and "hermes profile create half-bot, then faker-kit add-project acme/half" in flagged[0]
-             and "NOT SET UP" not in "".join(line for line in status.splitlines() if "crm-bot" in line), status.strip() or err.strip())
+    run.step("faker-kit status says in plain words that a project whose bot has no profile is not set up, and who creates it, without sending the reader to a shell",
+             code == 0 and len(flagged) == 1
+             and "NOT SET UP: bot half-bot has no Hermes profile, so this project does nothing yet; the bootstrap bot or chief of staff creates it with one approval in chat" in flagged[0]
+             and "Run hermes" not in flagged[0] and "NOT SET UP" not in "".join(line for line in status.splitlines() if "crm-bot" in line), status.strip() or err.strip())
+    profile_validation_scenario(run, other)
 
     other.update_gh(lambda state: state.update({"repo": "acme/half"}))
     code, out, err = other.kit("add-project", "acme/half", "--bot", "half-bot", "--project", "half", bot=None)
@@ -2208,6 +2222,139 @@ def profile_approval_scenario(run: Run, work: Path) -> None:
              and set(hooks) <= set(after_hooks) and {f"crm-bot-{kind}" for kind in ("issues", "pr", "security")} <= set(routes_after)
              and {name: routes_after[name] for name in routes_before if name.startswith("crm-bot-")} == {name: routes_before[name] for name in routes_before if name.startswith("crm-bot-")},
              err.strip() or out[:200])
+
+
+def hermes_calls(home: Path) -> list[list[str]]:
+    log = home / "hermes-calls.log"
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+def profile_creates(home: Path) -> list[list[str]]:
+    return [call for call in hermes_calls(home) if "profile" in call and "create" in call]
+
+
+def profile_validation_scenario(run: Run, other: Run) -> None:
+    profiles_module = sys.modules[faker_kit.Profiles.__module__]
+    bots_path = other.team / "bots.yaml"
+
+    def state() -> str:
+        return json.dumps([bots_path.read_text(), other.gh_now()["labels"], sorted(p.name for p in (other.hermes / "profiles").iterdir()), len(profile_creates(other.hermes))])
+
+    def repo(name: str) -> None:
+        other.update_gh(lambda gh: gh.update({"repo": name}))
+
+    repo("acme/half")
+    before = state()
+    code, out, err = other.kit("add-project", "acme/other", "--bot", "half-bot", "--project", "half", bot=None)
+    run.step("add-project refused by the bot registry leaves no profile behind, even from the owner's shell",
+             code == 1 and "project half is acme/half" in err and state() == before, err.strip())
+
+    repo("acme/crm")
+    other.update_gh(lambda gh: gh.update({"unreadable_repos": ["acme/ghost"]}))
+    code, out, err = other.kit("add-project", "acme/ghost", "--bot", "ghost-bot", "--project", "ghost", bot=None)
+    run.step("add-project for a repository GitHub cannot read refuses before it creates a profile, an entry, or a label",
+             code == 1 and "acme/ghost" in err and state() == before, err.strip())
+
+    subprocess.run(["hermes", "profile", "create", "dirs-bot"], env=other.env(), capture_output=True, text=True)
+    (other.hermes / "profiles" / "dirs-bot" / "config.yaml").write_text(yaml.safe_dump({"skills": {"external_dirs": {"a": 1}}}))
+    repo("acme/dirs")
+    before_dirs = state()
+    code, out, err = other.kit("add-project", "acme/dirs", "--bot", "dirs-bot", "--project", "dirs", bot=None)
+    run.step("add-project refuses a profile whose skills.external_dirs is not a folder or a list before it writes a label or an entry",
+             code == 1 and "external_dirs must be a folder or a list of folders" in err and state() == before_dirs, err.strip())
+
+    merged = {}
+    for bot, existing in (("list-bot", ["/opt/shared-skills", "/opt/other"]), ("text-bot", "/opt/shared-skills")):
+        subprocess.run(["hermes", "profile", "create", bot], env=other.env(), capture_output=True, text=True)
+        (other.hermes / "profiles" / bot / "config.yaml").write_text(yaml.safe_dump({"skills": {"external_dirs": existing}}))
+        repo(f"acme/{bot}")
+        code, out, err = other.kit("add-project", f"acme/{bot}", "--bot", bot, "--project", bot, bot=None)
+        merged[bot] = (code, yaml.safe_load((other.hermes / "profiles" / bot / "config.yaml").read_text())["skills"]["external_dirs"])
+    kit_skills = str(other.hermes / "profiles" / "list-bot" / "kit-skills")
+    run.step("add-project keeps the folders a profile already lists in skills.external_dirs, as a list or as one folder, and adds the kit's",
+             merged["list-bot"] == (0, ["/opt/shared-skills", "/opt/other", kit_skills])
+             and merged["text-bot"] == (0, ["/opt/shared-skills", str(other.hermes / "profiles" / "text-bot" / "kit-skills")]), json.dumps(merged))
+
+    repo("acme/chk")
+    before = state()
+    calls_before = len(hermes_calls(other.hermes))
+    gh_before = len((other.gh_log).read_text().splitlines())
+    code, out, err = other.kit("add-project", "acme/chk", "--check", bot=BOOTSTRAP)
+    checked = json.loads(out) if code == 0 else {}
+    new_calls = hermes_calls(other.hermes)[calls_before:]
+    new_gh = [json.loads(line) for line in other.gh_log.read_text().splitlines()[gh_before:]]
+    run.step("add-project --check says the bot and whether its profile exists, and writes nothing: no profile, entry, label, or Hermes change",
+             code == 0 and checked.get("check") is True and checked.get("bot") == "chk" and checked.get("project") == "chk" and checked.get("repo") == "acme/chk"
+             and checked.get("profile") == "missing" and state() == before
+             and all(call[:2] == ["profile", "show"] for call in new_calls) and all(call[:1] == ["api"] and "-X" not in call for call in new_gh), (err or out).strip()[:300])
+    repo("acme/crm")
+    code, out, err = other.kit("add-project", "acme/crm", "--bot", "crm-bot", "--project", "crm", "--check", bot=BOOTSTRAP)
+    run.step("add-project --check says when the profile already exists", code == 0 and json.loads(out).get("profile") == "exists" and state() == before, (err or out).strip()[:300])
+    refused = []
+    for argv in (("acme/other", "--bot", "half-bot", "--project", "half"), ("acme/ghost", "--bot", "ghost-bot", "--project", "ghost"), ("acme/crm", "--bot", "test"),
+                 ("acme/crm", "--bot", "faker-kit"), ("acme/crm", "--project", "claude"), ("nonsense",)):
+        code, out, err = other.kit("add-project", *argv, "--check", bot=BOOTSTRAP)
+        refused.append((argv[-1] if argv[0] == "nonsense" else argv[1:], code, bool(err.strip()), out))
+    run.step("add-project --check refuses a taken project, a repository GitHub cannot read, a reserved name, and a bad repository, and writes nothing",
+             all(code == 1 and said and not out for _, code, said, out in refused) and state() == before, json.dumps(refused)[:300])
+
+    reserved = []
+    for name in ("hermes", "test", "tmp", "root", "sudo", "gh", "git", "claude", "faker-kit", "python", "node", "uv", "default"):
+        code, out, err = other.kit("add-project", "acme/crm", "--bot", name, bot=BOOTSTRAP, env=AGENT_TURN)
+        reserved.append((name, code, "reserved" in err))
+    run.step("add-project refuses every reserved or shadowing bot name before it creates anything, so no approval is spent",
+             all(code == 1 and said for _, code, said in reserved) and state() == before, json.dumps(reserved)[:300])
+
+    folder = other.hermes / "profiles" / "crm-bot" / "kit-skills"
+    link = folder / "dispatch"
+    target = link.readlink()
+    link.unlink()
+    link.mkdir()
+    repo("acme/crm")
+    code, out, err = other.kit("add-project", "acme/crm", "--bot", "crm-bot", "--project", "crm", bot=BOOTSTRAP, env=AGENT_TURN)
+    kept_real = link.is_dir() and not link.is_symlink()
+    link.rmdir()
+    link.symlink_to(target)
+    run.step("add-project warns about a real directory in a bot's kit-skills folder and leaves it, as it does for the skills folder",
+             code == 0 and kept_real and f"conflict: {link} is a real directory; left as is" in err, err.strip()[:300])
+
+    calls_before = len(profile_creates(other.hermes))
+    repo("acme/half")
+    for mode, env in (("fails", {"E2E_HERMES_SHOW": "fail"}), ("hangs", {"E2E_HERMES_SHOW": "hang"})):
+        profiles_module.PROFILE_CHECK_SECONDS = 1
+        started = time.monotonic()
+        code, status, err = other.kit("status", bot=BOOTSTRAP, env=env)
+        took = time.monotonic() - started
+        line = next((row for row in status.splitlines() if row.startswith("half (half-bot, acme/half)")), "")
+        code_add, _, err_add = other.kit("add-project", "acme/half", "--bot", "half-bot", "--project", "half", bot=None, env=env)
+        code_check, out_check, _ = other.kit("add-project", "acme/half", "--bot", "half-bot", "--project", "half", "--check", bot=BOOTSTRAP, env=env)
+        run.step(f"when hermes profile show {mode}, status says it could not check and does not call the profile missing, and add-project and --check neither guess nor create",
+                 code == 0 and "could not check whether bot half-bot has a Hermes profile" in line and "NOT SET UP" not in line and took < 6
+                 and code_add == 1 and "could not check" in err_add and code_check == 0 and json.loads(out_check).get("profile") == "unknown"
+                 and len(profile_creates(other.hermes)) == calls_before and not (other.hermes / "profiles" / "half-bot").exists(), f"{line} | {err_add.strip()}")
+    profiles_module.PROFILE_CHECK_SECONDS = 20
+
+    hidden = other.bin / "hermes.off"
+    (other.bin / "hermes").rename(hidden)
+    try:
+        code, status, err = other.kit("status", bot=BOOTSTRAP)
+        code_add, _, err_add = other.kit("add-project", "acme/half", "--bot", "half-bot", "--project", "half", bot=None)
+    finally:
+        hidden.rename(other.bin / "hermes")
+    line = next((row for row in status.splitlines() if row.startswith("half (half-bot, acme/half)")), "")
+    run.step("with no hermes executable, status says it could not check and add-project refuses, instead of crashing or claiming the profile is missing",
+             code == 0 and "could not check" in line and "NOT SET UP" not in line and code_add == 1 and "could not check" in err_add and "unexpected" not in err_add, f"{line} | {err_add.strip()}")
+
+    code, out, err = other.kit("add-project", "acme/half", "--bot", "half-bot", "--project", "half", bot=BOOTSTRAP, env={**AGENT_TURN, "E2E_HERMES_CREATE_FAIL": "1"})
+    run.step("a failed profile create reports Hermes's own last words, on one line, bounded and redacted, and is not relabelled as needing approval",
+             code == 1 and "disk full at the end" in err and "ghp_" not in err and err.count("\n") == 1 and len(err) < 500 and "approval" not in err, err.strip()[-300:])
+    code, out, err = other.kit("add-project", "acme/half", "--bot", "half-bot", "--project", "half", bot=None, env={"E2E_HERMES_CREATE_FAIL": "1"})
+    run.step("the same failure from the owner's shell reports the same reason", code == 1 and "disk full at the end" in err and "ghp_" not in err and len(err) < 500, err.strip()[-300:])
+
+    repo("acme/crm")
+    code, out, err = other.kit("add-project", "acme/crm", "--bot", "crm-bot", "--project", "crm", bot=BOOTSTRAP, env={"E2E_HERMES_CRON_FAIL": "1"})
+    run.step("a failing hermes call elsewhere keeps its generic message and never prints Hermes's output",
+             code == 1 and err.strip().endswith("failed") and "ghp_" not in err and "unreadable" not in err, err.strip())
 
 
 def main(argv: list[str] | None = None) -> int:

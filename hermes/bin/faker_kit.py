@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import hashlib
 import importlib.util
 import json
@@ -96,7 +97,7 @@ def current_bot() -> str:
 
 def check_name(value: str, what: str) -> None:
     if not NAME.match(value) or value in RESERVED_NAMES:
-        raise Refused(f"{what} {value!r} must be lowercase letters, digits, - and _, and not default")
+        raise Refused(f"{what} {value!r} must be lowercase letters, digits, - and _, and not a reserved name ({', '.join(sorted(RESERVED_NAMES))})")
 
 
 def check_repo(value: str) -> None:
@@ -132,7 +133,7 @@ class Kit:
         self.pkg = self.kit / "hermes"
         self.cloud = cloud or Cloud(run_gh=run)
         self.andon = Andon(self.home)
-        self.profiles = Profiles(self.root, self.pkg)
+        self.profiles = Profiles(self.root, self.pkg, SECRET_SHAPES)
         self.machine_login_known: bool | None = None
 
     def bots_file(self) -> dict:
@@ -378,8 +379,11 @@ class Kit:
     def project_line(self, bot: Bot) -> str:
         cord = self.andon.read(bot.name)
         head = f"{bot.project} ({bot.name}, {bot.repo})" + (f" ANDON: {cord.reason}" if cord else "")
-        if not self.profiles.live(bot.name):
-            head += f" NOT SET UP: bot {bot.name} has no Hermes profile, so this project does nothing yet. Run hermes profile create {bot.name}, then faker-kit add-project {bot.repo}"
+        profile = self.profiles.live(bot.name)
+        if profile is None:
+            head += f" PROFILE UNKNOWN: could not check whether bot {bot.name} has a Hermes profile; run status again"
+        elif not profile:
+            head += f" NOT SET UP: bot {bot.name} has no Hermes profile, so this project does nothing yet; the bootstrap bot or chief of staff creates it with one approval in chat"
         try:
             pulls = Gh(self.home, bot.name, str(bot.repo), self.run).open_pulls()
         except Refused as err:
@@ -596,7 +600,7 @@ class Kit:
 
     def add_project(self, repo: str, bot: str | None = None, project: str | None = None, model: str | None = None,
                     intervals: dict[str, str | None] | None = None, subscription: bool | None = None, slack_channel: str | None = None,
-                    refresh_webhooks: bool = True, provider: str | None = None) -> dict:
+                    refresh_webhooks: bool = True, provider: str | None = None, check: bool = False) -> dict:
         check_repo(repo)
         slug = project or slugify(repo.split("/")[1])
         name = bot or slug
@@ -609,6 +613,14 @@ class Kit:
         inherited = subscription if subscription is not None else any(self.profiles.subscription_in_use(b) for b in self.bots_file()["bots"])
         use_subscription = not provider and inherited
         config_dir = self.profiles.claude_login() if use_subscription else None
+        proposed = copy.deepcopy(self.bots_file())
+        self.register_project(proposed, repo, name, slug, {key: wanted.get(key) for key in SCHEDULE_DEFAULTS}, slack_channel)
+        self.policy_from(proposed)
+        self.check_repo_readable(repo)
+        self.profiles.check_skill_dirs(name)
+        if check:
+            profile = self.profiles.live(name)
+            return {"check": True, "bot": name, "project": slug, "repo": repo, "profile": {True: "exists", False: "missing", None: "unknown"}[profile]}
         self.profiles.ensure(name)
         data = self.bots_file()
         self.register_project(data, repo, name, slug, {key: wanted.get(key) for key in SCHEDULE_DEFAULTS}, slack_channel)
@@ -634,6 +646,12 @@ class Kit:
             again = f"{repo} --provider {provider} --model {model}" if provider else repo
             steps.append(f"The owner signs gh in on this machine (gh auth login), then runs faker-kit add-project {again} again to start the jobs")
         return {**out, "project": slug, "repo": repo, "launch_checkout": str(checkout), "next": steps}
+
+    def check_repo_readable(self, repo: str) -> None:
+        try:
+            self.run(["api", f"repos/{repo}", "--jq", ".full_name"])
+        except Refused as err:
+            raise Refused(f"{repo} is not readable on GitHub with this machine's gh login ({err})") from err
 
     def kit_skill_dirs(self, machine: Machine) -> list[str]:
         wanted = []
@@ -780,6 +798,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--heartbeat-every")
     cmd.add_argument("--incidents-every")
     cmd.add_argument("--security-every")
+    cmd.add_argument("--check", action="store_true")
     cmd = sub.add_parser("vendor")
     cmd.add_argument("--project", required=True)
     cmd = sub.add_parser("status")
@@ -846,7 +865,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
         return kit.project_names()
     if args.command == "add-project":
         intervals = {key: getattr(args, key) for key in SCHEDULE_DEFAULTS}
-        return kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider)
+        return kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider, check=args.check)
     if args.command == "vendor":
         return kit.vendor(args.project)
     if args.command == "launch":

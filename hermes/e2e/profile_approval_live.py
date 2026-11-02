@@ -13,6 +13,7 @@ from pathlib import Path
 import run_dispatch_e2e as e2e
 
 BOOTSTRAP_BOT = e2e.BOOTSTRAP
+yaml = e2e.yaml
 NEW_BOT = "crm-bot"
 LATE_BOT = "late-bot"
 CONTROL_BOT = "control-bot"
@@ -24,14 +25,27 @@ import json, sys
 from tools.approval_detection import detect_human_required_command
 print(json.dumps({command: list(detect_human_required_command(command)) for command in json.loads(sys.argv[1])}))
 """
-MINT = """
-import sys
-from tools.approval_detection import detect_human_required_command
-from hermes_cli.profile_admin_guard import mint_grant
-command = sys.argv[1]
-found, description = detect_human_required_command(command)
-print(mint_grant(command, description or "") if found else "")
+GATE = """
+import json, sys
+from tools.approval import check_all_command_guards
+asked = []
+
+
+def stub_owner(command, description, **kwargs):
+    asked.append(command)
+    return "once"
+
+
+result = check_all_command_guards(sys.argv[1], "local", approval_callback=stub_owner)
+print(json.dumps({"approved": bool(result.get("approved")), "grant": result.get("profile_admin_grant", ""), "asked": asked}))
 """
+CHAT = {"HERMES_INTERACTIVE": "1"}
+ONE_SHOT = {"HERMES_INTERACTIVE": "1", "HERMES_SINGLE_QUERY_SESSION": "1"}
+CRON = {"HERMES_INTERACTIVE": "1", "HERMES_CRON_SESSION": "1"}
+GRANT = "HERMES_PROFILE_ADMIN_GRANT"
+HOME_BOT = "home-bot"
+CHIEF_NEW_BOT = "ops-bot"
+CHIEF_BOT = "ba-truong"
 
 
 def find_hermes(checkout: Path) -> tuple[Path, Path]:
@@ -83,7 +97,7 @@ def probe(run: e2e.Run, checkout: Path, hermes: Path, python: Path) -> None:
 
     denied = cli("-p", "default", "profile", "create", NEW_BOT, "--no-alias", extra=AGENT_TURN)
     run.step("Hermes denies profile create from an agent's command and creates nothing",
-             denied.returncode != 0 and "needs your approval" in denied.stderr and not live(NEW_BOT), denied.stderr.strip())
+             denied.returncode != 0 and "needs your approval" in denied.stdout + denied.stderr and not live(NEW_BOT), (denied.stdout + denied.stderr).strip())
 
     policy = e2e.load_policy(run.team)
     commands = [form.format(bot=NEW_BOT) for form in ALLOWED_FORMS]
@@ -95,15 +109,48 @@ def probe(run: e2e.Run, checkout: Path, hermes: Path, python: Path) -> None:
              classified.returncode == 0 and all(guard_allows.values()) and all(verdicts[c][0] is True for c in commands) and all(guard_refuses.values()),
              json.dumps({c: verdicts.get(c) for c in commands}) or classified.stderr.strip()[-200:])
 
+    def gate(command: str, context: dict[str, str]) -> dict:
+        done = run_in_checkout(python, checkout, {**env, **context}, GATE, command)
+        lines = done.stdout.strip().splitlines()
+        return json.loads(lines[-1]) if done.returncode == 0 and lines else {"approved": None, "grant": "", "asked": [], "error": done.stderr.strip()[-200:]}
+
     command = f"hermes profile create {NEW_BOT}"
-    minted = run_in_checkout(python, checkout, env, MINT, command)
-    token = minted.stdout.strip()
-    created = cli("profile", "create", NEW_BOT, extra={**AGENT_TURN, "HERMES_PROFILE_ADMIN_GRANT": token})
-    replay = cli("profile", "create", LATE_BOT, extra={**AGENT_TURN, "HERMES_PROFILE_ADMIN_GRANT": token})
+    granted = gate(command, CHAT)
+    token = granted["grant"]
+    created = cli("profile", "create", NEW_BOT, extra={**AGENT_TURN, GRANT: token})
+    replay = cli("profile", "create", LATE_BOT, extra={**AGENT_TURN, GRANT: token})
     wrapper = home / ".local" / "bin" / NEW_BOT
-    run.step("with a grant Hermes minted for the approved command, profile create succeeds once, writes its wrapper under the temporary home, and the grant cannot be replayed",
-             bool(token) and created.returncode == 0 and live(NEW_BOT) and wrapper.exists() and replay.returncode != 0 and not live(LATE_BOT),
-             (created.stderr + replay.stderr).strip()[:200] or "created, replay denied")
+    run.step("Hermes's own approval flow shows the stand-in owner one card in a chat and mints the grant; with it profile create succeeds once, "
+             "writes its wrapper under the temporary home, and the grant cannot be replayed",
+             granted["approved"] is True and granted["asked"] == [command] and bool(token) and created.returncode == 0 and live(NEW_BOT) and wrapper.exists()
+             and replay.returncode != 0 and not live(LATE_BOT), (created.stderr + replay.stderr).strip()[:200] or "approved once, created, replay denied")
+
+    refused_contexts = {name: gate(f"hermes profile create {LATE_BOT}", context) for name, context in (("cron", CRON), ("one-shot", ONE_SHOT), ("no chat", {}))}
+    unfinished = cli("profile", "create", LATE_BOT, extra=AGENT_TURN)
+    run.step("in a cron run, a one-shot -Q turn, and a turn with no chat, Hermes's flow asks nobody, mints no grant, and the create is denied",
+             all(r["approved"] is False and r["asked"] == [] and r["grant"] == "" for r in refused_contexts.values()) and unfinished.returncode != 0 and not live(LATE_BOT),
+             json.dumps(refused_contexts)[:300])
+
+    cli("profile", "create", BOOTSTRAP_BOT, "--no-alias")
+    bootstrap_home = run.hermes / "profiles" / BOOTSTRAP_BOT
+    in_bot = gate(f"hermes profile create {HOME_BOT}", {**CHAT, "HERMES_HOME": str(bootstrap_home)})
+    made = cli("profile", "create", HOME_BOT, "--no-alias", extra={**AGENT_TURN, "HERMES_HOME": str(bootstrap_home), GRANT: in_bot["grant"]})
+    run.step("with HERMES_HOME set to the bootstrap bot's profile home, as in a real bot turn, the flow mints a grant and profile create still works",
+             in_bot["approved"] is True and bool(in_bot["grant"]) and made.returncode == 0 and live(HOME_BOT), (made.stderr or made.stdout).strip()[:200])
+
+    roles = yaml.safe_load((run.team / "bots.yaml").read_text())
+    roles["bots"][CHIEF_BOT] = {"role": "chief"}
+    (run.team / "bots.yaml").write_text(yaml.safe_dump(roles))
+    policy = e2e.load_policy(run.team)
+    chief_forms = [form.format(bot=CHIEF_NEW_BOT) for form in ALLOWED_FORMS]
+    chief_allowed = all(e2e.decide(policy, CHIEF_BOT, "terminal", {"command": c}, False) is None for c in chief_forms)
+    chief_tainted = all(e2e.decide(policy, CHIEF_BOT, "terminal", {"command": c}, True) is not None for c in chief_forms)
+    by_chief = gate(chief_forms[0], CHAT)
+    chief_made = cli("profile", "create", CHIEF_NEW_BOT, "--no-alias", extra={**AGENT_TURN, GRANT: by_chief["grant"]})
+    project_refused = all(e2e.decide(policy, e2e.BOT, "terminal", {"command": c}, False) is not None for c in chief_forms)
+    run.step("the chief of staff's profile create is allowed by the guard in a clean turn only, goes through Hermes's flow, and creates the profile; a project bot's is refused",
+             chief_allowed and chief_tainted and by_chief["approved"] is True and chief_made.returncode == 0 and live(CHIEF_NEW_BOT) and project_refused,
+             json.dumps(by_chief)[:200])
 
     migrated = cli("catalog", "migrate")
     marker = run.hermes / "shared" / "catalog" / ".migrated"
@@ -133,9 +180,15 @@ def probe(run: e2e.Run, checkout: Path, hermes: Path, python: Path) -> None:
     labels = run.gh_now()["labels"]
     bots_before = (run.team / "bots.yaml").read_text()
     code, out, err = run.kit("add-project", "acme/late", "--bot", LATE_BOT, "--project", "late", bot=BOOTSTRAP_BOT, env=other_env)
-    run.step("without an approval, add-project for a missing profile refuses with Hermes's reason and what to run, and writes nothing",
-             code == 1 and "needs your approval" in err and f"Run `hermes profile create {LATE_BOT}` yourself" in err and (run.team / "bots.yaml").read_text() == bots_before
+    run.step("without an approval, add-project for a missing profile refuses with the next command for the bot, and writes nothing",
+             code == 1 and "needs the owner's approval" in err and f"Your next command is `hermes profile create {LATE_BOT}`, alone on the command line" in err
+             and (run.team / "bots.yaml").read_text() == bots_before
              and run.gh_now()["labels"] == labels and not live(LATE_BOT) and LATE_BOT not in bots_before, err.strip()[:300])
+
+    absent = cli("profile", "show", "ghost-bot")
+    present = cli("profile", "show", NEW_BOT)
+    run.step("Hermes's own text for a profile that does not exist is what status and add-project key on, and an existing profile exits 0",
+             absent.returncode != 0 and "Profile 'ghost-bot' does not exist" in absent.stdout + absent.stderr and present.returncode == 0, (absent.stdout + absent.stderr).strip()[:200])
 
 
 def main(argv: list[str] | None = None) -> int:

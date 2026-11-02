@@ -38,7 +38,7 @@ SEGMENT_SPLIT = re.compile(r"\|\||&&|[;|&\n]|\$\(|`|\)")
 ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
 
 NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
-RESERVED_NAMES = frozenset({"default"})
+RESERVED_NAMES = frozenset({"default", "hermes", "test", "tmp", "root", "sudo", "gh", "git", "claude", "faker-kit", "python", "node", "uv"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SLACK_CHANNEL = re.compile(r"\A[CG][A-Z0-9]{8,}\Z")
 BOOTSTRAP_READ_ONLY = ("status",)
@@ -108,7 +108,28 @@ LINK_IN_CODE = re.compile(rf"(?s){LINK_CALL}.{{0,300}}faker-kit/briefs|faker-kit
 PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|faker-kit/kit)(?![\w-])", re.I)
 PROFILE_CREATE = re.compile(r"hermes profile create (?:--no-alias ([a-z0-9][a-z0-9_-]{0,63})|([a-z0-9][a-z0-9_-]{0,63})(?: --no-alias)?)")
 PROFILE_ADMIN_WORDS = frozenset({"profile", "bot"})
+PROFILE_VERBS = frozenset({"create", "delete", "import", "install", "rename", "use", "export", "list", "show", "remove", "update"})
 PROFILE_CREATE_TURN = "hermes profile create"
+PROFILE_CREATORS = ("bootstrap", "chief")
+PROFILE_ADMIN_REFUSAL = (
+    "creating, importing, deleting, or listing bots and profiles is the owner's; the bootstrap bot and the chief of staff may run only "
+    "`hermes profile create <bot>` alone on the command line, with a name that is not reserved, in a turn that read nothing untrusted"
+)
+HERMES_PROGRAMS = ("hermes", "hermes-agent")
+HERMES_MODULES = ("hermes_cli", "hermes_cli.main")
+HERMES_VALUE_FLAGS = frozenset({"-p", "--profile", "-z", "--oneshot", "--usage-file", "-m", "--model", "--provider", "--reasoning", "-t", "--toolsets",
+                                "-r", "--resume", "--in", "-s", "--skills"})
+PACKAGE_RUNNERS = ("uv", "uvx", "pipx")
+PYTHON = re.compile(r"python[\d.]*\Z")
+SHADOWED_TOOLS = ("hermes", "faker-kit", "gh")
+SHADOWING_FILE = "hermes"
+PATH_ASSIGN = re.compile(r"\A(?:PATH|path)\+?=")
+ASSIGNMENT = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\+?=")
+PATH_ASSIGNERS = ("export", "declare", "typeset", "readonly", "local", "env", "setenv")
+FILE_WRITERS_LAST = ("cp", "mv", "ln", "install", "rsync")
+FILE_WRITERS_ANY = ("tee", "touch")
+DOWNLOAD_OUTPUT = {"curl": ("-o", "--output"), "wget": ("-O", "--output-document")}
+REDIRECT = re.compile(r"""\d*>>?\|?\s*(["']?)([^\s"';&|()<>]+)\1""")
 CLEAN_TURN_TEXT = re.compile(r"\bfaker-kit\W+(merge|handoff)\b")
 TAINTED_TURN_SECONDS = 3600
 TAINT_BLOCKED_TOOLS = ("delegate_task", "cronjob*")
@@ -477,9 +498,11 @@ def shell_words(segment: str, keep_path: bool = False) -> list[str]:
     return words
 
 
-def shell_commands(text: str, depth: int = 0, keep_path: bool = False) -> list[list[str]]:
+def shell_commands(text: str, depth: int = 0, keep_path: bool = False, raw_out: list[list[str]] | None = None) -> list[list[str]]:
     out: list[list[str]] = []
     for raw in SEGMENT_SPLIT.split(text or ""):
+        if raw_out is not None:
+            raw_out.append(split_words(raw.strip()))
         words = shell_words(raw.strip(), keep_path)
         if not words:
             continue
@@ -488,7 +511,7 @@ def shell_commands(text: str, depth: int = 0, keep_path: bool = False) -> list[l
         if script == UNCHECKABLE or (script is not None and depth >= 3):
             out.append([UNCHECKABLE, *words])
         elif script is not None:
-            out += shell_commands(script, depth + 1, keep_path)
+            out += shell_commands(script, depth + 1, keep_path, raw_out)
         else:
             out.append(words)
     return out
@@ -813,10 +836,111 @@ def wipes_home_or_root(words: list[str]) -> bool:
     return False
 
 
+def hermes_subcommand(args: list[str]) -> str | None:
+    i = 0
+    while i < len(args):
+        word = args[i]
+        if word == "--":
+            return args[i + 1] if i + 1 < len(args) else None
+        if not word.startswith("-"):
+            return word
+        i += 2 if word in HERMES_VALUE_FLAGS else 1
+    return None
+
+
+def hermes_arguments(policy: Policy, words: list[str]) -> list[str] | None:
+    program = Path(words[0]).name
+    if program in HERMES_PROGRAMS or program in policy.bots or "$" in program:
+        return words[1:]
+    if PYTHON.match(program):
+        module = next((words[i + 1] for i, w in enumerate(words[:-1]) if w == "-m"), None)
+        index = next((i for i, w in enumerate(words[:-1]) if w == "-m"), None)
+        return words[index + 2:] if module in HERMES_MODULES and index is not None else None
+    if program in PACKAGE_RUNNERS:
+        for i, word in enumerate(words[1:], 1):
+            name = Path(word).name
+            if name in HERMES_PROGRAMS or name in policy.bots:
+                j = i + 1
+                while j < len(words) and Path(words[j]).name in HERMES_PROGRAMS:
+                    j += 1
+                return words[j:]
+            if PYTHON.match(name):
+                nested = hermes_arguments(policy, words[i:])
+                if nested is not None:
+                    return nested
+    return None
+
+
+def profile_verb_form(args: list[str]) -> bool:
+    first = hermes_subcommand(args)
+    if first != "profile":
+        return False
+    after = args[args.index("profile") + 1:]
+    return bool(after) and after[0] in PROFILE_VERBS
+
+
+def shadowing_problem(words: list[str]) -> str | None:
+    first = words[0]
+    if (first.endswith("(") and first[:-1] in SHADOWED_TOOLS) or (first in SHADOWED_TOOLS and words[1:2] == ["("]):
+        return "a shell function named hermes, faker-kit, or gh would run in place of the real tool in later commands"
+    if first == "function" and words[1:2] and words[1].rstrip("(") in SHADOWED_TOOLS:
+        return "a shell function named hermes, faker-kit, or gh would run in place of the real tool in later commands"
+    if first == "alias" and any(w.split("=", 1)[0] in SHADOWED_TOOLS for w in words[1:] if "=" in w):
+        return "a shell alias named hermes, faker-kit, or gh would run in place of the real tool in later commands"
+    if writes_shadowing_file(words):
+        return "a file named hermes could run in place of the real hermes in later commands"
+    return None
+
+
+def writes_shadowing_file(words: list[str]) -> bool:
+    program, rest = Path(words[0]).name, list(words[1:])
+    operands = [w for w in rest if not w.startswith("-")]
+    targets: list[str] = []
+    if program in FILE_WRITERS_ANY:
+        targets = operands
+    elif program in FILE_WRITERS_LAST:
+        targets = operands[-1:]
+    elif program == "dd":
+        targets = [w[3:] for w in rest if w.startswith("of=")]
+    elif program in DOWNLOAD_OUTPUT:
+        targets = [rest[i + 1] for i, w in enumerate(rest[:-1]) if w in DOWNLOAD_OUTPUT[program]]
+    return any(Path(target).name == SHADOWING_FILE for target in targets)
+
+
+def path_rebinding(tokens: list[str]) -> bool:
+    i = 0
+    while i < len(tokens) and ASSIGNMENT.match(tokens[i]):
+        i += 1
+    if i == len(tokens):
+        return any(PATH_ASSIGN.match(w) for w in tokens)
+    while i < len(tokens):
+        base = Path(tokens[i]).name
+        if base in PATH_ASSIGNERS:
+            return any(PATH_ASSIGN.match(w) for w in tokens[i + 1:])
+        if base == "set":
+            return "PATH" in tokens[i + 1:]
+        if base in WRAPPERS or tokens[i].startswith("-") or ASSIGNMENT.match(tokens[i]):
+            i += 1
+            continue
+        break
+    return False
+
+
+def rebinding_problem(command: str, raw: list[list[str]]) -> str | None:
+    if any(path_rebinding(tokens) for tokens in raw):
+        return "assigning PATH would let a later command run something other than the real hermes, faker-kit, or gh"
+    if any(Path(match.group(2)).name == SHADOWING_FILE for match in REDIRECT.finditer(command)):
+        return "a file named hermes could run in place of the real hermes in later commands"
+    return None
+
+
 def command_problem(policy: Policy, words: list[str]) -> str | None:
     program = words[0]
     if program == UNCHECKABLE:
         return "the guard cannot check shells or eval nested this deep; write the commands to a script file and run that"
+    why = shadowing_problem(words)
+    if why:
+        return why
     if program == "gh" and words[1:3] == ["pr", "merge"]:
         return "raw gh pr merge skips faker-kit merge's gate"
     if program == "gh" and words[1:2] in (["run"], ["workflow"]) and words[2:3] in (["rerun"], ["cancel"], ["run"]):
@@ -840,13 +964,18 @@ def command_problem(policy: Policy, words: list[str]) -> str | None:
             return git_push_problem(words[i + 1:])
     if wipes_home_or_root(words):
         return "it wipes / or the home folder"
-    if program == "hermes":
-        chosen = next((words[j + 1] for j, w in enumerate(words[:-1]) if w in ("-p", "--profile")), None)
-        chosen = chosen or next((w.split("=", 1)[1] for w in words if w.startswith("--profile=")), None)
-        if chosen not in policy.bots or chosen == "default":
-            return "a bot runs hermes only with -p naming a faker-kit bot, never the default Hermes agent"
-        if PROFILE_ADMIN_WORDS.intersection(words[1:]):
-            return "creating, importing, deleting, or listing bots and profiles is the owner's; the bootstrap bot may run only `hermes profile create <bot>` alone on the command line"
+    launched = hermes_arguments(policy, words)
+    if launched is not None:
+        if program == "hermes":
+            chosen = next((words[j + 1] for j, w in enumerate(words[:-1]) if w in ("-p", "--profile")), None)
+            chosen = chosen or next((w.split("=", 1)[1] for w in words if w.startswith("--profile=")), None)
+            if chosen not in policy.bots or chosen == "default":
+                return "a bot runs hermes only with -p naming a faker-kit bot, never the default Hermes agent"
+        first = hermes_subcommand(launched)
+        if first in PROFILE_ADMIN_WORDS or (first is not None and "$" in first):
+            return PROFILE_ADMIN_REFUSAL
+    elif profile_verb_form(words[1:]):
+        return PROFILE_ADMIN_REFUSAL
     if any(PROTECTED_KIT.search(w) for w in words[1:]) and program not in (*KIT_READERS, PROGRAM):
         reading = program == "git" and any(w in KIT_GIT_READS for w in words[1:4])
         reading = reading or (program == "find" and not {"-delete", "-exec", "-execdir", "-ok"} & set(words))
@@ -856,6 +985,8 @@ def command_problem(policy: Policy, words: list[str]) -> str | None:
 
 
 def hard_block(policy: Policy, tool_name: str, args: dict) -> str | None:
+    if tool_name in ("write_file", "patch") and any(Path(text.strip()).name == SHADOWING_FILE for text in scanned_text(tool_name, args)):
+        return "a file named hermes could run in place of the real hermes in later commands"
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
         return None
     if tool_name in ("terminal", "process_manage"):
@@ -874,7 +1005,11 @@ def terminal_problem(policy: Policy, command: str, depth: int = 0) -> str | None
         return "the command is too long for the guard to check; put long content in a file with write_file and run a short command"
     if re.search(r">\s*\S*" + PROTECTED_KIT.pattern, command, re.I):
         return "bots never change the kit or ~/.hermes/bin"
-    commands = shell_commands(command, keep_path=True)
+    raw: list[list[str]] = []
+    commands = shell_commands(command, keep_path=True, raw_out=raw)
+    why = rebinding_problem(command, raw)
+    if why:
+        return why
     for words in commands:
         why = command_problem(policy, [Path(words[0]).name, *words[1:]])
         if why:
@@ -963,9 +1098,15 @@ def clean_turn_command(tool_name: str, args: dict) -> str | None:
     return found_text.group(1) if found_text else None
 
 
+def bootstrap_read(words: list[str]) -> bool:
+    if words[0] != PROGRAM or not words[1:2]:
+        return False
+    return words[1] in BOOTSTRAP_READ_ONLY or (words[1] == "add-project" and "--check" in words[2:])
+
+
 def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bool) -> dict | None:
     known = policy.bots.get(profile)
-    creating = known is not None and known.role == "bootstrap" and profile_create_name(tool_name, args) is not None
+    creating = known is not None and known.role in PROFILE_CREATORS and profile_create_name(tool_name, args) is not None
     why = None if creating else hard_block(policy, tool_name, args)
     if why:
         return block(f"{tool_name} is blocked for every bot: {why}")
@@ -990,7 +1131,7 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
     if not policy.ask_owner:
         return None
     segments = [s.split() for s in command_segments(str(args.get("command", "")))] if tool_name == "terminal" else []
-    bootstrap_reads = bool(segments) and all(w[0] == PROGRAM and w[1:2] and w[1] in BOOTSTRAP_READ_ONLY for w in segments)
+    bootstrap_reads = bool(segments) and all(bootstrap_read(w) for w in segments)
     if bot.role == "bootstrap" and not read_only and not bootstrap_reads:
         return approve(
             f"The bootstrap bot changes this machine or GitHub. Approve {tool_name} only if you asked for it.",
@@ -1040,6 +1181,8 @@ def reader_source(policy: Policy, tool_name: str, args: dict) -> str | None:
         return source
     if tool_name in ("terminal", "process_manage"):
         command = str(args.get("command", "")).strip()
+        if profile_create_name(tool_name, args):
+            return None
         return None if len(command) <= MAX_COMMAND_CHARS and TRUSTED_COMMAND.match(command) else source
     if tool_name in ("read_file", "search_files"):
         return None if kit_file(policy, args) else source
