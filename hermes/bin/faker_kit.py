@@ -55,7 +55,7 @@ from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
 from faker_kit_loop import Loop, LoopError
 from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
-from faker_kit_merge import MERGE_METHOD, REVIEW_WORKFLOW, SECURITY_JOB, Evidence, MergeLock, Verdict, decide, dispatch_rules, from_fork, security_run_id
+from faker_kit_merge import MERGE_METHOD, Evidence, MergeLock, Verdict, decide, dispatch_rules, from_fork
 from faker_kit_owner_turn import claim_owner_turn
 from faker_kit_profiles import Profiles
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
@@ -310,16 +310,13 @@ class Kit:
         head_info = pull.get("head") or {}
         ref = str(head_info.get("ref") or "")
         owner = str(((head_info.get("repo") or {}).get("owner") or {}).get("login") or str(head_info.get("label") or "").partition(":")[0])
-        statuses = gh.statuses(head)
-        run_id = security_run_id(statuses, gh.repo)
         try:
             rules = dispatch_rules(gh.file_text(".agents/dispatch.json", default))
         except ValueError as err:
             raise Refused(str(err)) from None
         head_tree = gh.workflows_tree(head)
-        return Evidence(gh.check_runs(head), statuses, gh.reviews(pr), gh.pull_files(pr), rules,
-                        gh.actions_run(run_id) if run_id else None, gh.actions_jobs(run_id) if run_id else None,
-                        gh.head_pulls(head), gh.head_jobs(head, REVIEW_WORKFLOW, SECURITY_JOB), gh.head_runs(head),
+        return Evidence(gh.check_runs(head), gh.statuses(head), gh.reviews(pr), gh.pull_files(pr), rules,
+                        gh.head_pulls(head), gh.head_runs(head),
                         ref, gh.branch_pulls(owner, ref) if owner and ref else None, gh.timeline(pr), str(pull.get("created_at") or ""),
                         head_tree is not None and head_tree == gh.workflows_tree(default))
 
@@ -468,7 +465,8 @@ class Kit:
         gate = {"merge": "ready to merge", "refuse": f"blocked: {verdict.message}"}[verdict.action]
         mergeable = {True: "mergeable", False: "conflicts", None: "mergeable unknown"}[detail.get("mergeable")]
         unit = UNIT_LINE.match(str(detail.get("body") or ""))
-        return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready", mergeable, gate])
+        return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready", mergeable,
+                           f"head {head if SHA.match(head) else 'unknown'}", gate])
 
     def handoff(self, caller: Bot, project: str, part: str) -> dict:
         self.refuse_after_untrusted_text(caller.name, "hand out work")

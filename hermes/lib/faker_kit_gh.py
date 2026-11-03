@@ -147,22 +147,6 @@ class Gh:
     def pull_files(self, number: int) -> list[dict]:
         return self.pages(f"repos/{self.repo}/pulls/{int(number)}/files")
 
-    def actions_run(self, run_id: int) -> dict | None:
-        try:
-            return self.json(f"repos/{self.repo}/actions/runs/{int(run_id)}")
-        except Refused as err:
-            if "HTTP 404" in str(err):
-                return None
-            raise
-
-    def actions_jobs(self, run_id: int) -> list[dict] | None:
-        try:
-            return self.pages(f"repos/{self.repo}/actions/runs/{int(run_id)}/jobs", {"filter": "latest"}, key="jobs")
-        except Refused as err:
-            if "HTTP 404" in str(err):
-                return None
-            raise
-
     def head_pulls(self, head: str) -> list[dict]:
         return self.pages(f"repos/{self.repo}/commits/{head}/pulls")
 
@@ -174,16 +158,6 @@ class Gh:
 
     def head_runs(self, head: str) -> list[dict]:
         return self.pages(f"repos/{self.repo}/actions/runs", {"head_sha": head}, key="workflow_runs")
-
-    def head_jobs(self, head: str, workflow: str, job: str) -> list[dict]:
-        try:
-            runs = self.pages(f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow.rsplit('/', 1)[-1])}/runs", {"head_sha": head}, key="workflow_runs")
-        except Refused as err:
-            if "HTTP 404" in str(err):
-                return []
-            raise
-        return [found for run in runs for found in self.pages(f"repos/{self.repo}/actions/runs/{int(run['id'])}/jobs", {"filter": "all"}, key="jobs")
-                if found.get("name") == job]
 
     def file_text(self, path: str, ref: str) -> str | None:
         query = urllib.parse.urlencode({"ref": ref})
