@@ -716,7 +716,7 @@ def arithmetic_closer(text: str, i: int, nested: bool, segment: list[str]) -> st
             return "}"
         return ")" if text.startswith("$(", i) and (nested or text.startswith("$((", i)) else ""
     if char == "(":
-        return ")" if nested or text.startswith("((", i) and (i == 0 or text[i - 1] != "$") else ""
+        return ")" if nested or (text.startswith("((", i) and (i == 0 or text[i - 1] != "$")) else ""
     if char != "[":
         return ""
     if nested:
