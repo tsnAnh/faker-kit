@@ -3058,6 +3058,16 @@ def profile_validation_scenario(run: Run, other: Run) -> None:
              code == 0 and checked.get("check") is True and checked.get("bot") == "chk" and checked.get("project") == "chk" and checked.get("repo") == "acme/chk"
              and checked.get("profile") == "missing" and state() == before
              and all(call[:2] == ["profile", "show"] for call in new_calls) and all(call[:1] == ["api"] and "-X" not in call for call in new_gh), (err or out).strip()[:300])
+    guard_path = other.team / "guard.yaml"
+    saved_guard = guard_path.read_text()
+    printed = {}
+    for wanted in (True, False):
+        guard_path.write_text(re.sub(r"(?m)^(\s*ask_owner:).*$", rf"\1 {str(wanted).lower()}", saved_guard))
+        code, out, err = other.kit("add-project", "acme/chk", "--check", bot=BOOTSTRAP)
+        printed[wanted] = json.loads(out).get("ask_owner") if code == 0 else err.strip()
+    guard_path.write_text(saved_guard)
+    run.step("add-project --check prints ask_owner, so a bot never has to read guard.yaml to know who approves",
+             printed == {True: True, False: False}, json.dumps({str(k): v for k, v in printed.items()})[:200])
     repo("acme/crm")
     code, out, err = other.kit("add-project", "acme/crm", "--bot", "crm-bot", "--project", "crm", "--check", bot=BOOTSTRAP)
     run.step("add-project --check says when the profile already exists", code == 0 and json.loads(out).get("profile") == "exists" and state() == before, (err or out).strip()[:300])

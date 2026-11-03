@@ -55,7 +55,7 @@ It validates the repository, the bot, and the project and writes nothing. It pri
 
 When the profile is `missing`, create it with exactly `hermes profile create <bot>`, alone on the command line: no `-p`, no clone flag, no `&&` or `;`. Hermes shows the owner one approval in this chat for the profile. With `ask_owner` on, `faker-kit add-project` asks for its own approval too; `--check` asks for none. Never tell the owner to run a command in their shell for this. The guard allows the profile create only in a turn that read nothing untrusted; if it blocks, ask the owner for the project in a new message.
 
-Hermes denies that approval in a scheduled job and in a message relayed from another bot, so never run `hermes profile create` there. When a relayed request finds the profile `missing`, reply to the sender in one line that names the bot ("<bot> needs its profile created"); the chief of staff creates it in its own chat and messages you again. Never tell the owner to switch chats.
+Hermes denies that approval in a scheduled job and in a message relayed from another bot, so never run `hermes profile create` there. When a relayed request finds the profile `missing`, end your turn with one line that names the bot ("<bot> needs its profile created"); the chief of staff creates it in its own chat and messages you again. Never tell the owner to switch chats.
 
 Then:
 

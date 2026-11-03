@@ -684,12 +684,12 @@ class Kit:
         config_dir = self.profiles.claude_login() if use_subscription else None
         proposed = copy.deepcopy(self.bots_file())
         self.register_project(proposed, repo, name, slug, {key: wanted.get(key) for key in SCHEDULE_DEFAULTS}, slack_channel)
-        self.policy_from(proposed)
+        checked_policy = self.policy_from(proposed)
         self.check_repo_readable(repo)
         self.profiles.check_skill_dirs(name)
         if check:
             profile = self.profiles.live(name)
-            return {"check": True, "bot": name, "project": slug, "repo": repo, "profile": {True: "exists", False: "missing", None: "unknown"}[profile]}
+            return {"check": True, "bot": name, "project": slug, "repo": repo, "profile": {True: "exists", False: "missing", None: "unknown"}[profile], "ask_owner": checked_policy.ask_owner}
         self.profiles.ensure(name)
         data = self.bots_file()
         self.register_project(data, repo, name, slug, {key: wanted.get(key) for key in SCHEDULE_DEFAULTS}, slack_channel)
