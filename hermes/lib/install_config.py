@@ -10,13 +10,21 @@ import yaml
 
 
 class InstallError(Exception):
-    pass
+    def __init__(self, message: str, detail: str = "") -> None:
+        super().__init__(message)
+        self.detail = detail
 
 
-def hermes(*args: str) -> str:
-    done = subprocess.run(["hermes", *args], capture_output=True, text=True)
+def hermes(*args: str, timeout: float | None = None) -> str:
+    label = " ".join(a for a in args[:4] if not a.startswith("-") or a == "-p")
+    try:
+        done = subprocess.run(["hermes", *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise InstallError(f"hermes {label} did not answer within {timeout:g}s") from None
+    except OSError:
+        raise InstallError(f"hermes {label} could not run: the hermes executable was not found") from None
     if done.returncode:
-        raise InstallError(f"hermes {' '.join(a for a in args[:4] if not a.startswith('-') or a == '-p')} failed")
+        raise InstallError(f"hermes {label} failed", f"{done.stdout}\n{done.stderr}")
     return done.stdout
 
 

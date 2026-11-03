@@ -10,11 +10,19 @@ from pathlib import Path
 
 from faker_kit_env import CLAUDE_CONFIG_DIR, parse_env_file, set_env
 from faker_kit_gh import Refused
+from faker_kit_incidents import redact
 from faker_kit_machine import SUBSCRIPTION_PROVIDER
 from install_config import KIT_GATE_SCRIPT, InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, mapping, profile_home, value_at
 
 PLUGIN = "faker_kit_guard"
+AGENT_CONTEXT_ENV = "HERMES_AGENT_TOOL_CONTEXT"
+PROFILE_CHECK_SECONDS = 20
+REASON_CHARS = 300
+APPROVAL_DENIAL = re.compile(r"needs your approval", re.I)
+TOKEN_ENV = ("GH_TOKEN", "GITHUB_TOKEN")
+ROLE_SKILL_DIR = "kit-skills"
 KIT_SKILL_DIRS = ("skills", "external_dirs")
+KIT_SKILL_ENABLED = ("skills", "enabled")
 ROLE_SKILL = {"project": "dispatch", "bootstrap": "bootstrap", "chief": "chief"}
 SUBSCRIPTION_PLUGIN = "claude-subscription-directsdk"
 SUBSCRIPTION_MIN_CLI = (2, 1, 284)
@@ -27,25 +35,61 @@ SCHEDULE_FIELDS = {"faker-kit-babysit": "heartbeat_every", "faker-kit-incidents"
 
 
 class Profiles:
-    def __init__(self, root: Path, pkg: Path) -> None:
-        self.root, self.pkg = root, pkg
+    def __init__(self, root: Path, pkg: Path, shapes: re.Pattern[str]) -> None:
+        self.root, self.pkg, self.shapes = root, pkg, shapes
 
     def home(self, bot: str) -> Path:
         return profile_home(self.root, bot)
 
-    def live(self, bot: str) -> bool:
+    def live(self, bot: str) -> bool | None:
         try:
-            hermes("profile", "show", bot)
-        except InstallError:
-            return False
+            hermes("profile", "show", bot, timeout=PROFILE_CHECK_SECONDS)
+        except InstallError as err:
+            return False if re.search(rf"Profile '{re.escape(bot)}' does not exist", err.detail) else None
         return True
 
+    def reason(self, detail: str) -> str:
+        known = [os.environ[name] for name in TOKEN_ENV if os.environ.get(name)]
+        text = " ".join(redact(detail, known, self.shapes).split())
+        return text if len(text) <= REASON_CHARS else "..." + text[-(REASON_CHARS - 3):]
+
+    def check_skill_dirs(self, bot: str) -> None:
+        config = self.home(bot) / "config.yaml"
+        if not config.exists():
+            return
+        current = value_at(mapping(config), KIT_SKILL_DIRS)
+        if current is not None and not isinstance(current, (str, list)):
+            raise Refused(f"{bot}: skills.external_dirs must be a folder or a list of folders")
+        self.enabled_skills(bot, config)
+
+    def enabled_skills(self, bot: str, config: Path) -> list:
+        current = value_at(mapping(config), KIT_SKILL_ENABLED)
+        if current is not None and not isinstance(current, (str, list)):
+            raise Refused(f"{bot}: skills.enabled must be a skill name or a list of skill names")
+        return [current] if isinstance(current, str) else (current or [])
+
     def ensure(self, bot: str) -> Path:
-        if not self.live(bot):
-            hermes("-p", "default", "profile", "create", bot)
+        found = self.live(bot)
+        if found is None:
+            raise Refused(f"could not check whether bot {bot} has a Hermes profile, because hermes profile show did not answer; nothing was changed, so try again")
+        if not found:
+            try:
+                hermes("-p", "default", "profile", "create", bot)
+            except InstallError as err:
+                raise Refused(self.creation_refusal(bot, err)) from err
             if not self.live(bot):
                 raise Refused(f"hermes profile create {bot} did not create a profile Hermes serves at {self.home(bot)}")
         return self.home(bot)
+
+    def creation_refusal(self, bot: str, err: InstallError) -> str:
+        if os.environ.get(AGENT_CONTEXT_ENV) and APPROVAL_DENIAL.search(err.detail):
+            return (
+                f"bot {bot} has no Hermes profile, and creating one needs the owner's approval. Your next command is `hermes profile create {bot}`, "
+                f"alone on the command line; the owner approves it in this chat. Then run this command again. If this turn cannot show an approval "
+                f"(a relayed message or a scheduled job), reply with one line saying bot {bot} needs its profile created"
+            )
+        reason = self.reason(err.detail)
+        return f"hermes profile create {bot} failed" + (f": {reason}" if reason else "")
 
     def link_skill(self, home: Path, name: str) -> None:
         dest = home / "skills"
@@ -57,6 +101,29 @@ class Profiles:
             sys.stderr.write(f"conflict: {target} is a real directory; left as is\n")
             return
         target.symlink_to(self.pkg / "skills" / name)
+
+    def expose_skill(self, bot: str, home: Path, name: str) -> None:
+        folder = home / ROLE_SKILL_DIR
+        folder.mkdir(parents=True, exist_ok=True)
+        for stale in folder.iterdir():
+            if stale.name != name and stale.is_symlink():
+                stale.unlink()
+        target = folder / name
+        if target.is_symlink() and target.readlink() != self.pkg / "skills" / name:
+            target.unlink()
+        if target.exists() and not target.is_symlink():
+            sys.stderr.write(f"conflict: {target} is a real directory; left as is\n")
+        elif not target.is_symlink():
+            target.symlink_to(self.pkg / "skills" / name)
+        current = value_at(mapping(home / "config.yaml"), KIT_SKILL_DIRS)
+        listed = [current] if isinstance(current, str) else current
+        if listed is not None and not isinstance(listed, list):
+            raise Refused(f"{bot}: skills.external_dirs must be a folder or a list of folders")
+        if str(folder) not in (listed or []):
+            config_set(self.root, bot, KIT_SKILL_DIRS, [*(listed or []), str(folder)])
+        enabled = self.enabled_skills(bot, home / "config.yaml")
+        if name not in enabled:
+            config_set(self.root, bot, KIT_SKILL_ENABLED, [*enabled, name])
 
     def refresh(self, bot: str, role: str, ask_owner: bool, model: str | None, claude_config_dir: str | None, provider: str | None = None) -> Path:
         home = self.ensure(bot)
@@ -79,6 +146,7 @@ class Profiles:
         shutil.rmtree(plugin, ignore_errors=True)
         shutil.copytree(self.pkg / "plugin" / PLUGIN, plugin, ignore=shutil.ignore_patterns("__pycache__"))
         self.link_skill(home, ROLE_SKILL[role])
+        self.expose_skill(bot, home, ROLE_SKILL[role])
         return home
 
     def subscription_in_use(self, bot: str) -> bool:
