@@ -39,7 +39,7 @@ SHOWN = 8
 LISTED = 20
 COVERED = (
     "hard_block", "terminal_problem", "shell_commands", "scan_shell", "arithmetic_closer", "shell_words", "split_words", "without_keywords", "unwrap", "shell_parts",
-    "shell_tokens", "shell_inputs", "piped_shell", "command_problem", "HEREDOC_OPERATOR", "SHELL_FED_LINE", "ENV_ASSIGN", "SHELL_KEYWORDS", "SHELLS", "ASSIGNMENT_NAME",
+    "shell_tokens", "shell_inputs", "piped_shell", "command_problem", "HEREDOC_OPERATOR", "SHELL_FED_LINE", "ENV_ASSIGN", "SHELL_KEYWORDS", "SHELLS", "ASSIGNMENT_TARGET",
     "WRAPPERS", "WRAPPER_VALUE_OPTIONS", "MAX_WRAPPERS", "UNCHECKABLE", "SHELL_VALUE_OPTIONS", "FISH_VALUE_OPTIONS",
 )
 SYNC_LINE = re.compile(r"^Sync commit: `([0-9a-f]{40})`", re.M)

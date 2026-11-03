@@ -18,9 +18,9 @@
  {
   "name": "comment-may-start-inside-a-word",
   "breaks": "widens the comment rule in scan_shell so a # in the middle of a word starts a comment, as the shell does not",
-  "old": "        elif char == \"#\" and (i == 0 or text[i - 1] in \" \\t\\n;&|()\"):\n",
+  "old": "        elif char == \"#\" and boundary and not closers:\n",
   "new": "        elif char == \"#\":\n",
-  "max_atoms": 2,
+  "max_atoms": 3,
   "expect": "#;gh pr merge 1"
  },
  {
