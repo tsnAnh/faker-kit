@@ -29,7 +29,7 @@ if (HERE.parent / "vendor").is_dir() and str(HERE.parent / "vendor") not in sys.
 
 import yaml
 from faker_kit_andon import LABEL, MACHINE, Andon, AndonError, Cord, clean_reason, issue_body
-from faker_kit_cloud import CHECKOUT, Cloud, CloudError, trust_checkout
+from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, Cloud, CloudError, session_effort, trust_checkout
 from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
 from faker_kit_gh import NAME, Gh, Refused, Runner, run_gh
 from faker_kit_guard.policy import (
@@ -68,7 +68,6 @@ KIT_BRANCH_PREFIX = "faker-kit/kit-"
 BRIEF_START = "/faker-mode"
 MAX_BRIEF_CHARS = 60_000
 SESSION_MODEL = re.compile(r"\A(?:opus|sonnet|haiku|fable|claude-[a-z0-9]+(?:-[a-z0-9]+){1,6})\Z")
-SESSION_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 UNIT_LINE = re.compile(r"\AUnit: ([a-z0-9][a-z0-9-]{0,63})[ \t]*\r?(?:\n|\Z)")
 STATUS_PRS = 30
 MERGEABLE_READS = 5
@@ -81,6 +80,7 @@ SECRET_SHAPES = re.compile(
 ANDON_FOOTER = (
     "\n\nStop rule: before every push, run `gh api 'repos/{repo}/issues?labels=agent:andon&state=open' --jq length`. "
     "If it prints anything but 0, do not push or update a pull request; say so and end the session.\n"
+    "\nEffort rule: never run yourself or any subagent at effort xhigh or max, whatever a playbook says; high is the highest allowed.\n"
 )
 ROLE_COMMANDS = {
     "project": {"launch", "merge", "status", "andon", "incidents", "issues"},
@@ -230,8 +230,8 @@ class Kit:
     def launch(self, caller: Bot | None, project: str | None, brief_file: str, model: str | None = None, effort: str | None = None) -> dict:
         if model is not None and not SESSION_MODEL.match(model):
             raise Refused("--model takes opus, sonnet, haiku, fable, or a full claude- model name")
-        if effort is not None and effort not in SESSION_EFFORTS:
-            raise Refused(f"--effort takes one of {', '.join(SESSION_EFFORTS)}")
+        if effort is not None and effort not in EFFORT_LEVELS:
+            raise Refused(f"--effort takes one of {', '.join(EFFORT_LEVELS)}")
         if caller is not None and caller.role == "project":
             target = caller
         elif project:
@@ -262,7 +262,8 @@ class Kit:
             session = self.cloud.start(repo, prompt, workdir, model, effort)
         except CloudError as err:
             raise Refused(f"launch failed: {err}") from err
-        return {"repo": repo, "session": session, "brief": digest, "model": model, "effort": effort, **({"kit_behind": behind} if behind else {})}
+        used, effort_note = session_effort(effort)
+        return {"repo": repo, "session": session, "brief": digest, "model": model, "effort": used, **effort_note, **({"kit_behind": behind} if behind else {})}
 
     def record_kit_source(self, source: str | None, require_current: bool = False) -> None:
         path = self.home / KIT_REPO_FILE

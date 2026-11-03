@@ -682,6 +682,38 @@ def hermes_webhook(route: dict, secret: str, event: str, payload: dict, signatur
     return 202, re.sub(r"\{([a-zA-Z0-9_.]+)\}", lookup, route["prompt"])
 
 
+def effort_scenario(run: Run, brief: Path) -> None:
+    def launched(*flags: str) -> tuple[int, dict, dict]:
+        code, out, _ = run.kit("launch", "--brief-file", str(brief), *flags)
+        return code, json.loads(out) if code == 0 else {}, json.loads(run.claude_log.read_text().splitlines()[-1])
+
+    lowered = []
+    for model in (None, "sonnet", "opus"):
+        for asked in ("max", "xhigh"):
+            code, printed, seen = launched(*(["--model", model] if model else []), "--effort", asked)
+            lowered.append((code == 0 and seen.get("effort") == "high" and printed.get("effort") == "high"
+                            and printed.get("effort_lowered") == {"from": asked, "to": "high"} and "effort_defaulted" not in printed
+                            and seen.get("model") == model, f"{model or 'no model'} {asked}: session {seen.get('effort')}, printed {printed.get('effort')} {printed.get('effort_lowered')}"))
+    run.step("launch lowers a request for xhigh or max to high on sonnet, opus, and the account's default model, and prints what it lowered",
+             all(ok for ok, _ in lowered), "; ".join(text for _, text in lowered))
+    code, printed, seen = launched()
+    run.step("launch with no effort starts the session at high and prints that it applied the default",
+             code == 0 and seen.get("effort") == "high" and printed.get("effort") == "high" and printed.get("effort_defaulted") == "high"
+             and "effort_lowered" not in printed and "model" not in seen, f"session {seen.get('effort')}, printed {printed}")
+    kept = []
+    for level in ("low", "medium", "high"):
+        code, printed, seen = launched("--effort", level)
+        kept.append((code == 0 and seen.get("effort") == level and printed.get("effort") == level
+                     and "effort_lowered" not in printed and "effort_defaulted" not in printed, f"{level}: session {seen.get('effort')}, printed {printed.get('effort')}"))
+    run.step("launch passes low, medium, and high through unchanged and unannotated", all(ok for ok, _ in kept), "; ".join(text for _, text in kept))
+    before = len(run.claude_log.read_text().splitlines())
+    code, _, err = run.kit("launch", "--brief-file", str(brief), "--effort", "ultra")
+    run.step("launch still refuses an effort that is not a level", code == 1 and "--effort takes one of" in err
+             and len(run.claude_log.read_text().splitlines()) == before, err.strip())
+    seen_efforts = [json.loads(line).get("effort") for line in run.claude_log.read_text().splitlines()]
+    run.step("no session in this run started above high", not {"xhigh", "max"} & set(seen_efforts), ", ".join(str(e) for e in seen_efforts))
+
+
 def launch_scenario(run: Run) -> None:
     good = run.brief("typo.md", "/faker-mode\n\nGOAL: fix the README typo.\nSCOPE: README.md only.\n")
     code, out, err = run.kit("launch", "--brief-file", str(good))
@@ -693,7 +725,9 @@ def launch_scenario(run: Run) -> None:
     first = calls[-1]["argv"][1]
     run.step("the brief is the session's first message and carries the andon stop rule",
              len(calls) == 1 and first.startswith("/faker-mode") and "agent:andon" in first and "README typo" in first, first[:120].replace("\n", " "))
-    run.step("a launch with no model choice leaves the session on the account's default", "model" not in calls[-1] and "effort" not in calls[-1], "")
+    run.step("a launch with no model choice leaves the model on the account's default and starts the session at high effort", "model" not in calls[-1] and calls[-1].get("effort") == "high", "")
+    run.step("the stop rule tells the session never to run itself or a subagent at xhigh or max",
+             "never run yourself or any subagent at effort xhigh or max" in first, first[-260:].replace("\n", " "))
     run.step("the session starts from the kept launch checkout", Path(calls[-1]["cwd"]).name == "repo" and "checkouts" in calls[-1]["cwd"], calls[-1]["cwd"])
     for name, text, needle in (("loose.md", "Fix the README typo.\n", "/faker-mode"), ("secret.md", "/faker-mode\n\nUse ghp_" + "A" * 36 + " to push.\n", "token")):
         code, _, err = run.kit("launch", "--brief-file", str(run.brief(name, text)))
@@ -722,6 +756,8 @@ def launch_scenario(run: Run) -> None:
     chosen = json.loads(run.claude_log.read_text().splitlines()[-1])
     run.step("launch starts the session on the model and effort the bot chose for the task", code == 0 and chosen.get("model") == "sonnet"
              and chosen.get("effort") == "low" and chosen["argv"][-1].startswith("/faker-mode") and json.loads(out)["model"] == "sonnet", out.strip() or err.strip())
+    effort_scenario(run, good)
+    sessions = len(run.claude_log.read_text().splitlines())
 
     code, _, err = run.kit("merge", "--pr", "1", bot=BOOTSTRAP)
     run.step("a bot may run only its own role's commands", code == 1 and "not one of its commands" in err, err.strip())
@@ -729,7 +765,7 @@ def launch_scenario(run: Run) -> None:
     raised = run.kit("andon", "raise", "bad", "merge", "landed")
     run.step("the bot pulls the andon cord", raised[0] == 0 and json.loads(raised[1])["stopped"] is True, raised[1].strip() or raised[2].strip())
     code, _, err = run.kit("launch", "--brief-file", str(good))
-    run.step("launch is refused while the andon cord is raised", code == 1 and "andon" in err.lower() and len(run.claude_log.read_text().splitlines()) == 2, err.strip())
+    run.step("launch is refused while the andon cord is raised", code == 1 and "andon" in err.lower() and len(run.claude_log.read_text().splitlines()) == sessions, err.strip())
     open_gates(run, 1, sha("a"))
     code, _, err = run.merge(1)
     run.step("merge is refused while the andon cord is raised", code == 1 and "andon" in err.lower(), err.strip())
