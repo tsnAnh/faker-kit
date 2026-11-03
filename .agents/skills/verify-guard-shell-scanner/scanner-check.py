@@ -251,7 +251,7 @@ def report(root: Path, bash: str, full: str, result: Result, limit: int | None) 
     print(f"guard: {root / GUARD}  sha256 {guard_digest(root)[:16]}")
     print(f"bash: {full}  python: {sys.version.split()[0]}  cores: {os.cpu_count()}")
     for key, count in result.totals.items():
-        print(f"{key}: {count['texts']} texts, {count['refused']} refused, {count['ran_canary_unrefused']} ran the canary unrefused")
+        print(f"{key}: {count['texts']} sequences, {count['refused']} refused, {count['ran_canary_unrefused']} ran the canary unrefused")
     for key, finding in result.findings.items():
         if finding.violations:
             print(f"{key}: {finding.violations} failing texts; shortest classes:")

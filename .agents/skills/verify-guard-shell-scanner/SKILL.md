@@ -60,7 +60,7 @@ Open on the sync commit. Each reproduces with `bash -c`, a script file, and stdi
 ## What is checked
 
 - Alphabets. `core` has 13 fragments: `#`, `\`, newline, space, `'`, `"`, `<<`, `$((`, `))`, `((`, `X`, `$(`, `)`. `wide` adds `$[`, `]`, `${`, `}`, `[`, `=`, `a`, a backtick, `<<<`, `&&`, `||`, `|`, `&`, `-` and tab.
-- Bounds. Every sequence of up to 5 `core` fragments followed by a newline and the canary, up to 4 followed by `;` and the canary, and up to 3 `wide` fragments for both. About 480,000 texts.
+- Bounds. Every sequence of up to 5 `core` fragments followed by a newline and the canary, up to 4 followed by `;` and the canary, and up to 3 `wide` fragments for both. About 480,000 sequences, a few of which spell the same text, such as `))` and `)` twice. A failing text is counted once.
 - Per text: `hard_block(policy, "terminal", {"command": text})`. If it allows, `bash -c text` runs in a scratch directory with no stdin and a stub `gh` as the only `PATH` entry. The text fails when the stub logs `pr merge 1`. A guard that raises counts as a refusal, because the plugin refuses on a raise (`pre_tool_call` in `hermes/plugin/faker_kit_guard/__init__.py`).
 - Safety. Every text is built from the fragments above and the canary, with no `>` redirection and no real binary on `PATH`, so bash can run only its builtins and the stub.
 
