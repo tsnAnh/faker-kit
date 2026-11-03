@@ -1,0 +1,42 @@
+[
+ {
+  "name": "arithmetic-shift-read-as-heredoc",
+  "breaks": "removes the arithmetic-context test that PR 228 added in scan_shell, so a << inside $((...)) opens a heredoc the shell never opens",
+  "old": "            found = None if closers else HEREDOC_OPERATOR.match(text, i + 2)\n",
+  "new": "            found = HEREDOC_OPERATOR.match(text, i + 2)\n",
+  "max_atoms": 5,
+  "expect": "<<"
+ },
+ {
+  "name": "semicolon-no-longer-ends-a-command",
+  "breaks": "drops ; from the characters at which scan_shell cuts a segment, so the command after a ; joins the one before it",
+  "old": "        elif char in \";|&`)\":\n",
+  "new": "        elif char in \"|&`)\":\n",
+  "max_atoms": 2,
+  "expect": ";gh pr merge 1"
+ },
+ {
+  "name": "comment-may-start-inside-a-word",
+  "breaks": "widens the comment rule in scan_shell so a # in the middle of a word starts a comment, as the shell does not",
+  "old": "        elif char == \"#\" and (i == 0 or text[i - 1] in \" \\t\\n;&|()\"):\n",
+  "new": "        elif char == \"#\":\n",
+  "max_atoms": 2,
+  "expect": "#;gh pr merge 1"
+ },
+ {
+  "name": "double-quote-never-closes",
+  "breaks": "removes the closing of a double-quoted string in scan_shell, so every later line reads as part of the string",
+  "old": "            if char == quote[-1]:\n",
+  "new": "            if char == quote[-1] and quote == \"$'\":\n",
+  "max_atoms": 3,
+  "expect": "\"\\ngh pr merge 1"
+ },
+ {
+  "name": "heredoc-checked-before-here-string",
+  "breaks": "reorders two branches of scan_shell so <<< is read as << followed by <, and the word after a here-string opens a heredoc",
+  "old": "        elif text.startswith(\"<<<\", i):\n            put(\"<<<\")\n            i += 3\n            continue\n        elif text.startswith(\"<<\", i):\n            found = None if closers else HEREDOC_OPERATOR.match(text, i + 2)\n            if found:\n                pending.append(found.group(2))\n                put(text[i:found.end()])\n                i = found.end()\n                continue\n",
+  "new": "        elif text.startswith(\"<<\", i):\n            found = None if closers else HEREDOC_OPERATOR.match(text, i + 2)\n            if found:\n                pending.append(found.group(2))\n                put(text[i:found.end()])\n                i = found.end()\n                continue\n        elif text.startswith(\"<<<\", i):\n            put(\"<<<\")\n            i += 3\n            continue\n",
+  "max_atoms": 2,
+  "expect": "<<<"
+ }
+]
