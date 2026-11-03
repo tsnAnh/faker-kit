@@ -36,7 +36,7 @@ It prints one line per open pull request. Your repository is in your profile; re
 | Command | Does |
 |---|---|
 | `faker-kit status` | One line per open pull request: author, draft or ready, mergeable, its full `head` commit, and where its merge gate stands. Safe to read; it holds no free text. It does not read verifier verdicts |
-| `faker-kit launch --brief-file <path> [--model <m>] [--effort <e>]` | Starts one Claude Code cloud session whose first message is the brief, on the model and effort you chose for the task (see Choose the model). The file must be a `.md` directly in your briefs folder and start with `/faker-mode`. Prints `{repo, session, brief, model, effort}`, plus `effort_lowered` (`{from, to}`) when it lowered an `xhigh` or `max` request to `high`, `effort_defaulted` when no `--effort` was given and it started the session at `high`, and `kit_behind` when the repository's vendored kit is an older commit of this machine's kit. Refuses while the andon cord is pulled, when the repository's vendored kit is neither this machine's kit nor an older commit of it, when the brief is over 60,000 characters, or when it looks like it holds a token |
+| `faker-kit launch --brief-file <path> [--model <m>] [--effort <e>]` | Starts one Claude Code cloud session whose first message is the brief, on the model and effort you chose for the task (see Choose the model). The file must be a `.md` directly in your briefs folder and start with `/faker-mode`. Prints `{repo, session, brief, model, effort}`, plus `model_defaulted` (`sonnet`) when no `--model` was given, `effort_defaulted` (`medium`) when no `--effort` was given, `effort_lowered` (`{from, to}`) when it lowered an `xhigh` or `max` request to `high`, and `kit_behind` when the repository's vendored kit is an older commit of this machine's kit. Refuses while the andon cord is pulled, when the repository's vendored kit is neither this machine's kit nor an older commit of it, when the brief is over 60,000 characters, or when it looks like it holds a token |
 | `faker-kit merge --pr <n>` | The merge gate, below. Refuses in a turn that read untrusted text |
 | `faker-kit merge --pr <n> --owner-approved` | The owner's explicit request to merge a named pull request, typed in Desktop or the terminal UI. The same message must ask for the merge (the word merge, land, or gộp) and the approval covers only the pull requests it names (`merge #12`); a message that names no number (`merge it`) covers exactly one merge. Each approval is used once and lasts for that message only. It skips only the protected-path gate. Every other gate still holds. Prints the gate it skipped. Refuses in any turn a bot, a notice, a scheduled job, or `hermes chat` started, and in a turn whose message did not ask for the merge |
 | `faker-kit andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows this project's andon cord |
@@ -86,20 +86,22 @@ STANDING is `preferences.md` pasted verbatim. Paste it into every launch and eve
 
 ### Choose the model
 
-You pick each session's model and effort from its task, every launch, the security, incident, verifier, and fix-issue briefs included. The owner's choices are the pstack rule `/setup-pstack` wrote on this machine, `~/.agents/pstack-models.md`; read it before each launch. Without it, use the defaults in parentheses.
+You pick each session's model and effort from its task, every launch, the security, incident, verifier, and fix-issue briefs included. The owner's choices are the pstack rule `/setup-pstack` wrote on this machine, `~/.agents/pstack-models.md`; read it before each launch. A model or effort it names above `high` is read as `high`.
 
-| The unit is | Role line | Default |
+The default for a coding session is Sonnet at medium effort. `faker-kit launch` applies that itself when you pass neither flag, so pass a flag only to depart from it.
+
+| The unit is | `--model` | `--effort` |
 |---|---|---|
-| A feature or a refactor | `feature, refactoring` | `sonnet` |
-| A bug fix, a fix-issue unit, or a revert | `bug-fix` | `sonnet` |
-| A performance fix | `perf-issue` | `sonnet` |
-| A rename, move, formatting, or one-line edit with nothing to decide | `trivial edits` | `haiku` (the session runs `sonnet`; see below) |
-| A cross-cutting design, gnarly concurrency, or a subtle algorithm | `hardest tasks` | `sonnet` |
-| A security review, an incident triage, or a pull request verification | `judgment and prose` | `inherit-parent` |
+| A feature, refactor, bug fix, fix-issue unit, revert, or performance fix | `sonnet` | `medium`; `low` when the spec leaves little to decide; never above `high` |
+| Concurrency, data integrity, security, auth, a migration, or a cross-cutting design | `sonnet` | `medium`; the brief carries the design: invariants, approach, failure cases, and the acceptance test |
+| Work with nothing to decide: an exact find-and-change, a rename, a move, formatting, a test whose assertions are given, read-only search, a summary, triage, or CI watching | `haiku` | `high`; `low` or `medium` for a pure lookup |
+| Prose, judgment, research synthesis, or a second opinion | `opus` | `low` or `medium` only |
 
-- The role's value is the `--model`: an alias (`opus`, `sonnet`, `haiku`, `fable`) or a full `claude-` model name. `inherit-parent` or `auto` means pass no `--model`, so the session runs on the account's default.
-- The session also coordinates, reviews, and verifies its own work, and its `inherit-parent` helpers run on its model. So a session never runs `haiku`: for a trivial edit, launch `sonnet`, and MODELS still sends the edit itself to the `trivial edits` model.
-- `--effort` is the effort in brackets on the rule's `# budget` line, such as `high` in `# budget: medium (high)`; `high` without a rule. `high` is the ceiling: no rule and no raise goes above it, and a rule that names `xhigh` or `max` is read as `high`. Never raise it for the hardest work. Lower it one step for a security review, a triage, or a verification, and two steps, down to `low`, for a trivial edit. `faker-kit launch` itself starts every session at `high` or lower: it lowers `xhigh` or `max` to `high` and says so in `effort_lowered`, and with no `--effort` it starts at `high` and prints `effort_defaulted`.
+- The role's value in the rule is the `--model`: an alias (`opus`, `sonnet`, `haiku`, `fable`) or a full `claude-` model name. `inherit-parent` or `auto` is not a default here: pass `sonnet`.
+- Opus is never a default and never for coding. Use it for coding only for a task Sonnet at medium cannot do, and then write the reason in the unit's `units.tsv` row and in the pull request body.
+- Highest effort is `high`. `xhigh` is an escalation only after a failure, for Haiku; `faker-kit launch` lowers it to `high` today and says so in `effort_lowered`, so plan for `high`. `max` is never used.
+- On a failure, start a fresh session one effort step higher (`low`, `medium`, `high`) with the failure in the brief; never retry the same session. A unit that needs a design decision, or fails at Sonnet `high`, comes back to you: re-brief it with the decision made.
+- `faker-kit launch` starts every session on a model and at an effort it chose: with no `--model` it passes `sonnet` and prints `model_defaulted`, with no `--effort` it passes `medium` and prints `effort_defaulted`, and it lowers `xhigh` or `max` to `high` and says so in `effort_lowered`.
 - Record the model and effort in the unit's `units.tsv` row.
 
 The cloud machine has no `~/.agents/pstack-models.md`, so faker-mode in the session would fall back to its own defaults for the helpers it starts. Add a MODELS field after STANDING (the templates' `{models}`): the line "Your pstack models, the owner's /setup-pstack rule; use them in place of faker-mode's defaults:", then the rule's lines from `# budget` to the end, verbatim. Leave the field out when there is no rule.
