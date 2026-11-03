@@ -27,9 +27,3 @@ Each teammate runs Claude Code (Claude Opus 5.5, max effort). Claude Code's agen
 ## Allowed model names
 
 After the rewrite, a vendored file may name only `claude-opus-5-5` (with `-max` or `-medium`), `gpt-6-sol` (with `-high` or `-medium`), and the family prefixes `claude-` and `gpt-`. [`scripts/sync-upstream.mjs`](../../scripts/sync-upstream.mjs) fails on anything else, apart from the map's `tokenExceptions`: code identifiers in a reflect example, and the example slugs in pstack's Claude Code adapter.
-
-## Outside the vendored plugins
-
-| Where | Model |
-|---|---|
-| `plugins/trust-ladder/templates/github/claude-review.yml` | The Claude Code action's default model, on `CLAUDE_CODE_OAUTH_TOKEN` |

@@ -16,21 +16,21 @@ The skill inspects the repository before it asks you anything. If the repository
 
 | Layer | Files | What they do |
 |---|---|---|
-| 3. Rules | `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`) | Commands, layout, boundaries, paved paths, a never-list, `## Review guidelines`, and the table that maps pstack's upstream terms to Claude Code |
-| 5. Style guide | `REVIEW.md`, `STYLE.md` | What reviewers check, and the team's taste with bad and good examples |
-| 3. Review bots | `.github/workflows/claude-review.yml`, `.agents/review-bot-patterns.md` | The Claude review of every push to a pull request, with its risk rating and security job, and the repository's learned triage patterns. No API keys |
+| 3. Rules | `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`) | Commands, layout, boundaries, paved paths, a never-list, and the table that maps pstack's upstream terms to Claude Code |
+| 5. Style guide | `STYLE.md` | The team's taste, with bad and good examples |
 | 4. Skills | `.claude/skills/`, `.agents/skills/` links | Project skills (such as your verification skill) visible to Claude Code |
 | Team | `.claude/settings.json`, `CODEOWNERS` | The kit and safe defaults for every teammate's agent, and a named reviewer for every path |
 | Measurement | The rule table in AGENTS.md, the `/check-agent-compatibility` report | Each rule and what enforces it, and the first readiness report |
 
-It records the repository's own build, test, and lint commands in AGENTS.md and adds no check script or lint configuration. Its one CI addition is a step that runs `scripts/link-skills.sh --check .` and `.agents/faker-kit/vendor_kit.py --check .` on every pull request, in the repository's existing CI workflow or, when there is none besides the review workflow, in a small `faker-kit-checks.yml`. To stop a mistake agents keep making, run [`/correct`](correct-an-agent.md), which adds a targeted lint to the repository's own CI.
+It records the repository's own build, test, and lint commands in AGENTS.md and adds no check script or lint configuration. Its one CI addition is a step that runs `scripts/link-skills.sh --check .` and `.agents/faker-kit/vendor_kit.py --check .` on every pull request, in the repository's existing CI workflow or, when there is none, in a small `faker-kit-checks.yml`. To stop a mistake agents keep making, run [`/correct`](correct-an-agent.md), which adds a targeted lint to the repository's own CI.
 
 ## After it merges
 
-1. **Turn on the review.** Install the Claude GitHub app on the repository (github.com/apps/claude) and add a `CLAUDE_CODE_OAUTH_TOKEN` repository secret from `claude setup-token`. It draws on a teammate's plan, so the repository needs no API key. Merge the pull request that adds `claude-review.yml` yourself: the review does not run on a pull request that edits its own workflow. `/setup-faker-kit` (Review bots) walks through it.
+1. **CI.** Make sure a GitHub Actions workflow builds and tests every pull request. A pull request is checked by it, and a Hermes project bot lands only pull requests with a passing run from it.
 2. **Branch protection.** Work through [the checklist](../../plugins/trust-ladder/templates/branch-protection.md): require the repository's CI checks, resolved review conversations, and a code owner's approval, with no bypass. This is what makes it safe for non-engineers to open pull requests.
-3. **A verification skill.** Run `/create-verification-skill` next. It is the single most valuable skill a repository can have. See the pstack guide's [Verify the result and open a PR](../../plugins/pstack/docs/guide/06-verify-and-ship.md).
-4. **Cloud sessions.** When you want agents to work in parallel without your laptop, run `/setup-cloud-agents`.
+3. **Verification skills.** Run `/create-verification-skill` next. It is the single most valuable skill a repository can have. See the pstack guide's [Verify the result and open a PR](../../plugins/pstack/docs/guide/06-verify-and-ship.md). Where a missed case is costly, such as a parser or a permission check, also run `/create-formal-verification-skill`. Before a pull request merges, a separate verifier session runs these skills on the exact head and comments a verdict.
+4. **Protected paths.** List the paths only you merge under `risk_paths_high` in `.agents/dispatch.json` (`/setup-hermes-project` does this), and name their owners in `CODEOWNERS`.
+5. **Cloud sessions.** When you want agents to work in parallel without your laptop, run `/setup-cloud-agents`.
 
 ## Check the result
 

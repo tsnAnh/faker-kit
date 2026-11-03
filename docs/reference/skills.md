@@ -29,7 +29,7 @@ You rarely need the name. Claude Code picks a skill on its own when your request
 | [fix-ci](../../plugins/team-workflows/skills/fix-ci/SKILL.md) | team-workflows | Engineers | `/fix-ci` | Find failing PR checks, inspect logs or external check links, and apply focused fixes |
 | [loop-on-ci](../../plugins/team-workflows/skills/loop-on-ci/SKILL.md) | team-workflows | Engineers | `/loop-on-ci until it is green` | Monitor PR checks and fix failures until green. |
 
-## Layer 3: Rules and review bots
+## Layer 3: Rules
 
 | Skill | Plugin | For | Try | What it does |
 |---|---|---|---|---|

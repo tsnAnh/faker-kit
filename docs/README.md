@@ -8,7 +8,7 @@ faker-kit gives Claude Code Lauren Tan's pstack working methods and their compan
 |---|---|
 | [Engineers: your first hour](start/engineers.md) | Install, set up a repository, build a verification skill, ship a proven change, encode your first correction |
 | [Install the kit](how-to/install.md) | Install in Claude Code, enable it for a whole team, choose the model |
-| [Set up a repository](how-to/set-up-a-repo.md) | Run `/setup-faker-kit`: AGENTS.md, review, team settings |
+| [Set up a repository](how-to/set-up-a-repo.md) | Run `/setup-faker-kit`: AGENTS.md, CI and verification, team settings |
 | [Roll the kit out to a team](how-to/roll-out-to-a-team.md) | Sequence a rollout and name the roles |
 | [Correct an agent so it stays corrected](how-to/correct-an-agent.md) | Use `/correct` to move a fix to the strongest layer |
 | [Dispatch work with Hermes](how-to/dispatch-with-hermes.md) | Let cloud agents turn what you ask for into pull requests you only merge |

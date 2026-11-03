@@ -5,7 +5,7 @@ When agents keep making the same mistake, fix the repository, not your next prom
 ## When to run it
 
 - You have corrected agents for the same mistake more than once.
-- A reviewer, or a review bot, flags the same thing on two pull requests.
+- A reviewer flags the same thing on two pull requests.
 - Someone says "don't do that again" or "can we encode this".
 
 Only a person starts it; an agent does not run it on its own. A one-off misunderstanding of a single task does not need it.
@@ -37,7 +37,7 @@ Exceptions to a check go on the offending line with a reason, an expiry date, an
 | Dart: "don't fire and forget futures" | `discarded_futures` as an error in `analysis_options.yaml` |
 | Any stack: "stop explaining workarounds in comments" | A CI check that fails when a change adds a comment; `/no-comments` clears the existing ones |
 | Any stack: "every string needs all languages" | A CI check that compares every locale file's keys with the template locale |
-| "Error messages should sound calm" | A STYLE.md entry, then a review guideline once the wording is settled |
+| "Error messages should sound calm" | A STYLE.md entry, then an AGENTS.md rule once the wording is settled |
 
 [The trust ladder reference](../../plugins/trust-ladder/references/trust-ladder.md) has more routing examples.
 

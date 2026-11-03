@@ -12,7 +12,7 @@ That trust does not come from better prompts. It comes from the environment the 
 
 1. **The codebase.** Agents extend the patterns they see, because the files they read become their context. The codebase is their memory. Make the mistake impossible to write, with types, data structures, module boundaries, and one conventional way to do each thing.
 2. **Static analysis.** Lint rules, compiler diagnostics, and CI. When an agent keeps making the same mistake, a check stops it without anyone's cooperation.
-3. **Rules and review bots.** AGENTS.md and automated pull request review (the Claude review workflow here). This is guidance, not enforcement: an agent can skip a file, and a person can ignore a bot.
+3. **Rules.** AGENTS.md and nested AGENTS.md files. This is guidance, not enforcement: an agent can skip a file.
 4. **Skills.** Procedures agents load when they need them, above all the verification skill that lets an agent run the app and prove its work.
 5. **The style guide.** Enforced only by humans in review. At the rate agents open pull requests, nobody can remember every rule for every line, so the style guide is where rules are found, not where they should stay.
 
