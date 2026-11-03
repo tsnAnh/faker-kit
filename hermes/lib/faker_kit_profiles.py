@@ -22,6 +22,7 @@ APPROVAL_DENIAL = re.compile(r"needs your approval", re.I)
 TOKEN_ENV = ("GH_TOKEN", "GITHUB_TOKEN")
 ROLE_SKILL_DIR = "kit-skills"
 KIT_SKILL_DIRS = ("skills", "external_dirs")
+KIT_SKILL_ENABLED = ("skills", "enabled")
 ROLE_SKILL = {"project": "dispatch", "bootstrap": "bootstrap", "chief": "chief"}
 SUBSCRIPTION_PLUGIN = "claude-subscription-directsdk"
 SUBSCRIPTION_MIN_CLI = (2, 1, 284)
@@ -59,6 +60,13 @@ class Profiles:
         current = value_at(mapping(config), KIT_SKILL_DIRS)
         if current is not None and not isinstance(current, (str, list)):
             raise Refused(f"{bot}: skills.external_dirs must be a folder or a list of folders")
+        self.enabled_skills(bot, config)
+
+    def enabled_skills(self, bot: str, config: Path) -> list:
+        current = value_at(mapping(config), KIT_SKILL_ENABLED)
+        if current is not None and not isinstance(current, (str, list)):
+            raise Refused(f"{bot}: skills.enabled must be a skill name or a list of skill names")
+        return [current] if isinstance(current, str) else (current or [])
 
     def ensure(self, bot: str) -> Path:
         found = self.live(bot)
@@ -113,6 +121,9 @@ class Profiles:
             raise Refused(f"{bot}: skills.external_dirs must be a folder or a list of folders")
         if str(folder) not in (listed or []):
             config_set(self.root, bot, KIT_SKILL_DIRS, [*(listed or []), str(folder)])
+        enabled = self.enabled_skills(bot, home / "config.yaml")
+        if name not in enabled:
+            config_set(self.root, bot, KIT_SKILL_ENABLED, [*enabled, name])
 
     def refresh(self, bot: str, role: str, ask_owner: bool, model: str | None, claude_config_dir: str | None, provider: str | None = None) -> Path:
         home = self.ensure(bot)

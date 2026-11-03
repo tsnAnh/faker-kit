@@ -162,6 +162,9 @@ def probe(run: e2e.Run, checkout: Path, hermes: Path, python: Path) -> None:
     run.step("with the shared skill catalog active, a skill symlinked into a profile's skills folder is not listed (the cause)",
              migrated.returncode == 0 and marker.is_file() and control.returncode == 0 and "dispatch" not in control.stdout, control.stdout.strip()[-120:])
 
+    (marker.parent / "skills").mkdir(parents=True, exist_ok=True)
+    (marker.parent / "skills" / "dispatch").symlink_to(run.team / "kit" / "hermes" / "skills" / "dispatch")
+
     other_env = {**AGENT_TURN, **QUIET}
     code, out, err = run.kit(*crm, bot=BOOTSTRAP_BOT, env=other_env)
     added = json.loads(out) if code == 0 else {}

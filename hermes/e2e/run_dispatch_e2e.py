@@ -1595,7 +1595,7 @@ def install_scenario(run: Run, work: Path) -> None:
         profile = hermes / "profiles" / bot
         profile.mkdir(parents=True)
         (profile / ".profile-identity").write_text(bot)
-        (profile / "config.yaml").write_text(json.dumps({"plugins": {"enabled": ["other_plugin"]}}))
+        (profile / "config.yaml").write_text(json.dumps({"plugins": {"enabled": ["other_plugin"]}, "skills": {"enabled": ["kept_skill"]}}))
     (hermes / "config.yaml").write_text(json.dumps({"skills": {"external_dirs": ["/elsewhere/skills"]}}))
 
     source, ref = kit_source(work)
@@ -1687,6 +1687,9 @@ def install_scenario(run: Run, work: Path) -> None:
     skill = hermes / "profiles" / BOT / "skills" / "dispatch"
     run.step("skill folders and links point at the faker-kit kit", dirs == ["/elsewhere/skills", str(new / "kit" / "plugins" / "pstack" / "skills")]
              and skill.is_symlink() and str(new / "kit") in str(skill.readlink()), json.dumps(dirs))
+    enabled = {bot: __import__("yaml").safe_load((hermes / "profiles" / bot / "config.yaml").read_text())["skills"]["enabled"] for bot in (BOOTSTRAP, BOT)}
+    run.step("install.sh turns on each bot's role skill and keeps the skills the profile already enabled",
+             enabled == {BOOTSTRAP: ["kept_skill", "bootstrap"], BOT: ["kept_skill", "dispatch"]}, json.dumps(enabled))
     default_config = __import__("yaml").safe_load((hermes / "config.yaml").read_text())
     pr_route = default_config["platforms"]["webhook"]["extra"]["routes"][f"{BOT}-pr"]
     hooks = run.gh_now()["hooks"]
