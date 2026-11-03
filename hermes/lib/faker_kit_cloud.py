@@ -27,12 +27,24 @@ CLAUDE_GLOBAL_CONFIG = ".claude.json"
 CLAUDE_LEGACY_CONFIG = ".config.json"
 REDACTED_PROMPT = "[redacted prompt]"
 GIT_TIMEOUT_SECONDS = 120
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+EFFORT_CEILING = "high"
 
 Runner = Callable[..., str]
 
 
 class CloudError(Exception):
     pass
+
+
+def session_effort(requested: str | None) -> tuple[str, dict[str, str | dict[str, str]]]:
+    if requested is None:
+        return EFFORT_CEILING, {"effort_defaulted": EFFORT_CEILING}
+    if requested not in EFFORT_LEVELS:
+        raise CloudError(f"effort takes one of {', '.join(EFFORT_LEVELS)}")
+    if EFFORT_LEVELS.index(requested) > EFFORT_LEVELS.index(EFFORT_CEILING):
+        return EFFORT_CEILING, {"effort_lowered": {"from": requested, "to": EFFORT_CEILING}}
+    return requested, {}
 
 
 def clean_terminal_text(raw: bytes) -> str:
@@ -146,7 +158,7 @@ class Cloud:
         self.prune(workdir.parent)
         checkout = self.checkout(repo, workdir.parent / CHECKOUT)
         trusted_in = trust_checkout(checkout, os.environ.get(CLAUDE_CONFIG_DIR, ""))
-        chosen = [*(["--model", model] if model else []), *(["--effort", effort] if effort else [])]
+        chosen = [*(["--model", model] if model else []), "--effort", session_effort(effort)[0]]
         return self.launch(["claude", *chosen, "--cloud", prompt], checkout, workdir.with_name(workdir.name + ".log"), prompt, trusted_in)
 
     def checkout(self, repo: str, path: Path) -> Path:

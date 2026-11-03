@@ -104,7 +104,7 @@ Under `~/.hermes/faker-kit/`: `kit/` (the kit at the pinned commit), `guard.yaml
 
 ## Choose each bot's model
 
-A bot's own turns run on the provider and model in its Hermes profile (`model.provider` and `model.default` in its `config.yaml`). Cloud sessions always run in Claude Code through `claude --cloud`, whatever the bots use. For each bot, pick one of these:
+A bot's own turns run on the provider and model in its Hermes profile (`model.provider` and `model.default` in its `config.yaml`). Cloud sessions always run in Claude Code through `claude --cloud`, whatever the bots use. `faker-kit launch` caps a cloud session's effort at `high` (`EFFORT_CEILING` in `lib/faker_kit_cloud.py`): a request for `xhigh` or `max` starts at `high` and the launch output names it in `effort_lowered`, and a launch with no `--effort` starts at `high` and prints `effort_defaulted`. For each bot, pick one of these:
 
 | You give | What `faker-kit` writes to the profile |
 |---|---|
