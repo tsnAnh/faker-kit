@@ -272,27 +272,12 @@ if args[0] == "api":
     elif route.startswith(prefix + "/commits/") and route.endswith("/pulls"):
         head = route.split("/")[-2]
         answer([pull_row(p) for p in state["pulls"] if pull_row(p)["head"]["sha"] == head] + state.get("head_pulls", {}).get(head, []))
-    elif route == prefix + "/actions/workflows/claude-review.yml/runs":
-        if state.get("no_review_workflow"):
-            fail("gh: Not Found (HTTP 404)")
-        head = urllib.parse.parse_qs(split.query).get("head_sha", [""])[0]
-        answer({"workflow_runs": [r for r in state["runs"].values() if r["head_sha"] == head and r["path"].split("@")[0] == ".github/workflows/claude-review.yml"]})
     elif route == prefix + "/actions/runs":
         read_fails("head_runs")
         head = urllib.parse.parse_qs(split.query).get("head_sha", [""])[0]
         answer({"total_count": len(state["runs"]), "workflow_runs": [r for r in state["runs"].values() if r["head_sha"] == head] + state.get("stray_runs", [])})
     elif route.startswith(prefix + "/commits/") and route.endswith("/statuses"):
         answer(state["statuses"].get(route.split("/")[-2], []))
-    elif route.startswith(prefix + "/actions/runs/") and route.endswith("/jobs"):
-        run_id = route.split("/")[-2]
-        if run_id not in state["runs"]:
-            fail("gh: Not Found (HTTP 404)")
-        answer({"total_count": len(state["jobs"].get(run_id, [])), "jobs": state["jobs"].get(run_id, [])})
-    elif route.startswith(prefix + "/actions/runs/"):
-        run = state["runs"].get(route.rsplit("/", 1)[-1])
-        if run is None:
-            fail("gh: Not Found (HTTP 404)")
-        answer(run)
     elif method == "POST" and route.startswith(prefix + "/issues/") and route.endswith("/comments"):
         state["comments"].append({"issue": int(route.split("/")[-2]), "body": json.loads(sys.stdin.read())["body"]})
         save()
@@ -544,7 +529,7 @@ class Run:
             "files": {".agents/faker-kit/KIT.json": json.dumps({"kit_ref": self.kit_ref}),
                       ".agents/dispatch.json": json.dumps({"forbidden_paths": ["infra/", "*.lock"], "risk_paths_high": ["billing/"]})},
             "pulls": [self.pull(n, sha(letter)) for n, letter in ((1, "a"), (2, "b"), (3, "c"))],
-            "reviews": {}, "check_runs": {}, "statuses": {}, "runs": {}, "jobs": {}, "pull_files": {}, "comments": [], "hooks": [], "labels": [],
+            "reviews": {}, "check_runs": {}, "statuses": {}, "runs": {}, "pull_files": {}, "comments": [], "hooks": [], "labels": [],
             "main_head": sha("e"), "annotations": {}, "bugs": [], "events": {}, "permissions": {}, "issues": [], "merges": [], "jit": [], "deregistered": [],
             "git": {"base": "base-commit", "base_tree": "base-tree", "tree": [], "blobs": {}, "refs": {}},
         })
@@ -605,7 +590,7 @@ def review(user: str, state: str, commit: str, body: str = "", kind: str = "Bot"
     return {"user": {"login": user, "type": kind}, "state": state, "commit_id": commit, "body": body}
 
 
-def security_status(run_id: int = 101, state: str = "success", creator: str = "github-actions[bot]") -> dict:
+def review_status(run_id: int = 101, state: str = "success", creator: str = "github-actions[bot]") -> dict:
     return {"context": "security-review", "state": state, "creator": {"login": creator, "type": "Bot"},
             "target_url": f"https://github.com/{REPO}/actions/runs/{run_id}"}
 
@@ -624,28 +609,32 @@ def check_run(name: str, suite: int | None, conclusion: str = "success", status:
     return {"name": name, "status": status, "conclusion": conclusion, **({"check_suite": {"id": suite}} if suite is not None else {})}
 
 
-def security_job(head: str, run_id: int = 101, name: str = "security", status: str = "completed", conclusion: str | None = "success") -> dict:
-    return {"id": run_id * 10, "run_id": run_id, "name": name, "head_sha": head, "status": status, "conclusion": conclusion}
-
-
-def open_gates(run: Run, pr: int, head: str, risk: str = "low") -> None:
+def open_gates(run: Run, pr: int, head: str) -> None:
     def change(state: dict) -> None:
-        state["check_runs"][head] = [check_run("check", 20100), check_run("review", 10100)]
-        state["statuses"][head] = [security_status()]
-        state["runs"]["101"] = workflow_run(head, pulls=((pr, "main"),), branch=f"dispatch/unit-{pr}")
+        state["check_runs"][head] = [check_run("check", 20100)]
+        state["statuses"][head] = []
+        state["runs"].clear()
         state["runs"]["201"] = workflow_run(head, path=CI_PATH, pulls=((pr, "main"),), run_id=201, branch=f"dispatch/unit-{pr}")
         state["branch_pulls"] = []
         state["branch_query_misses"] = False
         state["fail_reads"] = []
         state["timelines"] = {}
         state["workflow_trees"] = {}
-        state["jobs"]["101"] = [security_job(head)]
-        state["runs"].pop("102", None)
-        state["jobs"].pop("102", None)
         state["head_pulls"] = {}
         state["stray_runs"] = []
-        state["reviews"][str(pr)] = [review("claude[bot]", "APPROVED", head, f"Looks right.\n\nRisk: {risk}")]
+        state["reviews"][str(pr)] = []
     run.update_gh(change)
+
+
+def review_noise(state: dict, pr: int, head: str, job: str = "success", status: str = "success") -> None:
+    state["runs"]["101"] = workflow_run(head, pulls=((pr, "main"),), branch=f"dispatch/unit-{pr}")
+    state["check_runs"][head] = [*state["check_runs"].get(head, []), check_run("review", 10100, job, "in_progress" if job == "" else "completed"),
+                                 check_run("security", 10100, job, "in_progress" if job == "" else "completed")]
+    state["statuses"][head] = [*state["statuses"].get(head, []), review_status(state=status)]
+
+
+def add_review_noise(run: Run, pr: int, head: str, job: str = "success", status: str = "success") -> None:
+    run.update_gh(lambda state: review_noise(state, pr, head, job, status))
 
 
 MISSING = object()
@@ -912,36 +901,52 @@ def merge_scenario(run: Run) -> None:
     result = run.merge(1)
     run.step("merge refuses a pull request whose checks are pending", refused(result, "1 pending"), result[2].strip())
 
-    open_gates(run, 1, head)
-    run.update_gh(lambda state: state["reviews"].pop("1"))
-    result = run.merge(1)
-    run.step("merge refuses a pull request the review app has not reviewed", refused(result, "has not reviewed"), result[2].strip())
-    run.update_gh(lambda state: state["reviews"].__setitem__("1", [review("claude[bot]", "APPROVED", sha("9"), "Fine.\n\nRisk: low")]))
-    result = run.merge(1)
-    run.step("merge refuses an approval of an older head", refused(result, "older commit"), result[2].strip())
-    run.update_gh(lambda state: state["reviews"].__setitem__("1", [
-        review("claude[bot]", "APPROVED", head, "Fine.\n\nRisk: low"),
-        review("claude[bot]", "CHANGES_REQUESTED", head, "No.\n\nRisk: low"),
-    ]))
-    result = run.merge(1)
-    run.step("merge refuses when the review app's latest review is not an approval", refused(result, "not an approval"), result[2].strip())
-    run.update_gh(lambda state: state["reviews"].__setitem__("1", [review("claude[bot]", "APPROVED", head, "Fine.\n\nRisk: high")]))
-    result = run.merge(1)
-    run.step("merge refuses Risk: high", refused(result, "Risk: high"), result[2].strip())
-    run.update_gh(lambda state: state["reviews"].__setitem__("1", [review("claude[bot]", "APPROVED", head, "Fine, no risk line.")]))
-    result = run.merge(1)
-    run.step("merge refuses an approval with no Risk line", refused(result, "no Risk line"), result[2].strip())
-    run.update_gh(lambda state: state["reviews"].__setitem__("1", [review("someone", "APPROVED", head, "Risk: low", kind="User")]))
-    result = run.merge(1)
-    run.step("merge ignores an approval from anyone but the review app", refused(result, "has not reviewed"), result[2].strip())
+    def ready_line() -> str:
+        _, out, err = run.kit("status")
+        return next((row for row in out.splitlines() if row.startswith("#1 ")), "") or err.strip()
 
-    open_gates(run, 1, head, "medium")
-    run.update_gh(lambda state: state["statuses"].__setitem__(head, [security_status(state="failure")]))
+    open_gates(run, 1, head)
+    line = ready_line()
+    run.step("status shows ready to merge for green CI with no review, no Risk line, and no security status at all", line.endswith(" | ready to merge"), line)
+    removed = [
+        ("no claude[bot] review at all", lambda state: state["reviews"].__setitem__("1", [])),
+        ("an approval of an older head", lambda state: state["reviews"].__setitem__("1", [review("claude[bot]", "APPROVED", sha("9"), "Fine.\n\nRisk: low")])),
+        ("claude[bot]'s latest review changing to not an approval", lambda state: state["reviews"].__setitem__("1", [
+            review("claude[bot]", "APPROVED", head, "Fine.\n\nRisk: low"), review("claude[bot]", "CHANGES_REQUESTED", head, "No.\n\nRisk: low")])),
+        ("Risk: high", lambda state: state["reviews"].__setitem__("1", [review("claude[bot]", "APPROVED", head, "Fine.\n\nRisk: high")])),
+        ("an approval with no Risk line", lambda state: state["reviews"].__setitem__("1", [review("claude[bot]", "APPROVED", head, "Fine, no risk line.")])),
+        ("an approval from someone who is not the review app", lambda state: state["reviews"].__setitem__("1", [review("someone", "APPROVED", head, "Risk: low", kind="User")])),
+    ]
+    for name, change in removed:
+        open_gates(run, 1, head)
+        run.update_gh(change)
+        line = ready_line()
+        run.step(f"status and merge do not read {name}", line.endswith(" | ready to merge"), line)
+    noise = [
+        ("a failed security job and a failed security-review status", "failure", "failure"),
+        ("a cancelled security job", "cancelled", "success"),
+        ("a pending security job and a pending security-review status", "", "pending"),
+        ("a failed security-review status over a successful job", "success", "failure"),
+    ]
+    for name, job, state_of_status in noise:
+        open_gates(run, 1, head)
+        add_review_noise(run, 1, head, job, state_of_status)
+        line = ready_line()
+        run.step(f"status ignores {name} of the review workflow", line.endswith(" | ready to merge"), line)
+    open_gates(run, 1, head)
+    run.update_gh(lambda state: state["statuses"].__setitem__(head, [{"context": "security-review", "state": "failure", "creator": {"login": "mallory", "type": "User"}}]))
+    line = ready_line()
+    run.step("status ignores a security-review status that links no run", line.endswith(" | ready to merge"), line)
+    open_gates(run, 1, head)
+    add_review_noise(run, 1, head, "failure", "failure")
+    run.update_gh(lambda state: state["statuses"].__setitem__(head, [{**review_status(state="failure"), "context": "review-summary"}]))
+    line = ready_line()
+    run.step("status ignores a status of another name that links a run of the review workflow", line.endswith(" | ready to merge"), line)
+    open_gates(run, 1, head)
+    add_review_noise(run, 1, head, "failure", "failure")
+    checks("failure")
     result = run.merge(1)
-    run.step("merge refuses a failed security-review", refused(result, "security-review did not succeed"), result[2].strip())
-    run.update_gh(lambda state: state["statuses"].__setitem__(head, []))
-    result = run.merge(1)
-    run.step("merge refuses a head security-review has not reported on", refused(result, "has not reported"), result[2].strip())
+    run.step("merge still refuses failing CI beside the review workflow's own jobs", refused(result, "1 failed") and not run.merged(), result[2].strip())
 
     ci_needle = "needs GitHub Actions CI that builds and tests every pull request"
 
@@ -965,11 +970,12 @@ def merge_scenario(run: Run) -> None:
     def pulls_of(*pairs: tuple[int, str]) -> list[dict]:
         return [{"number": number, "base": {"ref": base}} for number, base in pairs]
 
-    open_gates(run, 1, head, "medium")
+    open_gates(run, 1, head)
+    add_review_noise(run, 1, head)
     run.update_gh(review_only_checks())
     result = run.merge(1)
-    run.step("merge refuses a head whose only checks are the review workflow's own jobs",
-             refused(result, ci_needle) and refused(result, REVIEW_PATH) and untouched(result), result[2].strip())
+    run.step("merge refuses a head whose only checks are the review workflow's own jobs: they are not CI",
+             refused(result, ci_needle) and untouched(result), result[2].strip())
     run.update_gh(lambda state: state["check_runs"][head].append(check_run("check", 20100)))
     code, out, err = run.kit("status")
     line = next((row for row in out.splitlines() if row.startswith("#1 ")), "")
@@ -1008,7 +1014,8 @@ def merge_scenario(run: Run) -> None:
         ("a run of the review workflow at another ref", ci_run(path=f"{REVIEW_PATH}@refs/pull/1/merge")),
     ]
     for name, change in not_ci:
-        open_gates(run, 1, head, "medium")
+        open_gates(run, 1, head)
+        add_review_noise(run, 1, head)
         run.update_gh(change)
         result = run.merge(1)
         run.step(f"merge refuses {name} as the CI that builds and tests the head", refused(result, ci_needle) and untouched(result), result[2].strip())
@@ -1019,13 +1026,13 @@ def merge_scenario(run: Run) -> None:
     push_only = ci_run(event="push", pull_requests=[])
     rebase_hint = "workflows differ from main; rebase onto main"
     for name, tree in (("workflows that differ from the default branch's", "workflows-stale"), ("no workflows folder", None)):
-        open_gates(run, 1, head, "medium")
+        open_gates(run, 1, head)
         run.update_gh(push_only)
         run.update_gh(stale(tree))
         result = run.merge(1)
         run.step(f"merge refuses a push run of a head with {name}, with the rebase hint",
                  refused(result, ci_needle) and refused(result, rebase_hint) and untouched(result), result[2].strip())
-    open_gates(run, 1, head, "medium")
+    open_gates(run, 1, head)
     run.update_gh(stale("workflows-stale"))
     code, out, err = run.kit("status")
     line = next((row for row in out.splitlines() if row.startswith("#1 ")), "")
@@ -1045,7 +1052,7 @@ def merge_scenario(run: Run) -> None:
          "do not include #1 against main"),
     ]
     for name, change, needle in base_cases:
-        open_gates(run, 1, head, "medium")
+        open_gates(run, 1, head)
         run.update_gh(change)
         result = run.merge(1)
         code, out, err = run.kit("status")
@@ -1053,7 +1060,7 @@ def merge_scenario(run: Run) -> None:
         run.step(f"merge and status refuse {name}, with every run listing #1 against main", refused(result, needle) and untouched(result) and needle in line, result[2].strip() + " | " + line)
 
     for read in ("branch_pulls", "timeline", "head_runs", "workflows_tree"):
-        open_gates(run, 1, head, "medium")
+        open_gates(run, 1, head)
         run.update_gh(lambda state, read=read: state.__setitem__("fail_reads", [read]))
         result = run.merge(1)
         code, out, err = run.kit("status")
@@ -1062,63 +1069,20 @@ def merge_scenario(run: Run) -> None:
                  result[0] != 0 and "HTTP 500" in result[2] and untouched(result) and "ready to merge" not in line,
                  result[2].strip() + " | " + line)
 
-    forged = [
-        ("a success whose run is another workflow", lambda state: state["runs"].__setitem__("101", workflow_run(head, path=".github/workflows/ci.yml")),
-         "does not come from"),
-        ("a success whose run belongs to another pull request", lambda state: state["runs"].__setitem__("101", workflow_run(head, pulls=((9, "main"),))),
-         "was not a run for #1"),
-        ("a success whose run was against a branch other than the default", lambda state: state["runs"].__setitem__("101", workflow_run(head, pulls=((1, "evil"),))),
-         "was not a run for #1"),
-        ("a success whose run came from a throwaway branch at the same commit", lambda state: state["runs"].__setitem__("101", workflow_run(head, branch="throwaway")),
-         "was not a run for #1"),
-        ("a success whose run was created before the pull request opened",
-         lambda state: state["runs"].__setitem__("101", {**workflow_run(head), "created_at": "2026-09-30T00:00:00Z"}), "was not a run for #1"),
-        ("a success whose run came from a fork", lambda state: state["runs"].__setitem__("101", {**workflow_run(head), "head_repository": {"full_name": "evil/shop"}}),
-         "was not a run for #1"),
-        ("a success while a closed pull request from this branch targets another base", lambda state: state["branch_pulls"].append(closed_evil), "targets evil, not main"),
-        ("a success on a pull request whose base was changed after it opened", lambda state: state["timelines"].__setitem__("1", [{"event": "labeled"}, {"event": "base_ref_changed"}]),
-         "base of #1 was changed"),
-        ("a success whose run is of another commit", lambda state: state["runs"].__setitem__("101", workflow_run(sha("9"))), "does not come from"),
-        ("a success whose run is not a pull_request run", lambda state: state["runs"].__setitem__("101", workflow_run(head, event="workflow_dispatch")),
-         "does not come from"),
-        ("a success whose run does not exist", lambda state: state["runs"].pop("101"), "does not come from"),
-        ("a success with no run link", lambda state: state["statuses"].__setitem__(head, [{**security_status(), "target_url": None}]),
-         "does not point at a run"),
-        ("a success linking another repository's run", lambda state: state["statuses"].__setitem__(head, [{**security_status(), "target_url": "https://github.com/evil/shop/actions/runs/101"}]),
-         "does not point at a run"),
-        ("a later forged failure over the workflow's own success",
-         lambda state: state["statuses"].__setitem__(head, [security_status(state="failure", creator="mallory"), security_status()]), "did not succeed"),
-        ("a forged success pointing at a real run whose security job failed", lambda state: state["jobs"].__setitem__("101", [security_job(head, conclusion="failure")]),
-         "job of run 101 did not succeed"),
-        ("a success pointing at a run whose security job was cancelled", lambda state: state["jobs"].__setitem__("101", [security_job(head, conclusion="cancelled")]),
-         "did not succeed"),
-        ("a success pointing at a run whose security job is still running", lambda state: state["jobs"].__setitem__("101", [security_job(head, status="in_progress", conclusion=None)]),
-         "has not finished"),
-        ("a success pointing at a run with no security job", lambda state: state["jobs"].__setitem__("101", [security_job(head, name="review")]), "no single security job"),
-        ("a success pointing at a run with no jobs", lambda state: state["jobs"].pop("101"), "no single security job"),
-        ("a success pointing at a run whose security job is of another run", lambda state: state["jobs"].__setitem__("101", [security_job(head, run_id=102)]),
-         "no single security job"),
-        ("a success pointing at a run whose security job is of another commit", lambda state: state["jobs"].__setitem__("101", [security_job(sha("9"))]),
-         "no single security job"),
-        ("a success pointing at a run with two security jobs", lambda state: state["jobs"].__setitem__("101", [security_job(head), security_job(head, conclusion="failure")]),
-         "no single security job"),
-        ("a success while another open pull request has the same head", lambda state: state.setdefault("head_pulls", {}).__setitem__(head, [
-            {"number": 2, "state": "open", "head": {"sha": head}, "base": {"ref": "evil"}}]), "has the same head"),
-        ("a success after another security run on the same head failed", lambda state: (state["runs"].__setitem__("102", {**workflow_run(head), "id": 102}),
-            state["jobs"].__setitem__("102", [security_job(head, run_id=102, conclusion="failure")])), "a failed verdict sticks"),
-        ("a check run named security-review and no status", lambda state: (state["statuses"].__setitem__(head, []), state["check_runs"][head].append(
-            {"name": "security-review", "status": "completed", "conclusion": "success"})), "has not reported"),
-    ]
-    for name, change, needle in forged:
-        open_gates(run, 1, head, "medium")
-        run.update_gh(change)
-        result = run.merge(1)
-        run.step(f"merge refuses {name}", refused(result, needle) and result[1] == "" and not run.merged(), result[2].strip())
+    open_gates(run, 1, head)
+    run.update_gh(lambda state: state.setdefault("head_pulls", {}).__setitem__(head, [
+        {"number": 2, "state": "open", "head": {"sha": head}, "base": {"ref": "evil"}}]))
+    result = run.merge(1)
+    run.step("merge refuses while another open pull request has the same head", refused(result, "has the same head") and untouched(result), result[2].strip())
+    open_gates(run, 1, head)
+    run.update_gh(lambda state: state.setdefault("head_pulls", {}).__setitem__(head, [
+        {"number": 2, "state": "closed", "head": {"sha": head}, "base": {"ref": "evil"}}]))
+    line = ready_line()
+    run.step("a closed pull request with the same head does not stop the gate", line.endswith(" | ready to merge"), line)
 
-    open_gates(run, 1, head, "medium")
-    code, out, err = run.kit("status")
-    line = next((row for row in out.splitlines() if row.startswith("#1 ")), "")
-    run.step("a security job that succeeded on the head lets every gate pass", code == 0 and line.endswith(" | ready to merge"), line or err.strip())
+    open_gates(run, 1, head)
+    line = ready_line()
+    run.step("green CI from a pull_request run of this head lets every gate pass", line.endswith(" | ready to merge"), line)
     for path, previous in ((".github/workflows/ci.yml", None), (".agents/dispatch.json", None), ("hermes/plugin/faker_kit_guard/policy.py", None), ("infra/main.tf", None),
                            ("billing/charge.py", None), ("deps/yarn.lock", None), ("web/sub/infra/main.tf", None),
                            ("Hermes/plugin/Faker_Kit_Guard/policy.py", None), (".GitHub/Workflows/ci.yml", None), ("docs/ok.md", "infra/old.tf"),
@@ -1133,13 +1097,16 @@ def merge_scenario(run: Run) -> None:
         log = run.hermes / "hermes-calls.log"
         return [line for line in log.read_text().splitlines() if '"send"' in line] if log.exists() else []
 
+    open_gates(run, 1, head)
+    add_review_noise(run, 1, head, "failure", "failure")
+    run.update_gh(lambda state: state["reviews"]["1"].append(review("claude[bot]", "CHANGES_REQUESTED", head, "Needs work.\n\nRisk: high")))
     run.update_gh(lambda state: state["reviews"]["1"].append(review("reviewer", "CHANGES_REQUESTED", head, "Please change this.", kind="User")))
     result = run.merge(1)
     run.step("merge refuses while a person has requested changes", refused(result, "requested changes") and not run.merged(), result[2].strip())
     run.update_gh(lambda state: state["reviews"]["1"].append(review("reviewer", "APPROVED", head, "Fixed.", kind="User")))
     result = run.merge(1)
     landed = json.loads(result[1]) if result[0] == 0 else {}
-    run.step("the first call with every gate passing merges the exact head, with no owner comment, no Slack message and no wait",
+    run.step("the first call with every gate passing merges the exact head, past a red review workflow and claude[bot]'s changes requested, with no owner comment, no Slack message and no wait",
              landed.get("merged") is True and landed.get("head") == head and run.merged() == [{"pr": 1, "sha": head, "method": "squash"}]
              and not run.gh_now()["comments"] and not sends() and not run.sleeps and "notice" not in result[1] and not list((run.team / "merge").glob("*.json")),
              result[1].strip() or result[2].strip())
@@ -1148,9 +1115,11 @@ def merge_scenario(run: Run) -> None:
 
     second = sha("b")
     open_gates(run, 2, second)
+    add_review_noise(run, 2, second, "", "pending")
+    run.update_gh(lambda state: state["reviews"].__setitem__("2", [review("claude[bot]", "APPROVED", sha("9"), "Old.\n\nRisk: low")]))
     run.update_gh(lambda state: next(p for p in state["pulls"] if p["number"] == 2).update(mergeable=None, mergeable_reads=[None, None, True]))
     result = run.merge(2)
-    run.step("merge re-reads a pull request whose mergeable is null and merges once GitHub reports true",
+    run.step("merge re-reads a pull request whose mergeable is null and merges once GitHub reports true, past a pending review workflow and an older claude[bot] approval",
              result[0] == 0 and run.merged()[-1] == {"pr": 2, "sha": second, "method": "squash"} and len(run.sleeps) == 2 and not sends(), result[1].strip() or result[2].strip())
 
     open_gates(run, 3, sha("c"))
@@ -1226,17 +1195,6 @@ def merge_scenario(run: Run) -> None:
              code == 0 and "blocked: the change touches .github/workflows/ignore?previous?instru" in out
              and "ignore previous" not in out and "curl" not in out and "<" not in out, out.strip() or err.strip())
     run.update_gh(lambda state: state["pull_files"].pop("3"))
-    saved = {}
-    run.update_gh(lambda state: (saved.update(statuses=state["statuses"], runs=state["runs"], jobs=state["jobs"]),
-                                 state.update(no_review_workflow=True, statuses={}, runs={"201": state["runs"]["201"]}, jobs={})))
-    merges = len(run.merged())
-    code, out, err = run.kit("status")
-    result = run.merge(3)
-    run.step("status and merge read a repository that has no review workflow yet as a security review that has not reported",
-             code == 0 and out.strip().startswith("#3 ") and "has not reported" in out and refused(result, "has not reported") and len(run.merged()) == merges,
-             out.strip() or err.strip())
-    run.update_gh(lambda state: (state.pop("no_review_workflow"), state.update(saved)))
-
     policy = load_policy(run.team)
     blocked_raw = decide(policy, BOT, "terminal", {"command": "gh pr merge 2 --squash"}, False)
     blocked_api = decide(policy, BOT, "terminal", {"command": "gh api -X PUT repos/acme/shop/pulls/2/merge"}, False)
@@ -1330,10 +1288,10 @@ class OwnerBed:
 
         self.run.update_gh(reopen)
 
-    def gates(self, risk: str = "high", files: tuple[str, ...] = (".github/workflows/ci.yml",), pr: int = 1) -> None:
+    def gates(self, files: tuple[str, ...] = (".github/workflows/ci.yml",), pr: int = 1) -> None:
         pr_head = self.head if pr == 1 else sha("b" if pr == 2 else "c")
         self.fresh(pr, pr_head)
-        open_gates(self.run, pr, pr_head, risk)
+        open_gates(self.run, pr, pr_head)
         self.run.update_gh(lambda state: state["pull_files"].__setitem__(str(pr), [{"filename": name} for name in files]))
 
     def gates_for_both(self) -> None:
@@ -1341,11 +1299,8 @@ class OwnerBed:
         self.gates(pr=2)
 
         def second_run_set(state: dict) -> None:
-            state["check_runs"][self.head] = [check_run("check", 30200), check_run("review", 30100)]
-            state["statuses"][self.head] = [security_status(301)]
-            state["runs"]["301"] = workflow_run(self.head, pulls=((1, "main"),), run_id=301)
+            state["check_runs"][self.head] = [check_run("check", 30200)]
             state["runs"]["302"] = workflow_run(self.head, path=CI_PATH, pulls=((1, "main"),), run_id=302)
-            state["jobs"]["301"] = [security_job(self.head, 301)]
 
         self.run.update_gh(second_run_set)
 
@@ -1358,7 +1313,7 @@ def owner_merge_scenario(run: Run) -> None:
         host, head = bed.host, bed.head
         bed.gates()
         result = run.merge(1)
-        run.step("plain merge is unchanged: a protected path and Risk: high stay with the owner", bed.refused(result, "Risk: high") or bed.refused(result, "the owner merges it"), result[2].strip())
+        run.step("plain merge is unchanged: a protected path stays with the owner", bed.refused(result, "the owner merges it"), result[2].strip())
         result = bed.merge_flag("--pr", "1")
         run.step("owner-approved merge refuses a command that was not told its turn, as a Hermes too old to say which turn it runs in", bed.refused(result, "too old"), result[2].strip())
         result = bed.merge_flag("--pr", "1", turn="t-unknown")
@@ -1429,18 +1384,21 @@ def owner_merge_scenario(run: Run) -> None:
                  allowed is None and allowed_tui is None and record.get("origin") == "owner" and record.get("session") == chat and record.get("turn") == f"t-{chat}"
                  and record.get("merge_prs") == [1] and record.get("projects_named") == [], json.dumps(record, sort_keys=True))
 
-        def failing(change: Callable[[dict], object], needle: str, name: str, risk: str = "medium") -> None:
-            bed.gates(risk)
+        def failing(change: Callable[[dict], object], needle: str, name: str) -> None:
+            bed.gates()
             run.update_gh(change)
             result = bed.merge_flag("--pr", "1", session=chat)
             run.step(f"owner-approved merge still refuses {name}", bed.refused(result, needle), result[2].strip())
 
-        failing(lambda state: state["check_runs"][head].__setitem__(0, check_run("check", 20100, "failure")), "1 failed", "a failed check", "high")
+        failing(lambda state: state["check_runs"][head].__setitem__(0, check_run("check", 20100, "failure")), "1 failed", "a failed check")
         failing(lambda state: state["check_runs"][head].__setitem__(0, check_run("check", 20100, "", "in_progress")), "checks still running; the owner asks again when they finish", "a pending check")
         failing(lambda state: next(p for p in state["pulls"] if p["number"] == 1).update(mergeable=False), "conflicts", "a conflict")
-        failing(lambda state: state["reviews"]["1"].append(review("reviewer", "CHANGES_REQUESTED", head, "No.", kind="User")), "requested changes", "a human's requested changes", "high")
-        failing(lambda state: state["jobs"].__setitem__("101", [security_job(head, conclusion="failure")]), "security job", "a failed security job", "high")
-        failing(lambda state: state["statuses"].__setitem__(head, []), "has not reported", "a head the security review has not reported on")
+        failing(lambda state: state["reviews"]["1"].append(review("reviewer", "CHANGES_REQUESTED", head, "No.", kind="User")), "requested changes", "a human's requested changes")
+        failing(lambda state: state["check_runs"].__setitem__(head, []), "no checks", "a head with no checks at all")
+        failing(lambda state: (state["check_runs"].__setitem__(head, []), review_noise(state, 1, head)), "CI that builds and tests", "a head whose only checks are the review workflow's")
+        failing(lambda state: state["timelines"].__setitem__("1", [{"event": "base_ref_changed"}]), "base of #1 was changed", "a base changed after the pull request opened")
+        failing(lambda state: state.setdefault("head_pulls", {}).__setitem__(head, [{"number": 2, "state": "open", "head": {"sha": head}, "base": {"ref": "evil"}}]),
+               "has the same head", "another open pull request with the same head")
         failing(lambda state: next(p for p in state["pulls"] if p["number"] == 1).update(head_repo="fork/shop"), "fork", "a fork")
         bed.gates()
         raised = run.kit("andon", "raise", "stop", "everything")
@@ -1448,13 +1406,13 @@ def owner_merge_scenario(run: Run) -> None:
         cleared = run.kit("andon", "clear")
         run.step("owner-approved merge still refuses while the andon cord is pulled", raised[0] == 0 and bed.refused(result, "andon") and cleared[0] == 0, result[2].strip())
 
-        bed.gates("high")
+        bed.gates()
         result = bed.merge_flag("--pr", "1", session=chat)
         landed = json.loads(result[1]) if result[0] == 0 else {}
-        run.step("owner-approved merge bypasses a protected path and Risk: high, pins the head, lists the gates in the result and prints one line naming them",
-                 landed.get("merged") is True and landed.get("owner_approved") is True and landed.get("bypassed") == ["protected-paths", "risk-high"]
+        run.step("owner-approved merge skips only the protected-path gate, pins the head, lists it in the result and prints one line naming it",
+                 landed.get("merged") is True and landed.get("owner_approved") is True and landed.get("bypassed") == ["protected-paths"]
                  and run.merged()[-1] == {"pr": 1, "sha": head, "method": "squash"}
-                 and result[2].strip() == "faker-kit: owner-approved merge of #1; gates bypassed: protected-paths, risk-high", result[2].strip() or result[1].strip())
+                 and result[2].strip() == "faker-kit: owner-approved merge of #1; gates bypassed: protected-paths", result[2].strip() or result[1].strip())
         bed.landed = len(run.merged())
         run.step("a successful owner-approved merge consumes the owner's approval for that pull request", bed.record(chat) is None, str(bed.record(chat)))
         bed.end(chat)
@@ -1462,12 +1420,12 @@ def owner_merge_scenario(run: Run) -> None:
         second = sha("b")
         bed.fresh(2, second)
         open_gates(run, 2, second)
-        run.update_gh(lambda state: (state["reviews"].pop("2"), state["pull_files"].__setitem__("2", [{"filename": ".agents/dispatch.json"}])))
+        run.update_gh(lambda state: state["pull_files"].__setitem__("2", [{"filename": ".agents/dispatch.json"}]))
         two = bed.new_owner("merge #2")
         result = bed.merge_flag("--pr", "2", session=two)
         landed = json.loads(result[1]) if result[0] == 0 else {}
-        run.step("owner-approved merge bypasses a missing claude[bot] approval and a protected path",
-                 landed.get("bypassed") == ["protected-paths", "claude-approval"] and run.merged()[-1] == {"pr": 2, "sha": second, "method": "squash"}, result[2].strip())
+        run.step("owner-approved merge of a protected path with no claude[bot] review lists only protected-paths: no review is a gate to skip",
+                 landed.get("bypassed") == ["protected-paths"] and run.merged()[-1] == {"pr": 2, "sha": second, "method": "squash"}, result[2].strip())
         bed.landed = len(run.merged())
         bed.end(two)
 
@@ -1805,7 +1763,7 @@ def owner_landing_scenario(run: Run) -> None:
         result = bed.merge_flag("--pr", "1", session=lost)
         landed = json.loads(result[1]) if result[0] == 0 else {}
         run.step("a merge whose response was lost but which landed reports success in the usual shape and consumes the approval",
-                 bed.landed_now(result, 1) and landed.get("merged") is True and landed.get("owner_approved") is True and landed.get("bypassed") == ["protected-paths", "risk-high"]
+                 bed.landed_now(result, 1) and landed.get("merged") is True and landed.get("owner_approved") is True and landed.get("bypassed") == ["protected-paths"]
                  and bed.record(lost) is None, result[2].strip())
         bed.end(lost)
 
@@ -1900,23 +1858,25 @@ def owner_reviews_scenario(run: Run) -> None:
         head = bed.head
         old = sha("0")
         cases = [
-            ("claude[bot]'s changes requested on the head", [review("claude[bot]", "CHANGES_REQUESTED", head, "Needs work.\n\nRisk: low")], False),
-            ("another bot's changes requested on the head", [review("claude[bot]", "APPROVED", head, "Fine.\n\nRisk: low"), review("coderabbit[bot]", "CHANGES_REQUESTED", head, "No.")], False),
-            ("a bot's changes requested on an older commit", [review("claude[bot]", "CHANGES_REQUESTED", old, "Needs work.\n\nRisk: low")], True),
-            ("a bot's changes requested and later approved", [review("claude[bot]", "CHANGES_REQUESTED", head, "Needs work."), review("claude[bot]", "APPROVED", head, "Fixed.\n\nRisk: low")], True),
+            ("claude[bot]'s changes requested on the head", [review("claude[bot]", "CHANGES_REQUESTED", head, "Needs work.\n\nRisk: low")]),
+            ("another bot's changes requested on the head", [review("coderabbit[bot]", "CHANGES_REQUESTED", head, "No.")]),
+            ("a bot's changes requested on an older commit", [review("claude[bot]", "CHANGES_REQUESTED", old, "Needs work.\n\nRisk: low")]),
         ]
-        for name, reviews, merges in cases:
-            bed.gates("low")
+        for name, reviews in cases:
+            bed.gates()
             bed.reviews(*reviews)
             session = bed.new_owner()
             result = bed.merge_flag("--pr", "1", session=session)
-            ok = bed.landed_now(result, 1) if merges else bed.refused(result, "requested changes on the current head")
-            run.step(f"owner-approved merge {'merges past' if merges else 'refuses'} {name}", ok, result[2].strip())
+            run.step(f"owner-approved merge is not stopped by {name}: only a person's changes requested gate a merge", bed.landed_now(result, 1), result[2].strip())
             bed.end(session)
-        bed.gates("low", files=("README.md",))
-        bed.reviews(review("claude[bot]", "CHANGES_REQUESTED", head, "Needs work.\n\nRisk: low"))
+        bed.gates(files=("README.md",))
+        bed.reviews(review("claude[bot]", "CHANGES_REQUESTED", head, "Needs work.\n\nRisk: high"))
         plain = run.merge(1)
-        run.step("plain merge is unchanged by a bot's changes requested on the head", bed.refused(plain, "is not an approval"), plain[2].strip())
+        run.step("plain merge is not stopped by a bot's changes requested on the head", bed.landed_now(plain, 1), plain[2].strip())
+        bed.gates(files=("README.md",))
+        bed.reviews(review("claude[bot]", "APPROVED", head, "Fine.\n\nRisk: low"), review("reviewer", "CHANGES_REQUESTED", head, "No.", kind="User"))
+        refused_plain = run.merge(1)
+        run.step("plain merge is stopped by a person's changes requested beside claude[bot]'s approval", bed.refused(refused_plain, "requested changes"), refused_plain[2].strip())
 
 
 def owner_chief_scenario(run: Run) -> None:
