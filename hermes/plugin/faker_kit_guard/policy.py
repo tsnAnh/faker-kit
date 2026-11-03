@@ -45,7 +45,7 @@ ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
 
 NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
 RESERVED_NAMES = frozenset({"default", "hermes", "test", "tmp", "root", "sudo"})
-SHADOWING_BOT_NAMES = frozenset({"gh", "git", "claude", "faker-kit", "python", "node", "uv"})
+SHADOWING_BOT_NAMES = frozenset({"gh", "git", "claude", "faker-kit", "python", "python3", "node", "uv", "jq", "bash", "curl"})
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SLACK_CHANNEL = re.compile(r"\A[CG][A-Z0-9]{8,}\Z")
 BOOTSTRAP_READ_ONLY = ("status",)
@@ -704,6 +704,28 @@ def shell_parts(words: list[str]) -> tuple[str | None, str | None]:
     return (rest if runs_script else None), (None if runs_script else rest)
 
 
+ASSIGNMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def arithmetic_closer(text: str, i: int, nested: bool, segment: list[str]) -> str:
+    char = text[i]
+    if char == "$":
+        if text.startswith("$[", i):
+            return "]"
+        if text.startswith("${", i):
+            return "}"
+        return ")" if text.startswith("$(", i) and (nested or text.startswith("$((", i)) else ""
+    if char == "(":
+        return ")" if nested or (text.startswith("((", i) and (i == 0 or text[i - 1] != "$")) else ""
+    if char != "[":
+        return ""
+    if nested:
+        return "]"
+    *before, name = "".join(segment).split() or [""]
+    subscript = ASSIGNMENT_NAME.fullmatch(name) and all(ENV_ASSIGN.match(word) or word in SHELL_KEYWORDS for word in before)
+    return "]" if subscript and i and text[i - 1] == name[-1] else ""
+
+
 def scan_shell(text: str) -> tuple[list[str], str]:
     text = (text or "").replace("\\\n", "")
     segments: list[str] = []
@@ -711,6 +733,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
     clean: list[str] = []
     quote, nested, line_start, i, size = "", 0, 0, 0, len(text)
     pending: list[str] = []
+    closers: list[str] = []
 
     def put(chunk: str) -> None:
         current.append(chunk)
@@ -723,6 +746,11 @@ def scan_shell(text: str) -> tuple[list[str], str]:
 
     while i < size:
         char = text[i]
+        if not quote:
+            if closers and char == closers[-1]:
+                closers.pop()
+            elif opener := arithmetic_closer(text, i, bool(closers), current):
+                closers.append(opener)
         if quote == "'":
             quote = "" if char == "'" else quote
         elif quote in ('"', "$'"):
@@ -763,7 +791,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
             i += 3
             continue
         elif text.startswith("<<", i):
-            found = HEREDOC_OPERATOR.match(text, i + 2)
+            found = None if closers else HEREDOC_OPERATOR.match(text, i + 2)
             if found:
                 pending.append(found.group(2))
                 put(text[i:found.end()])
