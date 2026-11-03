@@ -704,7 +704,7 @@ def shell_parts(words: list[str]) -> tuple[str | None, str | None]:
     return (rest if runs_script else None), (None if runs_script else rest)
 
 
-ASSIGNMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+ASSIGNMENT_TARGET = re.compile(r"(?:^|[\s(])[A-Za-z_][A-Za-z0-9_]*(\+?=)?$")
 
 
 def arithmetic_closer(text: str, i: int, nested: bool, segment: list[str]) -> str:
@@ -716,14 +716,16 @@ def arithmetic_closer(text: str, i: int, nested: bool, segment: list[str]) -> st
             return "}"
         return ")" if text.startswith("$(", i) and (nested or text.startswith("$((", i)) else ""
     if char == "(":
-        return ")" if nested or (text.startswith("((", i) and (i == 0 or text[i - 1] != "$")) else ""
+        if nested or (text.startswith("((", i) and (i == 0 or text[i - 1] != "$")):
+            return ")"
+        target = ASSIGNMENT_TARGET.search("".join(segment))
+        return ")" if target and target.group(1) else ""
     if char != "[":
         return ""
     if nested:
         return "]"
-    *before, name = "".join(segment).split() or [""]
-    subscript = ASSIGNMENT_NAME.fullmatch(name) and all(ENV_ASSIGN.match(word) or word in SHELL_KEYWORDS for word in before)
-    return "]" if subscript and i and text[i - 1] == name[-1] else ""
+    target = ASSIGNMENT_TARGET.search("".join(segment))
+    return "]" if target and not target.group(1) else ""
 
 
 def scan_shell(text: str) -> tuple[list[str], str]:
@@ -814,13 +816,18 @@ def scan_shell(text: str) -> tuple[list[str], str]:
             opening = text[line_start:i]
             line_start = i + 1
             if pending and not SHELL_FED_LINE.search(opening):
+                hidden_to = line_start
                 for delimiter in pending:
-                    closing = re.compile(rf"^[ \t]*{re.escape(delimiter)}[ \t]*$", re.M).search(text, line_start)
-                    line_start = closing.end() if closing else size
-                i = line_start
-                line_start += 1
-                pending.clear()
-                continue
+                    closing = re.compile(rf"^[ \t]*{re.escape(delimiter)}[ \t]*$", re.M).search(text, hidden_to)
+                    if not closing:
+                        break
+                    hidden_to = closing.end()
+                else:
+                    line_start = hidden_to
+                    i = line_start
+                    line_start += 1
+                    pending.clear()
+                    continue
             pending.clear()
             i += 1
             continue
