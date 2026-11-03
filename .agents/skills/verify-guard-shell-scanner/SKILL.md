@@ -17,20 +17,20 @@ description: "Verify that no shell text hides a raw `gh pr merge` from the Herme
 python3 .agents/skills/verify-guard-shell-scanner/scanner-check.py
 ```
 
-Needs `python3` 3.10 or newer and GNU bash 5.2 on `PATH`. The run refuses any other bash minor version, because `baseline.json` was recorded with 5.2.21. Ubuntu 24.04 and Debian 12 ship bash 5.2. On another image, or a Mac whose `/bin/bash` is 3.2, pass `--bash PATH` for a bash 5.2. A full run takes about 40 seconds on 4 cores.
+Needs `python3` 3.10 or newer and GNU bash 5.2 on `PATH`. The run refuses any other bash minor version, because `baseline.json` was recorded with 5.2.21. Ubuntu 24.04 and Debian 12 ship bash 5.2. On another image, or a Mac whose `/bin/bash` is 3.2, pass `--bash PATH` for a bash 5.2. A full run took about 40 seconds on 4 cores and scales with cores.
 
-This check is not in `scripts/check.sh`. A full run is over a minute on 2 cores, `check.sh` also runs on Macs that have no bash 5.2, and a branch that predates the sync commit fails it until it merges.
+This check is not in `scripts/check.sh`. `check.sh` also runs on Macs that have no bash 5.2, a 2-core runner would take about 80 seconds (estimated), and a branch that predates the sync commit fails it until it merges.
 
 | Last line | Exit | Meaning |
 |---|---|---|
 | `PASS` | 0 | No text fails. |
 | `UNCHANGED` | 0 | The failing texts are exactly the known findings below. This is the state of main after pull request 228. A checkout that predates it prints the arithmetic `<<` texts as `NEW`. |
 | `FAIL` | 1 | `NEW` lines are failing texts that are not in `baseline.json`: a break. `FIXED` lines are known findings that stopped failing. |
-| `INCONCLUSIVE` or an error | 2 | Wrong bash, or bash timed out on a text. |
+| `INCONCLUSIVE` or an error | 2 | Wrong bash, a guard that does not load, a failed control, or a bash timeout. |
 
 Before it scans, the run proves its own instruments: the guard must refuse a plain `gh pr merge 1` and allow `echo hi`, and the stub `gh` must log the first and not the second. If not, it stops with exit 2, because a pass would mean nothing.
 
-`--drift` first: it lists the covered definitions below that changed since the sync commit. Exit 0 means none of them changed. `--max-atoms 3` gives a 5 second run that compares only the shortest failing texts. `--artifact PATH` writes a JSON transcript, and the printed `digest` is the same on every run of the same code.
+`--drift` first: it lists the covered definitions below that changed since the sync commit. Exit 0 means none of them changed. `--max-atoms 3` gives a run of about 5 seconds that compares only the shortest failing texts. `--artifact PATH` writes a JSON transcript, and the printed `digest` is the same on every run of the same code.
 
 ## Read a result
 
@@ -49,7 +49,7 @@ To see what the scanner made of a text, load the guard and print `scan_shell(tex
 
 ## Known findings
 
-Open on the sync commit. Each reproduces with `bash -c`, a script file, and stdin, and `decide(...)` returns `None`.
+Open on the sync commit. One text of each class was reproduced with `bash -c`, a script file, and stdin, and `decide(...)` returned `None` for it.
 
 1. **A comment that ends in a backslash hides the next line.** `echo hi # note \` then a newline, then `gh pr merge 1`. `scan_shell` starts with `text.replace("\\\n", "")`, which joins the next line onto the comment. Bash ends a comment at the newline.
 2. **A `#` that bash does not read as a comment hides the rest of the line.** `echo $()#;gh pr merge 1`, `echo \ #;gh pr merge 1`, `((#));gh pr merge 1`. The comment branch of `scan_shell` fires after any of `" \t\n;&|()"`, but a `#` straight after the `)` of `$(...)`, `$((...))` or `((...))`, or after an escaped blank, is not at the start of a word.
@@ -72,6 +72,7 @@ Open on the sync commit. Each reproduces with `bash -c`, a script file, and stdi
 - The other hard blocks. Secret reads, pushes to main, the merge API and wiping home use the same segments, but only the `gh pr merge 1` canary runs.
 - The layers around `hard_block`: the plugin's `pre_tool_call`, the owner-turn logic, and anything Hermes does to a command before bash gets it. `hermes/e2e/guard_scenario.py` covers the plugin.
 - Other shells and bash versions: zsh, dash, and the macOS `/bin/bash` 3.2.
+- The merge gate. The read-then-merge order of `Kit.land` in `hermes/bin/faker_kit.py` and the owner-approval records in `hermes/lib/faker_kit_owner_turn.py` are other targets for a formal check, and none exists yet.
 
 A pass covers the bound, not every input.
 
