@@ -5,7 +5,7 @@ A rollout that works in a week and keeps working after a year.
 ## Week 1: one repository, done properly
 
 1. An engineer installs the kit ([Install](install.md)) and runs `/setup-faker-kit` on the main repository. Merge its pull request.
-2. Turn on the Claude review (`/setup-faker-kit`, Review bots; no API keys) and [branch protection](../../plugins/trust-ladder/templates/branch-protection.md). From now on every change, from anyone or any agent, passes the same gates.
+2. Turn on [branch protection](../../plugins/trust-ladder/templates/branch-protection.md), with the repository's own CI as the required checks. From now on every change, from anyone or any agent, passes the same gates.
 3. Run `/create-verification-skill` and merge it. Until this exists, agents cannot prove their work, so the rest of the team cannot rely on them.
 4. Run `/setup-cloud-agents`. The repository then boots in a fresh cloud session with the kit loaded, and you have chosen how each surface shows screenshots on pull requests, including the mobile apps a cloud machine cannot run.
 5. To have a bot run the work while you are away, connect the repository to Hermes dispatch: [Dispatch work with Hermes](dispatch-with-hermes.md).
@@ -24,7 +24,6 @@ Designers, marketers, and founders install nothing. Give each one a seat on the 
 | Verification-skill owner | One engineer, with an on-call rotation once many agents depend on it | Keeps the verification skill and its feature map working; reviews the `/maintain-verification-skill` pull request |
 | Code owners | Per area, in CODEOWNERS | Review and merge pull requests, including those opened by non-engineers |
 | Kit maintainer | One engineer | Updates the kit from upstream, adjusts models, and adds team skills to this repository |
-| Review owner | One teammate with Claude Code | Owns the `CLAUDE_CODE_OAUTH_TOKEN` the review workflow draws on. When they leave, someone else runs `claude setup-token` and replaces the secret |
 
 ## Rituals
 

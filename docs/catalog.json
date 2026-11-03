@@ -4,7 +4,7 @@
     "ladder": "The ladder: route corrections, set up, and measure",
     "1": "Layer 1: Codebase",
     "2": "Layer 2: Static analysis",
-    "3": "Layer 3: Rules and review bots",
+    "3": "Layer 3: Rules",
     "4": "Layer 4: Skills and verification",
     "5": "Layer 5: Style guide",
     "scale": "Scale: many agents and the outer loop"

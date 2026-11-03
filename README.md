@@ -2,7 +2,7 @@
 
 faker-kit is a kit for Claude Code that makes coding agents trustworthy enough to run many at once.
 
-It packages eight open-source agent plugins (Lauren Tan's pstack, team-workflows, thermos, and five more), unchanged except for model names and a few renames, and adds `trust-ladder`: skills that turn every correction you give an agent into a lasting fix, review and security triage, and a Hermes module that dispatches work to Claude Code cloud sessions.
+It packages eight open-source agent plugins (Lauren Tan's pstack, team-workflows, thermos, and five more), unchanged except for model names and a few renames, and adds `trust-ladder`: skills that turn every correction you give an agent into a lasting fix, per-push security review and incident triage, and a Hermes module that dispatches work to Claude Code cloud sessions.
 
 ## Install
 
@@ -25,7 +25,7 @@ Every time you correct an agent, `/correct` puts the fix in the strongest layer 
 |---|---|---|
 | 1. Codebase | Types, boundaries, one blessed way per concern | `/architect`, `/blast-radius` |
 | 2. Static analysis | Lint rules, compiler settings, CI checks, ratchets | `/correct`, which adds a targeted lint to the repository's own CI |
-| 3. Rules and review bots | AGENTS.md; Claude review on every PR | `setup-faker-kit`, `/thermos`, `/interrogate` |
+| 3. Rules | AGENTS.md | `setup-faker-kit`, `/thermos`, `/interrogate` |
 | 4. Skills | Procedures, above all a verification skill that runs the app and proves changes | `/create-verification-skill`, `control-mobile`, `/faker-mode` and its playbooks |
 | 5. Style guide | STYLE.md, enforced by human reviewers until it can climb | `style-guide-from-reviews` |
 

@@ -23,8 +23,8 @@ This repository's pull requests come from agents, and it has no human review com
 ### S1. A refusal or notice tells the owner what to do next
 
 - Why: the owner reads these in Bot Chat or a terminal, often hours later. A line that only says what failed leaves them guessing which command or setting fixes it.
-- Bad: `faker-kit: refused: no security-review status`
-- Good: `faker-kit: refused: security-review has not reported on the head; add the security job from .github/workflows/claude-review.yml`
+- Bad: `faker-kit: refused: no passing CI run`
+- Good: `faker-kit: refused: no passing push or pull_request CI run on the head; add a workflow that builds and tests every pull request`
 - Promotion: review
 - Source: the owner's setup sessions for the routine and the claude --cloud launch (#35, #46), where every stuck step was a refusal that did not name its fix.
 
