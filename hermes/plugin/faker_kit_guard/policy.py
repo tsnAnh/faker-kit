@@ -822,10 +822,8 @@ def scan_shell(text: str) -> tuple[list[str], str]:
         elif char == "(":
             word_parens.append(bool(word_parens and word_parens[-1] and i and text[i - 1] == "("))
         elif char in ";|&`)":
-            if char == ")":
-                next_boundary = not (word_parens.pop() if word_parens else False)
-            else:
-                next_boundary = char != "`"
+            closes_word = bool(word_parens.pop()) if char == ")" and word_parens else False
+            next_boundary = char not in "`)" or (char == ")" and not closes_word)
             cut(char)
             i += 1
             continue
