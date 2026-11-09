@@ -484,7 +484,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
     current: list[str] = []
     clean: list[str] = []
     quote, nested, line_start, i, size = "", 0, 0, 0, len(text)
-    pending: list[str] = []
+    pending: list[tuple[str, bool]] = []
     closers: list[str] = []
     word_parens: list[bool] = []
     next_boundary = True
@@ -559,7 +559,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
                 size = len(text)
             found = None if closers else HEREDOC_OPERATOR.match(text, i + 2)
             if found:
-                pending.append(found.group(2))
+                pending.append((found.group(2), not found.group(1) and "\\" not in text[i + 2:found.end()]))
                 put(text[i:found.end()])
                 i = found.end()
                 continue
@@ -589,11 +589,11 @@ def scan_shell(text: str) -> tuple[list[str], str]:
             line_start = i + 1
             if pending and not SHELL_FED_LINE.search(opening):
                 hidden_to = line_start
-                for delimiter in pending:
-                    closing = re.compile(rf"^[ \t]*{re.escape(delimiter)}[ \t]*$", re.M).search(text, hidden_to)
-                    if not closing:
+                for delimiter, joins in pending:
+                    closing_end = heredoc_closer_end(text, hidden_to, delimiter, joins)
+                    if closing_end is None:
                         break
-                    hidden_to = closing.end()
+                    hidden_to = closing_end
                 else:
                     line_start = hidden_to
                     i = line_start
@@ -655,13 +655,46 @@ def shell_tokens(command: str) -> list[str] | None:
         return None
 
 
+def heredoc_closer_end(text: str, start: int, delimiter: str, joins: bool) -> int | None:
+    """End of the line where bash closes a heredoc, or None.
+
+    An unquoted heredoc joins a backslash-newline before it reads a line, so a
+    closer can span physical lines. A closer ending in CR also closes: bash
+    keeps the CR in the delimiter of a CRLF command.
+    """
+    closer = re.compile(rf"[ \t]*{re.escape(delimiter)}[ \t\r]*")
+    pos = start
+    while pos <= len(text):
+        end, logical = pos, ""
+        while True:
+            newline = text.find("\n", end)
+            line_end = len(text) if newline < 0 else newline
+            line = text[end:line_end]
+            trailing = len(line) - len(line.rstrip("\\"))
+            if joins and trailing % 2 and newline >= 0:
+                logical += line[:-1]
+                end = newline + 1
+                continue
+            logical += line
+            break
+        if closer.fullmatch(logical):
+            return line_end
+        if newline < 0:
+            return None
+        pos = newline + 1
+    return None
+
+
 def heredoc_body(command: str, delimiter: str, start: int) -> tuple[str, int]:
     opened = command.find("<<", start)
     line_end = command.find("\n", opened) if opened >= 0 else -1
     if line_end < 0:
         return "", len(command)
-    closing = re.compile(rf"^[ \t]*{re.escape(delimiter)}[ \t]*$", re.M).search(command, line_end + 1)
-    end = closing.start() if closing else len(command)
+    ends = [heredoc_closer_end(command, line_end + 1, delimiter, joins) for joins in (True, False)]
+    closed = max((e for e in ends if e is not None), default=None)
+    if closed is None:
+        return command[line_end + 1:], len(command)
+    end = command.rfind("\n", line_end + 1, closed) + 1 or line_end + 1
     return command[line_end + 1:end], end
 
 
