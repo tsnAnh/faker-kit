@@ -101,6 +101,7 @@ KIT_GIT_READS = ("log", "show", "status", "diff", "rev-parse", "describe", "ls-f
 PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|faker-kit/kit)(?![\w-])", re.I)
 GUARD_FILES = re.compile(r"\.hermes/faker-kit/(?:guard|bots)\.yaml(?![\w-])|plugins/faker_kit_guard(?![\w-])", re.I)
 SHELL_KEYWORDS = frozenset({"then", "do", "else", "elif", "if", "while", "until", "{", "!"})
+HEREDOC_SPAN = re.compile(r"""-?[ \t]*(?:[\w'"]|\\\\|\\\n|\\)*""")
 HEREDOC_OPERATOR = re.compile(r"""-?[ \t]*\\?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
 SHELL_FED_LINE = re.compile(r"(?<![\w./-])(?:sh|bash|zsh|dash|fish|eval|source|xargs)(?![\w-])")
 RELAY_HANDLE = r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}"
@@ -510,7 +511,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
         elif quote in ('"', "$'"):
             if char == "\\":
                 if quote == '"' and text.startswith("\n", i + 1):
-                    i += 2
+                    text, size = text[:i] + text[i + 2:], size - 2
                     continue
                 put(text[i:i + 2])
                 i += 2
@@ -533,9 +534,10 @@ def scan_shell(text: str) -> tuple[list[str], str]:
                 continue
         elif char == "\\":
             if text.startswith("\n", i + 1):
+                text, size = text[:i] + text[i + 2:], size - 2
                 next_boundary = boundary
-            else:
-                put(text[i:i + 2])
+                continue
+            put(text[i:i + 2])
             i += 2
             continue
         elif char in "'\"":
@@ -551,6 +553,10 @@ def scan_shell(text: str) -> tuple[list[str], str]:
             i += 3
             continue
         elif text.startswith("<<", i):
+            if not closers and (span := HEREDOC_SPAN.match(text, i + 2)):
+                joined = span.group().replace("\\\n", "")
+                text = text[:span.start()] + joined + text[span.end():]
+                size = len(text)
             found = None if closers else HEREDOC_OPERATOR.match(text, i + 2)
             if found:
                 pending.append(found.group(2))
