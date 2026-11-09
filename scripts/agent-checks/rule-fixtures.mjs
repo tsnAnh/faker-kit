@@ -11,7 +11,7 @@ check, a bad fixture that must fail with the expected text in its output, and a 
 fixture that must pass. A rule someone weakens or deletes fails here, not in review.
 
 Keep fixtures under .agents/rule-fixtures/<id>/ and exclude that directory from the
-normal lint run, so the bad fixture does not fail the rest of scripts/check.sh.
+normal lint run, so the bad fixture does not fail the rest of the lint run.
 
 Config:
   { "rules": [ { "id": "no-direct-now",

@@ -1,4 +1,7 @@
 pre-push:
+  parallel: true
   commands:
-    check:
-      run: scripts/check.sh
+    lint:
+      run: node scripts/agent-checks/ratchet.mjs check && node scripts/agent-checks/import-boundaries.mjs && ruff check && mypy
+    validate:
+      run: node scripts/validate.mjs && node scripts/gen-catalog.mjs --check

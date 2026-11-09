@@ -54,4 +54,4 @@ This repository's pull requests come from agents, and it has no human review com
 
 ## Promoted
 
-- **No AI or agent references in commit messages** moved to a check: `scripts/check-commit-messages.mjs`, run by `scripts/check.sh` (owner rule; `.agents/dispatch.md` standing order 6, #42).
+- **No AI or agent references in commit messages** moved to a check: `scripts/check-commit-messages.mjs`, run by CI's `commit-messages` job (owner rule; `.agents/dispatch.md` standing order 6, #42).

@@ -19,7 +19,7 @@ python3 .agents/skills/verify-guard-shell-scanner/scanner-check.py
 
 Needs `python3` 3.10 or newer and GNU bash 5.2 on `PATH`. The run refuses any other bash minor version, because `baseline.json` was recorded with 5.2.21. Ubuntu 24.04 and Debian 12 ship bash 5.2. On another image, or a Mac whose `/bin/bash` is 3.2, pass `--bash PATH` for a bash 5.2. A full run took about 40 seconds on 4 cores and scales with cores.
 
-This check is not in `scripts/check.sh`. `check.sh` also runs on Macs that have no bash 5.2, a 2-core runner would take about 80 seconds (estimated), and a branch that predates the sync commit fails it until it merges.
+This check is not in any CI job. The kit's checks also run on Macs that have no bash 5.2, a 2-core runner would take about 80 seconds (estimated), and a branch that predates the sync commit fails it until it merges.
 
 | Last line | Exit | Meaning |
 |---|---|---|
