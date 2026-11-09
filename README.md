@@ -2,7 +2,7 @@
 
 faker-kit is a kit for Claude Code that makes coding agents trustworthy enough to run many at once.
 
-It packages eight open-source agent plugins (Lauren Tan's pstack, team-workflows, thermos, and five more), unchanged except for model names and a few renames, and adds `trust-ladder`: skills that turn every correction you give an agent into a lasting fix, per-push security review and incident triage, and a Hermes module that dispatches work to Claude Code cloud sessions.
+It packages eight open-source agent plugins (Lauren Tan's pstack, team-workflows, thermos, and five more), unchanged except for model names and a few renames, and adds `trust-ladder`: skills that turn every correction you give an agent into a lasting fix, incident triage, and a Hermes module that dispatches work to Claude Code cloud sessions.
 
 ## Install
 
