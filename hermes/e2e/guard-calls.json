@@ -1137,7 +1137,23 @@
     {"tool": "execute_code", "args": {"code": "os.system('git push -u origin feature/x')"}},
     {"tool": "delegate_task", "args": {"goal": "run git push origin feature and open the pull request"}},
     {"tool": "cronjob_create", "args": {"script": "#!/bin/sh\ngit push origin feature"}},
-    {"tool": "terminal", "args": {"command": "python3 -c \"import os; os.system('git push origin feature')\""}}
+    {"tool": "terminal", "args": {"command": "python3 -c \"import os; os.system('git push origin feature')\""}},
+    {"tool": "execute_code", "args": {"code": "subprocess.run(['git', 'push', 'origin', 'feature/main-menu'])"}},
+    {"tool": "delegate_task", "args": {"goal": "merge main into the branch, then git push origin feature"}},
+    {"tool": "cronjob_manage", "args": {"action": "create", "prompt": "rebase on main and git push --force-with-lease your branch"}}
+  ]},
+  {"name": "code never force-pushes, mirrors, deletes, or pushes to main", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "block", "message": "blocked for every bot", "calls": [
+    {"tool": "execute_code", "args": {"code": "subprocess.run(['git', 'push', '--force', 'origin', 'feature'])"}},
+    {"tool": "execute_code", "args": {"code": "subprocess.run(['git', 'push', '-f', 'origin', 'feature'])"}},
+    {"tool": "execute_code", "args": {"code": "os.system('git push --force-with-lease origin feature')"}},
+    {"tool": "execute_code", "args": {"code": "os.system('git push origin +feature')"}},
+    {"tool": "execute_code", "args": {"code": "os.system('git push --mirror origin')"}},
+    {"tool": "execute_code", "args": {"code": "os.system('git push origin --delete feature')"}},
+    {"tool": "execute_code", "args": {"code": "subprocess.run(['git', 'push', 'origin', 'main'])"}},
+    {"tool": "execute_code", "args": {"code": "os.system('git -C repo push origin HEAD:master')"}},
+    {"tool": "cronjob_create", "args": {"script": "#!/bin/sh\ngit push --force origin feature"}},
+    {"tool": "cronjob_manage", "args": {"action": "create", "script": "git push origin main"}},
+    {"tool": "terminal", "args": {"command": "python3 -c \"import os; os.system('git push origin main')\""}}
   ]},
   {"name": "write_file and patch never change the kit, ~/.hermes/bin, the guard's policy files, or the guard plugin", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "block", "message": "blocked for every bot", "calls": [
     {"tool": "write_file", "args": {"path": "~/.hermes/bin/x", "content": "x"}},

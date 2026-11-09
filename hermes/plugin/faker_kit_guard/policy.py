@@ -74,6 +74,11 @@ CODE_BLOCKS = (
     (GRAPHQL_WRITES, "it merges, deletes, moves a ref, or dismisses a review through GraphQL"),
     (WIPE, "it wipes / or the home folder"),
 )
+CODE_PUSH = re.compile(r"\bgit\b[^\n]{0,80}?\bpush\b([^\n]{0,200})")
+RISKY_PUSH = re.compile(
+    r"(?<![\w-])(?:--force(?:-with-lease|-if-includes)?(?:=\S*)?|-f|--mirror|--all|--delete|-d|--prune)(?![\w-])"
+    r"|[\s'\",]\+[\w/.-]|(?<![\w/.-])(?:main|master)(?![\w/.-])"
+)
 INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|perl|ruby|php|bun|deno|osascript)\Z")
 INTERPRETER_CODE_OPTIONS = ("-c", "-e", "-E", "-r", "--eval", "--command", "-p", "--print")
 WRAPPERS = ("env", "command", "exec", "nohup", "sudo", "xargs", "time", "nice", "stdbuf", "caffeinate", "timeout", "arch")
@@ -976,7 +981,11 @@ def hard_block(tool_name: str, args: dict) -> str | None:
         return None
     if tool_name in ("terminal", "process_manage"):
         return terminal_problem(str(args.get("command", "")))
-    if tool_name in ("execute_code", "delegate_task") or fnmatch.fnmatchcase(tool_name, "cronjob*"):
+    if tool_name == "execute_code":
+        return code_problem(strings(args)) or code_push_problem(strings(args))
+    if fnmatch.fnmatchcase(tool_name, "cronjob*"):
+        return code_problem(strings(args)) or code_push_problem(strings({k: args.get(k) for k in ("script", "command")}))
+    if tool_name == "delegate_task":
         return code_problem(strings(args))
     return None
 
@@ -997,7 +1006,15 @@ def terminal_problem(command: str, depth: int = 0) -> str | None:
             why = terminal_problem(value, depth + 1)
             if why:
                 return why
-    return code_problem(interpreter_code(scanned, clean))
+    code = interpreter_code(scanned, clean)
+    return code_problem(code) or code_push_problem(code)
+
+
+def code_push_problem(texts: list[str]) -> str | None:
+    for text in texts:
+        if any(RISKY_PUSH.search(found.group(1)) for found in CODE_PUSH.finditer(text)):
+            return "code never force-pushes, mirrors, deletes, prunes, or pushes to main; push a named feature branch"
+    return None
 
 
 def github_code_write(text: str) -> bool:
