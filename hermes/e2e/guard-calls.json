@@ -1236,5 +1236,21 @@
     {"tool": "terminal", "args": {"command": "echo X\\\necho ok"}},
     {"tool": "terminal", "args": {"command": "echo a\\ #gh pr merge 1"}},
     {"tool": "terminal", "args": {"command": "echo X\\\\\\\ngh pr merge 1"}}
+  ]},
+  {"name": "a backslash-newline cannot split a heredoc delimiter or a shell name to hide gh pr merge", "policy": "quiet", "profiles": ["meo-beo"], "expect": "block", "calls": [
+    {"tool": "terminal", "args": {"command": "cat <<E\\\nOF\nEOF\ngh pr merge 1\nE\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<E\\\nOF\nEOF\ngh pr merge 1\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<'E'\\\nOF\nEOF\ngh pr merge 1\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<\\\nEOF\nEOF\ngh pr merge 1\n"}},
+    {"tool": "terminal", "args": {"command": "b\\\nash <<EOF\ngh pr merge 1\nEOF\n"}},
+    {"tool": "terminal", "args": {"command": "s\\\nh <<EOF\ngh pr merge 1\nEOF\n"}},
+    {"tool": "terminal", "args": {"command": "ba\\\nsh <<EOF\ngh pr merge 1\nEOF\n"}},
+    {"tool": "terminal", "args": {"command": "bash <<EO\\\nF\ngh pr merge 1\nEOF\n"}}
+  ]},
+  {"name": "heredoc text that bash never runs stays inert across a continuation", "policy": "quiet", "profiles": ["meo-beo"], "expect": "allow", "calls": [
+    {"tool": "terminal", "args": {"command": "cat <<EOF\ngh pr merge 1\nEOF\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<E\\\nOF\ngh pr merge 1\nEOF\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<E\\\nOF\nhello\nEOF\necho ok\n"}},
+    {"tool": "terminal", "args": {"command": "echo b\\\nash\n"}}
   ]}
 ]
