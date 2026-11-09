@@ -97,7 +97,6 @@
     "trust-ladder/setup-cloud-agents": {"layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-cloud-agents"},
     "trust-ladder/setup-hermes-project": {"layer": "scale", "audience": ["engineer", "lead"], "prompt": "/setup-hermes-project for acme/shop with Claude Code"},
     "trust-ladder/triage-incident": {"layer": "scale", "audience": ["engineer", "lead"], "prompt": "/triage-incident Investigate OWNER/REPO: main is red: test. The head of main is <sha>; its last commit with passing checks is <sha>. Post the diagnosis on the head commit."},
-    "trust-ladder/review-main-security": {"layer": "scale", "audience": ["engineer", "lead"], "prompt": "/review-main-security Review the commits after <base> up to <head> on main of OWNER/REPO, and post the result on the head commit."},
     "pstack/swarm": {"layer": "scale", "audience": ["engineer"], "prompt": "take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win"},
     "pstack/sharpen": {"layer": "front-door", "audience": ["everyone"], "prompt": "/sharpen add dark mode to the settings page"},
     "pstack/in-your-own-words": {"layer": "front-door", "audience": ["everyone"], "prompt": "/in-your-own-words"}

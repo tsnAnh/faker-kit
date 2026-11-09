@@ -2,7 +2,7 @@
 
 # Skills
 
-Every skill in the kit: 91 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
+Every skill in the kit: 90 skills from 9 plugins, grouped by the layer of the trust ladder it strengthens. See [the trust ladder](../explanation/trust-ladder.md) for what the layers mean.
 
 ## How to call a skill
 
@@ -140,6 +140,5 @@ You rarely need the name. Claude Code picks a skill on its own when your request
 | [setup-cloud-agents](../../plugins/trust-ladder/skills/setup-cloud-agents/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-cloud-agents` | Make the repository start, build, test, and run its app in a fresh cloud container, so engineers can run agents in parallel and designers, marketers, and founders can use the kit from a browser or phone with nothing... |
 | [setup-hermes-project](../../plugins/trust-ladder/skills/setup-hermes-project/SKILL.md) | trust-ladder | Engineers, Leads | `/setup-hermes-project for acme/shop with Claude Code` | Connect a GitHub repository to this machine's Hermes dispatch. |
 | [triage-incident](../../plugins/trust-ladder/skills/triage-incident/SKILL.md) | trust-ladder | Engineers, Leads | `/triage-incident Investigate OWNER/REPO: main is red: test. The head of main is <sha>; its last commit with passing checks is <sha>. Post the diagnosis on the head commit.` | Investigate one incident a Hermes project bot brought to you (the default branch's checks went red, a health URL fails, or an alert source such as Sentry, PagerDuty, Datadog, or Grafana reports a failure), without... |
-| [review-main-security](../../plugins/trust-ladder/skills/review-main-security/SKILL.md) | trust-ladder | Engineers, Leads | `/review-main-security Review the commits after <base> up to <head> on main of OWNER/REPO, and post the result on the head commit.` | Review the new commits on a repository's default branch for security issues, from a Hermes project bot's brief soon after each push, without changing anything. |
 | [swarm](../../plugins/pstack/skills/swarm/SKILL.md) | pstack | Engineers | `take a trace of the status quo, make a targeted fix, and use /swarm to confirm the win` | Fan out N parallel workers, drain them, and return one report. |
 

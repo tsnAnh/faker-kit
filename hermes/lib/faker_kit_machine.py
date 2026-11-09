@@ -22,8 +22,6 @@ ROUTE_JOBS: dict[str, tuple[str, tuple[str, ...], str, tuple[dict[str, str], ...
     "pr": ("faker-kit-babysit", ("pull_request", "pull_request_review", "check_suite", "status"),
            "GitHub event {event_type} ({action}) in {repository.full_name}. Pull request {pull_request.number}, "
            "check suite head {check_suite.head_sha}. Babysit the open pull requests.", ()),
-    "security": ("faker-kit-security", ("push",),
-                 "GitHub event push to {ref} in {repository.full_name}, head {after}. Run the security review.", ()),
     "issues": ("faker-kit-issues", ("issues",),
                "GitHub event issues ({action}) in {repository.full_name}: the faker:fix label was added to issue {issue.number}. "
                "Follow the Bug reports section of the dispatch skill.",
@@ -52,7 +50,6 @@ class Project:
     repo: str
     heartbeat_every: str | None = None
     incidents_every: str | None = None
-    security_every: str | None = None
     model: str | None = None
     provider: str | None = None
 
@@ -156,7 +153,7 @@ def parse_machine(data: object) -> Machine:
     for i, item in enumerate(raw_projects):
         where = f"projects[{i}]"
         entry = _mapping(item, where)
-        every = {k: _text(entry, k, where, EVERY, required=False) for k in ("heartbeat_every", "incidents_every", "security_every")}
+        every = {k: _text(entry, k, where, EVERY, required=False) for k in ("heartbeat_every", "incidents_every")}
         model, provider = _model_choice(entry, "model", "provider", where, subscription)
         projects.append(Project(bot=str(_text(entry, "bot", where, NAME)), project=str(_text(entry, "project", where, NAME)),
                                 repo=str(_text(entry, "repo", where, REPO)), model=model, provider=provider, **every))
