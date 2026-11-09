@@ -29,7 +29,7 @@ if (HERE.parent / "vendor").is_dir() and str(HERE.parent / "vendor") not in sys.
 
 import yaml
 from faker_kit_andon import LABEL, MACHINE, Andon, AndonError, Cord, clean_reason, issue_body
-from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, Cloud, CloudError, session_effort, session_model, trust_checkout
+from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, PERMISSION_MODE, Cloud, CloudError, session_effort, session_model, trust_checkout
 from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
 from faker_kit_gh import NAME, Gh, Refused, Runner, run_gh
 from faker_kit_guard.policy import (
@@ -243,7 +243,8 @@ class Kit:
             raise Refused(f"launch failed: {err}") from err
         used, effort_note = session_effort(effort)
         used_model, model_note = session_model(model)
-        return {"repo": repo, "session": session, "brief": digest, "model": used_model, "effort": used, **model_note, **effort_note, **({"kit_behind": behind} if behind else {})}
+        printed = {"repo": repo, "session": session, "brief": digest, "model": used_model, "effort": used, "permission_mode": PERMISSION_MODE}
+        return {**printed, **model_note, **effort_note, **({"kit_behind": behind} if behind else {})}
 
     def record_kit_source(self, source: str | None, require_current: bool = False) -> None:
         path = self.home / KIT_REPO_FILE

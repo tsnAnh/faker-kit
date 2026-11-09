@@ -31,6 +31,7 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 EFFORT_CEILING = "high"
 DEFAULT_EFFORT = "medium"
 DEFAULT_MODEL = "sonnet"
+PERMISSION_MODE = "auto"
 
 Runner = Callable[..., str]
 
@@ -166,7 +167,7 @@ class Cloud:
         self.prune(workdir.parent)
         checkout = self.checkout(repo, workdir.parent / CHECKOUT)
         trusted_in = trust_checkout(checkout, os.environ.get(CLAUDE_CONFIG_DIR, ""))
-        chosen = ["--model", session_model(model)[0], "--effort", session_effort(effort)[0]]
+        chosen = ["--model", session_model(model)[0], "--effort", session_effort(effort)[0], "--permission-mode", PERMISSION_MODE]
         return self.launch(["claude", *chosen, "--cloud", prompt], checkout, workdir.with_name(workdir.name + ".log"), prompt, trusted_in)
 
     def checkout(self, repo: str, path: Path) -> Path:
