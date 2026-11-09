@@ -15,12 +15,12 @@ max_in_flight_total: 3
 trusted_authors:
   - OWNER-LOGIN
 
-# Whether the guard and Hermes ask the owner in Desktop before a bot acts: every bootstrap bot
-# change, and any tool after a turn read untrusted content.
+# Whether the guard and Hermes ask the owner in Desktop before the bootstrap bot changes this
+# machine or GitHub.
 # false stops every question. Deny rules and the wrapping of untrusted output still apply, and the
 # hard blocks never lift (secret reads, repository deletion, pushes to main, force-pushes, raw
-# gh pr merge, wiping / or home), but a prompt injection in a web page can then make a bot act
-# without you seeing it first.
+# gh pr merge, wiping / or home, edits to the kit and the guard's own files), but a prompt
+# injection in a web page can then make a bot act without you seeing it first.
 # faker-kit also sets each bot's Hermes approvals.mode to off when this is false; run
 # faker-kit install after changing it.
 ask_owner: true
@@ -32,9 +32,8 @@ ask_owner: true
 # alert_hosts:
 #   - grafana.example.com
 
-# Tool results from these are wrapped in <untrusted source=...> and taint the turn.
-# After that, every tool not in read_only_tools needs the owner's approval in Desktop, and
-# faker-kit merge refuses until a new message or wake.
+# Tool results from these are wrapped in <untrusted source=...> so the model reads them as data,
+# not as instructions. Wrapping changes nothing else: the turn runs every tool it could before.
 untrusted_readers:
   - tool: web_*
   - tool: browser_*
@@ -63,7 +62,8 @@ untrusted_readers:
 # command in a terminal call. {tool, command} matches other tools.
 deny: []
 
-# Tools that never change anything. Everything else counts as side-effecting.
+# Tools that never change anything. The bootstrap bot asks the owner to approve every tool not
+# listed here while ask_owner is true.
 read_only_tools:
   - read_file
   - search_files

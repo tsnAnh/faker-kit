@@ -40,23 +40,19 @@ from faker_kit_guard.policy import (
     REPO,
     RESERVED_NAMES,
     SHADOWING_BOT_NAMES,
-    TAINTED_TURN_SECONDS,
-    TURN_ID_ENV,
     Bot,
     Policy,
     PolicyError,
     faker_kit_home,
     load_policy,
     parse_policy,
-    tainted_turn_marker,
 )
 from faker_kit_incident_sources import FetchJson, fetch_json
 from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
 from faker_kit_loop import Loop, LoopError
 from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
-from faker_kit_merge import MERGE_METHOD, Evidence, MergeLock, Verdict, decide, dispatch_rules, from_fork
-from faker_kit_owner_turn import claim_owner_turn
+from faker_kit_merge import MERGE_METHOD, Evidence, MergeLock, decide, from_fork
 from faker_kit_profiles import Profiles
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
 from install_config import InstallError, config_set, hermes, mapping, value_at
@@ -189,23 +185,6 @@ class Kit:
             raise Refused(f"no project {project}; create it with add-project first")
         return bot
 
-    def refuse_after_untrusted_text(self, bot: str, action: str, only_turn: str | None = None) -> None:
-        folder = tainted_turn_marker(self.home, bot)
-        for record in sorted(folder.iterdir()) if folder.is_dir() else []:
-            if record.name.startswith("."):
-                continue
-            try:
-                data = json.loads(record.read_text())
-                at = float(data["at"])
-            except FileNotFoundError:
-                continue
-            except (OSError, ValueError, KeyError, TypeError):
-                raise Refused(f"{action} could not read this bot's tainted-turn record; ask again in a new message") from None
-            if only_turn is not None and str(data.get("turn")) != only_turn:
-                continue
-            if self.now() - at < TAINTED_TURN_SECONDS:
-                raise Refused(f"this bot read text strangers wrote in its current turn, so it may not {action}; the owner or the chief of staff asks again in a new message")
-
     def cord(self, bot: str | None) -> Cord | None:
         return self.andon.pulled(bot)
 
@@ -311,12 +290,8 @@ class Kit:
         head_info = pull.get("head") or {}
         ref = str(head_info.get("ref") or "")
         owner = str(((head_info.get("repo") or {}).get("owner") or {}).get("login") or str(head_info.get("label") or "").partition(":")[0])
-        try:
-            rules = dispatch_rules(gh.file_text(".agents/dispatch.json", default))
-        except ValueError as err:
-            raise Refused(str(err)) from None
         head_tree = gh.workflows_tree(head)
-        return Evidence(gh.check_runs(head), gh.statuses(head), gh.reviews(pr), gh.pull_files(pr), rules,
+        return Evidence(gh.check_runs(head), gh.statuses(head), gh.reviews(pr),
                         gh.head_pulls(head), gh.head_runs(head),
                         ref, gh.branch_pulls(owner, ref) if owner and ref else None, gh.timeline(pr), str(pull.get("created_at") or ""),
                         head_tree is not None and head_tree == gh.workflows_tree(default))
@@ -348,35 +323,19 @@ class Kit:
         if caller.role == "chief":
             if not project or not owner_approved:
                 raise Refused("the chief of staff merges only when the owner asks: faker-kit merge --project <project> --pr <number> --owner-approved")
-            policy = self.policy()
-            return self.merge(self.project_bot(policy, project), pr, True, caller, project)
+            return self.merge(self.project_bot(self.policy(), project), pr, True)
         if project and project != caller.project:
             raise Refused(f"{caller.name} merges only its own project's pull requests; the chief of staff merges for another project")
         return self.merge(caller, pr, owner_approved)
 
-    def merge(self, bot: Bot, pr: int, owner_approved: bool = False, caller: Bot | None = None, project: str | None = None) -> dict:
-        asker = caller or bot
-        self.refuse_after_untrusted_text(asker.name, "merge", os.environ.get(TURN_ID_ENV, "").strip() if owner_approved else None)
-        implied = project is None
-        claim = claim_owner_turn(self.home, asker.name, pr, project or bot.project, self.policy(), self.now(), os.environ, implied) if owner_approved else None
-        sent: list[bool] = []
-        try:
-            head, verdict = self.land(bot, pr, owner_approved, sent)
-        except BaseException:
-            if claim and not sent:
-                claim.release()
-            raise
+    def merge(self, bot: Bot, pr: int, owner_approved: bool = False) -> dict:
+        head = self.land(bot, pr, owner_approved)
         landed: dict[str, object] = {"pr": pr, "merged": True, "head": head, "method": MERGE_METHOD}
         if owner_approved:
-            landed.update(owner_approved=True, bypassed=list(verdict.bypassed))
-        if claim:
-            try:
-                claim.commit()
-            except (Refused, OSError, ValueError) as err:
-                landed["warning"] = f"#{pr} merged, but the owner's approval record could not be updated ({type(err).__name__}); it ends with this turn"
+            landed["owner_approved"] = True
         return landed
 
-    def land(self, bot: Bot, pr: int, owner_approved: bool, sent: list[bool]) -> tuple[str, Verdict]:
+    def land(self, bot: Bot, pr: int, owner_approved: bool) -> str:
         repo = str(bot.repo)
         gh = Gh(self.home, bot.name, repo, self.run)
         with MergeLock(self.home, bot.name).locked():
@@ -387,15 +346,14 @@ class Kit:
             verdict = decide(pr, head, self.evidence(gh, pr, head, default, data), repo, default, owner_approved)
             if verdict.action != "merge":
                 raise Refused(verdict.message)
-            sent.append(True)
             try:
                 self.run(["api", "-X", "PUT", f"repos/{repo}/pulls/{pr}/merge", "-f", f"merge_method={MERGE_METHOD}", "-f", f"sha={head}"])
             except Refused as err:
                 landed = self.landed_after_error(gh, pr, head)
                 if landed:
-                    return head, verdict
+                    return head
                 raise PutFailed(self.put_failure(pr, landed, err)) from err
-        return head, verdict
+        return head
 
     @staticmethod
     def landed_after_error(gh: Gh, pr: int, head: str) -> bool | None:
@@ -410,9 +368,9 @@ class Kit:
     @staticmethod
     def put_failure(pr: int, landed: bool | None, err: Refused) -> str:
         if landed is False:
-            return f"the merge request for #{pr} was sent and GitHub refused it ({err}); #{pr} is still open, and this approval is used up, so the owner asks again in a new message"
+            return f"the merge request for #{pr} was sent and GitHub refused it ({err}); #{pr} is still open"
         return (f"the merge request for #{pr} was sent and the result could not be confirmed ({err}): #{pr} may or may not have merged; "
-                f"this approval is used up, so check #{pr} on GitHub before the owner asks again")
+                f"check #{pr} on GitHub before merging again")
 
     def incidents(self, bot: Bot, ack: str | None, last: bool) -> dict:
         try:
@@ -470,7 +428,6 @@ class Kit:
                            f"head {head if SHA.match(head) else 'unknown'}", gate])
 
     def handoff(self, caller: Bot, project: str, part: str) -> dict:
-        self.refuse_after_untrusted_text(caller.name, "hand out work")
         owner = self.policy().projects().get(project)
         if owner is None:
             raise Refused(f"no project {project} on this machine; faker-kit status --all lists them")
@@ -979,11 +936,6 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
     except (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError) as err:
         print(f"faker-kit: refused: {err}", file=sys.stderr)
         return 1
-    if isinstance(out, dict) and out.get("owner_approved"):
-        bypassed = ", ".join(str(gate) for gate in out.get("bypassed") or []) or "none"
-        print(f"faker-kit: owner-approved merge of #{out.get('pr')}; gates bypassed: {bypassed}", file=sys.stderr)
-    if isinstance(out, dict) and out.get("warning"):
-        print(f"faker-kit: warning: {out['warning']}", file=sys.stderr)
     print("\n".join(out) if isinstance(out, list) else json.dumps(out, ensure_ascii=False))
     return 0
 

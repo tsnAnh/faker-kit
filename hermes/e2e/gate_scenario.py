@@ -67,15 +67,6 @@ def printed_time(stdout: str) -> str | None:
     return found[1] if found else None
 
 
-def job_prompts(source: Path) -> dict[str, tuple[str, str]]:
-    jobs: dict[str, tuple[str, str]] = {}
-    for block in re.split(r"^## ", source.read_text(), flags=re.M)[1:]:
-        skill, prompt = re.search(r"^Skill: `(.+)`[ \t]*$", block, re.M), re.search(r"^Prompt: `(.+)`[ \t]*$", block, re.M)
-        if skill and prompt:
-            jobs[block.split("\n", 1)[0].strip()] = (skill[1], prompt[1])
-    return jobs
-
-
 def gate_scenario(run: Run, hermes: Path, bot: str, install: Callable[[], subprocess.CompletedProcess[str]], env: dict[str, str], work: Path) -> None:
     profile = hermes / "profiles" / bot
     gate = profile / "scripts" / GATE
@@ -204,30 +195,14 @@ def gate_scenario(run: Run, hermes: Path, bot: str, install: Callable[[], subpro
     host.skills(False)
     incidents_prompt = jobs()["faker-kit-incidents"]["prompt"]
     skill = (guard_scenario.HERMES / "skills" / "dispatch" / "SKILL.md").read_text()
-    assembled = f"{skill}\n\n## Script Output\nThe following data was collected by a pre-run script. Use it as context for your analysis.\n\n{red.stdout.strip()}\n\n{incidents_prompt}"
-    woken, reader = host.sid(), host.sid()
-    host.message(assembled, session=woken)
-    host.message(assembled, session=reader)
-    clean_merge = host.terminal("faker-kit merge --pr 1", session=woken, label="dispatch prompt merge")
-    clean_delegate = host.tool("delegate_task", {"goal": "x"}, session=woken, label="dispatch prompt delegate")
-    run.step("a turn whose prompt carries the dispatch skill text, the gate's summary, and the incidents prompt is not tainted: faker-kit merge and delegate_task are allowed",
-             clean_merge is None and clean_delegate is None, f"merge {guard_scenario.action(clean_merge)}, delegate {guard_scenario.action(clean_delegate)}")
-    every_job = {**job_prompts(guard_scenario.HERMES / "cron" / "project-jobs.md"), **job_prompts(guard_scenario.HERMES / "cron" / "chief-jobs.md")}
-    job_verdicts: dict[str, str] = {}
-    for name, (job_skill, job_prompt) in every_job.items():
-        turn_text = f"{(guard_scenario.HERMES / 'skills' / job_skill / 'SKILL.md').read_text()}\n\n{job_prompt}"
-        session = host.sid()
-        host.message(turn_text, session=session)
-        job_verdicts[name] = guard_scenario.action(host.terminal("faker-kit merge --pr 1", session=session, label=f"{name} prompt merge"))
-    run.step("a turn built from each project and chief job's real skill text and prompt is not tainted: faker-kit merge is allowed",
-             len(every_job) == 6 and all(v == guard_scenario.action(None) for v in job_verdicts.values()), json.dumps(job_verdicts, sort_keys=True))
+    reader = host.sid()
     reading = host.terminal("faker-kit incidents --last", session=reader, label="incidents last read")
-    wrapped = host.result("terminal", {"command": "faker-kit incidents --last"}, json.dumps(stored), session=reader)
-    tainted_merge = host.terminal("faker-kit merge --pr 1", session=reader, label="after incidents last merge")
-    tainted_delegate = host.tool("delegate_task", {"goal": "x"}, session=reader, label="after incidents last delegate")
-    run.step("reading the report with faker-kit incidents --last through the terminal wraps it as untrusted and taints the turn: faker-kit merge and delegate_task are then refused",
-             reading is None and wrapped is not None and wrapped.startswith("<untrusted") and guard_scenario.blocked(tainted_merge) and guard_scenario.blocked(tainted_delegate),
-             f"read {guard_scenario.action(reading)}, merge {guard_scenario.action(tainted_merge)}, delegate {guard_scenario.action(tainted_delegate)}")
+    result = host.result("terminal", {"command": "faker-kit incidents --last"}, json.dumps(stored), session=reader)
+    later_merge = host.terminal("faker-kit merge --pr 1", session=reader, label="after incidents last merge")
+    later_delegate = host.tool("delegate_task", {"goal": "x"}, session=reader, label="after incidents last delegate")
+    run.step("reading the report with faker-kit incidents --last through the terminal returns it whole, and faker-kit merge and delegate_task are allowed afterwards",
+             reading is None and result is None and later_merge is None and later_delegate is None,
+             f"read {guard_scenario.action(reading)}, merge {guard_scenario.action(later_merge)}, delegate {guard_scenario.action(later_delegate)}")
 
     acked = kit("incidents", "--ack", "main")
     news_report = stored

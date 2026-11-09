@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import fnmatch
-import json
 import re
-import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -17,20 +14,10 @@ KIT_CHECKS_WORKFLOW = ".github/workflows/faker-kit-checks.yml"
 NOT_CI_WORKFLOWS = (REVIEW_WORKFLOW, KIT_CHECKS_WORKFLOW)
 WORKFLOW_FOLDER = ".github/workflows/"
 BASE_CHANGE_EVENTS = ("base_ref_changed", "automatic_base_change_succeeded", "automatic_base_change_failed")
-OWNER_ONLY_PATHS = (
-    ".github/workflows/",
-    ".agents/dispatch.json",
-    "hermes/plugin/faker_kit_guard/",
-    "hermes/templates/guard.yaml",
-    ".agents/faker-kit/",
-)
-GLOB_CHARS = "*?["
-MAX_LISTED_FILES = 3000
 PASSING_CONCLUSIONS = ("success", "neutral", "skipped")
 FORMAL_REVIEWS = ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
 IGNORED_STATUS = "security-review"
 TOKEN_CHARS = 40
-GATE_PATHS = "protected-paths"
 
 
 @dataclass(frozen=True)
@@ -38,8 +25,6 @@ class Evidence:
     check_runs: list[dict]
     statuses: list[dict]
     reviews: list[dict]
-    files: list[dict]
-    rules: list[str]
     head_pulls: list[dict] | None = field(default=None)
     head_runs: list[dict] | None = field(default=None)
     head_ref: str = ""
@@ -53,7 +38,6 @@ class Evidence:
 class Verdict:
     action: str
     message: str
-    bypassed: tuple[str, ...] = ()
 
 
 def from_fork(pull: dict, repo: str) -> bool:
@@ -195,47 +179,6 @@ def base_problem(pulls: list[dict] | None, timeline: list[dict] | None, pr: int,
     return None
 
 
-def fold(text: str) -> str:
-    return unicodedata.normalize("NFC", text).casefold()
-
-
-def owner_path_match(path: str, rule: str) -> bool:
-    path, rule = fold(path), fold(rule)
-    name = path.rsplit("/", 1)[-1]
-    if rule.endswith("/"):
-        return ("/" + rule) in ("/" + path)
-    if any(char in rule for char in GLOB_CHARS):
-        return fnmatch.fnmatchcase(path, rule) or fnmatch.fnmatchcase(name, rule)
-    return path == rule or path.startswith(rule + "/") or name == rule
-
-
-def owner_path_problem(files: list[dict], rules: list[str]) -> str | None:
-    if len(files) >= MAX_LISTED_FILES:
-        return f"the change lists {MAX_LISTED_FILES} files or more, more than GitHub shows; the owner merges it"
-    for entry in files:
-        for path in (str(entry.get("filename") or ""), str(entry.get("previous_filename") or "")):
-            hit = next((rule for rule in (*OWNER_ONLY_PATHS, *rules) if path and owner_path_match(path, rule)), None)
-            if hit:
-                return f"the change touches {token(path)}, which {token(hit)} protects; the owner merges it"
-    return None
-
-
-def dispatch_rules(text: str | None) -> list[str]:
-    if text is None:
-        return []
-    try:
-        data = json.loads(text)
-    except ValueError:
-        raise ValueError(".agents/dispatch.json on the default branch is not valid JSON") from None
-    rules: list[str] = []
-    for key in ("risk_paths_high", "forbidden_paths"):
-        value = data.get(key) if isinstance(data, dict) else None
-        if value is not None and not (isinstance(value, list) and all(isinstance(item, str) for item in value)):
-            raise ValueError(f".agents/dispatch.json {key} must be a list of paths")
-        rules += [item for item in value or [] if item]
-    return rules
-
-
 def requested_changes(reviews: list[dict]) -> int:
     latest: dict[str, str] = {}
     for review in reviews:
@@ -246,16 +189,13 @@ def requested_changes(reviews: list[dict]) -> int:
 
 def decide(pr: int, head: str, evidence: Evidence, repo: str, default: str, owner_approved: bool = False) -> Verdict:
     ref = evidence.head_ref
-    path_problem = owner_path_problem(evidence.files, evidence.rules)
-    problem = ((None if owner_approved else path_problem) or base_problem(evidence.branch_pulls, evidence.timeline, pr, default)
+    problem = (base_problem(evidence.branch_pulls, evidence.timeline, pr, default)
                or checks_problem(evidence.check_runs, evidence.statuses, evidence.head_runs, head, repo, pr, default, ref, evidence.opened, evidence.workflows_match, owner_approved)
                or head_problem(evidence.head_pulls, pr, head))
     if problem:
         return Verdict("refuse", problem)
     if requested_changes(evidence.reviews):
         return Verdict("refuse", "a reviewer requested changes; the author or the reviewer must resolve it")
-    if owner_approved and path_problem:
-        return Verdict("merge", "every gate the owner's approval does not cover passed", (GATE_PATHS,))
     return Verdict("merge", "every gate passed")
 
 

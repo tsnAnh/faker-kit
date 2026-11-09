@@ -1,13 +1,10 @@
 
 from __future__ import annotations
 
-import contextlib
-import fcntl
 import fnmatch
 import hashlib
 import html
 import importlib.util
-import itertools
 import json
 import os
 import posixpath
@@ -16,9 +13,7 @@ import shlex
 import sys
 import threading
 import types
-import unicodedata
 import urllib.parse
-from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,7 +31,6 @@ DEFAULT_READ_ONLY_TOOLS = (
     "web_search", "web_extract", "vision_analyze",
 )
 CHAT_TOOLS = ("message_agent", "clarify", "todo_*", "skills_list", "skill_view", "session_search")
-TRUSTED_RESULTS = (*CHAT_TOOLS, "write_file", "patch")
 PATH_ARGS = {"write_file": ("path",), "patch": ("path",), "read_file": ("path",), "search_files": ("path",)}
 PROGRAM = "faker-kit"
 QUOTING = re.compile(r"""["'`\\]""")
@@ -49,32 +43,23 @@ SHADOWING_BOT_NAMES = frozenset({"gh", "git", "claude", "faker-kit", "python", "
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SLACK_CHANNEL = re.compile(r"\A[CG][A-Z0-9]{8,}\Z")
 BOOTSTRAP_READ_ONLY = ("status",)
-CHIEF_NO_APPROVAL = ("status", "loop")
-CLEAN_TURN_COMMANDS = ("merge", "handoff")
 SECRET_TEXT = re.compile(
     r"(?<![\w.-])\.env(?:\.(?!example(?![\w-])|sample(?![\w-])|template(?![\w-])|dist(?![\w-]))[\w-]+)*(?![\w.-])"
     r"|\.ssh(?![\w-])|\.config/gh(?![\w-])|\.git-credentials|\.netrc(?![\w-])|\.aws/credentials|\bid_(?:rsa|ed25519|ecdsa)(?![\w-])"
     r"|login\.keychain|\.hermes(?!/bin(?![\w-])|/faker-kit/kit(?![\w-])|/faker-kit/briefs(?![\w-]))(?![\w-])|\.hermes/\S*\.\."
-    r"|(?<![\w-])(?:tainted|owner)-turns(?![\w-])"
     r"|\bHERMES_HOME\b|\bFAKER_KIT_HOME\b",
     re.I,
 )
-WRITE_PROTECTED = re.compile(r"\.hermes(?!/faker-kit/briefs(?![\w-]))(?![\w-])|(?<![\w-])(?:tainted|owner)-turns(?![\w-])", re.I)
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
 SECRET_SEGMENTS = re.compile(
     r"\A(?:gh auth token\b|gh auth status\b.*(?:\s-t\b|--show-token)|security (?:find-|dump-keychain|export)|git credential\b"
     r"|printenv\b|env\Z|export\Z|export -p\b|set\Z|declare -[a-z]*[px]|compgen -[ve]\b)"
 )
 WIPE = re.compile(r"""\brm\s+(?:-\S+\s+)*-[a-zA-Z]*[rR][a-zA-Z]*\s+(?:-\S+\s+)*["']?(?:/|~|\$HOME|\$\{HOME\})/?\*?["']?(?=$|[\s;&|)'"])""")
-HERMES_SUBCOMMANDS = ("chat", "send", "run", "gateway", "cron", "sessions", "acp", "kanban", "peer", "proxy", "webhook", "profile", "model",
-                      "setup", "update", "config", "login", "auth", "tools", "skills", "mcp", "plugins", "doctor")
-LAUNCHERS = r"(?:run|Popen|call|check_call|check_output|getoutput|getstatusoutput|system|popen|spawn\w*|exec\w*)"
-HERMES_RUN = re.compile(rf"""\b{LAUNCHERS}\s*\(\s*[\[(]?\s*['"`](?:[\w./~-]{{0,200}}/)?hermes(?=['"`\s])"""
-                        rf"""|(?:^|&&|\|\||[;|])[ \t]*(?:[\w./~-]{{0,200}}/)?hermes[ \t]+(?:-|(?:{"|".join(HERMES_SUBCOMMANDS)})\b)""", re.M)
-GIT_SHELL_ALIAS = re.compile(r"(?:-c)?alias\.[^=\s]*=\s*!", re.I)
 SEPARATORS = set(";&|()\n")
 MAX_WRAPPERS = 16
 MAX_COMMAND_CHARS = 100_000
+MAX_SHELL_DEPTH = 3
 GRAPHQL_WRITES = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch|updateRef|createRef|deleteRef|createCommitOnBranch|dismissPullRequestReview)\b")
 GITHUB_MENTION = re.compile(r"github|\bgh\b|\brepos/", re.I)
 GITHUB_WRITE_PATHS = re.compile(
@@ -87,12 +72,15 @@ CODE_BLOCKS = (
     (re.compile(r"\bgh\W+repo\W+delete\b"), "it deletes a repository"),
     (re.compile(r"\bgh\W+(?:run|workflow)\W+(?:rerun|cancel|run)\b"), "a bot never re-runs, cancels, or starts a workflow run"),
     (GRAPHQL_WRITES, "it merges, deletes, moves a ref, or dismisses a review through GraphQL"),
-    (re.compile(r"\bgit\b[^\n]{0,80}?\bpush\b"), "push from the terminal with a named branch, not from code or a delegated task"),
     (WIPE, "it wipes / or the home folder"),
+)
+CODE_PUSH = re.compile(r"\bgit\b[^\n]{0,80}?\bpush\b([^\n]{0,200})")
+RISKY_PUSH = re.compile(
+    r"(?<![\w-])(?:--force(?:-with-lease|-if-includes)?(?:=\S*)?|-f|--mirror|--all|--delete|-d|--prune)(?![\w-])"
+    r"|[\s'\",]\+[\w/.-]|(?<![\w/.-])(?:main|master)(?![\w/.-])"
 )
 INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|perl|ruby|php|bun|deno|osascript)\Z")
 INTERPRETER_CODE_OPTIONS = ("-c", "-e", "-E", "-r", "--eval", "--command", "-p", "--print")
-UNCHECKABLE = "(unchecked)"
 WRAPPERS = ("env", "command", "exec", "nohup", "sudo", "xargs", "time", "nice", "stdbuf", "caffeinate", "timeout", "arch")
 WRAPPER_VALUE_OPTIONS = {"env": ("-u", "-C", "-P", "-L", "-U", "--unset", "--chdir"), "arch": ("-arch", "-e"), "nice": ("-n", "--adjustment"), "timeout": ("-s", "-k", "--signal", "--kill-after"),
                          "sudo": ("-u", "-g", "-C", "-D", "-h", "-p", "-U", "-r", "-t", "-T", "-R", "--user", "--group", "--close-from", "--chdir",
@@ -110,80 +98,14 @@ GH_API_VALUE_OPTIONS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field
 GH_API_BODY_OPTIONS = ("-f", "-F", "--field", "--raw-field", "--input")
 KIT_READERS = ("cat", "ls", "head", "tail", "grep", "rg", "wc", "less", "file", "stat", "diff", "realpath", "readlink")
 KIT_GIT_READS = ("log", "show", "status", "diff", "rev-parse", "describe", "ls-files", "blame")
-BRIEFS_PATH = re.compile(r"faker-kit/briefs(?![\w-])", re.I)
-LINK_CALL = r"(?:symlink\w*|hardlink_to|os\.link|fs\.link\w*)"
-LINK_IN_CODE = re.compile(rf"(?s){LINK_CALL}.{{0,300}}faker-kit/briefs|faker-kit/briefs.{{0,300}}{LINK_CALL}", re.I)
 PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|faker-kit/kit)(?![\w-])", re.I)
-PROFILE_CREATE = re.compile(r"hermes profile create (?:--no-alias ([a-z0-9][a-z0-9_-]{0,63})|([a-z0-9][a-z0-9_-]{0,63})(?: --no-alias)?)")
-PROFILE_ADMIN_WORDS = frozenset({"profile", "bot"})
-PROFILE_CREATE_TURN = "hermes profile create"
-PROFILE_CREATORS = ("bootstrap", "chief")
-PROFILE_ADMIN_REFUSAL = (
-    "creating, importing, deleting, or listing bots and profiles is the owner's; the bootstrap bot and the chief of staff may run only "
-    "`hermes profile create <bot>` alone on the command line, with a name that is not reserved, in a turn that read nothing untrusted"
-)
-HERMES_PROGRAMS = ("hermes", "hermes-agent")
-HERMES_MODULES = ("hermes_cli", "hermes_cli.main")
-HERMES_VALUE_FLAGS = frozenset({"-p", "--profile", "-z", "--oneshot", "--usage-file", "-m", "--model", "--provider", "--reasoning", "-t", "--toolsets",
-                                "-r", "--resume", "--in", "-s", "--skills"})
-HERMES_OPTIONAL_VALUE_FLAGS = ("-c", "--continue")
-HERMES_WORDS = frozenset(HERMES_SUBCOMMANDS) | PROFILE_ADMIN_WORDS
-PACKAGE_RUNNERS = ("uv", "uvx", "pipx")
-PYTHON = re.compile(r"python[\d.]*\Z")
-SHADOWED_TOOLS = ("hermes", "faker-kit", "gh")
-SHADOWING_FILE = "hermes"
-PATH_ASSIGN = re.compile(r"\APATH\+?=")
-ASSIGNMENT = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\+?=")
-PATH_ASSIGNERS = ("export", "declare", "typeset", "readonly", "local", "env", "setenv")
-FILE_WRITERS_LAST = ("cp", "mv", "ln", "install", "rsync")
-FILE_WRITERS_ANY = ("tee", "touch")
-DOWNLOAD_OUTPUT = {"curl": ("-o", "--output"), "wget": ("-O", "--output-document")}
-REDIRECT_CHARS = frozenset("<>&|")
+GUARD_FILES = re.compile(r"\.hermes/faker-kit/(?:guard|bots)\.yaml(?![\w-])|plugins/faker_kit_guard(?![\w-])", re.I)
 SHELL_KEYWORDS = frozenset({"then", "do", "else", "elif", "if", "while", "until", "{", "!"})
 HEREDOC_OPERATOR = re.compile(r"""-?[ \t]*\\?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
 SHELL_FED_LINE = re.compile(r"(?<![\w./-])(?:sh|bash|zsh|dash|fish|eval|source|xargs)(?![\w-])")
-CLEAN_TURN_TEXT = re.compile(r"\bfaker-kit\W+(merge|handoff)\b")
-TAINTED_TURN_SECONDS = 3600
-TAINT_BLOCKED_TOOLS = ("delegate_task", "cronjob*")
-OWNER_FLAG = "--owner-approved"
-OWNER_PLATFORMS = ("desktop", "tui")
-OWNER_TURN_SECONDS = 1800
-FUTURE_SKEW_SECONDS = 60
-TURN_ID_ENV = "HERMES_TURN_ID"
-ORIGIN_OWNER = "owner"
-ORIGIN_UNSUPPORTED = "unsupported"
-ORIGIN_NO_MERGE_ASK = "the owner's message did not ask for a merge; if they asked while you were working, ask them to send it again"
-ORIGIN_UNCLEAR = ("the owner's wording was not an unambiguous merge request; ask the owner to say it plainly, for example "
-                  "\"merge #5\", and do not guess the pull request")
-ORIGIN_EXPANDED = "the owner's message was expanded with a file, image or other context, so the guard cannot tell the owner's words from it"
-ORIGIN_NO_TEXT = "the guard was not given the text the owner typed"
-HERMES_TURN_FIELDS = ("turn_author", "synthetic_turn", "typed_message", "context_expanded")
 RELAY_HANDLE = r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}"
 RELAY_STAMP = rf"Message from (?:(?!\(@)[^\n]){{0,240}}? \(@(?P<sender>{RELAY_HANDLE})\): "
 RELAY_MARK = re.compile(rf"\(@{RELAY_HANDLE}\): ")
-NOTICE_STAMP = (r"\[IMPORTANT: |\[System: |\[ASYNC (?:DELEGATION )?(?:BATCH )?(?:TASK )?(?:COMPLETE|FAILED)|\[Heartbeat"
-                r"|A background (?:fan-out of \d+ subagent\(s\)|subagent) you dispatched earlier has finished\.")
-RELAY_BOT_STAMP = "Message from \U0001f916 "
-RELAYED_TURN = re.compile(rf"\A\s*(?:{re.escape(RELAY_BOT_STAMP)}|{NOTICE_STAMP})")
-MERGE_VERB = re.compile(r"(?<!\w)(?:merge|land|gộp)(?!\w)", re.I)
-REQUEST_TEXT_LIMIT = 300
-REQUEST_VERBS = frozenset({"merge", "land", "gộp"})
-REQUEST_LEAD = frozenset({"please", "pls", "ok", "okay", "yes", "go", "ahead", "and", "just", "cứ", "now"})
-REQUEST_CONNECTORS = frozenset({"and", "&", "và", "va", "+"})
-REQUEST_POINTERS = frozenset({"it", "this", "that", "the", "pr", "pull", "request", "nó"})
-REQUEST_PLACES = frozenset({"in", "on", "for", "of"})
-REQUEST_TAIL = frozenset({"please", "pls", "now", "one", "đi", "nhé", "nha", "giúp", "hộ", "luôn", "anh", "em"})
-CLAUSE_SPLIT = re.compile(r"[.,;!\n]")
-PULL_URL = re.compile(r"https?://github\.com/([^\s/]+)/([^\s/]+)/pull/([0-9]{1,7})(?:/[^\s?#]*)?")
-REQUEST_FORBIDDEN = re.compile(r"[\"\u201c\u201d\u00ab\u00bb`<>:?]|[0-9][.,;][0-9]")
-REQUEST_HEDGES = frozenset({
-    "no", "not", "nope", "never", "don't", "dont", "except", "but", "unless", "yet", "if", "actually", "wait", "hold", "stop", "cancel", "kidding",
-    "joking", "jk", "nvm", "nevermind", "sorry", "wrong", "oops", "undo", "revert", "later", "tomorrow", "instead", "rather", "without", "only", "maybe",
-    "might", "perhaps", "should", "would", "could", "whether", "think", "wonder", "probably", "đừng", "không", "chưa", "khoan", "thôi", "dừng", "chớ",
-})
-BARE_POINTERS = frozenset({(), ("it",), ("nó",), ("this",), ("that",), ("this", "pr"), ("that", "pr"), ("the", "pr")})
-REFERENCE = re.compile(r"(?:#|pr[#-]?)([0-9]{1,7})")
-BARE_NUMBER = re.compile(r"[0-9]{1,7}")
 
 
 def relay_sender(match: re.Match[str], text: str, author: object) -> str:
@@ -200,179 +122,6 @@ def relay_sender(match: re.Match[str], text: str, author: object) -> str:
 
 def faker_kit_program(word: str) -> bool:
     return word in (PROGRAM, f"~/.hermes/bin/{PROGRAM}", str(Path.home() / ".hermes" / "bin" / PROGRAM))
-
-
-def tainted_turn_marker(home: Path, profile: str) -> Path:
-    return home / "tainted-turns" / profile
-
-
-def tainted_turn_record(home: Path, profile: str, session: str) -> Path:
-    return tainted_turn_marker(home, profile) / (re.sub(r"[^A-Za-z0-9_.-]", "_", session)[:120] or "unknown")
-
-
-def owner_turn_marker(home: Path, profile: str) -> Path:
-    return home / "owner-turns" / profile
-
-
-def owner_turn_record(home: Path, profile: str, session: str) -> Path:
-    return owner_turn_marker(home, profile) / (re.sub(r"[^A-Za-z0-9_.-]", "_", session)[:120] or "unknown")
-
-
-@dataclass(frozen=True)
-class MergeRequest:
-    prs: tuple[int, ...]
-    projects: tuple[str, ...]
-
-
-def project_words(policy: Policy) -> dict[str, tuple[str, ...]]:
-    words: dict[str, list[str]] = {}
-    for slug, bot in sorted(policy.projects().items()):
-        repo = (bot.repo or "").lower()
-        for word in {slug.lower(), bot.name.lower(), repo.split("/")[-1], repo} - {""}:
-            words.setdefault(word, []).append(slug)
-    return {word: tuple(slugs) for word, slugs in words.items()}
-
-
-def dangling_place(rest: list[str], words: Mapping[str, Sequence[str]]) -> bool:
-    return any(token in REQUEST_PLACES and not (index + 1 < len(rest) and rest[index + 1] in words) for index, token in enumerate(rest))
-
-
-def request_parts(tokens: list[str], words: Mapping[str, Sequence[str]]) -> tuple[list[int], list[str]] | None:
-    start = 0
-    while start < len(tokens):
-        if tokens[start] in REQUEST_LEAD:
-            start += 1
-        elif tokens[start : start + 2] == ["làm", "ơn"]:
-            start += 2
-        else:
-            break
-    if start >= len(tokens) or tokens[start] not in REQUEST_VERBS:
-        return None
-    verb, rest = tokens[start], tokens[start + 1 :]
-    prs: list[int] = []
-    projects: list[str] = []
-    pointers: list[str] = []
-    previous, before = verb, ""
-    for token in rest:
-        reference = REFERENCE.fullmatch(token)
-        if reference:
-            prs.append(int(reference.group(1)))
-        elif BARE_NUMBER.fullmatch(token) and (previous == verb or previous in ("pr", "pull") or (previous == "request" and before == "pull") or (prs and previous in REQUEST_CONNECTORS)):
-            prs.append(int(token))
-        elif token in REQUEST_POINTERS:
-            pointers.append(token)
-        elif token in words:
-            projects.extend(words[token])
-        elif token not in REQUEST_CONNECTORS | REQUEST_PLACES | REQUEST_TAIL:
-            return None
-        before, previous = previous, token
-    if prs:
-        if rest[-1] in REQUEST_CONNECTORS | REQUEST_PLACES:
-            return None
-    elif tuple(pointers) not in BARE_POINTERS or any(token in REQUEST_CONNECTORS for token in rest) or dangling_place(rest, words):
-        return None
-    if verb == "land" and not prs and not pointers:
-        return None
-    return prs, projects
-
-
-def polite_only(tokens: list[str]) -> bool:
-    return all(token in REQUEST_LEAD | REQUEST_TAIL or token in ("làm", "ơn") for token in tokens)
-
-
-def references_only(tokens: list[str]) -> list[int] | None:
-    found = [REFERENCE.fullmatch(token) for token in tokens if token not in REQUEST_CONNECTORS]
-    if not found or not all(found):
-        return None
-    return [int(match.group(1)) for match in found if match]
-
-
-def merge_request(typed: str, project_words: Mapping[str, Sequence[str]]) -> MergeRequest | None:
-    text = unicodedata.normalize("NFC", typed).lower().replace("\u2019", "'")
-    if len(text) > REQUEST_TEXT_LIMIT or "```" in text or "~~~" in text or "?" in text:
-        return None
-    if any(line.lstrip().startswith(">") for line in text.split("\n")):
-        return None
-    text = PULL_URL.sub(lambda found: f" #{found.group(3)} {found.group(1)}/{found.group(2)} " if f"{found.group(1)}/{found.group(2)}" in project_words else found.group(0), text)
-    if REQUEST_FORBIDDEN.search(text):
-        return None
-    prs: list[int] = []
-    projects: list[str] = []
-    requested = attach = False
-    for clause in CLAUSE_SPLIT.split(text):
-        tokens = clause.split()
-        if not tokens:
-            continue
-        if any(token in REQUEST_HEDGES for token in tokens):
-            return None
-        parts = request_parts(tokens, project_words)
-        attached = references_only(tokens) if attach and parts is None else None
-        if parts is not None:
-            prs.extend(parts[0])
-            projects.extend(parts[1])
-            requested = attach = True
-        elif attached is not None:
-            prs.extend(attached)
-        elif polite_only(tokens):
-            attach = False
-        else:
-            return None
-    if not requested:
-        return None
-    return MergeRequest(tuple(dict.fromkeys(prs)), tuple(dict.fromkeys(projects)))
-
-
-@contextlib.contextmanager
-def owner_turn_lock(folder: Path) -> Iterator[None]:
-    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with (folder / ".lock").open("a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        yield
-
-
-def write_owner_record(path: Path, data: dict) -> None:
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
-    tmp.write_text(json.dumps(data))
-    tmp.replace(path)
-
-
-def turn_origin(hook: dict[str, object], project_words: Mapping[str, Sequence[str]]) -> tuple[str, MergeRequest | None]:
-    if any(field not in hook for field in HERMES_TURN_FIELDS):
-        return ORIGIN_UNSUPPORTED, None
-    platform = str(hook.get("platform") or "").strip().lower()
-    author = hook["turn_author"]
-    if platform not in OWNER_PLATFORMS:
-        return f"it came through {platform or 'an unknown platform'}, which is not an owner UI", None
-    if author is not None and (not isinstance(author, dict) or author.get("is_bot") is not False):
-        return "a bot wrote it", None
-    if hook["synthetic_turn"] is not False:
-        return "Hermes injected it, the owner did not type it", None
-    typed = hook["typed_message"]
-    if not isinstance(typed, str):
-        return ORIGIN_NO_TEXT, None
-    if hook["context_expanded"] is not False:
-        return ORIGIN_EXPANDED, None
-    if RELAYED_TURN.match(typed) or RELAY_BOT_STAMP in typed or RELAY_MARK.search(typed):
-        return "it was relayed from another sender", None
-    request = merge_request(typed, project_words)
-    if request is None:
-        return (ORIGIN_UNCLEAR if MERGE_VERB.search(unicodedata.normalize("NFC", typed)) else ORIGIN_NO_MERGE_ASK), None
-    return ORIGIN_OWNER, request
-
-
-def kit_flag_in(text: str) -> bool:
-    return OWNER_FLAG in text and ("faker-kit" in text or "faker_kit" in text)
-
-
-def owner_approved_use(tool_name: str, args: dict) -> bool:
-    if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
-        return False
-    texts = strings(args)
-    if kit_flag_in(" ".join(texts)):
-        return True
-    if any(kit_flag_in(QUOTING.sub("", text)) for text in texts):
-        return True
-    return any(kit_flag_in(" ".join(words)) for text in texts for words in shell_commands(text, keep_path=True))
 
 
 class PolicyError(ValueError):
@@ -870,40 +619,23 @@ def shell_words(segment: str, keep_path: bool = False) -> list[str]:
             words = rest
         else:
             break
-    else:
-        return [UNCHECKABLE, *words[:1]]
     if words and not keep_path:
         words[0] = Path(words[0]).name
     return words
 
 
-def without_keywords(words: list[str]) -> list[str]:
-    start = 0
-    while start < len(words) and words[start] in SHELL_KEYWORDS:
-        start += 1
-    return words[start:]
-
-
-def shell_commands(text: str, depth: int = 0, keep_path: bool = False, raw_out: list[list[str]] | None = None,
-                   texts_out: list[str] | None = None) -> list[list[str]]:
+def shell_commands(text: str, depth: int = 0, keep_path: bool = False) -> list[list[str]]:
     out: list[list[str]] = []
-    segments, clean = scan_shell(text)
-    if texts_out is not None:
-        texts_out.append(clean)
-    for raw in segments:
-        if raw_out is not None:
-            raw_out.append(without_keywords(split_words(raw.strip())))
+    for raw in scan_shell(text)[0]:
         words = shell_words(raw.strip(), keep_path)
         if not words:
             continue
         program = Path(words[0]).name
         script = shell_parts(words)[0] if program in SHELLS else " ".join(words[2 if words[1:2] == ["--"] else 1:]) if program == "eval" else None
-        if script == UNCHECKABLE or (script is not None and depth >= 3):
-            out.append([UNCHECKABLE, *words])
-        elif script is not None:
-            out += shell_commands(script, depth + 1, keep_path, raw_out, texts_out)
-        else:
+        if script is None:
             out.append(words)
+        elif depth < MAX_SHELL_DEPTH:
+            out += shell_commands(script, depth + 1, keep_path)
     return out
 
 
@@ -975,8 +707,6 @@ def piped_shell(segment: list[str], piped: bool) -> list[tuple[str, str]]:
             break
         fed_by_xargs = fed_by_xargs or Path(words[0]).name == "xargs"
         words = words[1:] if ENV_ASSIGN.match(words[0]) else unwrap(Path(words[0]).name, words[1:])
-    else:
-        return [("block", "the guard cannot check a command wrapped this many times")]
     if not words or Path(words[0]).name not in SHELLS:
         return []
     if fed_by_xargs:
@@ -1226,143 +956,18 @@ def wipes_home_or_root(words: list[str]) -> bool:
     return False
 
 
-def hermes_subcommand(args: list[str]) -> str | None:
-    i = 0
-    while i < len(args):
-        word = args[i]
-        if word == "--":
-            return args[i + 1] if i + 1 < len(args) else None
-        if not word.startswith("-"):
-            return word
-        following = args[i + 1] if i + 1 < len(args) else ""
-        if word in HERMES_OPTIONAL_VALUE_FLAGS:
-            i += 1 if not following or following.startswith("-") or following in HERMES_WORDS else 2
-        else:
-            i += 2 if word in HERMES_VALUE_FLAGS else 1
-    return None
-
-
-def hermes_arguments(policy: Policy, words: list[str]) -> list[str] | None:
-    program = Path(words[0]).name
-    if program in HERMES_PROGRAMS or program in policy.bots:
-        return words[1:]
-    if PYTHON.match(program):
-        module = next((words[i + 1] for i, w in enumerate(words[:-1]) if w == "-m"), None)
-        index = next((i for i, w in enumerate(words[:-1]) if w == "-m"), None)
-        return words[index + 2:] if module in HERMES_MODULES and index is not None else None
-    if program in PACKAGE_RUNNERS:
-        for i, word in enumerate(words[1:], 1):
-            name = Path(word).name
-            if name in HERMES_PROGRAMS or name in policy.bots:
-                j = i + 1
-                while j < len(words) and Path(words[j]).name in HERMES_PROGRAMS:
-                    j += 1
-                return words[j:]
-            if PYTHON.match(name):
-                nested = hermes_arguments(policy, words[i:])
-                if nested is not None:
-                    return nested
-    return None
-
-
-def shadowing_problem(words: list[str]) -> str | None:
-    first = words[0]
-    if (first.endswith("(") and first[:-1] in SHADOWED_TOOLS) or (first in SHADOWED_TOOLS and words[1:2] == ["("]):
-        return "a shell function named hermes, faker-kit, or gh would run in place of the real tool in later commands"
-    if first == "function" and words[1:2] and words[1].rstrip("(") in SHADOWED_TOOLS:
-        return "a shell function named hermes, faker-kit, or gh would run in place of the real tool in later commands"
-    if first == "alias" and any(w.split("=", 1)[0] in SHADOWED_TOOLS for w in words[1:] if "=" in w):
-        return "a shell alias named hermes, faker-kit, or gh would run in place of the real tool in later commands"
-    if writes_shadowing_file(words):
-        return "a file named hermes could run in place of the real hermes in later commands"
-    return None
-
-
-def path_directories() -> set[str]:
-    listed = [*os.environ.get("PATH", "").split(":"), "~/.hermes/bin", "~/.local/bin"]
-    return {str(Path(os.path.expandvars(entry)).expanduser()) for entry in listed if entry}
-
-
-def shadows_hermes(target: str, sources: list[str]) -> bool:
-    if Path(target).name != SHADOWING_FILE or target.endswith("/"):
-        return False
-    written = Path(os.path.expandvars(target)).expanduser()
-    if written.is_dir():
-        return False
-    on_path = written.parent.name in ("bin", "sbin") or str(written.parent) in path_directories()
-    return on_path or not any(Path(source).name == SHADOWING_FILE for source in sources)
-
-
-def writes_shadowing_file(words: list[str]) -> bool:
-    program, rest = Path(words[0]).name, list(words[1:])
-    operands = [w for w in rest if not w.startswith("-")]
-    targets: list[str] = []
-    sources: list[str] = []
-    if program in FILE_WRITERS_ANY:
-        targets = operands
-    elif program in FILE_WRITERS_LAST:
-        targets, sources = operands[-1:], operands[:-1]
-    elif program == "dd":
-        targets = [w[3:] for w in rest if w.startswith("of=")]
-    elif program in DOWNLOAD_OUTPUT:
-        targets = [rest[i + 1] for i, w in enumerate(rest[:-1]) if w in DOWNLOAD_OUTPUT[program]]
-    return any(shadows_hermes(target, sources) for target in targets)
-
-
-def path_rebinding(tokens: list[str]) -> bool:
-    i = 0
-    while i < len(tokens) and ASSIGNMENT.match(tokens[i]):
-        i += 1
-    if i == len(tokens):
-        return any(PATH_ASSIGN.match(w) for w in tokens)
-    while i < len(tokens):
-        base = Path(tokens[i]).name
-        if base in PATH_ASSIGNERS:
-            return any(PATH_ASSIGN.match(w) for w in tokens[i + 1:])
-        if base == "set":
-            return "PATH" in tokens[i + 1:]
-        if base in WRAPPERS or tokens[i].startswith("-") or ASSIGNMENT.match(tokens[i]):
-            i += 1
-            continue
-        break
-    return False
-
-
-def redirect_targets(text: str) -> list[str]:
-    tokens = shell_tokens(text) or []
-    return [after for token, after in itertools.pairwise(tokens) if ">" in token and set(token) <= REDIRECT_CHARS]
-
-
-def rebinding_problem(texts: list[str], raw: list[list[str]]) -> str | None:
-    if any(path_rebinding(tokens) for tokens in raw):
-        return "assigning PATH would let a later command run something other than the real hermes, faker-kit, or gh"
-    if any(Path(target).name == SHADOWING_FILE for text in texts for target in redirect_targets(text)):
-        return "a file named hermes could run in place of the real hermes in later commands"
-    return None
-
-
-def command_problem(policy: Policy, words: list[str]) -> str | None:
+def command_problem(words: list[str]) -> str | None:
     program = words[0]
-    if program == UNCHECKABLE:
-        return "the guard cannot check shells or eval nested this deep; write the commands to a script file and run that"
-    why = shadowing_problem(words)
-    if why:
-        return why
     if program == "gh" and words[1:3] == ["pr", "merge"]:
         return "raw gh pr merge skips faker-kit merge's gate"
     if program == "gh" and words[1:2] in (["run"], ["workflow"]) and words[2:3] in (["rerun"], ["cancel"], ["run"]):
         return "a bot never re-runs, cancels, or starts a workflow run, because the security verdict on a head must stick"
-    if program == "gh" and words[1:2] in (["alias"], ["extension"], ["ext"]):
-        return "a gh alias or extension can hide any command"
     if program == "gh" and words[1:3] == ["repo", "delete"]:
         return "it deletes a repository"
     if program == "gh" and words[1:2] == ["api"]:
         return gh_api_problem(words[2:])
     if program == "curl":
         return curl_problem(words[1:])
-    if program == "git" and (any(GIT_SHELL_ALIAS.match(w) for w in words)
-                             or any(words[k].lower().startswith("alias.") and words[k + 1].startswith("!") for k in range(len(words) - 1))):
-        return "a git shell alias can hide any command"
     if program == "git":
         i = 1
         while i < len(words) and words[i].startswith("-"):
@@ -1371,18 +976,6 @@ def command_problem(policy: Policy, words: list[str]) -> str | None:
             return git_push_problem(words[i + 1:])
     if wipes_home_or_root(words):
         return "it wipes / or the home folder"
-    launched = hermes_arguments(policy, words)
-    if launched is not None:
-        if program == "hermes":
-            chosen = next((words[j + 1] for j, w in enumerate(words[:-1]) if w in ("-p", "--profile")), None)
-            chosen = chosen or next((w.split("=", 1)[1] for w in words if w.startswith("--profile=")), None)
-            if chosen not in policy.bots or chosen == "default":
-                return "a bot runs hermes only with -p naming a faker-kit bot, never the default Hermes agent"
-        first = hermes_subcommand(launched)
-        if first in PROFILE_ADMIN_WORDS or (first is not None and "$" in first):
-            return PROFILE_ADMIN_REFUSAL
-    elif "$" in program and words[1:2] and words[1] in PROFILE_ADMIN_WORDS:
-        return PROFILE_ADMIN_REFUSAL
     if any(PROTECTED_KIT.search(w) for w in words[1:]) and program not in (*KIT_READERS, PROGRAM):
         reading = program == "git" and any(w in KIT_GIT_READS for w in words[1:4])
         reading = reading or (program == "find" and not {"-delete", "-exec", "-execdir", "-ok"} & set(words))
@@ -1391,45 +984,55 @@ def command_problem(policy: Policy, words: list[str]) -> str | None:
     return None
 
 
-def hard_block(policy: Policy, tool_name: str, args: dict) -> str | None:
-    if tool_name in ("write_file", "patch") and any(Path(text.strip()).name == SHADOWING_FILE for text in scanned_text(tool_name, args)):
-        return "a file named hermes could run in place of the real hermes in later commands"
+def protected_write(tool_name: str, args: dict) -> str | None:
+    for text in scanned_text(tool_name, args):
+        target = posixpath.normpath(text.strip())
+        if PROTECTED_KIT.search(target) or GUARD_FILES.search(target):
+            return "bots never change the kit, ~/.hermes/bin, or the guard's own policy and plugin"
+    return None
+
+
+def hard_block(tool_name: str, args: dict) -> str | None:
+    if tool_name in ("write_file", "patch"):
+        return protected_write(tool_name, args)
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
         return None
     if tool_name in ("terminal", "process_manage"):
-        return terminal_problem(policy, str(args.get("command", "")))
+        return terminal_problem(str(args.get("command", "")))
     if tool_name == "execute_code":
-        return code_problem(strings(args), hermes=True)
+        return code_problem(strings(args)) or code_push_problem(strings(args))
     if fnmatch.fnmatchcase(tool_name, "cronjob*"):
-        return code_problem(strings(args)) or code_problem(strings({k: args.get(k) for k in ("script", "command")}), hermes=True)
+        return code_problem(strings(args)) or code_push_problem(strings({k: args.get(k) for k in ("script", "command")}))
     if tool_name == "delegate_task":
         return code_problem(strings(args))
     return None
 
 
-def terminal_problem(policy: Policy, command: str, depth: int = 0) -> str | None:
-    if len(command) > MAX_COMMAND_CHARS:
-        return "the command is too long for the guard to check; put long content in a file with write_file and run a short command"
-    if re.search(r">\s*\S*" + PROTECTED_KIT.pattern, command, re.I):
+def terminal_problem(command: str, depth: int = 0) -> str | None:
+    scanned = command[:MAX_COMMAND_CHARS]
+    if re.search(r">\s*\S*" + PROTECTED_KIT.pattern, scanned, re.I):
         return "bots never change the kit or ~/.hermes/bin"
-    raw: list[list[str]] = []
-    texts: list[str] = []
-    commands = shell_commands(command, keep_path=True, raw_out=raw, texts_out=texts)
-    clean = scan_shell(command)[1]
-    why = rebinding_problem(texts, raw)
-    if why:
-        return why
-    for words in commands:
-        why = command_problem(policy, [Path(words[0]).name, *words[1:]])
+    clean = scan_shell(scanned)[1]
+    for words in shell_commands(scanned, keep_path=True):
+        why = command_problem([Path(words[0]).name, *words[1:]])
         if why:
             return why
-    if BRIEFS_PATH.search(command) and any(Path(words[0]).name == "ln" for words in commands):
-        return "a link inside a briefs folder can point at files a brief must never read"
     for kind, value in shell_inputs(clean):
-        why = value if kind == "block" else terminal_problem(policy, value, depth + 1) if depth < 3 else command_problem(policy, [UNCHECKABLE])
-        if why:
-            return why
-    return code_problem(interpreter_code(command, clean), hermes=True)
+        if kind == "block" and scanned == command:
+            return value
+        if kind == "script" and depth < MAX_SHELL_DEPTH:
+            why = terminal_problem(value, depth + 1)
+            if why:
+                return why
+    code = interpreter_code(scanned, clean)
+    return code_problem(code) or code_push_problem(code)
+
+
+def code_push_problem(texts: list[str]) -> str | None:
+    for text in texts:
+        if any(RISKY_PUSH.search(found.group(1)) for found in CODE_PUSH.finditer(text)):
+            return "code never force-pushes, mirrors, deletes, prunes, or pushes to main; push a named feature branch"
+    return None
 
 
 def github_code_write(text: str) -> bool:
@@ -1437,29 +1040,15 @@ def github_code_write(text: str) -> bool:
     return bool(GITHUB_MENTION.search(seen) and GITHUB_WRITE_PATHS.search(seen) and WRITE_INTENT.search(seen))
 
 
-def code_problem(texts: list[str], hermes: bool = False) -> str | None:
+def code_problem(texts: list[str]) -> str | None:
     for text in texts:
         if github_code_write(text):
             return "code never writes merges, statuses, check runs, reviews, refs, or file contents through the GitHub API; the merge gate's evidence stays with faker-kit merge"
-        if hermes and HERMES_RUN.search(text):
-            return "a bot never runs the default Hermes agent"
         for pattern, why in CODE_BLOCKS:
             if pattern.search(text):
                 return why
         if PROTECTED_KIT.search(text):
             return "bots never change the kit or ~/.hermes/bin from code or a delegated task"
-        if LINK_IN_CODE.search(text):
-            return "a link inside a briefs folder can point at files a brief must never read"
-    return None
-
-
-def default_agent_use(policy: Policy, profile: str, tool_name: str, args: dict) -> str | None:
-    if tool_name != "message_agent":
-        return None
-    target = str(args.get("target", "")).strip().lstrip("@")
-    if target == profile or target not in policy.bots:
-        others = ", ".join(sorted(name for name in policy.bots if name != profile)) or "none"
-        return f"{profile} may message only this machine's faker-kit bots ({others}), never the default Hermes agent"
     return None
 
 
@@ -1474,39 +1063,7 @@ def secret_reference(tool_name: str, args: dict) -> str | None:
         found = SECRET_TEXT.search(text)
         if found:
             return found.group(0)
-    if tool_name in ("write_file", "patch"):
-        for text in scanned_text(tool_name, args):
-            if WRITE_PROTECTED.search(text):
-                return "the Hermes home, the kit, or its commands"
-    if tool_name == "search_files":
-        where = str(Path(str(args.get("path") or ".")).expanduser().resolve())
-        if where in ("/", "/Users", "/home", str(Path.home())):
-            return "the whole home folder; search a project folder"
     return None
-
-
-def profile_create_name(tool_name: str, args: dict, bots: Iterable[str] = ()) -> str | None:
-    if tool_name != "terminal":
-        return None
-    found = PROFILE_CREATE.fullmatch(str(args.get("command", "")).strip())
-    name = (found.group(1) or found.group(2)) if found else None
-    if name and name not in RESERVED_NAMES and (name not in SHADOWING_BOT_NAMES or name in bots):
-        return name
-    return None
-
-
-def clean_turn_command(policy: Policy, tool_name: str, args: dict) -> str | None:
-    if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in TAINT_BLOCKED_TOOLS):
-        return tool_name
-    if profile_create_name(tool_name, args, policy.bots):
-        return PROFILE_CREATE_TURN
-    if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
-        return None
-    if tool_name in ("terminal", "process_manage"):
-        found = [w[1] for w in shell_commands(str(args.get("command", ""))) if w[0] == PROGRAM and w[1:2] and w[1] in CLEAN_TURN_COMMANDS]
-        return found[0] if found else None
-    found_text = next((m for t in strings(args) for m in [CLEAN_TURN_TEXT.search(t)] if m), None)
-    return found_text.group(1) if found_text else None
 
 
 def reads_only(command: str, verbs: tuple[str, ...]) -> bool:
@@ -1520,10 +1077,8 @@ def reads_only(command: str, verbs: tuple[str, ...]) -> bool:
     return bool(parts)
 
 
-def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bool) -> dict | None:
-    known = policy.bots.get(profile)
-    creating = known is not None and known.role in PROFILE_CREATORS and profile_create_name(tool_name, args, policy.bots) is not None
-    why = None if creating else hard_block(policy, tool_name, args)
+def decide(policy: Policy, profile: str, tool_name: str, args: dict) -> dict | None:
+    why = hard_block(tool_name, args)
     if why:
         return block(f"{tool_name} is blocked for every bot: {why}")
     for rule in policy.deny:
@@ -1535,75 +1090,30 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, tainted: bo
     bot = policy.bots.get(profile)
     if bot is None:
         return block(f"profile {profile} is not a faker-kit bot in bots.yaml; every tool call is blocked")
-    default = default_agent_use(policy, profile, tool_name, args)
-    if default:
-        return block(default)
-    gated = clean_turn_command(policy, tool_name, args) if tainted else None
-    if gated:
-        return block(f"{gated} runs only in a turn that read nothing untrusted; the owner or the chief of staff must ask for it in a new message, or a new wake must start it")
-    if creating:
-        return None
-    read_only = tool_name in policy.read_only_tools
-    if not policy.ask_owner:
+    if not policy.ask_owner or bot.role != "bootstrap" or tool_name in policy.read_only_tools:
         return None
     command = str(args.get("command", "")) if tool_name == "terminal" else ""
-    bootstrap_reads = reads_only(command, BOOTSTRAP_READ_ONLY)
-    if bot.role == "bootstrap" and not read_only and not bootstrap_reads:
-        return approve(
-            f"The bootstrap bot changes this machine or GitHub. Approve {tool_name} only if you asked for it.",
-            tool_name, args, "bootstrap",
-        )
-    chief_loop = reads_only(command, CHIEF_NO_APPROVAL)
-    if tainted and not read_only and not (bot.role == "chief" and chief_loop):
-        return approve(f"This turn read untrusted content. Approve {tool_name} only if you asked for it.", tool_name, args, "taint")
-    return None
+    if reads_only(command, BOOTSTRAP_READ_ONLY):
+        return None
+    return approve(
+        f"The bootstrap bot changes this machine or GitHub. Approve {tool_name} only if you asked for it.",
+        tool_name, args, "bootstrap",
+    )
 
 
 def call_digest(args: dict) -> str:
     return hashlib.sha256(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
-PLAIN_PATH = r"(?:~/)?[A-Za-z0-9_./-]+"
 FAKER_KIT_LAUNCHER = rf"(?:faker-kit|~/\.hermes/bin/faker-kit|{re.escape(str(Path.home()))}/\.hermes/bin/faker-kit)"
-TRUSTED_FILTER = (
-    r"head(?: +-n *[0-9]+| +-[0-9]+)?|tail(?: +-n *\+?[0-9]+| +-[0-9]+)?|wc +-l"
-    r"|grep(?: +-[icvE]+)? +(?:[A-Za-z0-9_.:=][A-Za-z0-9_.:=-]*|'[A-Za-z0-9 _.:=/][A-Za-z0-9 _.:=/-]*')"
-    r"|jq(?: +-[rc]+)? +(?:\.[A-Za-z0-9_.]*|'\.[A-Za-z0-9_.\[\]]*')"
-)
-TRUSTED_STEP = (
-    rf"(?:pwd|date(?: +-u)?(?: +\+[A-Za-z%:_-]+)?"
-    rf"|{FAKER_KIT_LAUNCHER} +(?!incidents(?![A-Za-z0-9_.=:,+~-]))[a-z][a-z-]*(?: +[A-Za-z0-9_./=:,+~-]+)*"
-    rf"(?: +(?:2>&1|2> */dev/null|> */dev/null))*(?: *\| *(?:{TRUSTED_FILTER}))*)"
-)
 ADD_PROJECT_CHECK = re.compile(rf"{FAKER_KIT_LAUNCHER} +add-project(?: +[A-Za-z0-9_./=:,+~-]+)* +--check")
-TRUSTED_COMMAND = re.compile(rf"\A(?:cd +{PLAIN_PATH} +&& +)?{TRUSTED_STEP}(?: *(?:\|\||&&|;|\n) *{TRUSTED_STEP})*\Z")
-
-
-def kit_file(policy: Policy, args: dict) -> bool:
-    raw = str(args.get("path") or "")
-    if not raw or not Path(raw).expanduser().is_absolute():
-        return False
-    try:
-        target = Path(raw).expanduser().resolve()
-        kit = (policy.home / "kit").resolve()
-    except (OSError, RuntimeError, ValueError):
-        return False
-    return (target == kit or kit in target.parents) and ".git" not in target.relative_to(kit).parts
 
 
 def reader_source(policy: Policy, tool_name: str, args: dict) -> str | None:
+    if not any(rule.matches(tool_name, args) for rule in policy.untrusted_readers):
+        return None
     segments = command_segments(str(args.get("command", "")))
-    source = f"{tool_name}:{segments[0][:120]}" if segments else tool_name
-    if any(rule.matches(tool_name, args) for rule in policy.untrusted_readers):
-        return source
-    if tool_name in ("terminal", "process_manage"):
-        command = str(args.get("command", "")).strip()
-        if profile_create_name(tool_name, args, policy.bots):
-            return None
-        return None if len(command) <= MAX_COMMAND_CHARS and TRUSTED_COMMAND.match(command) else source
-    if tool_name in ("read_file", "search_files"):
-        return None if kit_file(policy, args) else source
-    return None if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in TRUSTED_RESULTS) else source
+    return f"{tool_name}:{segments[0][:120]}" if segments else tool_name
 
 
 def wrap_untrusted(source: str, result: object) -> str:
