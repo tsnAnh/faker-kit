@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -35,8 +36,8 @@ SCHEDULE_FIELDS = {"faker-kit-babysit": "heartbeat_every", "faker-kit-incidents"
 
 
 class Profiles:
-    def __init__(self, root: Path, pkg: Path, shapes: re.Pattern[str]) -> None:
-        self.root, self.pkg, self.shapes = root, pkg, shapes
+    def __init__(self, root: Path, pkg: Path, shapes: re.Pattern[str], state: Path) -> None:
+        self.root, self.pkg, self.shapes, self.state = root, pkg, shapes, state
 
     def home(self, bot: str) -> Path:
         return profile_home(self.root, bot)
@@ -127,9 +128,7 @@ class Profiles:
 
     def refresh(self, bot: str, role: str, ask_owner: bool, model: str | None, claude_config_dir: str | None, provider: str | None = None) -> Path:
         home = self.ensure(bot)
-        apply_profile(self.root, bot, self.pkg / "profiles" / role / "config.yaml")
-        if not ask_owner:
-            config_set(self.root, bot, ("approvals", "mode"), "off")
+        apply_profile(self.root, bot, self.pkg / "profiles" / role / "config.yaml", {} if ask_owner else {("approvals", "mode"): "off"})
         if claude_config_dir is not None:
             self.use_subscription(bot, home, model, claude_config_dir)
         elif provider:
@@ -175,13 +174,21 @@ class Profiles:
     def use_subscription(self, bot: str, home: Path, model: str | None, config_dir: str) -> None:
         if not (home / "plugins" / SUBSCRIPTION_PROVIDER).is_dir():
             hermes("-p", bot, "plugins", "install", SUBSCRIPTION_PLUGIN)
-        hermes("-p", bot, "plugins", "enable", SUBSCRIPTION_PROVIDER, "--no-allow-tool-override")
+        if not self.subscription_enabled(home):
+            hermes("-p", bot, "plugins", "enable", SUBSCRIPTION_PROVIDER, "--no-allow-tool-override")
         config_set(self.root, bot, ("model", "provider"), SUBSCRIPTION_PROVIDER)
         config_set(self.root, bot, ("model", "default"), model or SUBSCRIPTION_DEFAULT_MODEL)
         self.unset_endpoint(bot, home)
         self.record_config_dir(home, config_dir)
         if config_dir:
             set_env(self.root, PLUGIN_CLAUDE_DIR_ENV, config_dir)
+
+    def subscription_enabled(self, home: Path) -> bool:
+        config = mapping(home / "config.yaml")
+        enabled = value_at(config, ("plugins", "enabled"))
+        return (isinstance(enabled, list) and SUBSCRIPTION_PROVIDER in enabled and not value_at(config, ("plugins", "disabled"))
+                and value_at(config, ("plugins", "entries", SUBSCRIPTION_PROVIDER, "allow_tool_override")) is False
+                and not declares_capabilities(home / "plugins" / SUBSCRIPTION_PROVIDER))
 
     def unset_endpoint(self, bot: str, home: Path) -> None:
         current = mapping(home / "config.yaml")
@@ -201,12 +208,16 @@ class Profiles:
         existing = cron_jobs(hermes("-p", bot, "cron", "list", "--all"))
         jobs = cron_spec(self.pkg / "cron" / spec, bot)
         scripts = {job["name"]: self.job_script(bot, job["script"]) for job in jobs if job["script"]}
+        records = self.job_records(bot)
+        digests = {}
         created = []
+        edited = False
         for job in jobs:
             schedule = f"every {intervals[SCHEDULE_FIELDS[job['name']]]}" if intervals else job["schedule"]
             deliver = f"{job['deliver']},slack:{slack_channel}" if slack_channel else job["deliver"]
             current = existing.get(job["name"])
             script_args = ["--script", self.write_job_script(*scripts[job["name"]])] if job["script"] else []
+            digests[job["name"]] = job_digest(schedule, job["prompt"], job["script"])
             if current is None:
                 args = ["-p", bot, "cron", "create", schedule, job["prompt"], "--name", job["name"], "--deliver", deliver, "--continuity"]
                 if job["skill"]:
@@ -219,10 +230,32 @@ class Profiles:
                 continue
             if not job["script"] and KIT_GATE_SCRIPT.match(Path(str(current.get("script") or "")).name):
                 script_args = ["--script", ""]
-            hermes("-p", bot, "cron", "edit", current["id"], "--schedule", schedule, "--prompt", job["prompt"], *script_args)
+            if not applied(records.get(job["name"]), current, digests[job["name"]]):
+                hermes("-p", bot, "cron", "edit", current["id"], "--schedule", schedule, "--prompt", job["prompt"], *script_args)
+                edited = True
             if enabled and not current["enabled"]:
                 hermes("-p", bot, "cron", "resume", current["id"])
+        if created or edited:
+            self.record_jobs(bot, digests)
         return created
+
+    def job_records(self, bot: str) -> dict[str, dict]:
+        try:
+            records = json.loads((self.state / "jobs" / f"{bot}.json").read_text())
+        except (OSError, ValueError):
+            return {}
+        return {name: record for name, record in records.items() if isinstance(record, dict)} if isinstance(records, dict) else {}
+
+    def record_jobs(self, bot: str, digests: dict[str, str]) -> None:
+        listed = cron_jobs(hermes("-p", bot, "cron", "list", "--all"))
+        records = {name: {"id": listed[name]["id"], "digest": digest, "schedule": listed[name].get("schedule"), "script": listed[name].get("script")}
+                   for name, digest in digests.items() if name in listed}
+        target = self.state / "jobs" / f"{bot}.json"
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temp = target.with_name(f".{target.name}.{os.getpid()}")
+        with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as out:
+            out.write(json.dumps(records, sort_keys=True))
+        temp.replace(target)
 
     def job_script(self, bot: str, name: str) -> tuple[Path, str]:
         source = self.pkg / "cron" / "scripts" / name
@@ -263,6 +296,26 @@ class Profiles:
                 config_set(self.root, profile, KIT_SKILL_DIRS, kept + wanted)
             covered.append(profile)
         return covered
+
+
+def job_digest(schedule: str, prompt: str, script: str | None) -> str:
+    return hashlib.sha256(json.dumps([schedule, prompt, script]).encode()).hexdigest()
+
+
+def applied(record: dict | None, current: dict, digest: str) -> bool:
+    return (record is not None and record.get("id") == current["id"] and record.get("digest") == digest
+            and record.get("schedule") == current.get("schedule") and record.get("script") == current.get("script"))
+
+
+def declares_capabilities(plugin: Path) -> bool:
+    manifest = next((plugin / name for name in ("plugin.yaml", "plugin.yml") if (plugin / name).is_file()), None)
+    if manifest is None:
+        return True
+    try:
+        declared = mapping(manifest).get("capabilities")
+    except InstallError:
+        return True
+    return isinstance(declared, list) and any(isinstance(item, str) for item in declared)
 
 
 def under(entry: str, home: Path, folder: Path) -> bool:

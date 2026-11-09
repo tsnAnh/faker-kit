@@ -136,7 +136,7 @@ class Kit:
         self.pkg = self.kit / "hermes"
         self.cloud = cloud or Cloud(run_gh=run)
         self.andon = Andon(self.home)
-        self.profiles = Profiles(self.root, self.pkg, SECRET_SHAPES)
+        self.profiles = Profiles(self.root, self.pkg, SECRET_SHAPES, self.home)
         self.machine_login_known: bool | None = None
 
     def bots_file(self) -> dict:
