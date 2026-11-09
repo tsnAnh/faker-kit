@@ -452,12 +452,20 @@ elif args[:1] == ["cron"]:
             job["enabled"] = args[1] == "resume"
     jobs_path.write_text(json.dumps(jobs, sort_keys=True))
 elif args[:2] == ["plugins", "install"]:
-    (base / "plugins" / args[2]).mkdir(parents=True, exist_ok=True)
+    installed = base / "plugins" / {"claude-subscription-directsdk": "claude-subscription-directsdk-experimental"}.get(args[2], args[2])
+    installed.mkdir(parents=True, exist_ok=True)
+    (installed / "plugin.yaml").write_text(yaml.safe_dump({"name": installed.name, "version": "0.3.4"}))
 elif args[:2] == ["plugins", "enable"]:
     config = load(base / "config.yaml", {})
-    enabled = config.setdefault("plugins", {}).setdefault("enabled", [])
+    plugins = config.setdefault("plugins", {})
+    enabled = plugins.setdefault("enabled", [])
     if args[2] not in enabled:
         enabled.append(args[2])
+    if "disabled" in plugins:
+        plugins["disabled"] = [name for name in plugins["disabled"] if name != args[2]]
+    for flag, granted in (("--allow-tool-override", True), ("--no-allow-tool-override", False)):
+        if flag in args:
+            plugins.setdefault("entries", {}).setdefault(args[2], {})["allow_tool_override"] = granted
     (base / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=True))
 elif args[:1] == ["send"]:
     pass
@@ -2665,6 +2673,126 @@ def profile_validation_scenario(run: Run, other: Run) -> None:
              code == 1 and err.strip().endswith("failed") and "ghp_" not in err and "unreadable" not in err, err.strip())
 
 
+SKIP_MACHINE_YAML = f"""version: 1
+bootstrap_bot: {BOOTSTRAP}
+claude_subscription: true
+guard:
+  trusted_authors:
+    - {OWNER}
+  ask_owner: false
+  max_in_flight_total: 3
+projects:
+  - bot: {BOT}
+    project: shop
+    repo: {REPO}
+    model: sonnet
+webhooks:
+  url: {WEBHOOK_BASE}
+  tunnel: hermes
+chief:
+  bot: {CHIEF}
+"""
+HERMES_WRITES = (("config", "set"), ("cron", "edit"), ("cron", "resume"), ("plugins", "enable"))
+
+
+def verb_of(call: list[str]) -> tuple[str, ...]:
+    return tuple((call[2:] if call[:1] == ["-p"] else call)[:2])
+
+
+def hermes_writes(calls: list[list[str]]) -> dict[str, int]:
+    verbs = [verb_of(call) for call in calls]
+    return {" ".join(write): verbs.count(write) for write in HERMES_WRITES}
+
+
+def install_skip_scenario(run: Run, work: Path) -> None:
+    other = Run(work)
+    other.steps, other.verdicts = run.steps, run.verdicts
+    other.build()
+    machine = other.team / "machine.yaml"
+    machine.write_text(SKIP_MACHINE_YAML)
+    bots = (BOOTSTRAP, BOT, CHIEF)
+    record = other.team / "jobs" / f"{BOT}.json"
+
+    def install() -> tuple[list[list[str]], str]:
+        seen = len(hermes_calls(other.hermes))
+        code, _, err = other.kit("install", "--config", str(machine), bot=None)
+        if code != 0:
+            raise Failure(f"install --config failed: {err.strip()[-300:]}")
+        return hermes_calls(other.hermes)[seen:], err
+
+    def job_rows() -> dict[str, dict]:
+        return {j["name"]: j for j in json.loads((other.hermes / "profiles" / BOT / "jobs.json").read_text())}
+
+    def config_of(bot: str) -> dict:
+        return yaml.safe_load((other.hermes / "profiles" / bot / "config.yaml").read_text())
+
+    first, _ = install()
+    mode_sets = sorted((call[1], call[-1]) for call in first if verb_of(call) == ("config", "set") and call[4] == "approvals.mode")
+    run.step("a first install writes each bot's approvals.mode once, straight to off, and never to manual in between",
+             mode_sets == sorted((bot, "off") for bot in bots) and all(config_of(bot)["approvals"] == {"mode": "off", "cron_mode": "deny"} for bot in bots),
+             json.dumps(mode_sets))
+    run.step("a first install enables the subscription plugin once per bot with tool override refused, and records the jobs it applied",
+             hermes_writes(first)["plugins enable"] == len(bots)
+             and all(config_of(bot)["plugins"]["entries"][SUBSCRIPTION] == {"allow_tool_override": False} for bot in bots)
+             and record.is_file() and set(json.loads(record.read_text())) == set(job_rows()) and oct(record.stat().st_mode & 0o777) == "0o600",
+             json.dumps(hermes_writes(first)))
+
+    before = {bot: (other.hermes / "profiles" / bot / "config.yaml").read_text() for bot in bots} | {"jobs": (other.hermes / "profiles" / BOT / "jobs.json").read_text()}
+    again, _ = install()
+    after = {bot: (other.hermes / "profiles" / bot / "config.yaml").read_text() for bot in bots} | {"jobs": (other.hermes / "profiles" / BOT / "jobs.json").read_text()}
+    counts = hermes_writes(again)
+    run.step("a second install with the same machine config makes no config set, cron edit, cron resume, or plugins enable call and changes no profile",
+             not any(counts.values()) and before == after,
+             f"{json.dumps(counts)}; first install {len(first)} hermes calls, second {len(again)}")
+
+    machine.write_text(SKIP_MACHINE_YAML.replace("model: sonnet", "model: opus"))
+    moved, _ = install()
+    run.step("changing one project's model makes exactly the one write for it and the profile ends with the new model",
+             [call for call in moved if verb_of(call) in HERMES_WRITES] == [["-p", BOT, "config", "set", "model.default", "opus"]]
+             and config_of(BOT)["model"] == {"provider": SUBSCRIPTION, "default": "opus"} and config_of(CHIEF)["model"]["default"] == "sonnet",
+             json.dumps(hermes_writes(moved)))
+
+    jobs_before = job_rows()
+    spec = other.team / "kit" / "hermes" / "cron" / "project-jobs.md"
+    spec.write_text(spec.read_text().replace("Babysit this project.", "Babysit this project, newest pull request first."))
+    reworded, _ = install()
+    rows = job_rows()
+    edits = [call for call in reworded if verb_of(call) == ("cron", "edit")]
+    run.step("a job whose prompt changed in the kit's spec is edited once, keeps its id, and the other jobs are left alone",
+             len(edits) == 1 and edits[0][edits[0].index("--prompt") + 1].startswith("Babysit this project, newest pull request first.")
+             and rows["faker-kit-babysit"]["id"] == jobs_before["faker-kit-babysit"]["id"]
+             and rows["faker-kit-babysit"]["prompt"].startswith("Babysit this project, newest pull request first.")
+             and {n: j for n, j in rows.items() if n != "faker-kit-babysit"} == {n: j for n, j in jobs_before.items() if n != "faker-kit-babysit"}
+             and hermes_writes(reworded)["config set"] == 0,
+             json.dumps(hermes_writes(reworded)))
+    steady, _ = install()
+    run.step("the install after that edit writes nothing again", not any(hermes_writes(steady).values()), json.dumps(hermes_writes(steady)))
+
+    drifted = json.loads((other.hermes / "profiles" / BOT / "jobs.json").read_text())
+    for job in drifted:
+        if job["name"] == "faker-kit-security":
+            job["schedule"] = "every 5m"
+    (other.hermes / "profiles" / BOT / "jobs.json").write_text(json.dumps(drifted, sort_keys=True))
+    repaired, _ = install()
+    run.step("a job whose schedule was changed behind the kit's back is edited back to the kit's schedule",
+             [call[call.index("--schedule") + 1] for call in repaired if verb_of(call) == ("cron", "edit")] == ["every 6h"]
+             and job_rows()["faker-kit-security"]["schedule"] == "every 6h", json.dumps(hermes_writes(repaired)))
+
+    record.write_text("{not json")
+    rebuilt, _ = install()
+    run.step("an unreadable job record makes the install edit every job once and write a readable record again",
+             hermes_writes(rebuilt)["cron edit"] == len(job_rows()) and set(json.loads(record.read_text())) == set(job_rows())
+             and hermes_writes(rebuilt)["config set"] == 0 and hermes_writes(rebuilt)["plugins enable"] == 0, json.dumps(hermes_writes(rebuilt)))
+
+    config = config_of(BOT)
+    config["plugins"]["entries"][SUBSCRIPTION]["allow_tool_override"] = True
+    (other.hermes / "profiles" / BOT / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=True))
+    regranted, _ = install()
+    run.step("a bot whose subscription plugin was granted tool override is enabled again with it refused",
+             hermes_writes(regranted)["plugins enable"] == 1
+             and config_of(BOT)["plugins"]["entries"][SUBSCRIPTION]["allow_tool_override"] is False, json.dumps(hermes_writes(regranted)))
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Stubbed end-to-end run of the faker-kit coordinator path")
     ap.add_argument("--artifact", type=Path, help="where to write the JSON transcript; defaults to a file in the run directory")
@@ -2687,6 +2815,7 @@ def main(argv: list[str] | None = None) -> int:
         runner_scenario(run, root / "runner")
         vendor_api_scenario(run, root / "vendor-api")
         profile_approval_scenario(run, root / "profile-approval")
+        install_skip_scenario(run, root / "install-skip")
         tooling_scenario.vendor_scenario(root / "vendor-script", run.step)
         tooling_scenario.ratchet_scenario(root / "ratchet", run.step)
         guard_scenario.guard_scenario(root / "guard", run.step, run.verdicts.append)

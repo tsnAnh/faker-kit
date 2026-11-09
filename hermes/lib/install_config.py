@@ -69,23 +69,30 @@ def value_at(config: object, keys: tuple[str, ...]) -> object:
     return config
 
 
+def holds(path: Path, keys: tuple[str, ...], value: object) -> bool:
+    actual = value_at(mapping(path), keys)
+    return actual == value and type(actual) is type(value)
+
+
 def config_set(root: Path, profile: str, keys: tuple[str, ...], value: object) -> None:
     key = ".".join(keys)
+    path = profile_home(root, profile) / "config.yaml"
+    if value is not None and holds(path, keys, value):
+        return
     literal = value if isinstance(value, str) else json.dumps(value)
     result = subprocess.run(["hermes", "-p", profile, "config", "set", key, literal], capture_output=True, text=True)
     if result.returncode:
         raise InstallError(f"Hermes config set failed for {profile}: {key}; check CLI/schema compatibility")
-    actual = value_at(mapping(profile_home(root, profile) / "config.yaml"), keys)
-    if actual != value or type(actual) is not type(value):
+    if not holds(path, keys, value):
         raise InstallError(f"Hermes config set did not persist {profile}: {key} with the expected type/value")
 
 
-def apply_profile(root: Path, profile: str, snippet: Path) -> None:
+def apply_profile(root: Path, profile: str, snippet: Path, overrides: dict[tuple[str, ...], object] | None = None) -> None:
     current = mapping(profile_home(root, profile) / "config.yaml")
     if section(current, "gateway").get("standalone") is True:
         raise InstallError(f"{profile} has gateway.standalone: true; migrate it to the shared host gateway first")
     updates = []
-    for keys, value in leaves(mapping(snippet)):
+    for keys, value in {**dict(leaves(mapping(snippet))), **(overrides or {})}.items():
         section(current, *keys[:-1])
         if keys == ("plugins", "enabled"):
             enabled = value_at(current, keys)
