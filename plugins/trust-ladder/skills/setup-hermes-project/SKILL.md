@@ -39,7 +39,7 @@ One question at a time, only what you do not know yet. Use AskUserQuestion.
 
 1. **The repository**, as `OWNER/REPO`.
 2. **The project slug and the bot's name**: lowercase letters, digits, `-` and `_`, never `default`. Offer the repository name for both.
-3. **The fallback cadence**, only if the owner wants other than heartbeat every `1h`, security every `6h`, and incidents every `10m` (GitHub events wake the bot sooner).
+3. **The fallback cadence**, only if the owner wants other than heartbeat every `1h` and incidents every `10m` (GitHub events wake the bot sooner).
 4. **Where the bot's own model runs**: on the owner's Claude subscription (`--claude-subscription`), or the provider Hermes already uses.
 
 ## 3. Create the project bot
@@ -48,10 +48,10 @@ Run this from the owner's own shell, with the `CLAUDE_CONFIG_DIR` their `claude`
 
 ```bash
 ~/.hermes/bin/faker-kit add-project OWNER/REPO [--bot <bot>] [--project <project>] \
-  [--heartbeat-every 1h] [--incidents-every 10m] [--security-every 6h] [--model <model>] [--claude-subscription]
+  [--heartbeat-every 1h] [--incidents-every 10m] [--model <model>] [--claude-subscription]
 ```
 
-It creates the bot's profile, its four agent jobs, the andon and bug-report labels in the repository, and the **launch checkout**: one kept clone of the repository that every Claude Code session for this project starts from. It prints that path as `launch_checkout`. The jobs start once `gh` is signed in on this machine; if the output says they are paused, the owner runs `gh auth login` once and you run `add-project` again.
+It creates the bot's profile, its three agent jobs, the andon and bug-report labels in the repository, and the **launch checkout**: one kept clone of the repository that every Claude Code session for this project starts from. It prints that path as `launch_checkout`. The jobs start once `gh` is signed in on this machine; if the output says they are paused, the owner runs `gh auth login` once and you run `add-project` again.
 
 ## 4. The checkout is trusted for you
 

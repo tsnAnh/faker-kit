@@ -35,7 +35,6 @@ from faker_kit_gh import NAME, Gh, Refused, Runner, run_gh
 from faker_kit_guard.policy import (
     DEFAULT_HEARTBEAT_EVERY,
     DEFAULT_INCIDENTS_EVERY,
-    DEFAULT_SECURITY_EVERY,
     INTERVAL,
     REPO,
     RESERVED_NAMES,
@@ -88,7 +87,7 @@ ROLE_COMMANDS = {
 OWNER_ONLY = {"install", "runner", "projects"}
 ANDON_COLOR = "b60205"
 ANDON_DESCRIPTION = "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"
-SCHEDULE_DEFAULTS = {"heartbeat_every": DEFAULT_HEARTBEAT_EVERY, "incidents_every": DEFAULT_INCIDENTS_EVERY, "security_every": DEFAULT_SECURITY_EVERY}
+SCHEDULE_DEFAULTS = {"heartbeat_every": DEFAULT_HEARTBEAT_EVERY, "incidents_every": DEFAULT_INCIDENTS_EVERY}
 
 
 def current_bot() -> str:
@@ -299,7 +298,7 @@ class Kit:
                         ref, gh.branch_pulls(owner, ref) if owner and ref else None, gh.timeline(pr), str(pull.get("created_at") or ""),
                         head_tree is not None and head_tree == gh.workflows_tree(default))
 
-    def mergeable_pull(self, gh: Gh, repo: str, pr: int) -> tuple[dict, str, str]:
+    def mergeable_pull(self, gh: Gh, repo: str, pr: int, owner_approved: bool = False) -> tuple[dict, str, str]:
         for read in range(MERGEABLE_READS):
             data = gh.pull(pr)
             head = str((data.get("head") or {}).get("sha") or "")
@@ -313,6 +312,9 @@ class Kit:
             if (data.get("base") or {}).get("ref") != default:
                 raise Refused(f"#{pr} targets another branch than the default branch {default}; only the owner merges it on GitHub")
             if data.get("mergeable") is False:
+                if owner_approved:
+                    raise Refused(f"#{pr} conflicts with its base branch, so the owner-requested merge cannot land; the owning session must update the existing branch against the base, "
+                                  "resolve the conflict, rerun the checks and push a new head; then the owner asks for the merge again (an approval covers only the message that gave it)")
                 raise Refused(f"#{pr} conflicts with its base branch; its author must update it first")
             if data.get("mergeable") is True:
                 return data, head, default
@@ -342,37 +344,44 @@ class Kit:
 
     def merge(self, bot: Bot, pr: int, owner_approved: bool = False, wait: int = 0) -> dict:
         waited: dict[str, int] = {}
-        head = self.land(bot, pr, owner_approved, wait, waited)
+        head, bypassed = self.land(bot, pr, owner_approved, wait, waited)
         landed: dict[str, object] = {"pr": pr, "merged": True, "head": head, "method": MERGE_METHOD}
         if owner_approved:
             landed["owner_approved"] = True
+        if bypassed:
+            landed["bypassed"] = list(bypassed)
         if wait:
             landed["wait"] = waited
         return landed
 
-    def land(self, bot: Bot, pr: int, owner_approved: bool, wait: int = 0, waited: dict[str, int] | None = None) -> str:
+    def land(self, bot: Bot, pr: int, owner_approved: bool, wait: int = 0, waited: dict[str, int] | None = None) -> tuple[str, tuple[str, ...]]:
         repo = str(bot.repo)
         gh = Gh(self.home, bot.name, repo, self.run)
         started, polls, checked = self.now(), 0, ""
         while True:
             with MergeLock(self.home, bot.name).locked():
-                data, head, default = self.mergeable_pull(gh, repo, pr)
+                data, head, default = self.mergeable_pull(gh, repo, pr, owner_approved)
                 if checked and head != checked:
                     raise Refused(f"the head of #{pr} moved from {checked[:12]} to {head[:12]} during the wait; nothing was merged, run merge again")
                 checked, polls = head, polls + 1
                 cord = self.cord(bot.name)
                 if cord:
-                    raise Refused(f"{cord.describe()}; nothing merges until the owner clears it")
-                verdict = decide(pr, head, self.evidence(gh, pr, head, default, data), repo, default, owner_approved)
+                    clear = ("; this project bot clears it only when the owner says so, with `faker-kit andon clear`, and never by itself; tell the owner and wait"
+                             if owner_approved else "")
+                    raise Refused(f"{cord.describe()}; nothing merges until the owner clears it{clear}")
+                evidence = self.evidence(gh, pr, head, default, data)
+                probe = decide(pr, head, evidence, repo, default, False) if wait else None
                 elapsed = int(self.now() - started)
                 if waited is not None:
                     waited.update(seconds=elapsed, polls=polls)
-                if verdict.action == "merge":
-                    return self.put_merge(gh, repo, pr, head)
-                if not (wait and verdict.pending):
-                    raise Refused(verdict.message)
-                if elapsed >= wait:
-                    raise Refused(f"{verdict.message}; still pending after waiting {elapsed} seconds over {polls} polls (bound {wait})")
+                if probe is not None and probe.pending:
+                    if elapsed >= wait:
+                        raise Refused(f"{probe.message}; still pending after waiting {elapsed} seconds over {polls} polls (bound {wait})")
+                else:
+                    verdict = decide(pr, head, evidence, repo, default, owner_approved)
+                    if verdict.action != "merge":
+                        raise Refused(verdict.message)
+                    return self.put_merge(gh, repo, pr, head), verdict.bypassed
             self.sleep(min(MERGE_WAIT_POLL_SECONDS, wait - elapsed))
 
     def put_merge(self, gh: Gh, repo: str, pr: int, head: str) -> str:
@@ -776,7 +785,7 @@ class Kit:
         projects = []
         for item in machine.projects if machine else ():
             slack = machine.slack.channel_id if machine and machine.slack and machine.slack.bot == item.bot else None
-            intervals = {"heartbeat_every": item.heartbeat_every, "incidents_every": item.incidents_every, "security_every": item.security_every}
+            intervals = {"heartbeat_every": item.heartbeat_every, "incidents_every": item.incidents_every}
             projects.append(self.add_project(item.repo, item.bot, item.project, item.model, intervals, use_subscription, slack, refresh_webhooks=False,
                                              provider=item.provider))
         policy = self.policy()
@@ -859,7 +868,6 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--claude-subscription", action="store_true", default=None)
     cmd.add_argument("--heartbeat-every")
     cmd.add_argument("--incidents-every")
-    cmd.add_argument("--security-every")
     cmd.add_argument("--check", action="store_true")
     cmd = sub.add_parser("vendor")
     cmd.add_argument("--project", required=True)

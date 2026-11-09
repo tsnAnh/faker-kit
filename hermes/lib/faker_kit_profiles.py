@@ -31,7 +31,7 @@ SUBSCRIPTION_DEFAULT_MODEL = "sonnet"
 PLUGIN_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
 KIT_OWNED_MARK = "\nKIT_OWNED = True\n"
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
-SCHEDULE_FIELDS = {"faker-kit-babysit": "heartbeat_every", "faker-kit-incidents": "incidents_every", "faker-kit-security": "security_every",
+SCHEDULE_FIELDS = {"faker-kit-babysit": "heartbeat_every", "faker-kit-incidents": "incidents_every",
                    "faker-kit-issues": "heartbeat_every"}
 
 
