@@ -52,7 +52,7 @@ from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
 from faker_kit_loop import Loop, LoopError
 from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
-from faker_kit_merge import MERGE_METHOD, Evidence, MergeLock, decide, from_fork
+from faker_kit_merge import MERGE_METHOD, Evidence, MergeLock, decide, from_fork, token
 from faker_kit_profiles import Profiles
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
 from install_config import InstallError, config_set, hermes, mapping, value_at
@@ -68,6 +68,8 @@ UNIT_LINE = re.compile(r"\AUnit: ([a-z0-9][a-z0-9-]{0,63})[ \t]*\r?(?:\n|\Z)")
 STATUS_PRS = 30
 MERGEABLE_READS = 5
 MERGEABLE_PAUSE_SECONDS = 5.0
+MERGE_WAIT_POLL_SECONDS = 30.0
+MERGE_WAIT_MAX_SECONDS = 1800
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SECRET_SHAPES = re.compile(
     r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}"
@@ -318,42 +320,69 @@ class Kit:
                 self.sleep(MERGEABLE_PAUSE_SECONDS)
         raise Refused(f"GitHub is still checking #{pr} for conflicts; run merge again in a minute")
 
-    def merge_command(self, caller: Bot | None, pr: int, project: str | None, owner_approved: bool) -> dict:
+    @staticmethod
+    def wait_seconds(text: str | None) -> int:
+        if text is None:
+            return 0
+        if not re.fullmatch(r"[0-9]{1,6}", text) or int(text) > MERGE_WAIT_MAX_SECONDS:
+            raise Refused(f"--wait takes a whole number of seconds from 0 to {MERGE_WAIT_MAX_SECONDS}, not {token(text)}")
+        return int(text)
+
+    def merge_command(self, caller: Bot | None, pr: int, project: str | None, owner_approved: bool, wait: str | None = None) -> dict:
+        seconds = self.wait_seconds(wait)
         if caller is None or caller.role not in ("project", "chief"):
             raise Refused("merge runs in a project bot's chat or the chief of staff's chat")
         if caller.role == "chief":
             if not project or not owner_approved:
                 raise Refused("the chief of staff merges only when the owner asks: faker-kit merge --project <project> --pr <number> --owner-approved")
-            return self.merge(self.project_bot(self.policy(), project), pr, True)
+            return self.merge(self.project_bot(self.policy(), project), pr, True, seconds)
         if project and project != caller.project:
             raise Refused(f"{caller.name} merges only its own project's pull requests; the chief of staff merges for another project")
-        return self.merge(caller, pr, owner_approved)
+        return self.merge(caller, pr, owner_approved, seconds)
 
-    def merge(self, bot: Bot, pr: int, owner_approved: bool = False) -> dict:
-        head = self.land(bot, pr, owner_approved)
+    def merge(self, bot: Bot, pr: int, owner_approved: bool = False, wait: int = 0) -> dict:
+        waited: dict[str, int] = {}
+        head = self.land(bot, pr, owner_approved, wait, waited)
         landed: dict[str, object] = {"pr": pr, "merged": True, "head": head, "method": MERGE_METHOD}
         if owner_approved:
             landed["owner_approved"] = True
+        if wait:
+            landed["wait"] = waited
         return landed
 
-    def land(self, bot: Bot, pr: int, owner_approved: bool) -> str:
+    def land(self, bot: Bot, pr: int, owner_approved: bool, wait: int = 0, waited: dict[str, int] | None = None) -> str:
         repo = str(bot.repo)
         gh = Gh(self.home, bot.name, repo, self.run)
-        with MergeLock(self.home, bot.name).locked():
-            data, head, default = self.mergeable_pull(gh, repo, pr)
-            cord = self.cord(bot.name)
-            if cord:
-                raise Refused(f"{cord.describe()}; nothing merges until the owner clears it")
-            verdict = decide(pr, head, self.evidence(gh, pr, head, default, data), repo, default, owner_approved)
-            if verdict.action != "merge":
-                raise Refused(verdict.message)
-            try:
-                self.run(["api", "-X", "PUT", f"repos/{repo}/pulls/{pr}/merge", "-f", f"merge_method={MERGE_METHOD}", "-f", f"sha={head}"])
-            except Refused as err:
-                landed = self.landed_after_error(gh, pr, head)
-                if landed:
-                    return head
-                raise PutFailed(self.put_failure(pr, landed, err)) from err
+        started, polls, checked = self.now(), 0, ""
+        while True:
+            with MergeLock(self.home, bot.name).locked():
+                data, head, default = self.mergeable_pull(gh, repo, pr)
+                if checked and head != checked:
+                    raise Refused(f"the head of #{pr} moved from {checked[:12]} to {head[:12]} during the wait; nothing was merged, run merge again")
+                checked, polls = head, polls + 1
+                cord = self.cord(bot.name)
+                if cord:
+                    raise Refused(f"{cord.describe()}; nothing merges until the owner clears it")
+                verdict = decide(pr, head, self.evidence(gh, pr, head, default, data), repo, default, owner_approved)
+                elapsed = int(self.now() - started)
+                if waited is not None:
+                    waited.update(seconds=elapsed, polls=polls)
+                if verdict.action == "merge":
+                    return self.put_merge(gh, repo, pr, head)
+                if not (wait and verdict.pending):
+                    raise Refused(verdict.message)
+                if elapsed >= wait:
+                    raise Refused(f"{verdict.message}; still pending after waiting {elapsed} seconds over {polls} polls (bound {wait})")
+            self.sleep(min(MERGE_WAIT_POLL_SECONDS, wait - elapsed))
+
+    def put_merge(self, gh: Gh, repo: str, pr: int, head: str) -> str:
+        try:
+            self.run(["api", "-X", "PUT", f"repos/{repo}/pulls/{pr}/merge", "-f", f"merge_method={MERGE_METHOD}", "-f", f"sha={head}"])
+        except Refused as err:
+            landed = self.landed_after_error(gh, pr, head)
+            if landed:
+                return head
+            raise PutFailed(self.put_failure(pr, landed, err)) from err
         return head
 
     @staticmethod
@@ -845,6 +874,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--pr", type=int, required=True)
     cmd.add_argument("--project")
     cmd.add_argument("--owner-approved", action="store_true")
+    cmd.add_argument("--wait", help="seconds to wait for pending checks, 0 to 1800")
     cmd = sub.add_parser("issues")
     cmd.add_argument("--claim", type=int)
     cmd = sub.add_parser("incidents")
@@ -908,7 +938,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     if args.command == "launch":
         return kit.launch(caller, args.project, args.brief_file, args.model, args.effort)
     if args.command == "merge":
-        return kit.merge_command(caller, args.pr, args.project, args.owner_approved)
+        return kit.merge_command(caller, args.pr, args.project, args.owner_approved, args.wait)
     if args.command == "issues":
         if caller is None or caller.role != "project":
             raise Refused("issues runs in a project bot's chat or job")

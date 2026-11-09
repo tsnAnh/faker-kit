@@ -38,6 +38,7 @@ class Evidence:
 class Verdict:
     action: str
     message: str
+    pending: bool = False
 
 
 def from_fork(pull: dict, repo: str) -> bool:
@@ -131,11 +132,7 @@ def gated_checks(check_runs: list[dict], statuses: list[dict], head_runs: list[d
     return kept_runs, kept_statuses
 
 
-def checks_problem(check_runs: list[dict], statuses: list[dict], head_runs: list[dict] | None, head: str, repo: str, pr: int, default: str, ref: str, opened: str, workflows_match: bool,
-                   owner_approved: bool = False) -> str | None:
-    if head_runs is None:
-        return "the workflow runs on this head could not be read"
-    counted_runs, counted_statuses = gated_checks(check_runs, statuses, head_runs, repo)
+def tally_checks(counted_runs: list[dict], counted_statuses: list[dict]) -> tuple[int, int]:
     failed = pending = 0
     for run in counted_runs:
         if run.get("status") != "completed":
@@ -146,6 +143,22 @@ def checks_problem(check_runs: list[dict], statuses: list[dict], head_runs: list
         state = str(status.get("state") or "").lower()
         pending += state == "pending"
         failed += state not in ("success", "pending")
+    return failed, pending
+
+
+def checks_only_pending(evidence: Evidence, repo: str) -> bool:
+    if evidence.head_runs is None:
+        return False
+    failed, pending = tally_checks(*gated_checks(evidence.check_runs, evidence.statuses, evidence.head_runs, repo))
+    return pending > 0 and not failed
+
+
+def checks_problem(check_runs: list[dict], statuses: list[dict], head_runs: list[dict] | None, head: str, repo: str, pr: int, default: str, ref: str, opened: str, workflows_match: bool,
+                   owner_approved: bool = False) -> str | None:
+    if head_runs is None:
+        return "the workflow runs on this head could not be read"
+    counted_runs, counted_statuses = gated_checks(check_runs, statuses, head_runs, repo)
+    failed, pending = tally_checks(counted_runs, counted_statuses)
     if not counted_runs and not counted_statuses:
         return "GitHub reports no checks on the head; the repository needs GitHub Actions CI that builds and tests every pull request"
     if owner_approved and pending and not failed:
@@ -189,11 +202,11 @@ def requested_changes(reviews: list[dict]) -> int:
 
 def decide(pr: int, head: str, evidence: Evidence, repo: str, default: str, owner_approved: bool = False) -> Verdict:
     ref = evidence.head_ref
-    problem = (base_problem(evidence.branch_pulls, evidence.timeline, pr, default)
-               or checks_problem(evidence.check_runs, evidence.statuses, evidence.head_runs, head, repo, pr, default, ref, evidence.opened, evidence.workflows_match, owner_approved)
-               or head_problem(evidence.head_pulls, pr, head))
+    base = base_problem(evidence.branch_pulls, evidence.timeline, pr, default)
+    checks = None if base else checks_problem(evidence.check_runs, evidence.statuses, evidence.head_runs, head, repo, pr, default, ref, evidence.opened, evidence.workflows_match, owner_approved)
+    problem = base or checks or head_problem(evidence.head_pulls, pr, head)
     if problem:
-        return Verdict("refuse", problem)
+        return Verdict("refuse", problem, pending=bool(checks) and checks_only_pending(evidence, repo))
     if requested_changes(evidence.reviews):
         return Verdict("refuse", "a reviewer requested changes; the author or the reviewer must resolve it")
     return Verdict("merge", "every gate passed")

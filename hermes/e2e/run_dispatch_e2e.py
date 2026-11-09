@@ -494,6 +494,7 @@ class Run:
         self.gh_log = root / "gh-calls.log"
         self.claude_log = root / "claude-calls.log"
         self.sleeps: list[float] = []
+        self.on_sleep: list = []
         self.clock = T0
         self.fetch_api = no_network
         self.fetch_url = no_network
@@ -563,7 +564,7 @@ class Run:
         out, err = io.StringIO(), io.StringIO()
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                code = faker_kit.main(list(argv), bot=bot or "default", now=lambda: self.clock, sleep=self.sleeps.append, fetch_api=self.fetch_api, fetch_url=self.fetch_url)
+                code = faker_kit.main(list(argv), bot=bot or "default", now=lambda: self.clock, sleep=self.sleep, fetch_api=self.fetch_api, fetch_url=self.fetch_url)
         finally:
             for key, value in saved.items():
                 if value is None:
@@ -571,6 +572,12 @@ class Run:
                 else:
                     os.environ[key] = value
         return code, out.getvalue(), err.getvalue()
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        if self.on_sleep:
+            self.clock += seconds
+            self.on_sleep.pop(0)()
 
     def brief(self, name: str, text: str) -> Path:
         folder = self.team / "briefs" / BOT
@@ -924,6 +931,45 @@ def merge_scenario(run: Run) -> None:
     checks("", "in_progress")
     result = run.merge(1)
     run.step("merge refuses a pull request whose checks are pending", refused(result, "1 pending"), result[2].strip())
+
+    def wait_case(*argv: str, then: tuple = (), pr: int = 1) -> tuple[int, str, str, list[float]]:
+        run.sleeps.clear()
+        run.update_gh(lambda state: (state["merges"].clear(), state["pulls"][0].update(state="open", merged_at=None)))
+        checks("", "in_progress")
+        run.on_sleep = list(then)
+        result = run.kit("merge", "--pr", str(pr), *argv)
+        run.on_sleep = []
+        return (*result, list(run.sleeps))
+
+    code, out, err, slept = wait_case("--wait", "300", then=(lambda: None, lambda: open_gates(run, 1, head)))
+    landed = json.loads(out) if code == 0 else {}
+    run.step("merge --wait waits two polls of 30 seconds for pending checks, then merges the exact head and prints the wait",
+             code == 0 and landed.get("wait") == {"seconds": 60, "polls": 3} and slept == [30.0, 30.0] and run.merged() == [{"pr": 1, "sha": head, "method": "squash"}], out.strip() or err.strip())
+    code, out, err, slept = wait_case("--wait", "60", then=(lambda: None, lambda: None))
+    run.step("merge --wait refuses checks still pending at the bound and says how long it waited",
+             code == 1 and "still pending after waiting 60 seconds over 3 polls" in err and slept == [30.0, 30.0] and not run.merged(), err.strip())
+    code, out, err, slept = wait_case("--wait", "300", then=(lambda: checks("failure"),))
+    run.step("merge --wait ends at once when a check fails", code == 1 and "1 failed" in err and slept == [30.0] and not run.merged(), err.strip())
+    moved = sha("f")
+    code, out, err, slept = wait_case("--wait", "300", then=(lambda: run.update_gh(lambda state: state["pulls"][0].update(head=moved)),))
+    run.step("merge --wait refuses when the head moved during the wait and merges nothing",
+             code == 1 and f"moved from {head[:12]} to {moved[:12]}" in err and slept == [30.0] and not run.merged(), err.strip())
+    run.update_gh(lambda state: state["pulls"][0].update(head=head))
+    code, out, err, slept = wait_case("--wait", "0")
+    run.step("merge --wait 0 refuses pending checks at once, as before", code == 1 and "1 pending" in err and not slept and "waiting" not in err, err.strip())
+    code, out, err, slept = wait_case()
+    run.step("merge without --wait refuses pending checks at once, as before", code == 1 and "1 pending" in err and not slept and "waiting" not in err, err.strip())
+    open_gates(run, 1, head)
+    code, out, err = run.kit("merge", "--pr", "1", "--wait", "0")
+    run.step("merge --wait 0 merges ready checks with no wait key in its output", code == 0 and "wait" not in json.loads(out), out.strip() or err.strip())
+    run.update_gh(lambda state: (state["merges"].clear(), state["pulls"][0].update(state="open", merged_at=None)))
+    for bad in ("1801", "-1", "1.5", "abc", ""):
+        code, out, err = run.kit("merge", "--pr", "1", "--wait", bad)
+        run.step(f"merge rejects --wait {bad!r}", code == 1 and "--wait takes a whole number of seconds from 0 to 1800" in err and not run.merged(), err.strip())
+    code, out, err, slept = wait_case("--wait", "1800", then=(lambda: open_gates(run, 1, head),))
+    run.step("merge accepts --wait 1800", code == 0 and json.loads(out)["wait"]["polls"] == 2, out.strip() or err.strip())
+    run.update_gh(lambda state: (state["merges"].clear(), state["pulls"][0].update(state="open", merged_at=None)))
+    run.sleeps.clear()
 
     def ready_line() -> str:
         _, out, err = run.kit("status")
