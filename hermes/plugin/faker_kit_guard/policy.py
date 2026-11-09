@@ -729,13 +729,15 @@ def arithmetic_closer(text: str, i: int, nested: bool, segment: list[str]) -> st
 
 
 def scan_shell(text: str) -> tuple[list[str], str]:
-    text = (text or "").replace("\\\n", "")
+    text = text or ""
     segments: list[str] = []
     current: list[str] = []
     clean: list[str] = []
     quote, nested, line_start, i, size = "", 0, 0, 0, len(text)
     pending: list[str] = []
     closers: list[str] = []
+    word_parens: list[bool] = []
+    next_boundary = True
 
     def put(chunk: str) -> None:
         current.append(chunk)
@@ -748,6 +750,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
 
     while i < size:
         char = text[i]
+        boundary, next_boundary, was_quoted = next_boundary, False, bool(quote)
         if not quote:
             if closers and char == closers[-1]:
                 closers.pop()
@@ -757,6 +760,9 @@ def scan_shell(text: str) -> tuple[list[str], str]:
             quote = "" if char == "'" else quote
         elif quote in ('"', "$'"):
             if char == "\\":
+                if quote == '"' and text.startswith("\n", i + 1):
+                    i += 2
+                    continue
                 put(text[i:i + 2])
                 i += 2
                 continue
@@ -777,12 +783,15 @@ def scan_shell(text: str) -> tuple[list[str], str]:
                 i += 1
                 continue
         elif char == "\\":
-            put(text[i:i + 2])
+            if text.startswith("\n", i + 1):
+                next_boundary = boundary
+            else:
+                put(text[i:i + 2])
             i += 2
             continue
         elif char in "'\"":
             quote = "$'" if char == "'" and i and text[i - 1] == "$" else char
-        elif char == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
+        elif char == "#" and boundary and not closers:
             end = text.find("\n", i)
             end = size if end < 0 else end
             put(text[i:end])
@@ -802,16 +811,24 @@ def scan_shell(text: str) -> tuple[list[str], str]:
         elif text.startswith(("&&", "||"), i):
             cut(text[i:i + 2])
             i += 2
+            next_boundary = True
             continue
         elif text.startswith("$(", i):
             cut("$(")
+            word_parens.append(True)
             i += 2
+            next_boundary = True
             continue
+        elif char == "(":
+            word_parens.append(bool(word_parens and word_parens[-1] and i and text[i - 1] == "("))
         elif char in ";|&`)":
+            closes_word = bool(word_parens.pop()) if char == ")" and word_parens else False
+            next_boundary = char not in "`)" or (char == ")" and not closes_word)
             cut(char)
             i += 1
             continue
         elif char == "\n":
+            next_boundary = True
             cut(char)
             opening = text[line_start:i]
             line_start = i + 1
@@ -832,6 +849,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
             i += 1
             continue
         put(char)
+        next_boundary = not was_quoted and char in " \t<>("
         i += 1
     segments.append("".join(current))
     return segments, "".join(clean)
