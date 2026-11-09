@@ -39,6 +39,7 @@ class Verdict:
     action: str
     message: str
     bypassed: tuple[str, ...] = ()
+    pending: bool = False
 
 
 def from_fork(pull: dict, repo: str) -> bool:
@@ -206,6 +207,7 @@ def requested_changes(reviews: list[dict]) -> int:
 def decide(pr: int, head: str, evidence: Evidence, repo: str, default: str, owner_approved: bool = False) -> Verdict:
     ref = evidence.head_ref
     bypassed: tuple[str, ...] = ()
+    only_pending = False
     problem = base_problem(evidence.branch_pulls, evidence.timeline, pr, default)
     if not problem and evidence.head_runs is None:
         problem = "the workflow runs on this head could not be read"
@@ -213,9 +215,12 @@ def decide(pr: int, head: str, evidence: Evidence, repo: str, default: str, owne
         bypassed = tuple(check_findings(evidence.check_runs, evidence.statuses, evidence.head_runs, head, repo, pr, default, ref, evidence.opened, evidence.workflows_match)[0])
     elif not problem:
         problem = checks_problem(evidence.check_runs, evidence.statuses, evidence.head_runs, head, repo, pr, default, ref, evidence.opened, evidence.workflows_match)
+        if problem and evidence.head_runs is not None:
+            _, failed, pending = check_findings(evidence.check_runs, evidence.statuses, evidence.head_runs, head, repo, pr, default, ref, evidence.opened, evidence.workflows_match)
+            only_pending = bool(pending) and not failed
     problem = problem or head_problem(evidence.head_pulls, pr, head)
     if problem:
-        return Verdict("refuse", problem)
+        return Verdict("refuse", problem, pending=only_pending)
     if requested_changes(evidence.reviews):
         return Verdict("refuse", "a reviewer requested changes; the author or the reviewer must resolve it")
     return Verdict("merge", "every gate passed" if not bypassed else "owner-approved over " + "; ".join(bypassed), bypassed)
