@@ -103,7 +103,7 @@ def gate_scenario(run: Run, hermes: Path, bot: str, install: Callable[[], subpro
     install()
     run.step("installing again rewrites neither the gate nor the jobs", (gate.read_bytes(), gate.stat().st_mtime_ns, jobs_file.read_bytes()) == kept, "gate and jobs unchanged")
 
-    edit_jobs(lambda by_name: by_name["faker-kit-babysit"].__setitem__("prompt", "stale prompt"))
+    edit_jobs(lambda by_name: by_name["faker-kit-babysit"].update({"prompt": "stale prompt", "schedule": "every 99m"}))
     blockers: dict[str, Callable[[], None]] = {
         "a foreign file": lambda: gate.write_text("print('not the kit')\n"),
         "a directory": lambda: gate.mkdir(),
