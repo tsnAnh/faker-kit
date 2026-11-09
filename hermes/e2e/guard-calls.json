@@ -1274,7 +1274,14 @@
     {"tool": "terminal", "args": {"command": "cat <<E'OF'\nEOF\ngh pr merge 1\nE\n"}},
     {"tool": "terminal", "args": {"command": "cat <<\"E\"OF\nEOF\ngh pr merge 1\nE\n"}},
     {"tool": "terminal", "args": {"command": "cat <<E\\OF\nEOF\ngh pr merge 1\nE\n"}},
-    {"tool": "terminal", "args": {"command": "cat <<-E'OF'\n\tEOF\ngh pr merge 1\nE\n"}}
+    {"tool": "terminal", "args": {"command": "cat <<-E'OF'\n\tEOF\ngh pr merge 1\nE\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<E$OF\nE$OF\ngh pr merge 1\nEOF\n"}}
+  ]},
+  {"name": "a heredoc delimiter with $'..' or $\"..\" quoting is never treated as closing, so its body is scanned", "policy": "quiet", "profiles": ["meo-beo"], "expect": "block", "message": "blocked for every bot", "calls": [
+    {"tool": "terminal", "args": {"command": "cat <<E$'OF'\nEOF\ngh pr merge 1\nE$OF\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<E$\"OF\"\nEOF\ngh pr merge 1\nE$OF\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<E$'O\\x46'\nEOF\ngh pr merge 1\nE$O\\x46\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<E$'O\\\\F'\nEO\\F\ngh pr merge 1\nE$O\\\\F\n"}}
   ]},
   {"name": "a partly quoted heredoc delimiter keeps its body inert up to the real closer", "policy": "quiet", "profiles": ["meo-beo"], "expect": "allow", "calls": [
     {"tool": "terminal", "args": {"command": "cat <<E\"OF\"\ngh pr merge 1\nEOF\n"}},

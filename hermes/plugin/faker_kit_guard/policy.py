@@ -591,7 +591,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
             if pending and not SHELL_FED_LINE.search(opening):
                 hidden_to = line_start
                 for delimiter, joins in pending:
-                    closing_end = heredoc_closer_end(text, hidden_to, delimiter, joins)
+                    closing_end = None if delimiter is None else heredoc_closer_end(text, hidden_to, delimiter, joins)
                     if closing_end is None:
                         break
                     hidden_to = closing_end
@@ -656,7 +656,10 @@ def shell_tokens(command: str) -> list[str] | None:
         return None
 
 
-def heredoc_delimiter(word: str) -> tuple[str, bool]:
+def heredoc_delimiter(word: str) -> tuple[str | None, bool]:
+    if "$'" in word or '$"' in word:
+        return None, False
+
     def unquote(found: re.Match[str]) -> str:
         if found.group(1) is not None:
             return found.group(1)
