@@ -32,7 +32,7 @@ A pull request is checked by the repository's own CI and proved by its verificat
 
 1. **CI.** The repository's own GitHub Actions workflow must build and test every pull request, triggered by `push` or `pull_request`. A Hermes project bot's `faker-kit merge` needs a passing check run from such a workflow on the head, so a repository without one cannot have its pull requests landed by a bot. If there is none, say so under "Owner to do" in the pull request; add no check runner of your own.
 2. **Verification skills.** Recommend `/create-verification-skill` for any repository with a user-facing surface, and `/create-formal-verification-skill` for logic where a missed case is costly (a parser, a permission check, a state machine). They leave `verify-*` skills in the repository. Before a pull request merges, a separate verifier session (never the author) runs those skills on the exact head and comments a verdict. For Hermes projects this is an instruction in the project bot's skill and `verification_skill` in `.agents/dispatch.json` names the skill.
-3. **Protected paths.** List the paths only the owner may merge (authentication, secrets, migrations, deployment) under `risk_paths_high` in `.agents/dispatch.json` (`setup-hermes-project`). `CODEOWNERS` and branch protection (`templates/branch-protection.md`) hold the same line on the GitHub side.
+3. **High-risk paths.** List the paths that need the closest review (authentication, secrets, migrations, deployment) under `risk_paths_high` in `.agents/dispatch.json` (`setup-hermes-project`). `CODEOWNERS` and branch protection (`templates/branch-protection.md`) hold the same line on the GitHub side.
 
 ## 4. Skills
 
