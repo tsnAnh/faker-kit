@@ -117,7 +117,7 @@ def pull_row(pull):
         "user": {"login": pull["author"]}, "mergeable": pull["mergeable"], "body": pull.get("body"),
         "created_at": pull.get("created_at", "2026-10-01T00:00:00Z"),
         "head": {"sha": pull["head"], "ref": pull["branch"], "repo": {"full_name": pull.get("head_repo", state["repo"]), "owner": {"login": pull.get("head_repo", state["repo"]).split("/")[0]}}},
-        "base": {"ref": "main", "repo": {"full_name": state["repo"]}},
+        "base": {"ref": pull.get("base", "main"), "repo": {"full_name": state["repo"]}},
     }
 
 
@@ -1291,7 +1291,7 @@ class OwnerBed:
         def reopen(state: dict) -> None:
             pull = next(p for p in state["pulls"] if p["number"] == pr)
             pull.update(state="open", merged_at=None, mergeable=True, head=pr_head, branch=f"dispatch/unit-{pr}")
-            for key in ("head_repo", "mergeable_reads"):
+            for key in ("head_repo", "mergeable_reads", "base"):
                 pull.pop(key, None)
 
         self.run.update_gh(reopen)
@@ -1359,12 +1359,31 @@ def owner_merge_scenario(run: Run) -> None:
             result = bed.merge_flag("--pr", "1")
             run.step(f"owner-approved merge still refuses {name}", bed.refused(result, needle), result[2].strip())
 
-        failing(lambda state: state["check_runs"][head].__setitem__(0, check_run("check", 20100, "failure")), "1 failed", "a failed check")
-        failing(lambda state: state["check_runs"][head].__setitem__(0, check_run("check", 20100, "", "in_progress")), "checks still running; the owner asks again when they finish", "a pending check")
-        failing(lambda state: next(p for p in state["pulls"] if p["number"] == 1).update(mergeable=False), "conflicts", "a conflict")
+        def overriding(change: Callable[[dict], object], needles: tuple[str, ...], name: str) -> None:
+            bed.gates()
+            run.update_gh(change)
+            result = bed.merge_flag("--pr", "1")
+            landed = json.loads(result[1]) if result[0] == 0 else {}
+            listed = " | ".join(landed.get("bypassed", []))
+            run.step(f"owner-approved merge lands over {name} and prints the bypassed gates",
+                     bed.landed_now(result, 1) and landed.get("owner_approved") is True and all(n in listed for n in needles), result[1].strip() or result[2].strip())
+
+        overriding(lambda state: state["check_runs"][head].__setitem__(0, check_run("check", 20100, "failure")), ("failed check check",), "a failed check")
+        overriding(lambda state: state["check_runs"][head].__setitem__(0, check_run("check", 20100, "", "in_progress")), ("pending check check",), "a pending check")
+        overriding(lambda state: state["check_runs"].__setitem__(head, []), ("no CI",), "a head with no checks and no CI workflow")
+        overriding(lambda state: (state["check_runs"].__setitem__(head, []), review_noise(state, 1, head)), ("no CI",), "a head whose only checks are the review workflow's")
+        bed.gates()
+        run.update_gh(lambda state: state["check_runs"][head].__setitem__(0, check_run("check", 20100, "failure")))
+        plain = run.merge(1)
+        run.step("plain merge over a failed check still refuses", bed.refused(plain, "1 failed"), plain[2].strip())
+        bed.gates()
+        run.update_gh(lambda state: next(p for p in state["pulls"] if p["number"] == 1).update(mergeable=False))
+        result = bed.merge_flag("--pr", "1")
+        run.step("owner-approved merge over a conflict refuses and says what the owning session does next",
+                 bed.refused(result, "owning session must update the existing branch") and "asks for the merge again" in result[2], result[2].strip())
         failing(lambda state: state["reviews"]["1"].append(review("reviewer", "CHANGES_REQUESTED", head, "No.", kind="User")), "requested changes", "a human's requested changes")
-        failing(lambda state: state["check_runs"].__setitem__(head, []), "no checks", "a head with no checks at all")
-        failing(lambda state: (state["check_runs"].__setitem__(head, []), review_noise(state, 1, head)), "CI that builds and tests", "a head whose only checks are the review workflow's")
+        failing(lambda state: next(p for p in state["pulls"] if p["number"] == 1).update(state="closed"), "already closed", "a closed pull request")
+        failing(lambda state: next(p for p in state["pulls"] if p["number"] == 1).update(base="other"), "default branch", "a non-default base")
         failing(lambda state: state["timelines"].__setitem__("1", [{"event": "base_ref_changed"}]), "base of #1 was changed", "a base changed after the pull request opened")
         failing(lambda state: state.setdefault("head_pulls", {}).__setitem__(head, [{"number": 2, "state": "open", "head": {"sha": head}, "base": {"ref": "evil"}}]),
                "has the same head", "another open pull request with the same head")
@@ -1373,7 +1392,9 @@ def owner_merge_scenario(run: Run) -> None:
         raised = run.kit("andon", "raise", "stop", "everything")
         result = bed.merge_flag("--pr", "1")
         cleared = run.kit("andon", "clear")
-        run.step("owner-approved merge still refuses while the andon cord is pulled", raised[0] == 0 and bed.refused(result, "andon") and cleared[0] == 0, result[2].strip())
+        run.step("owner-approved merge still refuses while the andon cord is pulled, naming the cord, its reason and who clears it",
+                 raised[0] == 0 and bed.refused(result, "andon pulled") and "stop everything" in result[2] and "faker-kit andon clear" in result[2] and "never by itself" in result[2]
+                 and cleared[0] == 0, result[2].strip())
 
         third = sha("c")
         bed.fresh(3, third)
