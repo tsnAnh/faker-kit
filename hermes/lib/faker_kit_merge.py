@@ -38,6 +38,7 @@ class Evidence:
 class Verdict:
     action: str
     message: str
+    bypassed: tuple[str, ...] = ()
 
 
 def from_fork(pull: dict, repo: str) -> bool:
@@ -131,25 +132,40 @@ def gated_checks(check_runs: list[dict], statuses: list[dict], head_runs: list[d
     return kept_runs, kept_statuses
 
 
-def checks_problem(check_runs: list[dict], statuses: list[dict], head_runs: list[dict] | None, head: str, repo: str, pr: int, default: str, ref: str, opened: str, workflows_match: bool,
-                   owner_approved: bool = False) -> str | None:
-    if head_runs is None:
-        return "the workflow runs on this head could not be read"
+def check_findings(check_runs: list[dict], statuses: list[dict], head_runs: list[dict], head: str, repo: str, pr: int, default: str, ref: str, opened: str,
+                   workflows_match: bool) -> tuple[list[str], int, int]:
     counted_runs, counted_statuses = gated_checks(check_runs, statuses, head_runs, repo)
+    names: list[str] = []
     failed = pending = 0
     for run in counted_runs:
         if run.get("status") != "completed":
             pending += 1
+            names.append(f"pending check {token(str(run.get('name') or '?'))}")
         elif str(run.get("conclusion") or "").lower() not in PASSING_CONCLUSIONS:
             failed += 1
+            names.append(f"failed check {token(str(run.get('name') or '?'))}")
     for status in counted_statuses:
         state = str(status.get("state") or "").lower()
-        pending += state == "pending"
-        failed += state not in ("success", "pending")
+        if state == "pending":
+            pending += 1
+            names.append(f"pending status {token(str(status.get('context') or '?'))}")
+        elif state != "success":
+            failed += 1
+            names.append(f"failed status {token(str(status.get('context') or '?'))}")
+    if not counted_runs and not counted_statuses:
+        names.append("no CI: GitHub reports no checks on the head")
+    elif ci_missing(counted_runs, head_runs, head, repo, pr, default, ref, opened, workflows_match):
+        names.append("no CI: no passing check run of a push or pull_request run of a CI workflow on the head")
+    return names, failed, pending
+
+
+def checks_problem(check_runs: list[dict], statuses: list[dict], head_runs: list[dict] | None, head: str, repo: str, pr: int, default: str, ref: str, opened: str, workflows_match: bool) -> str | None:
+    if head_runs is None:
+        return "the workflow runs on this head could not be read"
+    counted_runs, counted_statuses = gated_checks(check_runs, statuses, head_runs, repo)
+    _, failed, pending = check_findings(check_runs, statuses, head_runs, head, repo, pr, default, ref, opened, workflows_match)
     if not counted_runs and not counted_statuses:
         return "GitHub reports no checks on the head; the repository needs GitHub Actions CI that builds and tests every pull request"
-    if owner_approved and pending and not failed:
-        return "checks still running; the owner asks again when they finish"
     if failed or pending:
         return f"checks have not all passed ({failed} failed, {pending} pending)"
     return ci_missing(counted_runs, head_runs, head, repo, pr, default, ref, opened, workflows_match)
@@ -189,14 +205,20 @@ def requested_changes(reviews: list[dict]) -> int:
 
 def decide(pr: int, head: str, evidence: Evidence, repo: str, default: str, owner_approved: bool = False) -> Verdict:
     ref = evidence.head_ref
-    problem = (base_problem(evidence.branch_pulls, evidence.timeline, pr, default)
-               or checks_problem(evidence.check_runs, evidence.statuses, evidence.head_runs, head, repo, pr, default, ref, evidence.opened, evidence.workflows_match, owner_approved)
-               or head_problem(evidence.head_pulls, pr, head))
+    bypassed: tuple[str, ...] = ()
+    problem = base_problem(evidence.branch_pulls, evidence.timeline, pr, default)
+    if not problem and evidence.head_runs is None:
+        problem = "the workflow runs on this head could not be read"
+    if not problem and owner_approved and evidence.head_runs is not None:
+        bypassed = tuple(check_findings(evidence.check_runs, evidence.statuses, evidence.head_runs, head, repo, pr, default, ref, evidence.opened, evidence.workflows_match)[0])
+    elif not problem:
+        problem = checks_problem(evidence.check_runs, evidence.statuses, evidence.head_runs, head, repo, pr, default, ref, evidence.opened, evidence.workflows_match)
+    problem = problem or head_problem(evidence.head_pulls, pr, head)
     if problem:
         return Verdict("refuse", problem)
     if requested_changes(evidence.reviews):
         return Verdict("refuse", "a reviewer requested changes; the author or the reviewer must resolve it")
-    return Verdict("merge", "every gate passed")
+    return Verdict("merge", "every gate passed" if not bypassed else "owner-approved over " + "; ".join(bypassed), bypassed)
 
 
 class MergeLock:

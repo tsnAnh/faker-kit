@@ -297,7 +297,7 @@ class Kit:
                         ref, gh.branch_pulls(owner, ref) if owner and ref else None, gh.timeline(pr), str(pull.get("created_at") or ""),
                         head_tree is not None and head_tree == gh.workflows_tree(default))
 
-    def mergeable_pull(self, gh: Gh, repo: str, pr: int) -> tuple[dict, str, str]:
+    def mergeable_pull(self, gh: Gh, repo: str, pr: int, owner_approved: bool = False) -> tuple[dict, str, str]:
         for read in range(MERGEABLE_READS):
             data = gh.pull(pr)
             head = str((data.get("head") or {}).get("sha") or "")
@@ -311,6 +311,9 @@ class Kit:
             if (data.get("base") or {}).get("ref") != default:
                 raise Refused(f"#{pr} targets another branch than the default branch {default}; only the owner merges it on GitHub")
             if data.get("mergeable") is False:
+                if owner_approved:
+                    raise Refused(f"#{pr} conflicts with its base branch, so the owner-requested merge cannot land; the owning session must update the existing branch against the base, "
+                                  "resolve the conflict, rerun the checks and push a new head; then the owner asks for the merge again (an approval covers only the message that gave it)")
                 raise Refused(f"#{pr} conflicts with its base branch; its author must update it first")
             if data.get("mergeable") is True:
                 return data, head, default
@@ -330,20 +333,24 @@ class Kit:
         return self.merge(caller, pr, owner_approved)
 
     def merge(self, bot: Bot, pr: int, owner_approved: bool = False) -> dict:
-        head = self.land(bot, pr, owner_approved)
+        head, bypassed = self.land(bot, pr, owner_approved)
         landed: dict[str, object] = {"pr": pr, "merged": True, "head": head, "method": MERGE_METHOD}
         if owner_approved:
             landed["owner_approved"] = True
+        if bypassed:
+            landed["bypassed"] = list(bypassed)
         return landed
 
-    def land(self, bot: Bot, pr: int, owner_approved: bool) -> str:
+    def land(self, bot: Bot, pr: int, owner_approved: bool) -> tuple[str, tuple[str, ...]]:
         repo = str(bot.repo)
         gh = Gh(self.home, bot.name, repo, self.run)
         with MergeLock(self.home, bot.name).locked():
-            data, head, default = self.mergeable_pull(gh, repo, pr)
+            data, head, default = self.mergeable_pull(gh, repo, pr, owner_approved)
             cord = self.cord(bot.name)
             if cord:
-                raise Refused(f"{cord.describe()}; nothing merges until the owner clears it")
+                clear = ("; this project bot clears it only when the owner says so, with `faker-kit andon clear`, and never by itself; tell the owner and wait"
+                         if owner_approved else "")
+                raise Refused(f"{cord.describe()}; nothing merges until the owner clears it{clear}")
             verdict = decide(pr, head, self.evidence(gh, pr, head, default, data), repo, default, owner_approved)
             if verdict.action != "merge":
                 raise Refused(verdict.message)
@@ -352,9 +359,9 @@ class Kit:
             except Refused as err:
                 landed = self.landed_after_error(gh, pr, head)
                 if landed:
-                    return head
+                    return head, verdict.bypassed
                 raise PutFailed(self.put_failure(pr, landed, err)) from err
-        return head
+        return head, verdict.bypassed
 
     @staticmethod
     def landed_after_error(gh: Gh, pr: int, head: str) -> bool | None:
