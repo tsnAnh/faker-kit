@@ -76,7 +76,7 @@ CODE_BLOCKS = (
 CODE_PUSH = re.compile(r"\bgit\b[^\n]{0,80}?\bpush\b([^\n]{0,200})")
 RISKY_PUSH = re.compile(
     r"(?<![\w-])(?:--force(?:-with-lease|-if-includes)?(?:=\S*)?|-f|--mirror|--all|--delete|-d|--prune)(?![\w-])"
-    r"|[\s'\",]\+[\w/.-]|(?<![\w/.-])(?:main|master)(?![\w/.-])"
+    r"|[\s'\",]\+[\w/.-]|(?<![\w/.-])(?:main|master)(?![\w/.-])|refs/heads/(?:main|master)(?![\w/.-])"
 )
 INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|perl|ruby|php|bun|deno|osascript)\Z")
 INTERPRETER_CODE_OPTIONS = ("-c", "-e", "-E", "-r", "--eval", "--command", "-p", "--print")
@@ -101,7 +101,8 @@ PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|faker-kit/kit)(?![\w-])", re.I)
 GUARD_FILES = re.compile(r"\.hermes/faker-kit/(?:guard|bots)\.yaml(?![\w-])|plugins/faker_kit_guard(?![\w-])", re.I)
 SHELL_KEYWORDS = frozenset({"then", "do", "else", "elif", "if", "while", "until", "{", "!"})
 HEREDOC_SPAN = re.compile(r"""-?[ \t]*(?:[\w'"]|\\\\|\\\n|\\)*""")
-HEREDOC_OPERATOR = re.compile(r"""-?[ \t]*\\?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
+HEREDOC_OPERATOR = re.compile(r"""-?[ \t]*((?=[A-Za-z_'"\\])(?:[^\s;&|<>()'"\\]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+)""")
+HEREDOC_QUOTING = re.compile(r"""\\(.)|'([^']*)'|"((?:[^"\\]|\\.)*)\"""")
 SHELL_FED_LINE = re.compile(r"(?<![\w./-])(?:sh|bash|zsh|dash|fish|eval|source|xargs)(?![\w-])")
 RELAY_HANDLE = r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}"
 RELAY_STAMP = rf"Message from (?:(?!\(@)[^\n]){{0,240}}? \(@(?P<sender>{RELAY_HANDLE})\): "
@@ -481,7 +482,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
     current: list[str] = []
     clean: list[str] = []
     quote, nested, line_start, i, size = "", 0, 0, 0, len(text)
-    pending: list[tuple[str, bool]] = []
+    pending: list[tuple[str | None, bool]] = []
     closers: list[str] = []
     word_parens: list[bool] = []
     next_boundary = True
@@ -556,7 +557,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
                 size = len(text)
             found = None if closers else HEREDOC_OPERATOR.match(text, i + 2)
             if found:
-                pending.append((found.group(2), not found.group(1) and "\\" not in text[i + 2:found.end()]))
+                pending.append(heredoc_delimiter(found.group(1)))
                 put(text[i:found.end()])
                 i = found.end()
                 continue
@@ -587,7 +588,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
             if pending and not SHELL_FED_LINE.search(opening):
                 hidden_to = line_start
                 for delimiter, joins in pending:
-                    closing_end = heredoc_closer_end(text, hidden_to, delimiter, joins)
+                    closing_end = None if delimiter is None else heredoc_closer_end(text, hidden_to, delimiter, joins)
                     if closing_end is None:
                         break
                     hidden_to = closing_end
@@ -650,6 +651,20 @@ def shell_tokens(command: str) -> list[str] | None:
         return list(lexer)
     except ValueError:
         return None
+
+
+def heredoc_delimiter(word: str) -> tuple[str | None, bool]:
+    if "$'" in word or '$"' in word:
+        return None, False
+
+    def unquote(found: re.Match[str]) -> str:
+        if found.group(1) is not None:
+            return found.group(1)
+        if found.group(2) is not None:
+            return found.group(2)
+        return re.sub(r'\\([\\$`"])', r"\1", found.group(3))
+
+    return HEREDOC_QUOTING.sub(unquote, word), not any(char in word for char in "'\"\\")
 
 
 def heredoc_closer_end(text: str, start: int, delimiter: str, joins: bool) -> int | None:
