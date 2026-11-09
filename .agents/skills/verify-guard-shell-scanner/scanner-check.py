@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import ast
 import hashlib
 import importlib.util
@@ -104,15 +105,19 @@ class Probe:
         (stubs / "gh").chmod(0o755)
         self.log = self.sandbox / "ran.log"
         self.env = {"PATH": str(stubs), "CANARY_LOG": str(self.log), "HOME": str(self.sandbox), "LC_ALL": "C"}
-        self.policy = module.Policy(deny=(), untrusted_readers=(), read_only_tools=frozenset(), trusted_authors=frozenset(), max_in_flight_total=1, ask_owner=False, bots={}, home=self.sandbox)
-        self.hard_block = module.hard_block
+        hard_block = module.hard_block
+        if "policy" in inspect.signature(hard_block).parameters:
+            policy = module.Policy(deny=(), untrusted_readers=(), read_only_tools=frozenset(), trusted_authors=frozenset(), max_in_flight_total=1, ask_owner=False, bots={}, home=self.sandbox)
+            self.hard_block = lambda tool, args: hard_block(policy, tool, args)
+        else:
+            self.hard_block = hard_block
         self.bash = bash
         self.raised = 0
         self.timeouts = 0
 
     def refused(self, text: str) -> bool:
         try:
-            return self.hard_block(self.policy, "terminal", {"command": text}) is not None
+            return self.hard_block("terminal", {"command": text}) is not None
         except Exception:
             self.raised += 1
             return True
