@@ -22,7 +22,6 @@ BOTS_VERSION = 1
 ROLES = ("bootstrap", "project", "chief")
 DEFAULT_HEARTBEAT_EVERY = "1h"
 DEFAULT_INCIDENTS_EVERY = "10m"
-DEFAULT_SECURITY_EVERY = "6h"
 INTERVAL = re.compile(r"\A[1-9][0-9]*(?:m|h)\Z")
 
 DEFAULT_READ_ONLY_TOOLS = (
@@ -169,7 +168,6 @@ class Bot:
     repo: str | None = None
     heartbeat_every: str = DEFAULT_HEARTBEAT_EVERY
     incidents_every: str = DEFAULT_INCIDENTS_EVERY
-    security_every: str = DEFAULT_SECURITY_EVERY
     slack_channel: str | None = None
 
     @property
@@ -255,12 +253,11 @@ def parse_bots(data: object) -> dict[str, Bot]:
         seen_repos[repo.lower()] = name
         heartbeat_every = _interval(raw.get("heartbeat_every"), f"bots.yaml: {name} heartbeat_every", DEFAULT_HEARTBEAT_EVERY)
         incidents_every = _interval(raw.get("incidents_every"), f"bots.yaml: {name} incidents_every", DEFAULT_INCIDENTS_EVERY)
-        security_every = _interval(raw.get("security_every"), f"bots.yaml: {name} security_every", DEFAULT_SECURITY_EVERY)
         slack_channel = raw.get("slack_channel")
         if slack_channel is not None and not (isinstance(slack_channel, str) and SLACK_CHANNEL.match(slack_channel)):
             raise PolicyError(f"bots.yaml: {name} slack_channel must be a Slack channel id like C012ABCDEF")
         bots[name] = Bot(name=name, role="project", project=project, repo=repo, heartbeat_every=heartbeat_every, incidents_every=incidents_every,
-                         security_every=security_every, slack_channel=slack_channel)
+                         slack_channel=slack_channel)
     return bots
 
 

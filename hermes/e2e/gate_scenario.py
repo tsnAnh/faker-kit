@@ -87,7 +87,7 @@ def gate_scenario(run: Run, hermes: Path, bot: str, install: Callable[[], subpro
     attached = {name: job.get("script") for name, job in jobs().items()}
     text = gate.read_text() if gate.is_file() else ""
     run.step("install writes the incidents gate into the bot's scripts folder with the wrapper, profile, and PATH baked in, and attaches it to that job only",
-             attached == {"faker-kit-babysit": None, "faker-kit-security": None, "faker-kit-incidents": GATE, "faker-kit-issues": None}
+             attached == {"faker-kit-babysit": None, "faker-kit-incidents": GATE, "faker-kit-issues": None}
              and wrapper in text and str(profile) in text and '"@' not in text and "\nKIT_OWNED = True\n" in text, json.dumps(attached, sort_keys=True))
 
     ids = {name: job["id"] for name, job in jobs().items()}

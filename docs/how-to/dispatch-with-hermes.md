@@ -127,7 +127,7 @@ Use this only on private repositories: on a public one anyone's pull request wou
 
 Run `/setup-hermes-project` in Claude Code on this machine, or open the bootstrap bot in Hermes Desktop Bot Mode and say "set up project shop for acme/shop". Either runs:
 
-1. `faker-kit add-project acme/shop` creates the project bot, its four agent jobs (`faker-kit-babysit`, `faker-kit-security`, `faker-kit-incidents`, `faker-kit-issues`), the `agent:andon` and bug-report labels, the webhook routes (when the machine config is kept), and the launch checkout. faker-kit marks the checkout trusted in Claude Code for you.
+1. `faker-kit add-project acme/shop` creates the project bot, its three agent jobs (`faker-kit-babysit`, `faker-kit-incidents`, `faker-kit-issues`), the `agent:andon` and bug-report labels, the webhook routes (when the machine config is kept), and the launch checkout. faker-kit marks the checkout trusted in Claude Code for you.
 2. `faker-kit vendor --project shop` opens the pull request that copies the kit into the repository's `.agents/faker-kit/`. You review and merge it.
 3. `faker-kit launch --project shop --brief-file <setup brief>` starts one cloud session that sets the repository up for dispatch and for CI and verification, and opens one pull request. You review and merge it.
 
@@ -151,7 +151,6 @@ Then add the project bot in Bot Mode and ask it for one small change, such as a 
 - **Merge what the gate leaves to you**: pull requests that touch protected paths, forks, and each project's kit-vendoring pull request. Request changes on a pull request to stop one inside its window.
 - **Pull the andon cord** when something is going wrong: tell a project bot "stop", or the bootstrap bot "stop everything". When it is fixed, ask the bot to clear the cord.
 - **Act on incidents.** Every 10 minutes by default, the `faker-kit-incidents` job's gate script runs `faker-kit incidents` and wakes the bot only when something is new, resolved, or unreadable (the bot then reads the stored report with `faker-kit incidents --last`): the default branch's checks, the health URLs, and the Sentry, PagerDuty, Datadog, and Grafana sources listed under `incidents` in `.agents/dispatch.json`. Put each source's token in the project bot's own `.env` (never the repository) under `FAKER_KIT_ALERT_<TYPE>` or `FAKER_KIT_ALERT_<TYPE>_<NAME>` (`SENTRY`, `PAGERDUTY`, `DATADOG`, or `GRAFANA`, matching the source's type, so a token only goes to that vendor's hosts), and list any host that is not the vendor's own (Grafana, self-hosted Sentry) under `alert_hosts` in `~/.hermes/faker-kit/guard.yaml`. Code remembers what it has reported, so a new incident is announced once. The bot tells you in chat, launches a `triage-incident` session, and pulls the andon cord when `andon_on_red` says so. Alert text is untrusted data and taints the turn.
-- **Act on security findings.** A push to the default branch wakes `faker-kit-security` (6-hourly fallback). The bot launches a `review-main-security` session on the new commits and tells you each high or medium finding. Pull requests get no separate security job; the repository's CI and the verifier session check them before merge.
 
 ## Troubleshooting
 
