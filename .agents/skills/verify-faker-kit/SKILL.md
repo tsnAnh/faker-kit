@@ -7,7 +7,7 @@ description: Verify a change to faker-kit the way its users meet it. Runs the re
 
 faker-kit has no screen. Its users meet it in three places: the Hermes module an owner installs and runs (`hermes/install.sh`, `faker-kit`), the plugins Claude Code loads, and the vendored upstream sync. Prove a change in the place it touches; `features/` maps each one.
 
-`scripts/check.sh` is not verification. It proves the code passes its linters and the kit's own e2e runs. This skill proves a user gets the behavior: run both.
+The commands under Checks in AGENTS.md are not verification. They prove the code passes its linters and the kit's own e2e runs. This skill proves a user gets the behavior: run both.
 
 ## Hermes module
 

@@ -1,6 +1,6 @@
 # REVIEW.md
 
-What reviewers check that no tool can. Human reviewers and the Claude review workflow both use this file. Anything `scripts/check.sh` enforces is out of scope here.
+What reviewers check that no tool can. Human reviewers and the Claude review workflow both use this file. Anything CI's `lint`, `validate`, and `commit-messages` jobs enforce is out of scope here.
 
 ## Blocking
 
@@ -31,5 +31,5 @@ Entries in STYLE.md are review rules too. Cite the entry id, for example `[nit] 
 
 ## Out of scope
 
-- Formatting, import order, lint findings, types, and generated docs: `scripts/check.sh` enforces them.
+- Formatting, import order, lint findings, types, and generated docs: CI's `lint` and `validate` jobs enforce them.
 - Rewrites unrelated to the change.

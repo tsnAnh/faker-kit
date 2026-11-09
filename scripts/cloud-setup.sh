@@ -5,7 +5,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/cloud-setup.sh
 
-Install what scripts/check.sh needs in a fresh Ubuntu or Debian container, such as a
+Install what the kit's checks need (see AGENTS.md, Checks) in a fresh Ubuntu or Debian container, such as a
 Claude Code cloud session: Node 22 or later, Bun, jq, git, Python 3 with venv, and
 ruff, mypy, types-PyYAML and pyyaml in a tool venv linked onto PATH. Running it again
 changes nothing that is already installed. It reads no secrets and writes none.
@@ -101,4 +101,4 @@ fi
 
 say "node $(node --version), bun $(bun --version), jq $(jq --version), $(git --version), $(python3 --version)"
 say "ruff $(ruff --version | cut -d' ' -f2), mypy $(mypy --version | cut -d' ' -f2), claude $(claude --version 2>/dev/null | cut -d' ' -f1 || echo 'not installed')"
-say "ready: run scripts/check.sh"
+say "ready: run the checks AGENTS.md lists for your change"

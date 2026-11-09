@@ -1,5 +1,5 @@
 # Lint and type-check configuration for the kit's own Python: hermes/ and plugins/trust-ladder/.
-# scripts/check.sh runs `ruff check` and `mypy`; legacy violations carry a `faker-kit baseline` marker that
+# CI's `lint` job runs `ruff check` and `mypy`; legacy violations carry a `faker-kit baseline` marker that
 # .agents/ratchet.json only lets go down.
 
 [tool.ruff]
