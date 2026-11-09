@@ -77,7 +77,7 @@ CODE_BLOCKS = (
 CODE_PUSH = re.compile(r"\bgit\b[^\n]{0,80}?\bpush\b([^\n]{0,200})")
 RISKY_PUSH = re.compile(
     r"(?<![\w-])(?:--force(?:-with-lease|-if-includes)?(?:=\S*)?|-f|--mirror|--all|--delete|-d|--prune)(?![\w-])"
-    r"|[\s'\",]\+[\w/.-]|(?<![\w/.-])(?:main|master)(?![\w/.-])"
+    r"|[\s'\",]\+[\w/.-]|(?<![\w/.-])(?:main|master)(?![\w/.-])|refs/heads/(?:main|master)(?![\w/.-])"
 )
 INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|perl|ruby|php|bun|deno|osascript)\Z")
 INTERPRETER_CODE_OPTIONS = ("-c", "-e", "-E", "-r", "--eval", "--command", "-p", "--print")

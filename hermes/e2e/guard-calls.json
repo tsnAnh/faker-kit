@@ -1151,6 +1151,8 @@
     {"tool": "execute_code", "args": {"code": "os.system('git push origin --delete feature')"}},
     {"tool": "execute_code", "args": {"code": "subprocess.run(['git', 'push', 'origin', 'main'])"}},
     {"tool": "execute_code", "args": {"code": "os.system('git -C repo push origin HEAD:master')"}},
+    {"tool": "execute_code", "args": {"code": "subprocess.run(['git', 'push', 'origin', 'HEAD:refs/heads/main'])"}},
+    {"tool": "execute_code", "args": {"code": "os.system('git push origin refs/heads/master')"}},
     {"tool": "cronjob_create", "args": {"script": "#!/bin/sh\ngit push --force origin feature"}},
     {"tool": "cronjob_manage", "args": {"action": "create", "script": "git push origin main"}},
     {"tool": "terminal", "args": {"command": "python3 -c \"import os; os.system('git push origin main')\""}}
