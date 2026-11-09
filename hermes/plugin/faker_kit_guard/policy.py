@@ -485,7 +485,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
     current: list[str] = []
     clean: list[str] = []
     quote, nested, line_start, i, size = "", 0, 0, 0, len(text)
-    pending: list[tuple[str, bool]] = []
+    pending: list[tuple[str | None, bool]] = []
     closers: list[str] = []
     word_parens: list[bool] = []
     next_boundary = True
