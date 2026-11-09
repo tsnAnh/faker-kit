@@ -1268,5 +1268,20 @@
     {"tool": "terminal", "args": {"command": "cat <<\"EOF\"\nEO\\\nF\ngh pr merge 1\nEOF"}},
     {"tool": "terminal", "args": {"command": "cat <<\\EOF\nEO\\\nF\ngh pr merge 1\nEOF"}},
     {"tool": "terminal", "args": {"command": "cat <<EOF\ngh pr merge 1 \\\nmore\nEOF\necho done"}}
+  ]},
+  {"name": "a partly quoted heredoc delimiter is the whole word bash reads, so a shorter closer cannot hide gh pr merge", "policy": "quiet", "profiles": ["meo-beo"], "expect": "block", "message": "blocked for every bot", "calls": [
+    {"tool": "terminal", "args": {"command": "cat <<E\"OF\"\nEOF\ngh pr merge 1\nE\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<E'OF'\nEOF\ngh pr merge 1\nE\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<\"E\"OF\nEOF\ngh pr merge 1\nE\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<E\\OF\nEOF\ngh pr merge 1\nE\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<-E'OF'\n\tEOF\ngh pr merge 1\nE\n"}}
+  ]},
+  {"name": "a partly quoted heredoc delimiter keeps its body inert up to the real closer", "policy": "quiet", "profiles": ["meo-beo"], "expect": "allow", "calls": [
+    {"tool": "terminal", "args": {"command": "cat <<E\"OF\"\ngh pr merge 1\nEOF\n"}},
+    {"tool": "terminal", "args": {"command": "cat <<E'OF'\nEO\\\nF\ngh pr merge 1\nEOF\n"}}
+  ]},
+  {"name": "a feature branch whose name contains main is still pushed from code", "policy": "quiet", "profiles": ["meo-beo"], "expect": "allow", "calls": [
+    {"tool": "execute_code", "args": {"code": "os.system('git push origin refs/heads/feature/main-menu')"}},
+    {"tool": "execute_code", "args": {"code": "os.system('git push origin feature/main')"}}
   ]}
 ]

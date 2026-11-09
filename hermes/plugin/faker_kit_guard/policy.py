@@ -102,7 +102,8 @@ PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|faker-kit/kit)(?![\w-])", re.I)
 GUARD_FILES = re.compile(r"\.hermes/faker-kit/(?:guard|bots)\.yaml(?![\w-])|plugins/faker_kit_guard(?![\w-])", re.I)
 SHELL_KEYWORDS = frozenset({"then", "do", "else", "elif", "if", "while", "until", "{", "!"})
 HEREDOC_SPAN = re.compile(r"""-?[ \t]*(?:[\w'"]|\\\\|\\\n|\\)*""")
-HEREDOC_OPERATOR = re.compile(r"""-?[ \t]*\\?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1""")
+HEREDOC_OPERATOR = re.compile(r"""-?[ \t]*((?=[A-Za-z_'"\\])(?:[^\s;&|<>()'"\\]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+)""")
+HEREDOC_QUOTING = re.compile(r"""\\(.)|'([^']*)'|"((?:[^"\\]|\\.)*)\"""")
 SHELL_FED_LINE = re.compile(r"(?<![\w./-])(?:sh|bash|zsh|dash|fish|eval|source|xargs)(?![\w-])")
 RELAY_HANDLE = r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}"
 RELAY_STAMP = rf"Message from (?:(?!\(@)[^\n]){{0,240}}? \(@(?P<sender>{RELAY_HANDLE})\): "
@@ -559,7 +560,7 @@ def scan_shell(text: str) -> tuple[list[str], str]:
                 size = len(text)
             found = None if closers else HEREDOC_OPERATOR.match(text, i + 2)
             if found:
-                pending.append((found.group(2), not found.group(1) and "\\" not in text[i + 2:found.end()]))
+                pending.append(heredoc_delimiter(found.group(1)))
                 put(text[i:found.end()])
                 i = found.end()
                 continue
@@ -653,6 +654,17 @@ def shell_tokens(command: str) -> list[str] | None:
         return list(lexer)
     except ValueError:
         return None
+
+
+def heredoc_delimiter(word: str) -> tuple[str, bool]:
+    def unquote(found: re.Match[str]) -> str:
+        if found.group(1) is not None:
+            return found.group(1)
+        if found.group(2) is not None:
+            return found.group(2)
+        return re.sub(r'\\([\\$`"])', r"\1", found.group(3))
+
+    return HEREDOC_QUOTING.sub(unquote, word), not any(char in word for char in "'\"\\")
 
 
 def heredoc_closer_end(text: str, start: int, delimiter: str, joins: bool) -> int | None:
