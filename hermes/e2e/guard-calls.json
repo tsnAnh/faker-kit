@@ -1208,5 +1208,33 @@
     {"tool": "cronjob_create", "args": {"script": "faker-kit merge --pr 1 --owner-approved"}},
     {"tool": "terminal", "args": {"command": "faker-kit handoff --project shop --part \"quoted text\""}},
     {"tool": "terminal", "args": {"command": "faker-kit handoff --project shop --part 'add search'"}}
+  ]},
+  {"name": "a comment or backslash cannot hide a plain gh pr merge on the line bash runs", "policy": "quiet", "profiles": ["meo-beo"], "expect": "block", "calls": [
+    {"tool": "terminal", "args": {"command": "echo hi # note \\\ngh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo hi # note \\\n\ngh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo hi # note \\\\\ngh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo $()#;gh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo \\ #;gh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "((#));gh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo $((1))#;gh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo \"a\"#;gh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo 'a'#;gh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo a\\\n#;gh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo X\\\\\ngh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo \"X\\\\\"\ngh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo hi # note \\\ngh pr merge 1 # tail"}}
+  ]},
+  {"name": "a real comment or quoted hash keeps gh pr merge text inert", "policy": "quiet", "profiles": ["meo-beo"], "expect": "allow", "calls": [
+    {"tool": "terminal", "args": {"command": "echo hi # gh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo hi # note \\"}},
+    {"tool": "terminal", "args": {"command": "echo hi # note \\\necho ok"}},
+    {"tool": "terminal", "args": {"command": "echo a \\\n# gh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo \"# gh pr merge 1\""}},
+    {"tool": "terminal", "args": {"command": "echo '# gh pr merge 1'"}},
+    {"tool": "terminal", "args": {"command": "(echo)#gh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo X\\\\\necho ok # gh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo X\\\necho ok"}},
+    {"tool": "terminal", "args": {"command": "echo a\\ #gh pr merge 1"}},
+    {"tool": "terminal", "args": {"command": "echo X\\\\\\\ngh pr merge 1"}}
   ]}
 ]

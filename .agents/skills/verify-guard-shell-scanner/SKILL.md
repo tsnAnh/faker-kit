@@ -24,7 +24,7 @@ This check is not in `scripts/check.sh`. `check.sh` also runs on Macs that have 
 | Last line | Exit | Meaning |
 |---|---|---|
 | `PASS` | 0 | No text fails. |
-| `UNCHANGED` | 0 | The failing texts are exactly the known findings below. This is the state of main after pull request 228. A checkout that predates it prints the arithmetic `<<` texts as `NEW`. |
+| `UNCHANGED` | 0 | The failing texts are exactly the known findings below. This is the state of the sync commit below. A checkout that predates it prints the arithmetic `<<` texts as `NEW`. |
 | `FAIL` | 1 | `NEW` lines are failing texts that are not in `baseline.json`: a break. `FIXED` lines are known findings that stopped failing. |
 | `INCONCLUSIVE` or an error | 2 | Wrong bash, a guard that does not load, a failed control, or a bash timeout. |
 
@@ -49,13 +49,11 @@ To see what the scanner made of a text, load the guard and print `scan_shell(tex
 
 ## Known findings
 
-Open on the sync commit. One text of each class was reproduced with `bash -c`, a script file, and stdin, and `decide(...)` returned `None` for it.
+Open on the sync commit. One text of each class was reproduced with `bash -c`, and `decide(...)` returned `None` for it.
 
-1. **A comment that ends in a backslash hides the next line.** `echo hi # note \` then a newline, then `gh pr merge 1`. `scan_shell` starts with `text.replace("\\\n", "")`, which joins the next line onto the comment. Bash ends a comment at the newline.
-2. **A `#` that bash does not read as a comment hides the rest of the line.** `echo $()#;gh pr merge 1`, `echo \ #;gh pr merge 1`, `((#));gh pr merge 1`. The comment branch of `scan_shell` fires after any of `" \t\n;&|()"`, but a `#` straight after the `)` of `$(...)`, `$((...))` or `((...))`, or after an escaped blank, is not at the start of a word.
-3. **An escaped backslash at the end of a line counts as a line continuation.** `echo X\\` then a newline, then `gh pr merge 1`. The same `replace` removes the second backslash with the newline, so the next line reads as part of `X`'s word.
+1. **A heredoc operator ahead of the command hides it.** `<<X gh pr merge 1`, also written with a backslash-newline after `<<X `. Bash runs `gh` with the heredoc as its input. `scan_shell` keeps `<<X gh pr merge 1` as one segment whose first word is the redirection, so `command_problem` does not see `gh`. The three comment and backslash findings that once sat here (a comment ending in a backslash, a `#` that is not at the start of a word, an escaped backslash before a newline) were fixed in `scan_shell` by applying line continuation where bash does and by tracking the start of a word.
 
-`baseline.json` holds the shortest failing texts per alphabet and attachment: 71, 10, 9 and 8, out of 2,621 failing texts. A fix belongs in `scan_shell`. When one lands, the run prints `FIXED`: add each class to `hermes/e2e/guard-calls.json` as a block verdict, confirm by hand, run `--update-baseline`, and move the sync commit.
+`baseline.json` holds the shortest failing texts per alphabet and attachment: 9 in all, out of 16 failing texts. A fix belongs in the code that reads the words of a segment (`shell_words`, `split_words`, `command_problem`), not in `scan_shell`. When one lands, the run prints `FIXED`: add each class to `hermes/e2e/guard-calls.json` as a block verdict, confirm by hand, run `--update-baseline`, and move the sync commit.
 
 ## What is checked
 
@@ -87,11 +85,11 @@ File: `hermes/plugin/faker_kit_guard/policy.py`.
 | `shell_words`, `split_words`, `without_keywords`, `unwrap`, `shell_parts` | turn a segment into the words `command_problem` reads, looking through `env`, `sudo`, `timeout` and shell wrappers |
 | `shell_tokens`, `shell_inputs`, `piped_shell` | refuse shells fed from a pipe or here-string |
 | `command_problem` | the `gh pr merge` rule |
-| `HEREDOC_OPERATOR`, `SHELL_FED_LINE`, `ENV_ASSIGN`, `SHELL_KEYWORDS`, `SHELLS`, `ASSIGNMENT_NAME`, `WRAPPERS`, `WRAPPER_VALUE_OPTIONS`, `MAX_WRAPPERS`, `UNCHECKABLE`, `SHELL_VALUE_OPTIONS`, `FISH_VALUE_OPTIONS` | the patterns and tables those functions use |
+| `HEREDOC_OPERATOR`, `SHELL_FED_LINE`, `ENV_ASSIGN`, `SHELL_KEYWORDS`, `SHELLS`, `ASSIGNMENT_TARGET`, `WRAPPERS`, `WRAPPER_VALUE_OPTIONS`, `MAX_WRAPPERS`, `UNCHECKABLE`, `SHELL_VALUE_OPTIONS`, `FISH_VALUE_OPTIONS` | the patterns and tables those functions use |
 
-Sync commit: `4f1764b7aaaa1e824e2e6160346c475f101d4ba5`
+Sync commit: `2e0bf4b99db722e8889e2b4a0d4c8f7682f0d93f`
 
-That is main after pull request 228, the arithmetic `<<` fix. Move it forward only after you confirm that this check still describes the code at the new commit:
+That is the commit that fixed the comment and backslash findings in `scan_shell`, on top of main after pull request 234. Move it forward only after you confirm that this check still describes the code at the new commit:
 
 1. Run `--drift` and read every changed definition.
 2. Run the check and `--variants`.

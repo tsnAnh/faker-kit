@@ -676,23 +676,35 @@ def effort_scenario(run: Run, brief: Path) -> None:
         return code, json.loads(out) if code == 0 else {}, json.loads(run.claude_log.read_text().splitlines()[-1])
 
     lowered = []
-    for model in (None, "sonnet", "opus"):
+    for model in (None, "sonnet", "opus", "haiku"):
         for asked in ("max", "xhigh"):
             code, printed, seen = launched(*(["--model", model] if model else []), "--effort", asked)
             lowered.append((code == 0 and seen.get("effort") == "high" and printed.get("effort") == "high"
                             and printed.get("effort_lowered") == {"from": asked, "to": "high"} and "effort_defaulted" not in printed
-                            and seen.get("model") == model, f"{model or 'no model'} {asked}: session {seen.get('effort')}, printed {printed.get('effort')} {printed.get('effort_lowered')}"))
-    run.step("launch lowers a request for xhigh or max to high on sonnet, opus, and the account's default model, and prints what it lowered",
+                            and seen.get("model") == (model or "sonnet") and printed.get("model") == (model or "sonnet"),
+                            f"{model or 'no model'} {asked}: session {seen.get('model')} {seen.get('effort')}, printed {printed.get('effort')} {printed.get('effort_lowered')}"))
+    run.step("launch lowers a request for xhigh or max to high on sonnet, opus, haiku, and the default model, and prints what it lowered",
              all(ok for ok, _ in lowered), "; ".join(text for _, text in lowered))
     code, printed, seen = launched()
-    run.step("launch with no effort starts the session at high and prints that it applied the default",
-             code == 0 and seen.get("effort") == "high" and printed.get("effort") == "high" and printed.get("effort_defaulted") == "high"
-             and "effort_lowered" not in printed and "model" not in seen, f"session {seen.get('effort')}, printed {printed}")
+    run.step("launch with no flags starts the session on sonnet at medium and prints that it applied both defaults",
+             code == 0 and seen.get("model") == "sonnet" and seen.get("effort") == "medium"
+             and printed.get("model") == "sonnet" and printed.get("effort") == "medium"
+             and printed.get("model_defaulted") == "sonnet" and printed.get("effort_defaulted") == "medium"
+             and "effort_lowered" not in printed, f"session {seen.get('model')} {seen.get('effort')}, printed {printed}")
+    paired = []
+    for flags, model, level, defaulted in ((("--model", "opus"), "opus", "medium", "effort_defaulted"), (("--model", "haiku", "--effort", "high"), "haiku", "high", None),
+                                          (("--effort", "low"), "sonnet", "low", "model_defaulted"), (("--effort", "medium"), "sonnet", "medium", "model_defaulted")):
+        code, printed, seen = launched(*flags)
+        paired.append((code == 0 and seen.get("model") == model and seen.get("effort") == level and printed.get("model") == model and printed.get("effort") == level
+                       and {"model_defaulted", "effort_defaulted"} & set(printed) == ({defaulted} if defaulted else set()) and "effort_lowered" not in printed,
+                       f"{' '.join(flags)}: session {seen.get('model')} {seen.get('effort')}, printed {printed}"))
+    run.step("launch defaults only what the bot left out and passes an explicit opus, haiku, or effort through", all(ok for ok, _ in paired), "; ".join(text for _, text in paired))
     kept = []
     for level in ("low", "medium", "high"):
-        code, printed, seen = launched("--effort", level)
+        code, printed, seen = launched("--model", "sonnet", "--effort", level)
         kept.append((code == 0 and seen.get("effort") == level and printed.get("effort") == level
-                     and "effort_lowered" not in printed and "effort_defaulted" not in printed, f"{level}: session {seen.get('effort')}, printed {printed.get('effort')}"))
+                     and "effort_lowered" not in printed and "effort_defaulted" not in printed and "model_defaulted" not in printed,
+                     f"{level}: session {seen.get('effort')}, printed {printed.get('effort')}"))
     run.step("launch passes low, medium, and high through unchanged and unannotated", all(ok for ok, _ in kept), "; ".join(text for _, text in kept))
     before = len(run.claude_log.read_text().splitlines())
     code, _, err = run.kit("launch", "--brief-file", str(brief), "--effort", "ultra")
@@ -713,9 +725,9 @@ def launch_scenario(run: Run) -> None:
     first = calls[-1]["argv"][1]
     run.step("the brief is the session's first message and carries the andon stop rule",
              len(calls) == 1 and first.startswith("/faker-mode") and "agent:andon" in first and "README typo" in first, first[:120].replace("\n", " "))
-    run.step("a launch with no model choice leaves the model on the account's default and starts the session at high effort", "model" not in calls[-1] and calls[-1].get("effort") == "high", "")
-    run.step("the stop rule tells the session never to run itself or a subagent at xhigh or max",
-             "never run yourself or any subagent at effort xhigh or max" in first, first[-260:].replace("\n", " "))
+    run.step("a launch with no model choice starts the session on sonnet at medium effort", calls[-1].get("model") == "sonnet" and calls[-1].get("effort") == "medium", "")
+    run.step("the stop rule tells the session and its subagents to run sonnet at medium by default, never xhigh or max, and never opus for coding",
+             "you and any subagent run Sonnet at medium effort by default, never at effort xhigh or max" in first and "Never use Opus for coding" in first, first[-260:].replace("\n", " "))
     run.step("the session starts from the kept launch checkout", Path(calls[-1]["cwd"]).name == "repo" and "checkouts" in calls[-1]["cwd"], calls[-1]["cwd"])
     for name, text, needle in (("loose.md", "Fix the README typo.\n", "/faker-mode"), ("secret.md", "/faker-mode\n\nUse ghp_" + "A" * 36 + " to push.\n", "token")):
         code, _, err = run.kit("launch", "--brief-file", str(run.brief(name, text)))
