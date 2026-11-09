@@ -312,8 +312,8 @@ FAKE_CLAUDE = r'''
 import json, os, sys
 args = sys.argv[1:]
 chosen = {}
-while len(args) > 2 and args[0] in ("--model", "--effort"):
-    chosen[args[0][2:]] = args[1]
+while len(args) > 2 and args[0] in ("--model", "--effort", "--permission-mode"):
+    chosen[args[0][2:].replace("-", "_")] = args[1]
     args = args[2:]
 if len(args) == 2 and args[0] == "--cloud":
     if not os.isatty(1):
@@ -685,6 +685,11 @@ def effort_scenario(run: Run, brief: Path) -> None:
                             f"{model or 'no model'} {asked}: session {seen.get('model')} {seen.get('effort')}, printed {printed.get('effort')} {printed.get('effort_lowered')}"))
     run.step("launch lowers a request for xhigh or max to high on sonnet, opus, haiku, and the default model, and prints what it lowered",
              all(ok for ok, _ in lowered), "; ".join(text for _, text in lowered))
+    modes = [json.loads(line) for line in run.claude_log.read_text().splitlines()]
+    run.step("every launch asks Claude Code for auto permission mode next to model and effort, prints it, and never passes a bypass flag",
+             bool(modes) and all(m.get("permission_mode") == "auto" and m.get("model") and m.get("effort")
+                                 and not any("bypass" in a or "dangerously" in a for a in m["argv"]) for m in modes),
+             f"{len(modes)} launches, modes {sorted({m.get('permission_mode') for m in modes})}")
     code, printed, seen = launched()
     run.step("launch with no flags starts the session on sonnet at medium and prints that it applied both defaults",
              code == 0 and seen.get("model") == "sonnet" and seen.get("effort") == "medium"
