@@ -144,9 +144,6 @@ class Gh:
             latest.setdefault(str(status.get("context") or ""), status)
         return list(latest.values())
 
-    def pull_files(self, number: int) -> list[dict]:
-        return self.pages(f"repos/{self.repo}/pulls/{int(number)}/files")
-
     def head_pulls(self, head: str) -> list[dict]:
         return self.pages(f"repos/{self.repo}/commits/{head}/pulls")
 

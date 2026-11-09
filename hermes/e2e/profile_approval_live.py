@@ -99,14 +99,11 @@ def probe(run: e2e.Run, checkout: Path, hermes: Path, python: Path) -> None:
     run.step("Hermes denies profile create from an agent's command and creates nothing",
              denied.returncode != 0 and "needs your approval" in denied.stdout + denied.stderr and not live(NEW_BOT), (denied.stdout + denied.stderr).strip())
 
-    policy = e2e.load_policy(run.team)
     commands = [form.format(bot=NEW_BOT) for form in ALLOWED_FORMS]
     classified = run_in_checkout(python, checkout, env, DETECT, json.dumps(commands))
     verdicts = json.loads(classified.stdout) if classified.returncode == 0 else {}
-    guard_allows = {c: e2e.decide(policy, BOOTSTRAP_BOT, "terminal", {"command": c}, False) is None for c in commands}
-    guard_refuses = {role: all(e2e.decide(policy, bot, "terminal", {"command": c}, False) is not None for c in commands) for role, bot in (("project", e2e.BOT),)}
-    run.step("every form the guard allows the bootstrap bot is one Hermes's own detection classifies as needing a human",
-             classified.returncode == 0 and all(guard_allows.values()) and all(verdicts[c][0] is True for c in commands) and all(guard_refuses.values()),
+    run.step("every hermes profile create form the kit documents is one Hermes's own detection classifies as needing a human",
+             classified.returncode == 0 and all(verdicts[c][0] is True for c in commands),
              json.dumps({c: verdicts.get(c) for c in commands}) or classified.stderr.strip()[-200:])
 
     def gate(command: str, context: dict[str, str]) -> dict:
@@ -141,16 +138,11 @@ def probe(run: e2e.Run, checkout: Path, hermes: Path, python: Path) -> None:
     roles = yaml.safe_load((run.team / "bots.yaml").read_text())
     roles["bots"][CHIEF_BOT] = {"role": "chief"}
     (run.team / "bots.yaml").write_text(yaml.safe_dump(roles))
-    policy = e2e.load_policy(run.team)
     chief_forms = [form.format(bot=CHIEF_NEW_BOT) for form in ALLOWED_FORMS]
-    chief_allowed = all(e2e.decide(policy, CHIEF_BOT, "terminal", {"command": c}, False) is None for c in chief_forms)
-    chief_tainted = all(e2e.decide(policy, CHIEF_BOT, "terminal", {"command": c}, True) is not None for c in chief_forms)
     by_chief = gate(chief_forms[0], CHAT)
     chief_made = cli("profile", "create", CHIEF_NEW_BOT, "--no-alias", extra={**AGENT_TURN, GRANT: by_chief["grant"]})
-    project_refused = all(e2e.decide(policy, e2e.BOT, "terminal", {"command": c}, False) is not None for c in chief_forms)
-    run.step("the chief of staff's profile create is allowed by the guard in a clean turn only, goes through Hermes's flow, and creates the profile; a project bot's is refused",
-             chief_allowed and chief_tainted and by_chief["approved"] is True and chief_made.returncode == 0 and live(CHIEF_NEW_BOT) and project_refused,
-             json.dumps(by_chief)[:200])
+    run.step("the chief of staff's profile create goes through Hermes's own approval flow and creates the profile",
+             by_chief["approved"] is True and chief_made.returncode == 0 and live(CHIEF_NEW_BOT), json.dumps(by_chief)[:200])
 
     migrated = cli("catalog", "migrate")
     marker = run.hermes / "shared" / "catalog" / ".migrated"

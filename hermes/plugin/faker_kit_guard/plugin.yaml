@@ -1,9 +1,8 @@
 name: faker_kit_guard
-version: "0.3.0"
-description: "faker-kit guard. Blocks the hard-blocked calls from ~/.hermes/faker-kit/guard.yaml and bots.yaml, fails closed, asks the owner to approve every bootstrap change, wraps untrusted readers' output, and asks for approval of side-effecting tools in a turn that read it."
+version: "0.4.0"
+description: "faker-kit guard. Blocks the irreversible calls (force-pushes and pushes to main, raw gh pr merge and GitHub merge-gate writes, repository deletion, wiping / or home, secret reads, edits to the kit and the guard's own files) from ~/.hermes/faker-kit/guard.yaml and bots.yaml, fails closed, asks the owner to approve every bootstrap change when ask_owner is true, and wraps the output of untrusted readers."
 author: "faker-kit"
 provides_hooks:
   - pre_tool_call
   - transform_tool_result
   - pre_llm_call
-  - on_session_end
