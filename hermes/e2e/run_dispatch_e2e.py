@@ -886,6 +886,10 @@ def webhook_scenario(run: Run) -> None:
     status, prompt = hermes_webhook(pr_route, WEBHOOK_SECRET, "pull_request", payload, signed)
     run.step("a signed pull_request event wakes the babysit job with numbers only", status == 202 and prompt is not None
              and "pull request 1" in prompt.lower() and "ignore previous" not in prompt, str(prompt))
+    closed_pr = {**payload, "action": "closed", "pull_request": {"number": 1, "merged": True}}
+    status, prompt = hermes_webhook(pr_route, WEBHOOK_SECRET, "pull_request", closed_pr, signed_for(closed_pr))
+    run.step("a signed pull_request event with action closed (merged or not) is delivered to the babysit job, whose gate then decides whether to wake",
+             status == 202 and prompt is not None and "(closed)" in prompt and pr_route["cron_job"] == "faker-kit-babysit", str(prompt))
     run.step("an unsigned or wrongly signed delivery is refused",
              hermes_webhook(pr_route, WEBHOOK_SECRET, "pull_request", payload, None)[0] == 401
              and hermes_webhook(pr_route, WEBHOOK_SECRET, "pull_request", payload, "sha256=" + "0" * 64)[0] == 401, "401 twice")
