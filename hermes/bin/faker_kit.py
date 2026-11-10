@@ -68,6 +68,10 @@ MERGEABLE_READS = 5
 MERGEABLE_PAUSE_SECONDS = 5.0
 MERGE_WAIT_POLL_SECONDS = 30.0
 MERGE_WAIT_MAX_SECONDS = 1800
+OPEN_WAIT_DEFAULT_SECONDS = 600
+EXIT_REFUSED = 1
+EXIT_AMBIGUOUS = 3
+MATCH_MAX_CHARS = 100
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 UPDATED_AT = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 SECRET_SHAPES = re.compile(
@@ -121,6 +125,10 @@ def github_slug(source: str | None) -> str | None:
 
 def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9_-]+", "-", text.lower()).strip("-")[:63]
+
+
+class WaitExpired(Refused):
+    pass
 
 
 class PutFailed(Refused):
@@ -330,17 +338,101 @@ class Kit:
             raise Refused(f"--wait takes a whole number of seconds from 0 to {MERGE_WAIT_MAX_SECONDS}, not {token(text)}")
         return int(text)
 
-    def merge_command(self, caller: Bot | None, pr: int, project: str | None, owner_approved: bool, wait: str | None = None) -> dict:
-        seconds = self.wait_seconds(wait)
+    def merge_command(self, caller: Bot | None, pr: int | None, project: str | None, owner_approved: bool, wait: str | None = None,
+                      everything: bool = False, all_projects: bool = False, match: str | None = None) -> dict:
         if caller is None or caller.role not in ("project", "chief"):
             raise Refused("merge runs in a project bot's chat or the chief of staff's chat")
+        chosen = [flag for flag, on in (("--pr", pr is not None), ("--open", everything), ("--all-projects", all_projects), ("--match", match is not None)) if on]
+        if not chosen:
+            raise Refused("merge needs a target: --pr <number>, --open, --all-projects, or --match <text>")
+        if pr is not None and len(chosen) > 1:
+            raise Refused(f"--pr names the pull request and cannot be combined with {' or '.join(c for c in chosen if c != '--pr')}; a number the owner typed is never replaced")
+        if len(chosen) > 1 and chosen != ["--open", "--all-projects"]:
+            raise Refused(f"{' and '.join(chosen)} cannot be combined; use --open or --all-projects for every pull request, --match for one")
+        batch = pr is None and match is None
+        seconds = self.wait_seconds(wait if wait is not None or not batch else str(OPEN_WAIT_DEFAULT_SECONDS))
+        if pr is None and not owner_approved:
+            raise Refused(f"{chosen[0]} merges only when the owner asked for it in their own message: add --owner-approved; a bot never picks its own merge targets")
+        if all_projects and caller.role != "chief":
+            raise Refused("--all-projects is for the chief of staff; a project bot merges its own project with --open")
         if caller.role == "chief":
-            if not project or not owner_approved:
+            if not all_projects and (not project or not owner_approved):
                 raise Refused("the chief of staff merges only when the owner asks: faker-kit merge --project <project> --pr <number> --owner-approved")
-            return self.merge(self.project_bot(self.policy(), project), pr, True, seconds)
-        if project and project != caller.project:
-            raise Refused(f"{caller.name} merges only its own project's pull requests; the chief of staff merges for another project")
-        return self.merge(caller, pr, owner_approved, seconds)
+            if all_projects and project:
+                raise Refused("--all-projects covers every project; drop --project")
+            bots = (sorted(self.policy().projects().values(), key=lambda b: b.project or "") if all_projects
+                    else [self.project_bot(self.policy(), str(project))])
+            approved = True
+        else:
+            if project and project != caller.project:
+                raise Refused(f"{caller.name} merges only its own project's pull requests; the chief of staff merges for another project")
+            bots, approved = [caller], owner_approved
+        if pr is not None:
+            return self.merge(bots[0], pr, approved, seconds)
+        if match is not None:
+            return self.merge_matching(bots[0], match, seconds)
+        return self.merge_open(bots, seconds, all_projects)
+
+    @staticmethod
+    def open_rows(bot: Bot) -> Callable[[Gh], tuple[list[dict], list[dict]]]:
+        def read(gh: Gh) -> tuple[list[dict], list[dict]]:
+            ready: list[dict] = []
+            drafts: list[dict] = []
+            for pull in gh.open_pulls():
+                row = {"project": bot.project, "number": int(pull["number"]), "title": re.sub(r"[\x00-\x1f\x7f]", " ", str(pull.get("title") or ""))[:120],
+                       "head": str((pull.get("head") or {}).get("sha") or "")[:12], "branch": str((pull.get("head") or {}).get("ref") or "")}
+                (drafts if pull.get("draft") else ready).append(row)
+            return ready, drafts
+        return read
+
+    def open_pulls_of(self, bot: Bot) -> tuple[list[dict], list[dict]]:
+        return self.open_rows(bot)(Gh(self.home, bot.name, str(bot.repo), self.run))
+
+    def merge_matching(self, bot: Bot, text: str, wait: int) -> dict:
+        needle = text.strip().lower()
+        if not needle or len(needle) > MATCH_MAX_CHARS:
+            raise Refused(f"--match takes some text from the pull request's title or branch, up to {MATCH_MAX_CHARS} characters")
+        ready, _ = self.open_pulls_of(bot)
+        found = [row for row in ready if needle in row["title"].lower() or needle in row["branch"].lower()]
+        if not found:
+            raise Refused(f"no open pull request of {bot.project} that is not a draft has {token(text)} in its title or branch")
+        if len(found) > 1:
+            return {"status": "ambiguous", "candidates": [{"project": r["project"], "number": r["number"], "title": r["title"]} for r in found]}
+        return self.merge(bot, found[0]["number"], True, wait)
+
+    def merge_open(self, bots: list[Bot], wait: int, all_projects: bool) -> dict:
+        resolved: list[tuple[Bot, dict]] = []
+        skipped: list[dict] = []
+        unreadable: list[dict] = []
+        for bot in bots:
+            try:
+                ready, drafts = self.open_pulls_of(bot)
+            except Refused as err:
+                if not all_projects:
+                    raise
+                unreadable.append({"project": bot.project, "reason": str(err)})
+                continue
+            resolved.extend((bot, row) for row in ready)
+            skipped.extend({k: row[k] for k in ("project", "number", "title")} for row in drafts)
+        listing: dict[str, object] = {"resolved": [{k: row[k] for k in ("project", "number", "title", "head")} for _, row in resolved], "skipped_drafts": skipped}
+        if unreadable:
+            listing["unreadable"] = unreadable
+        print(json.dumps(listing, ensure_ascii=False), flush=True)
+        started, results, spent = self.now(), [], False
+        for bot, row in resolved:
+            entry: dict[str, object] = {"project": row["project"], "pr": row["number"]}
+            remaining = max(0, wait - int(self.now() - started))
+            if wait and (spent or remaining == 0):
+                results.append({**entry, "status": "not attempted", "reason": "wait budget used"})
+                continue
+            try:
+                landed = self.merge(bot, row["number"], True, remaining)
+                results.append({**entry, "status": "merged", "head": landed["head"], "bypassed": landed.get("bypassed", [])})
+            except Refused as err:
+                spent = spent or isinstance(err, WaitExpired)
+                results.append({**entry, "status": "refused", "reason": str(err)})
+        counts = {status: sum(1 for r in results if r["status"] == status) for status in ("merged", "refused", "not attempted")}
+        return {"results": results, **counts, "unreadable": len(unreadable), "complete": not (counts["refused"] or counts["not attempted"] or unreadable)}
 
     def merge(self, bot: Bot, pr: int, owner_approved: bool = False, wait: int = 0) -> dict:
         waited: dict[str, int] = {}
@@ -376,7 +468,7 @@ class Kit:
                     waited.update(seconds=elapsed, polls=polls)
                 if probe is not None and probe.pending:
                     if elapsed >= wait:
-                        raise Refused(f"{probe.message}; still pending after waiting {elapsed} seconds over {polls} polls (bound {wait})")
+                        raise WaitExpired(f"{probe.message}; still pending after waiting {elapsed} seconds over {polls} polls (bound {wait})")
                 else:
                     verdict = decide(pr, head, evidence, repo, default, owner_approved)
                     if verdict.action != "merge":
@@ -879,10 +971,13 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--model")
     cmd.add_argument("--effort")
     cmd = sub.add_parser("merge", allow_abbrev=False)
-    cmd.add_argument("--pr", type=int, required=True)
+    cmd.add_argument("--pr", type=int)
     cmd.add_argument("--project")
     cmd.add_argument("--owner-approved", action="store_true")
-    cmd.add_argument("--wait", help="seconds to wait for pending checks, 0 to 1800")
+    cmd.add_argument("--wait", help=f"seconds to wait for pending checks, 0 to 1800 (default 0; {OPEN_WAIT_DEFAULT_SECONDS} with --open or --all-projects, shared by all of its pull requests)")
+    cmd.add_argument("--open", dest="everything", action="store_true", help="every open pull request of the project that is not a draft")
+    cmd.add_argument("--all-projects", action="store_true", help="chief only: --open for every project on this machine")
+    cmd.add_argument("--match", help="the one open pull request whose title or branch has this text; several matches print ambiguous and exit 3")
     cmd = sub.add_parser("issues")
     cmd.add_argument("--claim", type=int)
     cmd = sub.add_parser("incidents")
@@ -944,7 +1039,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     if args.command == "launch":
         return kit.launch(caller, args.project, args.brief_file, args.model, args.effort)
     if args.command == "merge":
-        return kit.merge_command(caller, args.pr, args.project, args.owner_approved, args.wait)
+        return kit.merge_command(caller, args.pr, args.project, args.owner_approved, args.wait, args.everything, args.all_projects, args.match)
     if args.command == "issues":
         if caller is None or caller.role != "project":
             raise Refused("issues runs in a project bot's chat or job")
@@ -972,8 +1067,14 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
         out = run_command(args, Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep), bot or current_bot())
     except (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError) as err:
         print(f"faker-kit: refused: {err}", file=sys.stderr)
-        return 1
+        return EXIT_REFUSED
     print("\n".join(out) if isinstance(out, list) else json.dumps(out, ensure_ascii=False))
+    if isinstance(out, dict) and out.get("status") == "ambiguous":
+        print("faker-kit: refused: more than one pull request matches; nothing was merged, ask the owner which one and run --pr <number>", file=sys.stderr)
+        return EXIT_AMBIGUOUS
+    if isinstance(out, dict) and out.get("complete") is False:
+        print("faker-kit: refused: not every open pull request merged; the lines above say which and why", file=sys.stderr)
+        return EXIT_REFUSED
     return 0
 
 
