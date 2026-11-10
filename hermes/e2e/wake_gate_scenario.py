@@ -24,6 +24,7 @@ NOT_RECORDED = "no earlier tick of this gate is recorded"
 CHANGED = "the status changed"
 NOTICE_REASON = "a faker-kit notice printed"
 HEARTBEAT_REASON = "six hours passed since this gate last woke the agent while a pull request is open"
+LAST_GONE = "the last open pull request merged or closed"
 RUN_FAILED = "the job's previous run after the last wake did not finish ok"
 SHAPE = "faker-kit loop --all printed an unexpected report shape"
 NO_PRS_PART = {"id": 1, "project": "shop", "state": "waiting", "waits_on": None}
@@ -200,8 +201,8 @@ class Gates:
         update(lambda state: [pull.update(state="closed") for pull in state["pulls"]])
         emptied = self.tick(BABYSIT)
         stored = self.state(BABYSIT)
-        step("with every pull request closed the real status prints no open pull requests and the gate stays quiet, recording that as the new fingerprint",
-             self.silent(emptied) and stored["fingerprint"] == fingerprint_of([NO_PULLS]), self.say(emptied))
+        step("with every pull request closed the real status prints no open pull requests and the gate wakes once with the last-pull-request reason, recording that as the new fingerprint",
+             self.woke(emptied, LAST_GONE) and stored["fingerprint"] == fingerprint_of([NO_PULLS]), self.say(emptied))
         self.set_woke_at(BABYSIT, time.time() - HEARTBEAT - 3600)
         kept = self.snapshot(BABYSIT)
         late = self.tick(BABYSIT)
@@ -298,11 +299,29 @@ class Gates:
         step("a pull request that opens after the quiet stretch wakes the agent as a change",
              self.woke(appeared, CHANGED) and self.state(BABYSIT)["fingerprint"] == fingerprint_of(STATUS), self.say(appeared))
         self.serve([NO_PULLS])
-        woke_at = self.state(BABYSIT)["woke_at"]
         lists = self.hermes_lists()
         closed = self.tick(BABYSIT)
-        step("when the last pull request closes the gate stays quiet, records the empty status, keeps the last wake time, and never reads the job's last run",
-             self.silent(closed) and self.state(BABYSIT) == {"fingerprint": fingerprint_of([NO_PULLS]), "woke_at": woke_at, "retries": 0} and self.hermes_lists() == lists, self.say(closed))
+        step("when the last pull request closes the gate wakes the agent once with the last-pull-request reason, records the empty status, and stores the wake time",
+             self.woke(closed, LAST_GONE) and self.state(BABYSIT)["fingerprint"] == fingerprint_of([NO_PULLS]) and abs(self.state(BABYSIT)["woke_at"] - time.time()) < MARGIN
+             and self.state(BABYSIT)["retries"] == 0, self.say(closed))
+        kept = self.snapshot(BABYSIT)
+        lists = self.hermes_lists()
+        again = self.tick(BABYSIT)
+        step("the very next tick with still no pull request open is quiet, writes nothing, and never reads the job's last run",
+             self.silent(again) and self.snapshot(BABYSIT) == kept and self.hermes_lists() == lists, self.say(again))
+        self.set_woke_at(BABYSIT, time.time() - 7 * 60 * 60)
+        kept = self.snapshot(BABYSIT)
+        late_again = self.tick(BABYSIT)
+        step("seven hours after the last-pull-request wake with still none open the gate stays quiet and writes nothing",
+             self.silent(late_again) and self.snapshot(BABYSIT) == kept, self.say(late_again))
+        self.serve([STATUS[0], STATUS[1]])
+        self.tick(BABYSIT)
+        self.serve([STATUS[0]])
+        remaining = self.tick(BABYSIT)
+        step("with two pull requests open and one merged, one remains, the gate wakes with the ordinary changed reason",
+             self.woke(remaining, CHANGED) and self.state(BABYSIT)["fingerprint"] == fingerprint_of([STATUS[0]]), self.say(remaining))
+        self.serve([NO_PULLS])
+        self.tick(BABYSIT)
         self.set_last_run("error: the previous woken turn failed", time.time())
         failed = self.tick(BABYSIT)
         step("a failed earlier run does not wake the gate while no pull request is open", self.silent(failed), self.say(failed))

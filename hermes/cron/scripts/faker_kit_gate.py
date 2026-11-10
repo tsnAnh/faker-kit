@@ -29,6 +29,7 @@ NO_PULLS = "no open pull requests"
 NOT_RECORDED = "no earlier tick of this gate is recorded"
 NOTICE_REASON = "a faker-kit notice printed"
 CHANGED = "the status changed"
+LAST_GONE = "the last open pull request merged or closed"
 HEARTBEAT_REASON = "six hours passed since this gate last woke the agent while a pull request is open"
 RUN_FAILED = "the job's previous run after the last wake did not finish ok"
 
@@ -148,7 +149,7 @@ def wake_reason(job: str, stored: GateState | None, lines: list[str], now: float
     if any(NOTICE in line for line in lines):
         return NOTICE_REASON
     if lines == [NO_PULLS]:
-        return None
+        return LAST_GONE if stored is not None and stored.fingerprint != fingerprint(lines) else None
     if stored is None:
         return NOT_RECORDED
     if stored.fingerprint != fingerprint(lines):
@@ -165,7 +166,8 @@ def tick(job: str, lines: list[str], now: float, news: str | None = None) -> str
     path = state_path(job)
     stored = read_state(path)
     reason = wake_reason(job, stored, lines, now, news)
-    current = fingerprint(lines)
+    empty = NO_PULLS in lines
+    current = fingerprint([line for line in lines if NOTICE not in line] if empty else lines)
     if reason is not None:
         retries = stored.retries + 1 if stored is not None and reason == RUN_FAILED else 0
         write_state(path, GateState(current, now, retries))
