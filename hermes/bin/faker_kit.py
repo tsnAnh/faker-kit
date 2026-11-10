@@ -52,6 +52,7 @@ from faker_kit_loop import Loop, LoopError
 from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
 from faker_kit_merge import MERGE_METHOD, Evidence, MergeLock, decide, from_fork, token
 from faker_kit_profiles import Profiles
+from faker_kit_refresh import refresh
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
 from install_config import InstallError, config_set, hermes, mapping, value_at
 
@@ -88,7 +89,7 @@ ROLE_COMMANDS = {
     "bootstrap": {"add-project", "vendor", "launch", "status", "andon"},
     "chief": {"status", "handoff", "loop", "add-project", "merge"},
 }
-OWNER_ONLY = {"install", "runner", "projects"}
+OWNER_ONLY = {"install", "refresh", "runner", "projects"}
 ANDON_COLOR = "b60205"
 ANDON_DESCRIPTION = "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"
 SCHEDULE_DEFAULTS = {"heartbeat_every": DEFAULT_HEARTBEAT_EVERY}
@@ -935,6 +936,7 @@ class Kit:
         hooks = self.webhooks(machine.webhook_url, [(p.bot, p.repo) for p in machine.projects]) if machine and machine.webhook_url else []
         if config:
             self.keep_machine(config)
+        self.profiles.register_update_step()
         return {"projects": projects, "refreshed": refreshed, "skills": skills, "webhooks": hooks}
 
     def webhooks(self, base_url: str, projects: list[tuple[str, str]]) -> list[dict]:
@@ -991,6 +993,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--claude-subscription", action="store_true")
     cmd.add_argument("--source")
     cmd.add_argument("--require-current-kit", action="store_true")
+    cmd = sub.add_parser("refresh")
     cmd = sub.add_parser("projects")
     cmd = sub.add_parser("add-project")
     cmd.add_argument("repo")
@@ -1069,6 +1072,8 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
         return kit.status(caller, args.all)
     if args.command == "install":
         return kit.install(args.config, args.bootstrap_bot, args.model, args.claude_subscription, args.provider, args.source, args.require_current_kit)
+    if args.command == "refresh":
+        return [refresh(kit.home)]
     if args.command == "projects":
         return kit.project_names()
     if args.command == "add-project":

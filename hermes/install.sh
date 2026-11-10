@@ -87,6 +87,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [[ $ref =~ ^[0-9a-f]{40}$ ]] || die "--ref must be a full 40-character commit"
+[ ! -d "$source" ] || source=$(cd "$source" && pwd)
 [ -z "$model" ] || [ -n "$bootstrap_bot" ] || die "--model needs --bootstrap-bot"
 [ -z "$claude_subscription" ] || [ -n "$bootstrap_bot" ] || die "--claude-subscription needs --bootstrap-bot"
 [ -z "$provider" ] || [ -n "$bootstrap_bot" ] || die "--provider needs --bootstrap-bot"
@@ -219,6 +220,14 @@ vendor_projects() {
 if [ "$gateway" = 1 ]; then
   hermes -p default gateway install >/dev/null
   hermes -p default gateway restart >/dev/null 2>&1 || hermes -p default gateway start >/dev/null
+fi
+
+write_record() {
+  printf '%s\n' "$2" > "$kit_home/.$1.tmp.$$" && mv -f "$kit_home/.$1.tmp.$$" "$kit_home/$1"
+}
+if [ -z "$runner_failed" ]; then
+  write_record kit-source "$source"
+  write_record installed-ref "$ref"
 fi
 
 printf 'faker-kit Hermes module installed at kit %s.\n' "$ref"
