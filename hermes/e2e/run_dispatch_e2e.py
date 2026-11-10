@@ -24,6 +24,7 @@ from pathlib import Path
 
 import gate_scenario
 import guard_scenario
+import refresh_scenario
 import tooling_scenario
 import wake_gate_scenario
 
@@ -419,6 +420,9 @@ elif args[:2] == ["profile", "show"]:
         sys.exit(1)
     print(f"Profile: {args[2]}")
 elif args[:2] == ["config", "set"]:
+    if os.environ.get("E2E_HERMES_CONFIG_FAIL"):
+        sys.stderr.write("Error: config.yaml is read-only\n")
+        sys.exit(1)
     key, value = args[2:4]
     if value.startswith(("[", "{")) or value in ("true", "false", "null") or value.isdecimal():
         value = yaml.safe_load(value)
@@ -3142,6 +3146,7 @@ def main(argv: list[str] | None = None) -> int:
         trust_scenario(run)
         loop_scenario(run)
         install_scenario(run, root / "install")
+        refresh_scenario.refresh_scenario(root / "refresh", run.step, run.env(), run.bin / "hermes", kit_source)
         provider_scenario(run, root / "provider")
         runner_scenario(run, root / "runner")
         vendor_api_scenario(run, root / "vendor-api")

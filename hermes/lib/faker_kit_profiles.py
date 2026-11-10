@@ -36,6 +36,8 @@ GATE_LIBRARIES = (("cron/scripts", "faker_kit_gate.py"), ("lib", "faker_kit_cron
 RETIRED_JOBS = {"project-jobs.md": ("faker-kit-issues", "faker-kit-security", "faker-kit-incidents")}
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
 SCHEDULE_FIELDS = {"faker-kit-babysit": "heartbeat_every"}
+UPDATE_STEP = ("updates", "post_update_steps", "faker-kit")
+UPDATE_STEP_SECONDS = 1800
 
 
 class JobChanges(NamedTuple):
@@ -308,6 +310,10 @@ class Profiles:
             temp.chmod(0o600)
             temp.replace(target)
         return target.name
+
+    def register_update_step(self) -> None:
+        config_set(self.root, "default", (*UPDATE_STEP, "command"), [str(self.root / "bin" / "faker-kit"), "refresh"])
+        config_set(self.root, "default", (*UPDATE_STEP, "timeout"), UPDATE_STEP_SECONDS)
 
     def kit_skills(self, profiles: list[str], plugins_dir: Path, wanted: list[str]) -> list[str]:
         plugins = plugins_dir.resolve()
