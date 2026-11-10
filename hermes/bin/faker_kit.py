@@ -368,56 +368,85 @@ class Kit:
                 raise Refused(f"{caller.name} merges only its own project's pull requests; the chief of staff merges for another project")
             bots, approved = [caller], owner_approved
         if pr is not None:
-            return self.merge(bots[0], pr, approved, seconds)
+            return self.merge_named(bots[0], pr, approved, seconds)
         if match is not None:
             return self.merge_matching(bots[0], match, seconds)
         return self.merge_open(bots, seconds, all_projects)
 
+    def acting_login(self, bot: Bot) -> str:
+        try:
+            login = str(Gh(self.home, bot.name, str(bot.repo), self.run).json("user").get("login") or "")
+        except (Refused, ValueError) as err:
+            raise Refused(f"cannot read the GitHub login this machine acts as ({err}); nothing was merged, because a bulk merge touches only that login's pull requests") from err
+        if not login:
+            raise Refused("GitHub returned no login for this machine; nothing was merged, because a bulk merge touches only that login's pull requests")
+        return login
+
     @staticmethod
-    def open_rows(bot: Bot) -> Callable[[Gh], tuple[list[dict], list[dict]]]:
-        def read(gh: Gh) -> tuple[list[dict], list[dict]]:
-            ready: list[dict] = []
+    def open_rows(bot: Bot, login: str) -> Callable[[Gh], tuple[list[dict], list[dict], list[dict]]]:
+        def read(gh: Gh) -> tuple[list[dict], list[dict], list[dict]]:
+            own: list[dict] = []
             drafts: list[dict] = []
+            foreign: list[dict] = []
             for pull in gh.open_pulls():
                 row = {"project": bot.project, "number": int(pull["number"]), "title": re.sub(r"[\x00-\x1f\x7f]", " ", str(pull.get("title") or ""))[:120],
-                       "head": str((pull.get("head") or {}).get("sha") or "")[:12], "branch": str((pull.get("head") or {}).get("ref") or "")}
-                (drafts if pull.get("draft") else ready).append(row)
-            return ready, drafts
+                       "head": str((pull.get("head") or {}).get("sha") or "")[:12], "branch": str((pull.get("head") or {}).get("ref") or ""),
+                       "author": re.sub(r"[^A-Za-z0-9_\[\]-]", "?", str((pull.get("user") or {}).get("login") or "ghost"))[:40]}
+                if pull.get("draft"):
+                    drafts.append(row)
+                elif str(row["author"]).lower() == login.lower():
+                    own.append(row)
+                else:
+                    foreign.append(row)
+            return own, drafts, foreign
         return read
 
-    def open_pulls_of(self, bot: Bot) -> tuple[list[dict], list[dict]]:
-        return self.open_rows(bot)(Gh(self.home, bot.name, str(bot.repo), self.run))
+    def open_pulls_of(self, bot: Bot, login: str) -> tuple[list[dict], list[dict], list[dict]]:
+        return self.open_rows(bot, login)(Gh(self.home, bot.name, str(bot.repo), self.run))
 
     def merge_matching(self, bot: Bot, text: str, wait: int) -> dict:
         needle = text.strip().lower()
         if not needle or len(needle) > MATCH_MAX_CHARS:
             raise Refused(f"--match takes some text from the pull request's title or branch, up to {MATCH_MAX_CHARS} characters")
-        ready, _ = self.open_pulls_of(bot)
-        found = [row for row in ready if needle in row["title"].lower() or needle in row["branch"].lower()]
+        own, _, foreign = self.open_pulls_of(bot, self.acting_login(bot))
+
+        def has(row: dict) -> bool:
+            return needle in row["title"].lower() or needle in row["branch"].lower()
+
+        found = [row for row in own if has(row)]
         if not found:
-            raise Refused(f"no open pull request of {bot.project} that is not a draft has {token(text)} in its title or branch")
+            others = [row for row in foreign if has(row)]
+            note = ("; pull requests by other authors match and bulk merge never touches them (only a number the owner names merges one): "
+                    + "; ".join(f"#{r['number']} \"{r['title']}\" by {r['author']}" for r in others)) if others else ""
+            raise Refused(f"no open pull request of {bot.project} that is not a draft and was opened by this machine's login has {token(text)} in its title or branch{note}")
         if len(found) > 1:
             return {"status": "ambiguous", "candidates": [{"project": r["project"], "number": r["number"], "title": r["title"]} for r in found]}
         return self.merge(bot, found[0]["number"], True, wait)
 
     def merge_open(self, bots: list[Bot], wait: int, all_projects: bool) -> dict:
+        login = self.acting_login(bots[0]) if bots else ""
         resolved: list[tuple[Bot, dict]] = []
         skipped: list[dict] = []
+        not_owner: list[dict] = []
         unreadable: list[dict] = []
         for bot in bots:
             try:
-                ready, drafts = self.open_pulls_of(bot)
+                own, drafts, foreign = self.open_pulls_of(bot, login)
             except Refused as err:
                 if not all_projects:
                     raise
                 unreadable.append({"project": bot.project, "reason": str(err)})
                 continue
-            resolved.extend((bot, row) for row in ready)
+            resolved.extend((bot, row) for row in own)
             skipped.extend({k: row[k] for k in ("project", "number", "title")} for row in drafts)
-        listing: dict[str, object] = {"resolved": [{k: row[k] for k in ("project", "number", "title", "head")} for _, row in resolved], "skipped_drafts": skipped}
+            not_owner.extend({k: row[k] for k in ("project", "number", "title", "author")} for row in foreign)
+        listing: dict[str, object] = {"resolved": [{k: row[k] for k in ("project", "number", "title", "head")} for _, row in resolved], "skipped_drafts": skipped,
+                                      "skipped_not_owner": not_owner}
         if unreadable:
             listing["unreadable"] = unreadable
         print(json.dumps(listing, ensure_ascii=False), flush=True)
+        if not resolved:
+            raise Refused(f"no open pull request is eligible: a bulk merge takes only non-draft pull requests opened by {login}; nothing was merged")
         started, results, spent = self.now(), [], False
         for bot, row in resolved:
             entry: dict[str, object] = {"project": row["project"], "pr": row["number"]}
@@ -433,6 +462,17 @@ class Kit:
                 results.append({**entry, "status": "refused", "reason": str(err)})
         counts = {status: sum(1 for r in results if r["status"] == status) for status in ("merged", "refused", "not attempted")}
         return {"results": results, **counts, "unreadable": len(unreadable), "complete": not (counts["refused"] or counts["not attempted"] or unreadable)}
+
+    def merge_named(self, bot: Bot, pr: int, owner_approved: bool, wait: int) -> dict:
+        landed = self.merge(bot, pr, owner_approved, wait)
+        try:
+            author = str((Gh(self.home, bot.name, str(bot.repo), self.run).pull(pr).get("user") or {}).get("login") or "")
+            login = self.acting_login(bot)
+        except (Refused, ValueError):
+            return landed
+        if author and author.lower() != login.lower():
+            landed.update(author=author, named_by_owner=True)
+        return landed
 
     def merge(self, bot: Bot, pr: int, owner_approved: bool = False, wait: int = 0) -> dict:
         waited: dict[str, int] = {}

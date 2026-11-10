@@ -198,6 +198,10 @@ if args[0] == "api":
         state["git"]["opened"].append({"number": number, "html_url": url, "title": body["title"], "head": {"ref": body["head"], "repo": {"full_name": state["repo"]}}})
         save()
         print(json.dumps({"html_url": url}))
+    elif route == "user":
+        if state.get("login_unreadable"):
+            fail("gh: Bad credentials (HTTP 401)")
+        answer({"login": state.get("login", "Codertocat")})
     elif route == prefix or (re.fullmatch(r"repos/[^/]+/[^/]+", route) and route[len("repos/"):] not in state.get("unreadable_repos", [])):
         answer({"default_branch": "main", "full_name": route[len("repos/"):], "permissions": {"push": route[len("repos/"):] not in state.get("readonly_repos", [])}})
     elif route == prefix + "/commits/main":
@@ -2948,9 +2952,9 @@ def open_state(state: dict, specs: list[tuple]) -> None:
     state.update(pulls=[], reviews={}, check_runs={}, statuses={}, runs={}, merges=[], timelines={}, head_pulls={}, branch_pulls={}, workflow_trees={},
                  pull_files={}, fail_reads=[], stray_runs=[], branch_query_misses=False)
     state["branch_pulls"] = []
-    for number, title, branch, flavor in specs:
+    for number, title, branch, flavor, *who in specs:
         head = ready_head(number)
-        state["pulls"].append({**Run.pull(number, head, mergeable=flavor != "conflict"), "title": title, "branch": branch,
+        state["pulls"].append({**Run.pull(number, head, mergeable=flavor != "conflict"), "title": title, "branch": branch, **({"author": who[0]} if who else {}),
                                "draft": flavor == "draft", "state": "closed" if flavor == "closed" else "open"})
         run_id = 200 + number
         state["check_runs"][head] = [check_run("check", run_id * 100, *(("failure",) if flavor == "failed" else ("", "in_progress") if flavor == "pending" else ()))]
@@ -3045,6 +3049,59 @@ def merge_open_scenario(run: Run) -> None:
         run.step("merge --match with no candidate refuses and says so", result[0] == 1 and "no open pull request of shop" in result[2] and result[1] == "" and landed() == [62], result[2].strip())
         result = run.kit("merge", "--project", "shop", "--match", "stats", "--owner-approved", bot=CHIEF_BOT)
         run.step("the chief's merge --match skips a draft: a draft is never a candidate", result[0] == 1 and "no open pull request of shop" in result[2] and landed() == [62], result[2].strip())
+
+        shop_and_crm(run, [(81, "Mine one", "feat/a", "ready"), (82, "Theirs", "feat/b", "ready", "mcscoder"), (83, "Mine two", "feat/c", "ready", OWNER.lower()),
+                           (84, "Their draft", "feat/d", "draft", "mcscoder")])
+        result = run.kit("merge", "--open", "--owner-approved")
+        listing, final = batch(result)
+        run.step("merge --open merges only pull requests opened by the machine's login (case-insensitive) in ascending order, "
+                 "and lists another author's pull request under skipped_not_owner before any merge",
+                 result[0] == 0 and result[1].startswith('{"resolved"') and [r["number"] for r in listing["resolved"]] == [81, 83] and landed() == [81, 83]
+                 and listing["skipped_not_owner"] == [{"project": "shop", "number": 82, "title": "Theirs", "author": "mcscoder"}]
+                 and listing["skipped_drafts"] == [{"project": "shop", "number": 84, "title": "Their draft"}] and final["merged"] == 2 and final["complete"] is True,
+                 result[1].strip() or result[2].strip())
+
+        shop_and_crm(run, [(91, "Shop mine", "feat/a", "ready"), (92, "Shop theirs", "feat/b", "ready", "mcscoder")], [(93, "Crm theirs", "feat/a", "ready", "someone"),
+                                                                                                                       (94, "Crm mine", "feat/b", "ready")])
+        result = run.kit("merge", "--all-projects", "--owner-approved", bot=CHIEF_BOT)
+        listing, final = batch(result)
+        run.step("the chief's merge --all-projects skips the other authors' pull requests of every project and lists each under skipped_not_owner",
+                 result[0] == 0 and landed() == [91] and landed("crm") == [94]
+                 and sorted((r["project"], r["number"], r["author"]) for r in listing["skipped_not_owner"]) == [("crm", 93, "someone"), ("shop", 92, "mcscoder")] and final["merged"] == 2,
+                 result[1].strip() or result[2].strip())
+
+        shop_and_crm(run, [(111, "Add fren card", "feat/card", "ready", "mcscoder"), (112, "Fren api", "feat/api", "ready")])
+        result = run.kit("merge", "--match", "fren", "--owner-approved")
+        merged = json.loads(result[1]) if result[0] == 0 else {}
+        run.step("merge --match with one own and one other-author candidate merges the own one at once instead of reporting ambiguous",
+                 result[0] == 0 and merged.get("pr") == 112 and "author" not in merged and landed() == [112], result[1].strip() or result[2].strip())
+        shop_and_crm(run, [(121, "Add fren card", "feat/card", "ready", "mcscoder")])
+        result = run.kit("merge", "--match", "fren", "--owner-approved")
+        run.step("merge --match with only an other author's candidate refuses, names its number, title and author, and merges nothing",
+                 result[0] == 1 and "#121" in result[2] and "Add fren card" in result[2] and "mcscoder" in result[2] and landed() == [], result[2].strip())
+
+        shop_and_crm(run, [(131, "Theirs one", "feat/a", "ready", "mcscoder"), (132, "Theirs two", "feat/b", "ready", "someone")])
+        result = run.kit("merge", "--open", "--owner-approved")
+        first = json.loads(result[1].strip().splitlines()[0]) if result[1].strip() else {}
+        run.step("merge --open where every open pull request is by another author exits non-zero, lists them all under skipped_not_owner, and merges nothing",
+                 result[0] == 1 and first.get("resolved") == [] and len(first.get("skipped_not_owner", [])) == 2 and landed() == [] and "no open pull request is eligible" in result[2],
+                 result[1].strip() or result[2].strip())
+
+        shop_and_crm(run, [(141, "Mine", "feat/a", "ready")])
+        run.update_gh(lambda state: state.__setitem__("login_unreadable", True))
+        merged_before = landed()
+        results = [run.kit("merge", "--open", "--owner-approved"), run.kit("merge", "--match", "mine", "--owner-approved")]
+        run.update_gh(lambda state: state.pop("login_unreadable", None))
+        run.step("merge --open and --match refuse when the machine's GitHub login cannot be read, say why, print no listing, and merge nothing",
+                 all(r[0] == 1 and "cannot read the GitHub login" in r[2] and r[1] == "" for r in results) and landed() == merged_before == [], results[0][2].strip())
+
+        shop_and_crm(run, [(151, "Theirs", "feat/a", "ready", "mcscoder"), (152, "Mine", "feat/b", "ready")])
+        named = run.kit("merge", "--pr", "151", "--owner-approved")
+        own = run.kit("merge", "--pr", "152", "--owner-approved")
+        named_out, own_out = json.loads(named[1]) if named[0] == 0 else {}, json.loads(own[1]) if own[0] == 0 else {}
+        run.step("merge --pr N still merges another author's pull request because the owner named it, and the output says whose it was; the machine's own pull request carries nothing extra",
+                 named_out.get("author") == "mcscoder" and named_out.get("named_by_owner") is True and named_out.get("pr") == 151
+                 and "author" not in own_out and "named_by_owner" not in own_out and landed() == [151, 152], named[1].strip() or named[2].strip())
 
         shop_and_crm(run, [(70, "Gone", "feat/gone", "closed"), (71, "Other", "feat/a", "ready"), (72, "Named", "feat/b", "ready")])
         result = run.kit("merge", "--pr", "72", "--owner-approved")
