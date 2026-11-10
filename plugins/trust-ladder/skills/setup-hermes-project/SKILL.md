@@ -51,7 +51,7 @@ Run this from the owner's own shell, with the `CLAUDE_CONFIG_DIR` their `claude`
   [--heartbeat-every 1h] [--incidents-every 10m] [--model <model>] [--claude-subscription]
 ```
 
-It creates the bot's profile, its three agent jobs, the andon and bug-report labels in the repository, and the **launch checkout**: one kept clone of the repository that every Claude Code session for this project starts from. It prints that path as `launch_checkout`. The jobs start once `gh` is signed in on this machine; if the output says they are paused, the owner runs `gh auth login` once and you run `add-project` again.
+It creates the bot's profile, its two agent jobs, the andon and bug-report labels in the repository, and the **launch checkout**: one kept clone of the repository that every Claude Code session for this project starts from. It prints that path as `launch_checkout`. The jobs start once `gh` is signed in on this machine; if the output says they are paused, the owner runs `gh auth login` once and you run `add-project` again.
 
 ## 4. The checkout is trusted for you
 

@@ -70,6 +70,7 @@ MERGEABLE_PAUSE_SECONDS = 5.0
 MERGE_WAIT_POLL_SECONDS = 30.0
 MERGE_WAIT_MAX_SECONDS = 1800
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
+UPDATED_AT = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 SECRET_SHAPES = re.compile(
     r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}"
     r"|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
@@ -463,8 +464,9 @@ class Kit:
         gate = {"merge": "ready to merge", "refuse": f"blocked: {verdict.message}"}[verdict.action]
         mergeable = {True: "mergeable", False: "conflicts", None: "mergeable unknown"}[detail.get("mergeable")]
         unit = UNIT_LINE.match(str(detail.get("body") or ""))
+        updated = str(pull.get("updated_at") or "")
         return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready", mergeable,
-                           f"head {head if SHA.match(head) else 'unknown'}", gate])
+                           f"updated {updated if UPDATED_AT.match(updated) else 'unknown'}", f"head {head if SHA.match(head) else 'unknown'}", gate])
 
     def handoff(self, caller: Bot, project: str, part: str) -> dict:
         owner = self.policy().projects().get(project)
@@ -637,11 +639,13 @@ class Kit:
                 self.profiles.record_config_dir(home, os.environ.get("CLAUDE_CONFIG_DIR", ""))
             intervals = {key: getattr(bot, key) for key in SCHEDULE_DEFAULTS}
             active = self.profiles.github_login(home, self.machine_login())
-            out["jobs_created"] = self.profiles.ensure_jobs(bot.name, "project-jobs.md", intervals, bot.slack_channel, active)
+            changes = self.profiles.ensure_jobs(bot.name, "project-jobs.md", intervals, bot.slack_channel, active)
+            out["jobs_created"], out["jobs_removed"] = changes.created, changes.removed
             out["jobs_active"] = active
         if bot.role == "chief":
             active = self.profiles.github_login(home, self.machine_login())
-            out["jobs_created"] = self.profiles.ensure_jobs(bot.name, "chief-jobs.md", {}, None, active)
+            changes = self.profiles.ensure_jobs(bot.name, "chief-jobs.md", {}, None, active)
+            out["jobs_created"], out["jobs_removed"] = changes.created, changes.removed
             out["jobs_active"] = active
         return out
 

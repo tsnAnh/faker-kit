@@ -22,7 +22,7 @@ ROUTE_JOBS: dict[str, tuple[str, tuple[str, ...], str, tuple[dict[str, str], ...
     "pr": ("faker-kit-babysit", ("pull_request", "pull_request_review", "check_suite", "status"),
            "GitHub event {event_type} ({action}) in {repository.full_name}. Pull request {pull_request.number}, "
            "check suite head {check_suite.head_sha}. Babysit the open pull requests.", ()),
-    "issues": ("faker-kit-issues", ("issues",),
+    "issues": ("faker-kit-babysit", ("issues",),
                "GitHub event issues ({action}) in {repository.full_name}: the faker:fix label was added to issue {issue.number}. "
                "Follow the Bug reports section of the dispatch skill.",
                ({"field": "action", "equals": "labeled"}, {"field": "label.name", "equals": "faker:fix"})),

@@ -161,7 +161,7 @@ def probe(run: e2e.Run, checkout: Path, hermes: Path, python: Path) -> None:
     code, out, err = run.kit(*crm, bot=BOOTSTRAP_BOT, env=other_env)
     added = json.loads(out) if code == 0 else {}
     run.step("add-project in an agent's turn completes against real Hermes once the profile exists, with jobs running",
-             code == 0 and added.get("jobs_active") is True and len(added.get("jobs_created", [])) >= 3 and live(NEW_BOT), err.strip() or out[:200])
+             code == 0 and added.get("jobs_active") is True and len(added.get("jobs_created", [])) >= 2 and live(NEW_BOT), err.strip() or out[:200])
 
     listing = cli("-p", NEW_BOT, "skills", "list")
     row = next((line for line in listing.stdout.splitlines() if "dispatch" in line), "")
