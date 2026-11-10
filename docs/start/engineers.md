@@ -14,7 +14,7 @@ In the repository, on a new branch:
 /setup-faker-kit
 ```
 
-It writes AGENTS.md (with the repository's own build, test, and lint commands), and links project skills. It adds no check script or lint configuration, and one CI step that checks the kit's links and vendored copy. It opens one pull request. Details: [Set up a repository](../how-to/set-up-a-repo.md).
+It writes AGENTS.md (with the repository's own build, test, and lint commands), and links project skills. It adds no check script or lint configuration, and one CI step that checks the repository's skill links. It opens one pull request. Details: [Set up a repository](../how-to/set-up-a-repo.md).
 
 ## 3. Build a verification skill (20 minutes, then ongoing)
 

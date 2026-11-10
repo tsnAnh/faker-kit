@@ -1,6 +1,6 @@
 ---
 name: setup-faker-kit
-description: Prepare a repository so agents can work in it unattended and anyone on the team can use the kit. Writes AGENTS.md, CLAUDE.md and STYLE.md around the repository's own build, test, and lint commands; links project skills for Claude Code; adds team settings so teammates get the kit automatically; and starts the corrections ledger. It adds no check script or lint configuration of its own; the one CI step it adds checks the kit's own links and vendored copy. Use for /setup-faker-kit, "set this repo up for agents", or a repo with no AGENTS.md.
+description: Prepare a repository so agents can work in it unattended and anyone on the team can use the kit. Writes AGENTS.md, CLAUDE.md and STYLE.md around the repository's own build, test, and lint commands; links project skills for Claude Code; adds team settings so teammates get the kit automatically; and starts the corrections ledger. It adds no check script or lint configuration of its own; the one CI step it adds checks the repository's skill links. Use for /setup-faker-kit, "set this repo up for agents", or a repo with no AGENTS.md.
 ---
 
 # Set up faker-kit in a repository
@@ -37,7 +37,7 @@ A pull request is checked by the repository's own CI and proved by its verificat
 ## 4. Skills
 
 1. Copy `scripts/link-skills.sh` from this skill to the repository's `scripts/`, then run `bash scripts/link-skills.sh .`. It links every project skill into `.claude/skills` and `.agents/skills`. Run it again whenever a project skill is added, and `bash scripts/link-skills.sh --check .` to confirm every link resolves.
-2. Keep the kit intact in CI. Add one step to the repository's existing CI workflow that runs on every pull request, running `bash scripts/link-skills.sh --check .` and, when `.agents/faker-kit/vendor_kit.py` exists (the kit is vendored: always for a Hermes project, otherwise once `setup-cloud-agents` has run), `python3 .agents/faker-kit/vendor_kit.py --check .`. The first fails when a project skill is not linked; the second when the vendored kit was edited, a link broke, or `.agents/dispatch.json` pins another commit. If the repository has no CI workflow, create `.github/workflows/faker-kit-checks.yml` with only these steps, and drop the second command while the kit is not vendored. Replace `<runs-on>` with the runner the repository uses: GitHub's hosted `ubuntu-latest` by default, the labels of the organization's own self-hosted runners for an organization repository that has them (`gh api orgs/<org>/actions/runners` lists them), or `[self-hosted, faker-kit]` for a repository listed under `ci_runners` in the machine config (a label list stays a list):
+2. Keep the skill links intact in CI. Add one step to the repository's existing CI workflow that runs on every pull request, running `bash scripts/link-skills.sh --check .`. It fails when a project skill is not linked. If the repository has no CI workflow, create `.github/workflows/faker-kit-checks.yml` with only this step. Replace `<runs-on>` with the runner the repository uses: GitHub's hosted `ubuntu-latest` by default, the labels of the organization's own self-hosted runners for an organization repository that has them (`gh api orgs/<org>/actions/runners` lists them), or `[self-hosted, faker-kit]` for a repository listed under `ci_runners` in the machine config (a label list stays a list):
 
    ```yaml
    name: faker-kit-checks
@@ -49,7 +49,6 @@ A pull request is checked by the repository's own CI and proved by its verificat
        steps:
          - uses: actions/checkout@v4
          - run: bash scripts/link-skills.sh --check .
-         - run: python3 .agents/faker-kit/vendor_kit.py --check .
    ```
 
    That workflow checks the kit only. `faker-kit merge` does not count it as CI, so a repository whose only CI is this workflow still needs one that builds and tests every pull request before a Hermes bot can merge (`setup-hermes-project` stops without it).
@@ -60,15 +59,15 @@ A pull request is checked by the repository's own CI and proved by its verificat
 So that every teammate gets the kit without setup:
 
 - `.claude/settings.json` from `templates/claude-settings.json`: adds this marketplace, enables the plugins, and denies destructive commands.
-- Cloud sessions do not install the plugins this file enables. `setup-cloud-agents` vendors the kit into the repository for them.
+- Cloud sessions do not install the plugins this file enables. `setup-cloud-agents` gets the kit into them from the cloud environment's setup script.
 - `CODEOWNERS` and the branch-protection checklist in `templates/branch-protection.md`: the repository's own CI checks, resolved review conversations, and one human approval, so changes from anyone, including non-engineers, pass the same gates.
 
 ## 6. Start the records
 
-Keep the template's `## Rules and what enforces them` table in AGENTS.md; `/correct` (pstack) fills it as mistakes get fixed. When agents keep repeating a mistake, `/correct` picks the strongest layer that can stop it and, when that is a lint, adds a targeted one to the repository's own CI. Setup installs no lint configuration of its own, and no CI job beyond the kit-integrity step. Run `/check-agent-compatibility` and put its report in the pull request as the baseline the team improves on.
+Keep the template's `## Rules and what enforces them` table in AGENTS.md; `/correct` (pstack) fills it as mistakes get fixed. When agents keep repeating a mistake, `/correct` picks the strongest layer that can stop it and, when that is a lint, adds a targeted one to the repository's own CI. Setup installs no lint configuration of its own, and no CI job beyond the skill-link step. Run `/check-agent-compatibility` and put its report in the pull request as the baseline the team improves on.
 
 ## 7. Verify and open the PR
 
 1. Run the build, test, and lint commands recorded in AGENTS.md. They must pass as they did in step 1.
-2. Run `scripts/link-skills.sh --check .`, and `python3 .agents/faker-kit/vendor_kit.py --check .` when the kit is vendored, the same two commands the CI step runs.
+2. Run `scripts/link-skills.sh --check .`, the same command the CI step runs.
 3. Open one PR titled `chore(agents): set up faker-kit`. The body lists what was added, the `/check-agent-compatibility` report, what the user must turn on after merging (branch protection, and CI that builds and tests every pull request if the repository has none), and the recommended next step (usually `/create-verification-skill`).

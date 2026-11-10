@@ -30,7 +30,6 @@ jobs:
           echo "$RUNNER_TEMP/agents/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Lint
         run: |
-          python3 .agents/faker-kit/vendor_kit.py --check .
           node scripts/agent-checks/ratchet.mjs check
           node scripts/agent-checks/import-boundaries.mjs
           node scripts/agent-checks/rule-fixtures.mjs

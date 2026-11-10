@@ -3,15 +3,13 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: install.sh --ref COMMIT [--source URL_OR_DIR] [--bootstrap-bot NAME] [--provider P --model M] [--claude-subscription] [--no-gateway] [--no-vendor] [--require-current-kit]
+Usage: install.sh --ref COMMIT [--source URL_OR_DIR] [--bootstrap-bot NAME] [--provider P --model M] [--claude-subscription] [--no-gateway]
 
 Install the faker-kit Hermes module on this machine, pinned to one kit commit. Run it again
 with a new commit to move every bot to it; it keeps guard.yaml, bots.yaml, job state, and
 anything in a profile it does not own.
 
-  --ref COMMIT           Full 40-character kit commit. A project bot launches in a repository whose
-                         vendored kit is this commit or an older commit of the same kit; install.sh
-                         opens a pull request that moves each project's vendored kit to it.
+  --ref COMMIT           Full 40-character kit commit
   --source SRC           Kit repository (default: https://github.com/tsnAnh/faker-kit.git)
   --bootstrap-bot NAME   Create or refresh the bootstrap bot, the one that sets up projects.
                          Any Hermes profile name: lowercase letters, digits, - and _.
@@ -21,9 +19,6 @@ anything in a profile it does not own.
   --claude-subscription  Run the bootstrap bot's model on your Claude subscription through the
                          logged-in Claude Code CLI (only with --bootstrap-bot)
   --no-gateway           Do not install or restart the default profile's shared gateway
-  --no-vendor            Do not open a vendor pull request for each project after the bots refresh
-  --require-current-kit  Launch only where the vendored kit is exactly COMMIT, as before older kits
-                         were allowed; use it to pull a broken kit out of every repository
 
 Project bots are not created here. Ask the bootstrap bot for a new project; it runs
 faker-kit add-project, which you approve.
@@ -32,15 +27,10 @@ When ~/.hermes/faker-kit/machine.yaml exists (faker-kit install --config keeps a
 runs faker-kit install --config on it, which refreshes the bots, the guard settings, and the GitHub
 webhook routes, and faker-kit runner up --config on it, which starts the CI runners.
 
-After the bots refresh, it runs faker-kit vendor --project P for every project bot and prints the pull
-request or the note for each. A vendor failure prints a warning and never fails the install.
-
 It writes, under ~/.hermes:
   faker-kit/kit/            the kit at COMMIT; every bot's files come from here
   faker-kit/guard.yaml      the policy, written once from hermes/templates/guard.yaml
   faker-kit/bots.yaml       each bot's role, project, and repository; only faker-kit writes it
-  faker-kit/kit-repo        the GitHub OWNER/REPO of --source, when it is one; lets a project bot launch
-                            on a vendored kit that is an older commit of this kit
   bin/faker-kit             the one command every bot and the owner run
   faker-kit                 a symlink to it next to the hermes executable, which is on every bot terminal's PATH
   profiles/<bot>/           for each bot in bots.yaml: SOUL.md, config, the guard plugin, its skill
@@ -70,7 +60,7 @@ shell_quote() {
   printf "'%s'" "${s//$sq/$q}"
 }
 
-ref='' source=https://github.com/tsnAnh/faker-kit.git bootstrap_bot='' model='' provider='' claude_subscription='' gateway=1 vendor=1 require_current=''
+ref='' source=https://github.com/tsnAnh/faker-kit.git bootstrap_bot='' model='' provider='' claude_subscription='' gateway=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --ref) ref=$2; shift 2 ;;
@@ -80,8 +70,6 @@ while [ $# -gt 0 ]; do
     --provider) provider=$2; shift 2 ;;
     --claude-subscription) claude_subscription=1; shift ;;
     --no-gateway) gateway=0; shift ;;
-    --no-vendor) vendor=0; shift ;;
-    --require-current-kit) require_current=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument $1. Run --help for usage." ;;
   esac
@@ -174,17 +162,10 @@ link_on_hermes_path
 
 export FAKER_KIT_HOME=$kit_home
 unset HERMES_HOME
-kit_source_args=()
-install_help=$("$py" "$pkg/bin/faker_kit.py" install --help 2>/dev/null || true)
-if [[ $install_help == *--require-current-kit* ]]; then
-  kit_source_args=(--source "$source" ${require_current:+--require-current-kit})
-elif [ -n "$require_current" ]; then
-  die "kit $ref predates --require-current-kit; it already requires the exact kit"
-fi
 machine=$kit_home/machine.yaml
 runner_failed=''
 if [ -f "$machine" ]; then
-  "$py" "$pkg/bin/faker_kit.py" install --config "$machine" ${bootstrap_bot:+--bootstrap-bot "$bootstrap_bot"} ${model:+--model "$model"} ${provider:+--provider "$provider"} ${claude_subscription:+--claude-subscription} ${kit_source_args[@]+"${kit_source_args[@]}"} >/dev/null \
+  "$py" "$pkg/bin/faker_kit.py" install --config "$machine" ${bootstrap_bot:+--bootstrap-bot "$bootstrap_bot"} ${model:+--model "$model"} ${provider:+--provider "$provider"} ${claude_subscription:+--claude-subscription} >/dev/null \
     || die "faker-kit install --config $machine failed; fix the config, then run install.sh again"
   if "$py" "$pkg/bin/faker_kit.py" runner up --config "$machine" >/dev/null; then
     printf 'refreshed the bots, webhook routes, and CI runner services from %s\n' "$machine"
@@ -193,29 +174,9 @@ if [ -f "$machine" ]; then
     printf 'install.sh: faker-kit runner up --config %s failed; the CI runner services are not refreshed (is Docker running?)\n' "$machine" >&2
   fi
 else
-  "$py" "$pkg/bin/faker_kit.py" install ${bootstrap_bot:+--bootstrap-bot "$bootstrap_bot"} ${model:+--model "$model"} ${provider:+--provider "$provider"} ${claude_subscription:+--claude-subscription} ${kit_source_args[@]+"${kit_source_args[@]}"} >/dev/null
+  "$py" "$pkg/bin/faker_kit.py" install ${bootstrap_bot:+--bootstrap-bot "$bootstrap_bot"} ${model:+--model "$model"} ${provider:+--provider "$provider"} ${claude_subscription:+--claude-subscription} >/dev/null
 fi
 [ -z "$bootstrap_bot" ] || printf 'bootstrap bot %s ready; add it in Hermes Desktop Bot Mode and ask it for a project\n' "$bootstrap_bot"
-
-vendor_projects() {
-  local projects project out line vendor_err
-  projects=$("$py" "$pkg/bin/faker_kit.py" projects) \
-    || { printf 'install.sh: warning: faker-kit projects failed; no project was vendored\n' >&2; return 0; }
-  vendor_err=$(mktemp)
-  while IFS= read -r project; do
-    [ -n "$project" ] || continue
-    if ! out=$("$py" "$pkg/bin/faker_kit.py" vendor --project "$project" 2>"$vendor_err"); then
-      line=$(tail -n 1 "$vendor_err" | cut -c 1-300)
-      printf 'install.sh: warning: faker-kit vendor --project %s failed: %s\n' "$project" "$line" >&2
-    elif line=$(printf '%s' "$out" | "$py" -c 'import json, sys; r = json.load(sys.stdin); print(r["pr"] or r["note"])' 2>/dev/null); then
-      printf 'vendored kit for %s: %s\n' "$project" "$line"
-    else
-      printf 'install.sh: warning: faker-kit vendor --project %s printed no result\n' "$project" >&2
-    fi
-  done <<< "$projects"
-  rm -f "$vendor_err"
-}
-[ "$vendor" = 0 ] || vendor_projects
 
 if [ "$gateway" = 1 ]; then
   hermes -p default gateway install >/dev/null
@@ -232,8 +193,3 @@ fi
 
 printf 'faker-kit Hermes module installed at kit %s.\n' "$ref"
 [ -z "$runner_failed" ] || die "the CI runner services were not refreshed; fix the cause, then run install.sh again"
-if [ "$vendor" = 1 ]; then
-  printf 'Repositories on an older vendored kit still launch and report kit_behind; merge the vendor pull requests above to move each to %s.\n' "$ref"
-else
-  printf 'Repositories on an older vendored kit still launch and report kit_behind; run faker-kit vendor --project <project> for each to move it to %s.\n' "$ref"
-fi

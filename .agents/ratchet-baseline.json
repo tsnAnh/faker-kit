@@ -1,11 +1,10 @@
 {
   "python-noqa": {
-    "total": 19,
+    "total": 14,
     "perFile": {
       "hermes/e2e/run_dispatch_e2e.py": 5,
       "hermes/plugin/faker_kit_guard/__init__.py": 8,
-      "hermes/plugin/faker_kit_guard/policy.py": 1,
-      "plugins/trust-ladder/skills/setup-cloud-agents/scripts/vendor_kit.py": 5
+      "hermes/plugin/faker_kit_guard/policy.py": 1
     }
   },
   "python-type-baseline": {

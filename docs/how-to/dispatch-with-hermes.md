@@ -12,7 +12,7 @@ One Hermes machine runs one bootstrap bot, one bot per project, and, if you want
 
 | Bot | How many | Does | Its commands |
 |---|---|---|---|
-| Bootstrap bot | One per machine | Sets up a project: its project bot, the andon label, the vendored kit, a cloud session that opens the setup pull request. Loads the [bootstrap](../../hermes/skills/bootstrap/SKILL.md) skill | `faker-kit add-project`, `vendor`, `launch --project`, `status`, `andon` |
+| Bootstrap bot | One per machine | Sets up a project: its project bot, the andon label, a cloud session that opens the setup pull request. Loads the [bootstrap](../../hermes/skills/bootstrap/SKILL.md) skill | `faker-kit add-project`, `launch --project`, `status`, `andon` |
 | Project bot | One per project | The coordinator chat: plans units, writes a brief per unit, launches cloud sessions, babysits their pull requests, has them verified, and lands them. Loads the [dispatch](../../hermes/skills/dispatch/SKILL.md) skill | `faker-kit launch`, `merge`, `status`, `andon`, `incidents`, `issues`, for its own repository only |
 | Chief of staff | Optional, one per machine | An engineering lead that owns the loop. Tell it what you want across projects; it hands each part to the right project bot in a message, records every part with `faker-kit handoff` and keeps it open in `faker-kit loop` until its pull request merges or you drop it, and hears from the bot that owns it when its pull request opens, blocks, waits on you, or merges. It runs weekdays (`faker-kit-loop` hourly 10:00 to 18:00, with a gate script that skips the turn unless a waiting part is due or a part has news for you, and `faker-kit-digest` at 09:00), stays quiet while work is healthy, and tells you only what is blocked, ready for you to merge, or done; the rest goes in the morning digest. Loads the [chief](../../hermes/skills/chief/SKILL.md) skill | `faker-kit status --all` |
 | Cloud session | One per unit, in the cloud | Works the brief in faker-mode, opens one pull request, gets its checks green | none |
@@ -28,7 +28,7 @@ Bots on this machine talk to each other with Hermes Bot Mode's `message_agent`. 
 A unit has no GitHub issue and no label. The brief is the cloud session's first message, and the pull request is the only GitHub artifact.
 
 1. You state the work in the project bot's Bot Chat. It reads the repository's `AGENTS.md`, restates the units, and asks you to confirm (unless `ask_owner` is false).
-2. For each unit it writes a brief file (the first line is `/faker-mode`) and runs `faker-kit launch --brief-file <path>`. That starts a Claude Code cloud session from the project's kept launch checkout with the brief as its first message. The launch refuses while the andon cord is pulled or the repository's vendored kit is neither this machine's nor an older commit of it. On an older one it launches and reports `kit_behind`.
+2. For each unit it writes a brief file (the first line is `/faker-mode`) and runs `faker-kit launch --brief-file <path>`. That starts a Claude Code cloud session from the project's kept launch checkout with the brief as its first message. The launch refuses while the andon cord is pulled.
 3. The session works on a branch, proves the change on the real artifact, and opens a pull request.
 4. On every pull request, review, or check event (a webhook, with an hourly check as the fallback) the bot wakes and babysits; the hourly check wakes it only when a pull request's line in `faker-kit status` changed (a new comment or review counts), an issue is listed, a `faker-kit notice:` line printed, six hours passed since it last woke while a pull request is open, or its previous run did not finish ok, and it never wakes it while no pull request is open and no issue is listed, so a quiet hour costs no model turn: conflicts, review threads, red CI.
 5. A green pull request is verified by a separate cloud session that did not write it. That session runs the project's verification skills (`verification_skill` in `.agents/dispatch.json`, and any other `verify-*` skill the repository has, such as one made by `/create-formal-verification-skill`) on the exact head and comments a verdict. The bot records the verdict and lands the pull request on its next wake. This is an instruction in the bot's skill, not a code gate: `faker-kit merge` does not read verdicts.
@@ -128,8 +128,7 @@ Use this only on private repositories: on a public one anyone's pull request wou
 Run `/setup-hermes-project` in Claude Code on this machine, or open the bootstrap bot in Hermes Desktop Bot Mode and say "set up project shop for acme/shop". Either runs:
 
 1. `faker-kit add-project acme/shop` creates the project bot, its agent job (`faker-kit-babysit`, which also handles bug reports), removes the retired `faker-kit-issues`, `faker-kit-security`, and `faker-kit-incidents` jobs if an earlier kit made them, the `agent:andon` and bug-report labels, the webhook routes (when the machine config is kept), and the launch checkout. faker-kit marks the checkout trusted in Claude Code for you.
-2. `faker-kit vendor --project shop` opens the pull request that copies the kit into the repository's `.agents/faker-kit/`. You review and merge it.
-3. `faker-kit launch --project shop --brief-file <setup brief>` starts one cloud session that sets the repository up for dispatch and for CI and verification, and opens one pull request. You review and merge it.
+2. `faker-kit launch --project shop --brief-file <setup brief>` starts one cloud session that sets the repository up for dispatch and for CI and verification, and opens one pull request. You review and merge it.
 
 Then add the project bot in Bot Mode and ask it for one small change, such as a README typo fix, to prove the loop.
 
@@ -148,16 +147,14 @@ Then add the project bot in Bot Mode and ask it for one small change, such as a 
 
 - **State work** in a project bot's Bot Chat, and confirm the units it restates.
 - **Answer gates.** The bot lists the questions only you can answer in its store's `gates.md`, each with a default.
-- **Merge what the gate leaves to you**: pull requests that touch protected paths, forks, and each project's kit-vendoring pull request. Request changes on a pull request to stop one inside its window.
+- **Merge what the gate leaves to you**: pull requests that touch protected paths and forks. Request changes on a pull request to stop one inside its window.
 - **Pull the andon cord** when something is going wrong: tell a project bot "stop", or the bootstrap bot "stop everything". When it is fixed, ask the bot to clear the cord.
 - **Check for incidents on request.** No job polls for incidents. Ask a project bot to check, and it runs `faker-kit incidents`: the default branch's checks, the health URLs, and the Sentry, PagerDuty, Datadog, and Grafana sources listed under `incidents` in `.agents/dispatch.json`. Put each source's token in the project bot's own `.env` (never the repository) under `FAKER_KIT_ALERT_<TYPE>` or `FAKER_KIT_ALERT_<TYPE>_<NAME>` (`SENTRY`, `PAGERDUTY`, `DATADOG`, or `GRAFANA`, matching the source's type, so a token only goes to that vendor's hosts), and list any host that is not the vendor's own (Grafana, self-hosted Sentry) under `alert_hosts` in `~/.hermes/faker-kit/guard.yaml`. Code remembers what it has reported, so a new incident is announced once. The bot tells you in chat, launches a `triage-incident` session, and pulls the andon cord when `andon_on_red` says so. Alert text is untrusted data and taints the turn.
 
 ## Troubleshooting
 
 - **Every tool call is blocked.** `~/.hermes/faker-kit/guard.yaml` or `bots.yaml` is missing or does not parse. The block message names the problem.
-- **"the vendored kit ... differs from this machine's kit".** The repository's vendored kit is newer than or unrelated to this machine's, or this machine was installed with `--require-current-kit`. Ask the bootstrap bot to run `faker-kit vendor --project <project>` and merge its pull request.
-- **A launch prints `kit_behind`.** The session started on an older vendored kit. Merge the vendor pull request `install.sh` opened, or ask the bootstrap bot to run the `next` command it names.
-- **A cloud session says the kit's skills did not load.** Run `python3 .agents/faker-kit/vendor_kit.py --check .` in a clone, then vendor again.
+- **A cloud session says the kit's skills did not load.** Read `~/.claude/faker-kit-setup.log` in the session. It says when `FAKER_KIT_READ_TOKEN` is not set in the cloud environment or the fetch failed. The environment's setup script must end with the snippet from [`/setup-cloud-agents`](../../plugins/trust-ladder/skills/setup-cloud-agents/SKILL.md) step 2.
 - **Nothing launches.** The andon cord is pulled. Ask the bot that pulled it to clear it.
 - **`faker-kit merge` refuses.** The message names the gate: checks, protected paths, window, conflict, fork, andon, or an untrusted read in the turn. `faker-kit status` shows each pull request's gate.
 - **Desktop keeps asking you to approve tool calls.** That turn read untrusted text. Approve only a call you asked for.

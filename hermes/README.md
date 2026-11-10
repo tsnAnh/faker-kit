@@ -27,7 +27,6 @@ One command, `faker-kit` (`bin/faker_kit.py`, installed as `~/.hermes/bin/faker-
 |---|---|---|
 | `install` | owner's shell | Creates the bootstrap bot and chief, guard settings, webhooks and tunnel from a machine config, and sets each bot's model (see Choose each bot's model) |
 | `add-project OWNER/REPO` | bootstrap | Creates or refreshes a project bot: profile, guard, skills, jobs, the andon and bug-report labels, webhook routes (when the machine config is kept), launch checkout. Safe to rerun |
-| `vendor --project P` | bootstrap | Opens the pull request that copies the pinned kit into the repository's `.agents/faker-kit/` |
 | `launch --brief-file F` | project (bootstrap adds `--project P`) | Starts one cloud session; the brief must start with `/faker-mode` and live in the bot's briefs folder |
 | `merge --pr N` | project | The merge gate above |
 | `status [--all]` | every bot | Projects, open pull requests with their last update, full head commit, and gate state, andon cords |
@@ -67,7 +66,7 @@ With `webhooks` in the machine config, GitHub calls the machine when a pull requ
 
 ## How cloud agents get the kit
 
-A cloud session starts from a clone of the repository and cannot fetch the kit. `faker-kit vendor` copies the kit at this machine's commit into the repository's `.agents/faker-kit/` in a pull request. A project bot launches in a repository whose vendored kit is this machine's commit or an older commit of the same kit, and then reports `kit_behind`; it refuses a newer or unrelated one. To move to a new kit commit, rerun `install.sh --ref <commit>`: it opens a vendor pull request for each project, and you merge each one. `install.sh --require-current-kit` brings back the exact-match rule, for pulling a broken kit out of every repository.
+A cloud session starts from a clone of the repository and cannot fetch the kit, and no repository carries a copy. The owner's cloud environment gets it from its setup script and a `SessionStart` hook the script registers, as step 2 of `plugins/trust-ladder/skills/setup-cloud-agents/SKILL.md` describes. `faker-kit launch` never reads the repository for a kit. `install.sh` opens no pull request; its `--ref` is the kit commit this machine installs.
 
 ## Layout
 
@@ -82,13 +81,13 @@ A cloud session starts from a clone of the repository and cannot fetch the kit. 
 | `profiles/`, `skills/`, `cron/project-jobs.md`, `cron/chief-jobs.md` | Bot prompts and config, the bots' skills, the job definitions |
 | `cron/scripts/` | The babysit and loop jobs' gate scripts and `faker_kit_gate.py`, the module they share, which `install.sh` writes into each bot's `scripts/` folder with `lib/faker_kit_cron_list.py` (the `hermes cron list` parser the gate reads the job's last run with); the babysit gate keeps its state (fingerprint, wake time, failed-run retries) in `~/.hermes/faker-kit/gates/<bot>/faker-kit-babysit.json` |
 | `templates/` | `guard.yaml` and `machine.yaml` to copy, and the brief templates the dispatch skill fills (`triage-incident-brief.md`, `fix-issue-brief.md`) |
-| `e2e/run_dispatch_e2e.py`, `e2e/guard_scenario.py`, `e2e/guard-calls.json`, `e2e/tooling_scenario.py` | The kit's only test for the Hermes side, a stubbed end-to-end run: launch, andon, every merge refusal, migration, CI runner slots, the vendoring script and API, the ratchet rule, and every guard verdict through the real plugin. Prints a digest; the same on every run |
+| `e2e/run_dispatch_e2e.py`, `e2e/guard_scenario.py`, `e2e/guard-calls.json`, `e2e/tooling_scenario.py` | The kit's only test for the Hermes side, a stubbed end-to-end run: launch, andon, every merge refusal, migration, CI runner slots, the environment setup hook, the ratchet rule, and every guard verdict through the real plugin. Prints a digest; the same on every run |
 
 Under `~/.hermes/faker-kit/`: `kit/` (the kit at the pinned commit), `guard.yaml` (the policy; you edit it), `bots.yaml` (each bot's role, project, and repository), `briefs/<bot>/` (the only place a project bot may write), `andon/`, `merge/<bot>.lock` (the merge lock), `gates/<bot>/` (what each wake gate last saw and when it last woke the agent), `etag/<bot>/`, and `checkouts/<owner>__<repo>/repo` (the launch checkout every session starts from, trusted once).
 
 ## What only you do
 
-- Merge pull requests the gate leaves to you (protected paths, forks) and each project's kit-vendoring pull request.
+- Merge pull requests the gate leaves to you (protected paths, forks).
 - Sign `gh` in on the machine once (`gh auth login`); every bot shares that login. No bot ever sees a token in chat.
 - Sign Claude Code in on the machine. `faker-kit add-project` and every `faker-kit launch` mark the launch checkout trusted in Claude Code's config, so nobody trusts a folder by hand.
 
@@ -96,7 +95,6 @@ Under `~/.hermes/faker-kit/`: `kit/` (the kit at the pinned commit), `guard.yaml
 
 - **"Claude Code asks whether to trust <path>".** faker-kit marks each launch checkout trusted itself, so this means the Claude Code config the launch uses is missing or unreadable, or the launch read another config than the one named in the message. Sign Claude Code in on this machine (with the same `CLAUDE_CONFIG_DIR` the bot uses) and launch again.
 - **A Claude launch exits with "Not logged in" or "requires an interactive terminal".** The gateway runs `claude` without your shell. Check that the project bot's `.env` has `CLAUDE_CONFIG_DIR` pointing at your `claude` login, and rerun `faker-kit add-project` from a shell where it is exported.
-- **"the kit update <pull request> conflicts with its base branch".** Ask the bootstrap bot to run `faker-kit vendor --project <project>`; it rebuilds the pull request on the current branch.
 - **Merge keeps refusing.** `faker-kit status` shows the gate that is closed for each pull request.
 
 ## Choose each bot's model

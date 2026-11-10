@@ -22,7 +22,7 @@ The skill inspects the repository before it asks you anything. If the repository
 | Team | `.claude/settings.json`, `CODEOWNERS` | The kit and safe defaults for every teammate's agent, and a named reviewer for every path |
 | Measurement | The rule table in AGENTS.md, the `/check-agent-compatibility` report | Each rule and what enforces it, and the first readiness report |
 
-It records the repository's own build, test, and lint commands in AGENTS.md and adds no check script or lint configuration. Its one CI addition is a step that runs `scripts/link-skills.sh --check .` and `.agents/faker-kit/vendor_kit.py --check .` on every pull request, in the repository's existing CI workflow or, when there is none, in a small `faker-kit-checks.yml`. To stop a mistake agents keep making, run [`/correct`](correct-an-agent.md), which adds a targeted lint to the repository's own CI.
+It records the repository's own build, test, and lint commands in AGENTS.md and adds no check script or lint configuration. Its one CI addition is a step that runs `scripts/link-skills.sh --check .` on every pull request, in the repository's existing CI workflow or, when there is none, in a small `faker-kit-checks.yml`. To stop a mistake agents keep making, run [`/correct`](correct-an-agent.md), which adds a targeted lint to the repository's own CI.
 
 ## After it merges
 

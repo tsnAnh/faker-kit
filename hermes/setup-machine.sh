@@ -11,7 +11,7 @@ amd64 or arm64, with systemd) or macOS. Run it again at any time: every step che
 changes only what differs.
 
   --config FILE  The machine config (default: .agents/hermes-machine.yaml in this clone).
-  --ref COMMIT   Kit commit to install (default: the config's kit_ref, else .agents/dispatch.json's).
+  --ref COMMIT   Kit commit to install (default: the config's kit_ref).
   --yes          Do not stop to ask before installing packages.
 
 It installs what is missing (gh, Claude Code, Hermes, cloudflared, and Python with PyYAML), asks you
@@ -138,7 +138,6 @@ tunnel=$(read_config 'print(c.tunnel or "")')
 slack_bot=$(read_config 'print(c.slack.bot if c.slack else "")')
 ci_runners=$(read_config 'print(" ".join(r.repo for r in c.ci_runners))')
 [ -n "$ref" ] || ref=$(read_config 'print(c.kit_ref or "")')
-[ -n "$ref" ] || ref=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("kit_ref", ""))' "$repo/.agents/dispatch.json")
 [[ $ref =~ ^[0-9a-f]{40}$ ]] || die "no kit commit: pass --ref, or set kit_ref in $config"
 git -C "$repo" cat-file -e "$ref:hermes/lib/faker_kit_machine.py" 2>/dev/null \
   || die "kit $ref has no machine setup (or this clone lacks it: git fetch); pass a newer --ref, or move kit_ref forward"

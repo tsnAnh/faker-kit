@@ -2,7 +2,7 @@
 
 GOAL: Find why {key} is failing and name the smallest safe fix. Diagnose only: change nothing and push nothing.
 
-SCOPE: Run the triage-incident skill (`.agents/faker-kit/plugins/trust-ladder/skills/triage-incident/SKILL.md`) on the incident below. Read-only.
+SCOPE: Run `/triage-incident` on the incident below. Read-only.
 
 CONTEXT:
 - Incident: {title}
