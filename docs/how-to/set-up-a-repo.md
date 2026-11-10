@@ -28,7 +28,7 @@ It records the repository's own build, test, and lint commands in AGENTS.md and 
 
 1. **CI.** Make sure a GitHub Actions workflow builds and tests every pull request. A pull request is checked by it, and a Hermes project bot lands only pull requests with a passing run from it.
 2. **Branch protection.** Work through [the checklist](../../plugins/trust-ladder/templates/branch-protection.md): require the repository's CI checks, resolved review conversations, and a code owner's approval, with no bypass. This is what makes it safe for non-engineers to open pull requests.
-3. **Verification skills.** Run `/create-verification-skill` next. It is the single most valuable skill a repository can have. See the pstack guide's [Verify the result and open a PR](../../plugins/pstack/docs/guide/06-verify-and-ship.md). Where a missed case is costly, such as a parser or a permission check, also run `/create-formal-verification-skill`. Before a pull request merges, a separate verifier session runs these skills on the exact head and comments a verdict.
+3. **Verification skills.** Run `/create-verification-skill` next. It is the single most valuable skill a repository can have. See the pstack guide's [Verify the result and open a PR](../../plugins/pstack/docs/guide/06-verify-and-ship.md). Where a missed case is costly, such as a parser or a permission check, also run `/create-formal-verification-skill`. The author's own session runs these skills on its change.
 4. **Protected paths.** List the paths only you merge under `risk_paths_high` in `.agents/dispatch.json` (`/setup-hermes-project` does this), and name their owners in `CODEOWNERS`.
 5. **Cloud sessions.** When you want agents to work in parallel without your laptop, run `/setup-cloud-agents`.
 

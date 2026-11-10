@@ -1005,19 +1005,10 @@ def merge_scenario(run: Run) -> None:
     line = ready_line()
     run.step("status shows ready to merge for green CI with no review, no Risk line, and no security status at all", line.endswith(" | ready to merge"), line)
     run.step("status shows each pull request's full head commit before its gate and reads no verdict", f" | head {head} | ready to merge" in line, line)
-    template = (HERMES / "templates" / "verifier-brief.md").read_text()
-    before = len(run.claude_log.read_text().splitlines())
-    verifier = run.brief("verify-1-aaaaaaaa.md", fill(template, repo=REPO, pr="1", head=head, unit="csv-export", unit_brief="GOAL: Add CSV export.\nACCEPTANCE: The export downloads.",
-                                                      standing="1. Never push to main.", models="MODELS: sonnet"))
-    code, launched, err = run.kit("launch", "--brief-file", str(verifier))
-    first_message = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
-    run.step("the bot launches a verifier from the template: it names the pull request and head, reads the verification skills, comments a verdict, and pushes and merges nothing",
-             code == 0 and len(run.claude_log.read_text().splitlines()) == before + 1 and first_message.startswith("/faker-mode")
-             and f"pull request #1 of {REPO} at head {head}" in first_message and "GOAL: Add CSV export." in first_message
-             and "`verification_skill` in `.agents/dispatch.json`" in first_message and "verify-faker-kit" in first_message and "verify-*" in first_message
-             and "verdict: PASS+NOTES" in first_message and "verdict: FAIL" in first_message and "`head: ` followed by the full 40-character head SHA" in first_message
-             and "pushing to any branch" in first_message and "merging" in first_message and "MODELS: sonnet" in first_message
-             and not re.search(r"\{[a-z_]+\}", first_message), launched.strip() or err.strip())
+    skill_text = (HERMES / "skills" / "dispatch" / "SKILL.md").read_text()
+    run.step("the dispatch skill lands a ready pull request with faker-kit merge --pr <n> and names no verdict step",
+             "run `faker-kit merge --pr <n>` at once for each line that shows `ready to merge`" in skill_text
+             and not re.search(r"verifi[e]r|ledger|PASS|verdict row", skill_text), "")
     removed = [
         ("no claude[bot] review at all", lambda state: state["reviews"].__setitem__("1", [])),
         ("an approval of an older head", lambda state: state["reviews"].__setitem__("1", [review("claude[bot]", "APPROVED", sha("9"), "Fine.\n\nRisk: low")])),
