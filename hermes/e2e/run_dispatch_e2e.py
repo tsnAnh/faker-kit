@@ -24,6 +24,7 @@ from pathlib import Path
 import gate_scenario
 import guard_scenario
 import tooling_scenario
+import wake_gate_scenario
 
 HERMES = Path(__file__).resolve().parent.parent
 KIT = HERMES.parent
@@ -2076,7 +2077,8 @@ def install_scenario(run: Run, work: Path) -> None:
                             env={**env, "PATH": f"{shared_bin}:{env['PATH']}"}, capture_output=True, text=True, timeout=300)
     run.step("install.sh never links faker-kit into a folder outside the home folder, and says so",
              shared.returncode == 0 and not (shared_bin / "faker-kit").exists() and "outside your home folder" in shared.stderr, shared.stderr.strip()[-200:])
-    gate_scenario.gate_scenario(run, hermes, BOT, install, env, work)
+    gate_scenario.gate_scenario(run, hermes, BOT, BOOTSTRAP, install, env, work)
+    wake_gate_scenario.wake_scenario(run, hermes, BOT, env, work)
     launched = subprocess.run([str(hermes / "bin" / "faker-kit"), "andon", "show"], env={**env, "HERMES_HOME": str(hermes / "profiles" / BOOTSTRAP)}, capture_output=True, text=True)
     run.step("the installed wrapper runs the command and sees the machine cord",
              launched.returncode == 0 and json.loads(launched.stdout)["reason"] == "cloud bill spike", launched.stdout.strip() or launched.stderr.strip())

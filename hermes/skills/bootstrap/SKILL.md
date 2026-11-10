@@ -39,7 +39,7 @@ Ask with `clarify`, one question at a time, only what you do not know yet:
 1. **The repository**, as `OWNER/REPO`. If the owner's product is split across several repositories (an API, a web app, a mobile app), say that a project is one repository and suggest combining them into one first, each app in its own folder, so one agent can carry a feature through all of them. Otherwise each repository becomes its own project.
 2. **The project's slug and the bot's name**, only if the owner does not want the defaults (the repository's name). Lowercase letters, digits, `-` and `_`, and not a reserved name (`default`, `hermes`, `test`, `tmp`, `root`, `sudo`, `gh`, `git`, `claude`, `faker-kit`, `python`, `node`, `uv`). The bot's name is the Hermes profile name; the owner can give it any display title in Bot Mode.
 3. **The model** for the project bot, if the owner wants a particular one.
-4. **The fallback cadence**, only if the owner wants lower or higher latency than the defaults: heartbeat every `1h`, incidents every `10m`, security every `6h`. GitHub events wake the bot sooner.
+4. **The fallback cadence**, only if the owner wants lower or higher latency than the defaults: heartbeat every `1h`, incidents every `10m`, security every `6h`. GitHub events wake the bot sooner. The heartbeat is the tick of the babysit and issues jobs; their gates let it through only on news or after six hours, a fixed interval that `--heartbeat-every` does not change.
 
 Then restate the plan in a short list and ask the owner to confirm before step 3. With `ask_owner` false, restate it and go on.
 

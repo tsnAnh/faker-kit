@@ -9,6 +9,7 @@
 - `bot-merge`: `merge` refuses on failed or pending checks, a head whose only passing checks are the review workflow's own jobs or the kit-checks workflow's (or a check run that names no other workflow run, or whose workflow run came from `workflow_dispatch`, `pull_request_target`, `workflow_run`, another commit, another repository, another pull request, another base branch, a fork, a run created before the pull request opened, or a branch that is not this pull request's or ever targeted another base), a missing or older-head approval, `Risk: high` or no Risk line, a failed, missing, or forged `security-review` (the linked review-workflow run on the head has no successful `security` job), a change to a workflow, guard, or protected path, a person's changes-requested review, a fork, and a conflict; on the first call that passes every gate it merges the exact head at once, with no owner message and no wait; a mergeable value GitHub has not computed yet is re-read for about twenty seconds before it refuses. In a repository without the review workflow yet, `status` and `merge` report `security-review` as not reported instead of failing.
 - `bot-incidents`: `incidents` polls checks, health URLs, and Sentry, PagerDuty, Datadog, and Grafana alerts with tokens from the bot's `.env`, lists each new incident once, and a triage session launches from the brief template.
 - `bot-bug-reports`: `issues` lists an issue only when a collaborator with write access added its `faker:fix` label; a fix session launches from the brief template; `add-project` creates the three labels.
+- `bot-wake-gates`: the `faker-kit-babysit` and `faker-kit-issues` jobs carry gate scripts that run `faker-kit status` (and `faker-kit issues`) on each tick and skip the model turn with `{"wakeAgent": false}` unless there is no earlier tick, the status lines changed, a line holds `faker-kit notice:`, six hours passed since the gate last woke the agent, or (issues job) an issue is listed; each keeps `{fingerprint, woke_at}` under `~/.hermes/faker-kit/gates/<bot>/<job>.json`, written only on a wake; a command failure, a wrong shape, or a missing wrapper exits non-zero and writes nothing, so the agent wakes with a Script Error.
 - `bot-andon`: `andon raise` and `clear` for the project, and the machine cord read at launch.
 
 ## How to get to it (user POV)
@@ -18,7 +19,7 @@
 
 ## Driving it
 
-`python3 hermes/e2e/run_dispatch_e2e.py --artifact <path>`. Proof: every "launch", "merge", "window", and andon step prints `ok`, and two runs print the same digest. The "guard:" steps are the guard's verdicts through the real plugin (each call's verdict is in the transcript's `verdicts`), the "runner" steps are the CI slots, and the "vendor" steps are `faker-kit vendor` and `vendor_kit.py`.
+`python3 hermes/e2e/run_dispatch_e2e.py --artifact <path>`. Proof: every "launch", "merge", "window", and andon step prints `ok`, so do the "babysit gate", "issues gate", and "wake time" steps for `bot-wake-gates`, and two runs print the same digest. The "guard:" steps are the guard's verdicts through the real plugin (each call's verdict is in the transcript's `verdicts`), the "runner" steps are the CI slots, and the "vendor" steps are `faker-kit vendor` and `vendor_kit.py`.
 
 ## Gotchas
 

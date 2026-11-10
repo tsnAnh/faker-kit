@@ -29,14 +29,15 @@ SUBSCRIPTION_MIN_CLI = (2, 1, 284)
 SUBSCRIPTION_DEFAULT_MODEL = "sonnet"
 PLUGIN_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
 KIT_OWNED_MARK = "\nKIT_OWNED = True\n"
+GATE_LIBRARY = "faker_kit_gate.py"
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
 SCHEDULE_FIELDS = {"faker-kit-babysit": "heartbeat_every", "faker-kit-incidents": "incidents_every", "faker-kit-security": "security_every",
                    "faker-kit-issues": "heartbeat_every"}
 
 
 class Profiles:
-    def __init__(self, root: Path, pkg: Path, shapes: re.Pattern[str]) -> None:
-        self.root, self.pkg, self.shapes = root, pkg, shapes
+    def __init__(self, root: Path, pkg: Path, shapes: re.Pattern[str], state: Path) -> None:
+        self.root, self.pkg, self.shapes, self.state = root, pkg, shapes, state
 
     def home(self, bot: str) -> Path:
         return profile_home(self.root, bot)
@@ -201,7 +202,10 @@ class Profiles:
         existing = cron_jobs(hermes("-p", bot, "cron", "list", "--all"))
         jobs = cron_spec(self.pkg / "cron" / spec, bot)
         scripts = {job["name"]: self.job_script(bot, job["script"]) for job in jobs if job["script"]}
+        library = self.job_script(bot, GATE_LIBRARY) if scripts else None
         created = []
+        if library:
+            self.write_job_script(*library)
         for job in jobs:
             schedule = f"every {intervals[SCHEDULE_FIELDS[job['name']]]}" if intervals else job["schedule"]
             deliver = f"{job['deliver']},slack:{slack_channel}" if slack_channel else job["deliver"]
@@ -230,7 +234,7 @@ class Profiles:
             raise InstallError(f"cron script {name} is not in the kit at {source}")
         text = source.read_text()
         for placeholder, value in (("@WRAPPER@", str(self.root / "bin" / "faker-kit")), ("@HERMES_HOME@", str(self.home(bot))),
-                                   ("@PATH@", os.environ.get("PATH", ""))):
+                                   ("@FAKER_KIT_HOME@", str(self.state)), ("@PATH@", os.environ.get("PATH", ""))):
             text = text.replace(f'"{placeholder}"', json.dumps(value))
         target = self.home(bot) / "scripts" / name
         if target.is_symlink() or (target.exists() and not target.is_file()) or (target.is_file() and KIT_OWNED_MARK.encode() not in target.read_bytes()):
