@@ -2,23 +2,19 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import copy
 import hashlib
-import importlib.util
 import json
 import os
 import platform
 import re
 import secrets
 import stat
-import subprocess
 import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from types import ModuleType, TracebackType
-from urllib.parse import quote
+from types import TracebackType
 
 HERE = Path(__file__).resolve().parent
 for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
@@ -56,10 +52,6 @@ from faker_kit_refresh import refresh
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
 from install_config import InstallError, config_set, hermes, mapping, value_at
 
-VENDOR_MANIFEST = ".agents/faker-kit/KIT.json"
-KIT_REPO_FILE = "kit-repo"
-GITHUB_SOURCE = re.compile(r"\A(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)([^/\s]+/[^/\s]+?)(?:\.git)?/?\Z")
-KIT_BRANCH_PREFIX = "faker-kit/kit-"
 BRIEF_START = "/faker-mode"
 MAX_BRIEF_CHARS = 60_000
 SESSION_MODEL = re.compile(r"\A(?:opus|sonnet|haiku|fable|claude-[a-z0-9]+(?:-[a-z0-9]+){1,6})\Z")
@@ -86,7 +78,7 @@ ANDON_FOOTER = (
 )
 ROLE_COMMANDS = {
     "project": {"launch", "merge", "status", "andon", "incidents", "issues"},
-    "bootstrap": {"add-project", "vendor", "launch", "status", "andon"},
+    "bootstrap": {"add-project", "launch", "status", "andon"},
     "chief": {"status", "handoff", "loop", "add-project", "merge"},
 }
 OWNER_ONLY = {"install", "refresh", "runner", "projects"}
@@ -113,15 +105,6 @@ def check_repo(value: str) -> None:
 def check_interval(value: str | None, what: str) -> None:
     if value is not None and not INTERVAL.match(value):
         raise Refused(f"{what} must be a positive interval like 10m or 1h")
-
-
-def real_repo(slug: str) -> str | None:
-    return slug if REPO.match(slug) and not any(set(part) == {"."} for part in slug.split("/")) else None
-
-
-def github_slug(source: str | None) -> str | None:
-    found = GITHUB_SOURCE.match(source or "")
-    return real_repo(found.group(1)) if found else None
 
 
 def slugify(text: str) -> str:
@@ -178,17 +161,6 @@ class Kit:
                 self.machine_login_known = False
         return self.machine_login_known
 
-    def kit_commit(self) -> str:
-        done = subprocess.run(["git", "-C", str(self.kit), "rev-parse", "HEAD"], capture_output=True, text=True)
-        if done.returncode != 0:
-            raise Refused(f"no kit checkout at {self.kit}; run hermes/install.sh")
-        return done.stdout.strip()
-
-    def api(self, path: str, method: str = "GET", body: dict | None = None) -> dict:
-        args = ["api", "-X", method, path] if method != "GET" else ["api", path]
-        out = self.run(args) if body is None else self.run([*args, "--input", "-"], input=json.dumps(body))
-        return json.loads(out) if out.strip() else {}
-
     def project_bot(self, policy: Policy, project: str) -> Bot:
         bot = policy.projects().get(project)
         if bot is None:
@@ -235,7 +207,6 @@ class Kit:
         if SECRET_SHAPES.search(text):
             raise Refused("the brief looks like it holds a token or key; a session's first message is a process argument, so no secret goes in it")
         repo = str(target.repo)
-        behind = self.kit_matches(target)
         cord = self.cord(target.name)
         if cord:
             raise Refused(f"{cord.describe()}; nothing starts until it is cleared")
@@ -254,48 +225,7 @@ class Kit:
         used, effort_note = session_effort(effort)
         used_model, model_note = session_model(model)
         printed = {"repo": repo, "session": session, "brief": digest, "model": used_model, "effort": used, "permission_mode": PERMISSION_MODE}
-        return {**printed, **model_note, **effort_note, **({"kit_behind": behind} if behind else {})}
-
-    def record_kit_source(self, source: str | None, require_current: bool = False) -> None:
-        path = self.home / KIT_REPO_FILE
-        if source is None and not require_current:
-            return
-        slug = None if require_current else github_slug(source)
-        if slug is None:
-            path.unlink(missing_ok=True)
-            return
-        tmp = path.with_name(f".{KIT_REPO_FILE}.{os.getpid()}")
-        tmp.write_text(slug + "\n")
-        tmp.chmod(0o600)
-        tmp.replace(path)
-
-    def kit_repo(self) -> str | None:
-        try:
-            return real_repo((self.home / KIT_REPO_FILE).read_text().strip())
-        except OSError:
-            return None
-
-    def vendored_is_older(self, bot: str, vendored: object, local: str) -> bool:
-        kit_repo = self.kit_repo()
-        if kit_repo is None or not isinstance(vendored, str) or not SHA.match(vendored) or not SHA.match(local):
-            return False
-        try:
-            return Gh(self.home, bot, kit_repo, self.run).json(f"repos/{kit_repo}/compare/{vendored}...{local}?per_page=1").get("status") == "ahead"
-        except (Refused, ValueError):
-            return False
-
-    def kit_matches(self, target: Bot) -> dict | None:
-        repo = str(target.repo)
-        local = self.kit_commit()
-        try:
-            vendored = json.loads(base64.b64decode(Gh(self.home, target.name, repo, self.run).json(f"repos/{repo}/contents/{VENDOR_MANIFEST}")["content"])).get("kit_ref")
-        except (Refused, ValueError, KeyError, TypeError, AttributeError):
-            raise Refused(f"{repo} has no vendored kit, so cloud sessions would start without its skills; run faker-kit vendor --project <project>") from None
-        if vendored == local:
-            return None
-        if self.vendored_is_older(target.name, vendored, local):
-            return {"vendored": str(vendored)[:12], "machine": local[:12], "next": f"faker-kit vendor --project {target.project}"}
-        raise Refused(f"the vendored kit {str(vendored)[:12]} differs from this machine's kit {local[:12]}; run faker-kit vendor --project <project>")
+        return {**printed, **model_note, **effort_note}
 
     def evidence(self, gh: Gh, pr: int, head: str, default: str, pull: dict) -> Evidence:
         head_info = pull.get("head") or {}
@@ -656,110 +586,6 @@ class Kit:
         self.andon.drop(name)
         return {"stopped": False, "closed": closed}
 
-    def vendor_module(self) -> ModuleType:
-        path = self.kit / "plugins" / "trust-ladder" / "skills" / "setup-cloud-agents" / "scripts" / "vendor_kit.py"
-        if not path.is_file():
-            raise Refused(f"the kit at {self.kit} has no vendor_kit.py; pin a newer kit commit")
-        spec = importlib.util.spec_from_file_location("faker_kit_vendor_kit", path)
-        if spec is None or spec.loader is None:
-            raise Refused(f"cannot load {path}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
-        writes, sys.dont_write_bytecode = sys.dont_write_bytecode, True
-        try:
-            spec.loader.exec_module(module)
-        finally:
-            sys.dont_write_bytecode = writes
-        return module
-
-    def vendor(self, project: str) -> dict:
-        repo = str(self.project_bot(self.policy(), project).repo)
-        vk = self.vendor_module()
-        try:
-            kit_ref = vk.kit_commit(self.kit)
-            plan = vk.plan(self.kit, kit_ref)
-        except vk.VendorError as err:
-            raise Refused(str(err)) from None
-        default = self.api(f"repos/{repo}")["default_branch"]
-        ref_path, ref_query = quote(default, safe="/"), quote(default, safe="")
-        base = self.api(f"repos/{repo}/git/ref/heads/{ref_path}")["object"]["sha"]
-        base_tree = self.api(f"repos/{repo}/git/commits/{base}")["tree"]["sha"]
-        listing = self.api(f"repos/{repo}/git/trees/{base_tree}?recursive=1")
-        if listing.get("truncated"):
-            raise Refused(f"{repo} is too large to list through the API; run vendor_kit.py --into in a clone instead")
-        existing = {e["path"]: e for e in listing.get("tree") or []}
-        link_dirs = {place for places in vk.LINK_DIRS.values() for place, _ in places}
-        for link_dir in sorted(link_dirs):
-            if existing.get(link_dir, {}).get("mode") == "120000":
-                raise Refused(f"{link_dir} in {repo} is a symlink; make it a real folder first, so the kit's relative links resolve")
-        targets: dict[str, bool] = {}
-
-        def ours(entry: dict) -> bool:
-            if entry.get("mode") != "120000":
-                return False
-            if entry["sha"] not in targets:
-                blob = self.api(f"repos/{repo}/git/blobs/{entry['sha']}")
-                targets[entry["sha"]] = vk.points_into_vendor(base64.b64decode(blob["content"]).decode())
-            return targets[entry["sha"]]
-
-        entries = [{"path": path, "mode": "100755" if executable else "100644", "type": "blob", "content": data.decode()}
-                   for path, (data, executable) in sorted(plan.files.items())]
-        stale = [path for path, e in existing.items() if e["type"] == "blob"
-                 and path.startswith(f"{vk.VENDOR_DIR}/") and path not in plan.files and path != vk.MANIFEST]
-        linked, skipped = vk.choose_links(plan.links, lambda path: path in existing and not ours(existing[path]))
-        planned = {path for path, _ in linked}
-        entries += [{"path": path, "mode": "120000", "type": "blob", "content": target} for path, target in linked]
-        stale += [path for path, e in existing.items() if path.rsplit("/", 1)[0] in link_dirs and path not in planned and ours(e)]
-        entries += [{"path": path, "mode": existing[path]["mode"], "type": "blob", "sha": None} for path in sorted(stale)]
-        entries.append({"path": vk.MANIFEST, "mode": "100644", "type": "blob", "content": plan.manifest(linked).decode()})
-        if vk.DISPATCH in existing:
-            text = base64.b64decode(self.api(f"repos/{repo}/contents/{vk.DISPATCH}?ref={ref_query}")["content"]).decode()
-            try:
-                moved = vk.move_kit_ref(text, kit_ref)
-            except vk.VendorError as err:
-                raise Refused(str(err)) from None
-            if moved:
-                entries.append({"path": vk.DISPATCH, "mode": "100644", "type": "blob", "content": moved})
-        tree = self.api(f"repos/{repo}/git/trees", "POST", {"base_tree": base_tree, "tree": entries})["sha"]
-        result = {"project": project, "repo": repo, "kit_ref": kit_ref, "files": len(plan.files), "links": len(linked),
-                  "kept_repository_own": skipped, "removed": sorted(stale)}
-        short = kit_ref[:12]
-        branch = f"{KIT_BRANCH_PREFIX}{short}"
-        if tree == base_tree:
-            superseded = self.close_kit_prs(repo, ref_query, branch, f"{default} already has the kit {short}")
-            return {**result, "pr": None, "note": f"{default} already has the kit at {short}", "superseded": superseded}
-        commit = self.api(f"repos/{repo}/git/commits", "POST", {"message": f"chore(agents): vendor the kit {short}", "tree": tree, "parents": [base]})["sha"]
-        try:
-            self.api(f"repos/{repo}/git/ref/heads/{quote(branch, safe='/')}")
-            self.api(f"repos/{repo}/git/refs/heads/{quote(branch, safe='/')}", "PATCH", {"sha": commit, "force": True})
-        except Refused:
-            self.api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": commit})
-        mine = [pr["html_url"] for pr in self.kit_pulls(repo, ref_query) if pr["head"]["ref"] == branch]
-        if mine:
-            url = mine[0]
-        else:
-            body = (f"Copies the kit at `{kit_ref}` into `.agents/faker-kit/`, and links its skills from `.claude/skills/` and "
-                    "`.agents/skills/` and its subagents from `.claude/agents/`, so every agent session, cloud sessions included, "
-                    "has them. Generated by `faker-kit vendor`; nothing under `.agents/faker-kit/` is edited by hand.\n\n"
-                    f"`python3 .agents/faker-kit/vendor_kit.py --check .` verifies the copy. Kept the repository's own: "
-                    f"{', '.join(skipped) or 'none'}. Removed: {', '.join(sorted(stale)) or 'nothing'}.")
-            url = self.api(f"repos/{repo}/pulls", "POST", {"title": f"chore(agents): vendor the kit {short}", "head": branch, "base": default, "body": body})["html_url"]
-        return {**result, "branch": branch, "pr": url, "superseded": self.close_kit_prs(repo, ref_query, branch, f"{url} vendors the kit {short}")}
-
-    def kit_pulls(self, repo: str, ref_query: str) -> list[dict]:
-        pulls = self.run(["api", f"repos/{repo}/pulls?state=open&base={ref_query}&per_page=100"])
-        return [pr for pr in json.loads(pulls or "[]")
-                if str((pr.get("head") or {}).get("ref", "")).startswith(KIT_BRANCH_PREFIX)
-                and str(((pr["head"].get("repo") or {}).get("full_name")) or "").lower() == repo.lower()]
-
-    def close_kit_prs(self, repo: str, ref_query: str, keep: str, why: str) -> list[str]:
-        older = [pr for pr in self.kit_pulls(repo, ref_query) if pr["head"]["ref"] != keep]
-        for pr in older:
-            number = int(pr["number"])
-            self.api(f"repos/{repo}/pulls/{number}", "PATCH", {"state": "closed"})
-            self.api(f"repos/{repo}/issues/{number}/comments", "POST", {"body": f"Superseded: {why}."})
-        return sorted(pr["html_url"] for pr in older)
-
     def sync_bot(self, bot: Bot, ask_owner: bool, model: str | None, config_dir: str | None, provider: str | None = None) -> dict:
         home = self.profiles.refresh(bot.name, bot.role, ask_owner, model, config_dir, provider)
         out: dict = {"bot": bot.name, "role": bot.role}
@@ -840,7 +666,7 @@ class Kit:
         if webhook_url:
             out["webhooks"] = self.webhooks(webhook_url, [(name, repo)])
         trust_checkout(checkout, os.environ.get(CLAUDE_CONFIG_DIR, ""))
-        steps = [f"faker-kit vendor --project {slug}, then the owner merges its pull request"]
+        steps: list[str] = []
         if not out["jobs_active"]:
             again = f"{repo} --provider {provider} --model {model}" if provider else repo
             steps.append(f"The owner signs gh in on this machine (gh auth login), then runs faker-kit add-project {again} again to start the jobs")
@@ -887,8 +713,7 @@ class Kit:
     def project_names(self) -> list[str]:
         return sorted(self.policy().projects())
 
-    def install(self, config: Path | None, bootstrap: str | None, model: str | None, subscription: bool, provider: str | None = None,
-                source: str | None = None, require_current: bool = False) -> dict:
+    def install(self, config: Path | None, bootstrap: str | None, model: str | None, subscription: bool, provider: str | None = None) -> dict:
         machine = load_machine(config) if config else None
         wanted = self.kit_skill_dirs(machine) if machine else []
         use_subscription = subscription or bool(machine and machine.claude_subscription)
@@ -906,7 +731,6 @@ class Kit:
         if machine:
             self.write_guard(edit_guard((self.home / "guard.yaml").read_text(), machine))
         config_dir = self.profiles.claude_login() if use_subscription else None
-        self.record_kit_source(source, require_current)
         data = self.bots_file()
         for name, role in ((bootstrap, "bootstrap"), (machine.chief if machine else None, "chief")):
             if name:
@@ -991,8 +815,6 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--model")
     cmd.add_argument("--provider")
     cmd.add_argument("--claude-subscription", action="store_true")
-    cmd.add_argument("--source")
-    cmd.add_argument("--require-current-kit", action="store_true")
     cmd = sub.add_parser("refresh")
     cmd = sub.add_parser("projects")
     cmd = sub.add_parser("add-project")
@@ -1004,8 +826,6 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--claude-subscription", action="store_true", default=None)
     cmd.add_argument("--heartbeat-every")
     cmd.add_argument("--check", action="store_true")
-    cmd = sub.add_parser("vendor")
-    cmd.add_argument("--project", required=True)
     cmd = sub.add_parser("status")
     cmd.add_argument("--all", action="store_true")
     cmd = sub.add_parser("launch")
@@ -1071,7 +891,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     if args.command == "status":
         return kit.status(caller, args.all)
     if args.command == "install":
-        return kit.install(args.config, args.bootstrap_bot, args.model, args.claude_subscription, args.provider, args.source, args.require_current_kit)
+        return kit.install(args.config, args.bootstrap_bot, args.model, args.claude_subscription, args.provider)
     if args.command == "refresh":
         return [refresh(kit.home)]
     if args.command == "projects":
@@ -1079,8 +899,6 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     if args.command == "add-project":
         intervals = {key: getattr(args, key) for key in SCHEDULE_DEFAULTS}
         return kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider, check=args.check)
-    if args.command == "vendor":
-        return kit.vendor(args.project)
     if args.command == "launch":
         return kit.launch(caller, args.project, args.brief_file, args.model, args.effort)
     if args.command == "merge":

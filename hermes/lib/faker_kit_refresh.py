@@ -14,13 +14,11 @@ from urllib.parse import urlsplit
 from faker_kit_gh import Refused
 
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
-GITHUB_REPO = re.compile(r"\A[^/\s]+/[^/\s]+\Z")
 SOURCE_FILE = "kit-source"
 INSTALLED_FILE = "installed-ref"
-REPO_FILE = "kit-repo"
 LOCK_FILE = "refresh.lock"
 MAIN = "refs/heads/main"
-INSTALL_ARGS = ("--no-vendor", "--no-gateway")
+INSTALL_ARGS = ("--no-gateway",)
 LS_REMOTE_SECONDS = 60
 FETCH_SECONDS = 300
 INSTALL_SECONDS = 1380
@@ -53,9 +51,6 @@ def recorded_source(home: Path) -> str:
     source = read_line(home / SOURCE_FILE)
     if source:
         return source
-    repo = read_line(home / REPO_FILE)
-    if repo and GITHUB_REPO.match(repo):
-        return f"https://github.com/{repo}.git"
     raise Refused(f"no kit source is recorded in {home}; run hermes/install.sh once from a kit clone with --source")
 
 

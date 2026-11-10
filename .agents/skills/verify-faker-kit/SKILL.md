@@ -11,7 +11,7 @@ The commands under Checks in AGENTS.md are not verification. They prove the code
 
 ## Hermes module
 
-Hermes, GitHub, and the Claude CLI are external systems. `hermes/e2e/run_dispatch_e2e.py` replaces exactly those three with stubs on `PATH`; everything else is the real kit: the real `install.sh` run over a fake `~/.hermes/faker-kit` tree, the installed `faker-kit` wrapper, `launch`, `merge`, `andon`, `status`, `runner`, `vendor`, `vendor_kit.py`, and the guard plugin loaded and called the way Hermes does (every hard block and allowed read is a recorded verdict).
+Hermes, GitHub, and the Claude CLI are external systems. `hermes/e2e/run_dispatch_e2e.py` replaces exactly those three with stubs on `PATH`; everything else is the real kit: the real `install.sh` run over a fake `~/.hermes/faker-kit` tree, the installed `faker-kit` wrapper, `launch`, `merge`, `andon`, `status`, `runner`, `environment-setup.sh`, and the guard plugin loaded and called the way Hermes does (every hard block and allowed read is a recorded verdict).
 
 ```bash
 python3 hermes/e2e/run_dispatch_e2e.py --artifact .verify-evidence/hermes-e2e.json

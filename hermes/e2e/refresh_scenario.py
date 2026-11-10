@@ -40,7 +40,7 @@ def refresh_scenario(work: Path, step: Step, base_env: dict[str, str], fake_herm
     wrapper = hermes_home / "bin" / "faker-kit"
 
     def install(ref: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(["bash", str(source / "hermes" / "install.sh"), "--ref", ref, "--source", str(source), "--no-vendor", "--no-gateway"],
+        return subprocess.run(["bash", str(source / "hermes" / "install.sh"), "--ref", ref, "--source", str(source), "--no-gateway"],
                               env=env, capture_output=True, text=True, timeout=300)
 
     def refresh(extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -71,7 +71,7 @@ def refresh_scenario(work: Path, step: Step, base_env: dict[str, str], fake_herm
     before = hermes_calls()
     moved = refresh()
     new_calls = calls.read_text().splitlines()[before:]
-    step("refresh installs the source's newest main with --no-vendor --no-gateway and prints one line naming both commits",
+    step("refresh installs the source's newest main with --no-gateway and prints one line naming both commits",
          moved.returncode == 0 and moved.stdout.strip() == f"kit moved {first[:12]} -> {second[:12]}" and installed() == second and head() == second
          and (state / "kit" / "hermes" / "templates" / "refresh-marker").read_text() == "second\n" and not any('"gateway"' in line for line in new_calls)
          and not list(state.glob(".refresh-*")),
@@ -123,7 +123,6 @@ def refresh_scenario(work: Path, step: Step, base_env: dict[str, str], fake_herm
          (busy.stdout + busy.stderr).strip())
 
     (state / "kit-source").unlink()
-    (state / "kit-repo").unlink(missing_ok=True)
     unknown = refresh()
     step("a kit with no recorded source refuses and says how to record one", unknown.returncode == 1 and "no kit source is recorded" in unknown.stderr and installed() == fixed,
          (unknown.stdout + unknown.stderr).strip())

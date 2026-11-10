@@ -1,14 +1,12 @@
 {
   "backend": "claude",
-  "kit_ref": "0d275c94f6631dba87b464f25d0312b97034fd0c",
   "max_in_flight": 5,
   "forbidden_paths": [
     ".github/workflows/",
     "infra/",
     "*.lock",
     "bun.lock",
-    "package-lock.json",
-    ".agents/faker-kit/"
+    "package-lock.json"
   ],
   "trusted_dispatchers": [
     "tsnAnh"

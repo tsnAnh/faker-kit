@@ -13,7 +13,7 @@ claude_subscription: true
 # together. The kit picks neither; write the ones you chose. Sign in to the provider from your own terminal first.
 # bootstrap_provider: CHANGE-ME
 # bootstrap_model: CHANGE-ME
-# Optional: the kit commit to install. Default: kit_ref in this repository's .agents/dispatch.json.
+# The kit commit to install; setup-machine.sh needs this unless you pass --ref.
 # kit_ref: 0123456789abcdef0123456789abcdef01234567
 
 # Kit plugins whose skills your default Hermes profile and every kit bot load,

@@ -4,13 +4,15 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
 HERMES = Path(__file__).resolve().parent.parent
 KIT = HERMES.parent
-SCRIPT = KIT / "plugins" / "trust-ladder" / "skills" / "setup-cloud-agents" / "scripts" / "vendor_kit.py"
+SCRIPTS = KIT / "plugins" / "trust-ladder" / "skills" / "setup-cloud-agents" / "scripts"
+LINKS = SCRIPTS / "kit_links.py"
+ENVIRONMENT_SETUP = SCRIPTS / "environment-setup.sh"
+COMPAT = KIT / "plugins" / "trust-ladder" / "references" / "compat.md"
 RATCHET = KIT / "scripts" / "agent-checks" / "ratchet.mjs"
 RULE = "gh-graphql-read"
 GUARDED = ["hermes/bin/faker_kit.py", "hermes/lib/faker_kit_gh.py"]
@@ -25,166 +27,108 @@ def git(cwd: Path, *args: str) -> str:
     return done.stdout.strip()
 
 
-def make_kit(root: Path) -> tuple[Path, str]:
+def make_kit(root: Path) -> Path:
     kit = root / "kit"
     for plugin, skills in (("trust-ladder", ("check-agent-compatibility", "shared")), ("pstack", ("faker-mode", "shared")), ("team-workflows", ("shared",))):
         for skill in skills:
             folder = kit / "plugins" / plugin / "skills" / skill
             folder.mkdir(parents=True)
             (folder / "SKILL.md").write_text(f"---\nname: {skill}\n---\nfrom {plugin}\n")
-        (kit / "plugins" / plugin / "LICENSE").write_text(f"MIT {plugin}\n")
     (kit / "plugins" / "pstack" / "agents").mkdir()
     (kit / "plugins" / "pstack" / "agents" / "faker-agent.md").write_text("---\nname: faker-agent\n---\n")
-    for dropped in ("docs/guide.md", "assets/logo.png", "test/hooks.test.mjs"):
-        target = kit / "plugins" / "trust-ladder" / dropped
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("dropped")
-    nested_test = kit / "plugins" / "trust-ladder" / "skills" / "shared" / "test"
-    nested_test.mkdir(parents=True)
-    (nested_test / "kept.txt").write_text("fixture")
-    tool = kit / "plugins" / "pstack" / "skills" / "faker-mode" / "run.sh"
-    tool.write_text("#!/bin/sh\n")
-    tool.chmod(0o755)
+    (kit / "plugins" / "pstack" / "agents" / "notes.txt").write_text("not an agent")
+    (kit / "plugins" / "pstack" / "skills" / "no-skill-file").mkdir()
+    references = kit / "plugins" / "trust-ladder" / "references"
+    references.mkdir()
+    shutil.copy2(COMPAT, references / "compat.md")
     scripts = kit / "plugins" / "trust-ladder" / "skills" / "setup-cloud-agents" / "scripts"
     scripts.mkdir(parents=True)
-    shutil.copy2(SCRIPT, scripts / "vendor_kit.py")
-    (kit / "LICENSE").write_text("MIT kit\n")
-    git(kit, "init", "-q")
+    shutil.copy2(LINKS, scripts / "kit_links.py")
+    subprocess.run(["git", "init", "-q", "-b", "main", str(kit)], check=True, capture_output=True)
     git(kit, "add", ".")
     git(kit, "commit", "-qm", "kit")
-    return kit, git(kit, "rev-parse", "HEAD")
+    return kit
 
 
-def make_repo(root: Path, name: str = "repo") -> Path:
-    repo = root / name
-    skill = repo / ".claude" / "skills" / "verify-shop"
-    skill.mkdir(parents=True)
-    (skill / "SKILL.md").write_text("own")
-    git(repo, "init", "-q")
-    return repo
+def hook_registrations(config: Path) -> list[str]:
+    settings = json.loads((config / "settings.json").read_text())
+    return [hook["command"] for group in settings["hooks"]["SessionStart"] for hook in group["hooks"]]
 
 
-def vendor(kit: Path, repo: Path, *extra: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, str(SCRIPT), "--kit", str(kit), "--into", str(repo), *extra], capture_output=True, text=True)
+def environment_scenario(root: Path, step: Step) -> None:
+    kit = make_kit(root)
+    home = root / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    config = home / ".claude"
+    token = "e2e-read-token-" + "q" * 24
+    base = {key: value for key, value in os.environ.items() if key not in ("CLAUDE_CONFIG_DIR", "FAKER_KIT_READ_TOKEN", "FAKER_KIT_REF", "FAKER_KIT_URL", "config_dir")}
+    env = {**base, "HOME": str(home)}
+    session = {**env, "FAKER_KIT_READ_TOKEN": token, "FAKER_KIT_URL": str(kit)}
+    installer = config / "faker-kit-install.sh"
+    kit_dir = home / ".cache" / "faker-kit"
+    compat = COMPAT.read_text()
 
+    def hook(extra: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["bash", str(installer)], env={**session, **(extra or {})}, capture_output=True, text=True, timeout=120)
 
-def check(repo: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, str(repo / ".agents/faker-kit/vendor_kit.py"), "--check", str(repo)], capture_output=True, text=True)
+    config.mkdir()
+    (config / "settings.json").write_text(json.dumps({"model": "sonnet", "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "echo mine"}]}]}}))
+    first = subprocess.run(["bash", str(ENVIRONMENT_SETUP)], env=env, capture_output=True, text=True, timeout=120)
+    second = subprocess.run(["bash", "-c", f"set -euo pipefail; source {ENVIRONMENT_SETUP}; source {ENVIRONMENT_SETUP}"], env=env, capture_output=True, text=True, timeout=120)
+    commands = hook_registrations(config)
+    settings = json.loads((config / "settings.json").read_text())
+    step("environment-setup.sh without the token installs no kit, registers the session hook once beside the user's own, and sourcing it again twice adds no second hook",
+         first.returncode == 0 and second.returncode == 0 and not kit_dir.exists() and not (config / "skills").exists()
+         and commands == ["echo mine", f"bash {installer}"] and settings["model"] == "sonnet" and os.access(installer, os.X_OK)
+         and "FAKER_KIT_READ_TOKEN is not set" in (config / "faker-kit-setup.log").read_text(), (first.stderr + second.stderr).strip()[-300:] or str(commands))
 
+    started = hook()
+    skills = sorted(p.name for p in (config / "skills").iterdir())
+    agents = sorted(p.name for p in (config / "agents").iterdir())
+    log = (config / "faker-kit-setup.log").read_text()
+    owner = (config / "skills" / "shared").readlink() if (config / "skills" / "shared").is_symlink() else None
+    leaked = [str(p) for p in home.rglob("*") if p.is_file() and not p.is_symlink() and token.encode() in p.read_bytes()]
+    step("the session hook with the token fetches the kit, links its skills and agents with trust-ladder winning a shared name, prints exactly the compat block, and leaks no token",
+         started.returncode == 0 and skills == ["check-agent-compatibility", "faker-mode", "shared"] and agents == ["faker-agent.md"]
+         and owner == kit_dir.resolve() / "plugins" / "trust-ladder" / "skills" / "shared" and (config / "skills" / "faker-mode" / "SKILL.md").is_file()
+         and started.stdout == compat and started.stderr == "" and " installed" in log and "3 skills, 1 agents" in log and (kit_dir / ".faker-kit-installed").is_file()
+         and not leaked and token not in started.stdout + started.stderr, started.stderr.strip()[-300:] or str(skills))
 
-def vendor_scenario(root: Path, step: Step) -> None:
-    kit, ref = make_kit(root)
-    repo = make_repo(root)
-    (repo / ".agents" / "skills" / "check-agent-compatibility").mkdir(parents=True)
-    done = vendor(kit, repo)
-    result = json.loads(done.stdout) if done.returncode == 0 else {}
-    vendored = repo / ".agents" / "faker-kit"
-    link = repo / ".claude/skills/faker-mode"
-    manifest = json.loads((vendored / "KIT.json").read_text()) if (vendored / "KIT.json").exists() else {}
-    step("vendor_kit.py vendors the plugins, links skills and agents, and keeps the repository's own skills",
-         done.returncode == 0 and result["kit_ref"] == ref and result["skipped"] == [".claude/skills/check-agent-compatibility", ".agents/skills/check-agent-compatibility"]
-         and (vendored / "plugins/trust-ladder/LICENSE").read_text() == "MIT trust-ladder\n" and (vendored / "LICENSE").read_text() == "MIT kit\n"
-         and not (vendored / "plugins/trust-ladder/docs").exists() and not (vendored / "plugins/trust-ladder/assets").exists() and not (vendored / "plugins/trust-ladder/test").exists()
-         and (vendored / "plugins/trust-ladder/skills/shared/test/kept.txt").exists() and os.access(vendored / "plugins/pstack/skills/faker-mode/run.sh", os.X_OK)
-         and link.is_symlink() and link.readlink().as_posix() == "../../.agents/faker-kit/plugins/pstack/skills/faker-mode"
-         and (repo / ".claude/skills/shared/SKILL.md").read_text().endswith("from trust-ladder\n")
-         and (repo / ".claude/agents/faker-agent.md").readlink().as_posix() == "../../.agents/faker-kit/plugins/pstack/agents/faker-agent.md"
-         and (repo / ".claude/skills/verify-shop/SKILL.md").read_text() == "own" and (repo / ".agents/skills/check-agent-compatibility").is_dir()
-         and not (repo / ".agents/skills/check-agent-compatibility").is_symlink() and not (repo / ".claude/skills/check-agent-compatibility").exists()
-         and manifest["kit_ref"] == ref and ".claude/skills/check-agent-compatibility" not in manifest["links"] and check(repo).returncode == 0, (done.stderr or done.stdout)[-300:])
+    shutil.rmtree(kit)
+    again = hook()
+    step("a second hook run is a no-op that fetches nothing, changes nothing, and still prints exactly the compat block",
+         again.returncode == 0 and again.stdout == compat and again.stderr == "" and sorted(p.name for p in (config / "skills").iterdir()) == skills,
+         again.stderr.strip()[-300:])
 
-    (vendored / "plugins/pstack/skills/faker-mode/SKILL.md").write_text("edited")
-    (vendored / "plugins/pstack/new.md").write_text("added")
-    link.unlink()
-    (repo / ".agents").mkdir(exist_ok=True)
-    (repo / ".agents/dispatch.json").write_text(json.dumps({"kit_ref": "0" * 40}))
-    bad = check(repo)
-    problems = (
-        "faker-mode/SKILL.md differs from the kit", "plugins/pstack/new.md is not part of the vendored kit",
-        ".claude/skills/faker-mode should link to", "kit_ref 000000000000 differs from the vendored kit",
-    )
-    step("vendor_kit.py --check catches an edit, an extra file, a broken link, and a pin mismatch", bad.returncode == 1 and all(p in bad.stderr for p in problems), bad.stderr[-300:])
+    kit = make_kit(root / "second")
+    shutil.rmtree(kit_dir)
+    for link in (config / "skills").iterdir():
+        link.unlink()
+    own = config / "skills" / "faker-mode"
+    own.mkdir()
+    (own / "SKILL.md").write_text("mine")
+    stale = config / "skills" / "removed-upstream"
+    stale.symlink_to(kit_dir.resolve() / "plugins" / "pstack" / "skills" / "removed-upstream")
+    rerun = hook({"FAKER_KIT_URL": str(kit)})
+    step("a skill folder the user already has is kept as it is, a link to a skill the kit dropped is removed, and the rest still link",
+         rerun.returncode == 0 and (own / "SKILL.md").read_text() == "mine" and not own.is_symlink() and not stale.is_symlink()
+         and (config / "skills" / "shared").is_symlink() and "kept 1 of your own, removed 1 stale" in (config / "faker-kit-setup.log").read_text(), rerun.stderr.strip()[-300:])
 
-    bare = make_repo(root, "bare")
-    none = subprocess.run([sys.executable, str(SCRIPT), "--check", str(bare)], capture_output=True, text=True)
-    step("vendor_kit.py --check without a vendored kit says to vendor first", none.returncode == 1 and "vendor the kit first" in none.stderr, none.stderr.strip())
+    shutil.rmtree(kit_dir)
+    failed = hook({"FAKER_KIT_URL": str(root / "no-such-kit")})
+    step("a hook whose fetch fails exits non-zero with one line pointing at the log, prints nothing to stdout, and leaves no marker so the next start tries again",
+         failed.returncode != 0 and failed.stdout == "" and "see " in failed.stderr and "faker-kit-setup.log" in failed.stderr and len(failed.stderr.strip().splitlines()) == 1
+         and not (kit_dir / ".faker-kit-installed").exists() and hook({"FAKER_KIT_URL": str(kit)}).stdout == compat, failed.stderr.strip()[-300:])
 
-    stale = make_repo(root, "stale")
-    (stale / ".agents" / "old-kit" / "plugins" / "pstack" / "skills" / "faker-mode").mkdir(parents=True)
-    (stale / ".claude" / "skills" / "faker-mode").symlink_to("../../.agents/old-kit/plugins/pstack/skills/faker-mode")
-    refused = vendor(kit, stale)
-    step("vendor_kit.py refuses a repository whose skill links point into another vendored kit folder, and changes nothing",
-         refused.returncode != 0 and "another vendored kit folder" in refused.stderr and ".claude/skills/faker-mode" in refused.stderr
-         and not (stale / ".agents" / "faker-kit").exists(), refused.stderr.strip()[-300:])
-
-    fresh = make_repo(root, "fresh")
-    assert vendor(kit, fresh).returncode == 0
-    shutil.rmtree(kit / "plugins" / "pstack" / "skills" / "faker-mode")
-    git(kit, "commit", "-qam", "drop faker-mode")
-    new_ref = git(kit, "rev-parse", "HEAD")
-    again = vendor(kit, fresh)
-    step("vendor_kit.py at a newer kit commit replaces the copy and removes stale files and links",
-         again.returncode == 0 and ".claude/skills/faker-mode" in json.loads(again.stdout)["removed"] and not (fresh / ".claude/skills/faker-mode").is_symlink()
-         and not (fresh / ".agents/faker-kit/plugins/pstack/skills/faker-mode").exists() and json.loads((fresh / ".agents/faker-kit/KIT.json").read_text())["kit_ref"] == new_ref
-         and check(fresh).returncode == 0, again.stderr[-300:])
-
-    kit3, _ = make_kit(root / "third")
-    (kit3 / "plugins" / "pstack" / "lib").mkdir()
-    (kit3 / "plugins" / "pstack" / "lib" / "util.py").write_text("x = 1\n")
-    (kit3 / ".gitignore").write_text("*.local\n")
-    (kit3 / "plugins" / "pstack" / "notes.local").write_text("ignored in the kit")
-    git(kit3, "add", ".")
-    git(kit3, "commit", "-qm", "lib")
-    ref3 = git(kit3, "rev-parse", "HEAD")
-    ignoring = make_repo(root, "ignoring")
-    (ignoring / ".gitignore").write_text("lib/\n*.py\n")
-    (ignoring / ".agents").mkdir()
-    (ignoring / ".agents/dispatch.json").write_text(json.dumps({"backend": "claude", "kit_ref": "0" * 40}))
-    moved = vendor(kit3, ignoring)
-    git(ignoring, "add", "-A")
-    step("vendor_kit.py moves kit_ref, vendors files the repository's ignore rules would drop, and leaves out what the kit ignores",
-         moved.returncode == 0 and json.loads(moved.stdout)["kit_ref_moved"] is True and json.loads((ignoring / ".agents/dispatch.json").read_text()) == {"backend": "claude", "kit_ref": ref3}
-         and not (ignoring / ".agents/faker-kit/plugins/pstack/notes.local").exists() and ".agents/faker-kit/plugins/pstack/lib/util.py" in git(ignoring, "ls-files")
-         and check(ignoring).returncode == 0,
-         moved.stderr[-300:])
-
-    hidden = make_repo(root, "hidden")
-    (hidden / ".gitignore").write_text(".agents/\n")
-    refused = vendor(kit, hidden)
-    step("vendor_kit.py refuses what the repository would not commit", refused.returncode == 1 and "ignore rules leave out" in refused.stderr, refused.stderr.strip()[-200:])
-
-    kit4, _ = make_kit(root / "fourth")
-    dirty = make_repo(root, "dirty")
-    (kit4 / "plugins" / "pstack" / "skills" / "faker-mode" / "SKILL.md").write_text("local edit")
-    refused = vendor(kit4, dirty)
-    allowed = vendor(kit4, dirty, "--allow-dirty")
-    kit5, _ = make_kit(root / "fifth")
-    (kit5 / "plugins" / "pstack" / "skills" / "faker-mode" / "new.md").write_text("untracked")
-    untracked = vendor(kit5, make_repo(root, "untracked"))
-    step("vendor_kit.py refuses a kit with uncommitted or untracked changes unless told", refused.returncode == 1 and "uncommitted changes" in refused.stderr and allowed.returncode == 0
-         and untracked.returncode == 1 and "uncommitted changes" in untracked.stderr, refused.stderr.strip()[-200:])
-
-    kit6, _ = make_kit(root / "sixth")
-    linked = make_repo(root, "linked")
-    (linked / ".agents").mkdir()
-    (linked / ".agents" / "skills").symlink_to("../.claude/skills")
-    folder = vendor(kit6, linked)
-    plain = make_repo(root, "plain")
-    shutil.rmtree(plain / ".git")
-    not_git = vendor(kit6, plain)
-    (kit6 / "plugins" / "pstack" / "skills" / "faker-mode" / "link.md").symlink_to("SKILL.md")
-    git(kit6, "add", ".")
-    git(kit6, "commit", "-qm", "link")
-    symlink = vendor(kit6, make_repo(root, "symlinked"))
-    step("vendor_kit.py refuses a linked skills folder, a folder that is not a git repository, and a symlink in the kit",
-         "is a symlink; make it a real folder" in folder.stderr and "not a git repository" in not_git.stderr and "holds files only" in symlink.stderr
-         and all(p.returncode == 1 for p in (folder, not_git, symlink)),
-         folder.stderr.strip()[-120:])
-
-    real = make_repo(root, "real")
-    live = vendor(KIT, real, "--allow-dirty")
-    step("vendor_kit.py vendors this kit cleanly and the copy checks", live.returncode == 0 and (real / ".claude/skills/faker-mode/SKILL.md").exists()
-         and (real / ".claude/skills/check-agent-compatibility/SKILL.md").exists() and check(real).returncode == 0, (live.stderr or live.stdout)[-300:])
+    elsewhere = root / "elsewhere"
+    shutil.rmtree(kit_dir)
+    surrounding = {**env, "ELSEWHERE": str(elsewhere), "SETUP": str(ENVIRONMENT_SETUP)}
+    chosen = subprocess.run(["bash", "-c", 'config_dir=$ELSEWHERE; source "$SETUP"'], env=surrounding, capture_output=True, text=True, timeout=120)
+    moved = subprocess.run(["bash", str(elsewhere / "faker-kit-install.sh")], env={**session, "FAKER_KIT_URL": str(kit)}, capture_output=True, text=True, timeout=120)
+    via_env = subprocess.run(["bash", str(ENVIRONMENT_SETUP)], env={**env, "CLAUDE_CONFIG_DIR": str(root / "from-env")}, capture_output=True, text=True, timeout=120)
+    step("the config folder is the surrounding script's config_dir, else CLAUDE_CONFIG_DIR, and the hook installs into the folder it was registered in",
+         chosen.returncode == 0 and moved.returncode == 0 and (elsewhere / "skills" / "faker-mode").is_symlink() and via_env.returncode == 0
+         and (root / "from-env" / "settings.json").is_file(), (chosen.stderr + moved.stderr + via_env.stderr).strip()[-300:])
 
 
 def ratchet(cwd: Path, *args: str) -> tuple[int, str]:

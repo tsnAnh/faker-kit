@@ -33,7 +33,7 @@ A repository can make the kit appear for everyone who opens it. `/setup-faker-ki
 | `.claude/settings.json` | After a teammate trusts the folder, Claude Code registers the faker-kit marketplace and knows which plugins the project enables. Each person still runs `/plugin install trust-ladder@faker-kit` once. |
 | `AGENTS.md` and `CLAUDE.md` | The instructions every agent reads, with the upstream-terms table built in. |
 
-Cloud sessions (Claude Code on the web) install none of these plugins; `/setup-cloud-agents` vendors the kit into the repository for them.
+Cloud sessions (Claude Code on the web) install none of these plugins; the cloud environment's setup script gets the kit into them (`/setup-cloud-agents`).
 
 ## Check that it works
 
