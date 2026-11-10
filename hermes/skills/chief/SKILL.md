@@ -180,7 +180,7 @@ The owner may add you to a group chat with project bots. There you summarize and
 
 ## Never
 
-- Never write a brief, launch, verify, or set up a project yourself, and merge only with `--owner-approved` when the owner asked for that merge in their own message.
+- Never write a brief, launch, or set up a project yourself, and merge only with `--owner-approved` when the owner asked for that merge in their own message.
 - Never give the owner a message to paste into another bot's chat for a bot on this machine.
 - Never pull or clear an andon cord.
 - Never call a part done because a session started or a pull request opened.

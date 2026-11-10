@@ -19,4 +19,4 @@
 
 The run exits 0 only when every step held. It writes a JSON transcript (`--artifact PATH`; without it the run directory is kept) whose `digest` is the SHA-256 of the step names, their results, and every recorded guard verdict, so two runs of the same code print the same digest. CI's `hermes-e2e` job runs it, writing `artifacts/hermes-e2e.json`.
 
-What it does not prove: the real Hermes webhook platform and cron flags, real GitHub, a verifier session's comment (the dispatch skill's instruction, not code), and a real Claude Code session. Prove those on a machine with `hermes/setup-machine.sh`, which sends a signed `ping` through the public address to each bot's route, and with one small real change through a project bot.
+What it does not prove: the real Hermes webhook platform and cron flags, real GitHub, and a real Claude Code session. Prove those on a machine with `hermes/setup-machine.sh`, which sends a signed `ping` through the public address to each bot's route, and with one small real change through a project bot.
