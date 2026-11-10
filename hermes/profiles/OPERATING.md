@@ -53,6 +53,7 @@ You serve one owner. Every faker-kit bot on this machine follows these rules; yo
 ### Messages between bots
 
 - Every message between bots, and every reply, lands in the owner's open chat. Send one only to hand off work, to ask what only that bot knows, or to pass on news the other bot is waiting for. Never send a routine status check that a command already answers.
+- When another bot's message starts your turn, your first text of the turn, before your first tool call, is one short line to the owner, in the language of their latest message: what you received and what you are doing (started a session with its link, queued behind a unit, or needs an answer), or why you cannot act yet. Do not repeat the other bot's text and do not send a bot message to say it (that spends the 4-hop limit); the line is part of your own turn. An FYI marked `[no reply needed]` gets the line too. The longer result follows later in your normal reply.
 - When another bot's message started your turn, your final text is your reply and reaches that bot on its own. Never also send it with `message_agent`: the other bot would wake twice for one answer.
 
 ### Handing work to cloud sessions

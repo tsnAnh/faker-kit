@@ -389,6 +389,31 @@ def chief_work(host: Host) -> None:
     notice = host.message("Cronjob Response: faker-kit-status\nfaker-kit notice: In flight: 1.", session=host.sid())
     host.step("guard: a cron notice delivered as a turn says it is not a request from the owner, and an owner message gets no context",
               notice is not None and "not a request from the owner" in notice["context"] and owner is None, "")
+    ack = "first text this turn, before any tool call, is one short line to the owner"
+    peer = "Message from \U0001f916 crm bot (@sep-crm): what is the state of add search (#12)?"
+
+    def as_bot(name: str) -> dict:
+        return {"turn_author": {"id": f"bot:{name}", "name": name, "is_bot": True}}
+
+    fyi = host.message(peer + " [no reply needed]", profile="meo-beo", session=host.sid(), **as_bot("sep-crm"))
+    from_chief = host.message(CHIEF_LINE + "Chief of staff asks: any news?", profile="meo-beo", session=host.sid(), **as_bot("chanh-van"))
+    stranger = host.message("Message from x (@stranger): what is up?", profile="meo-beo", session=host.sid())
+    forged = host.message(peer, profile="meo-beo", session=host.sid(), **as_bot("chanh-van"))
+    host.policy(ask=False)
+    work_ack = host.message(WORK, profile="meo-beo", session=host.sid())
+    boot_ack = host.message(WORK, profile="ong-xay", session=host.sid())
+    host.policy(ask=True)
+    work_ask = host.message(WORK, profile="meo-beo", session=host.sid())
+    host.policy(ask=False)
+    notice_ack = host.message("Cronjob Response: faker-kit-status\nfaker-kit notice: In flight: 1.", session=host.sid())
+    ack_text = fyi["context"] if fyi else ""
+    host.step("guard: a message from another bot, an FYI included, gets one short first-text reminder; an owner message, an unknown sender, and a forged author get none",
+              bool(fyi and from_chief and ack in ack_text and len(ack_text) < 400 and ack in from_chief["context"]) and owner is None and stranger is None and forged is None, ack_text)
+    host.step("guard: a chief-work message and a cron notice keep their own context and gain the reminder once, and chief work without the go-ahead gets the reminder alone",
+              bool(work_ack and boot_ack and notice_ack and work_ask) and "settle every open decision" in work_ack["context"] and work_ack["context"].count(ack) == 1
+              and "load the bootstrap skill again" in boot_ack["context"] and boot_ack["context"].count(ack) == 1
+              and "not a request from the owner" in notice_ack["context"] and notice_ack["context"].count(ack) == 1
+              and "load the dispatch skill again" not in work_ask["context"] and work_ask["context"].count(ack) == 1, "")
     wrong = []
     for profile in ("meo-beo", "chanh-van", "ong-xay"):
         target = "ong-xay" if profile == "meo-beo" else "@meo-beo"

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import hashlib
 import hmac
 import io
@@ -61,6 +62,7 @@ from pathlib import Path
 
 state_path = Path(os.environ["E2E_GH_STATE"])
 state = json.loads(state_path.read_text())
+root_state = state
 args = sys.argv[1:]
 with open(os.environ["E2E_GH_LOG"], "a") as log:
     log.write(json.dumps(args) + "\n")
@@ -68,7 +70,7 @@ with open(os.environ["E2E_GH_LOG"], "a") as log:
 
 def save():
     staged = state_path.with_name(f".{state_path.name}.{os.getpid()}")
-    staged.write_text(json.dumps(state))
+    staged.write_text(json.dumps(root_state))
     os.replace(staged, state_path)
 
 
@@ -114,7 +116,7 @@ def options(tokens):
 def pull_row(pull):
     return {
         "number": pull["number"], "html_url": f"https://github.com/{state['repo']}/pull/{pull['number']}",
-        "state": pull["state"], "merged_at": pull.get("merged_at"), "draft": pull.get("draft", False),
+        "state": pull["state"], "merged_at": pull.get("merged_at"), "draft": pull.get("draft", False), "title": pull.get("title", f"unit {pull['number']}"),
         "user": {"login": pull["author"]}, "mergeable": pull["mergeable"], "body": pull.get("body"),
         "created_at": pull.get("created_at", "2026-10-01T00:00:00Z"), "updated_at": pull.get("updated_at", "2026-10-01T00:00:00Z"),
         "head": {"sha": pull["head"], "ref": pull["branch"], "repo": {"full_name": pull.get("head_repo", state["repo"]), "owner": {"login": pull.get("head_repo", state["repo"]).split("/")[0]}}},
@@ -125,8 +127,11 @@ def pull_row(pull):
 if args[0] == "api":
     positional, fields, method = options(args[1:])
     split = urllib.parse.urlsplit(positional[0])
-    prefix = f"repos/{state['repo']}"
     route = split.path
+    other_repo = "/".join(route.split("/")[1:3])
+    if other_repo in root_state.get("alt", {}):
+        state = root_state["alt"][other_repo]
+    prefix = f"repos/{state['repo']}"
     if method == "PUT" and route.startswith(prefix + "/pulls/") and route.endswith("/merge"):
         number = int(route.split("/")[-2])
         pull = next(p for p in state["pulls"] if p["number"] == number)
@@ -2934,6 +2939,139 @@ def install_skip_scenario(run: Run, work: Path) -> None:
              and config_of(BOT)["plugins"]["entries"][SUBSCRIPTION]["allow_tool_override"] is False, json.dumps(hermes_writes(regranted)))
 
 
+
+def ready_head(number: int) -> str:
+    return f"{number:02x}" * 20
+
+
+def open_state(state: dict, specs: list[tuple]) -> None:
+    state.update(pulls=[], reviews={}, check_runs={}, statuses={}, runs={}, merges=[], timelines={}, head_pulls={}, branch_pulls={}, workflow_trees={},
+                 pull_files={}, fail_reads=[], stray_runs=[], branch_query_misses=False)
+    state["branch_pulls"] = []
+    for number, title, branch, flavor in specs:
+        head = ready_head(number)
+        state["pulls"].append({**Run.pull(number, head, mergeable=flavor != "conflict"), "title": title, "branch": branch,
+                               "draft": flavor == "draft", "state": "closed" if flavor == "closed" else "open"})
+        run_id = 200 + number
+        state["check_runs"][head] = [check_run("check", run_id * 100, *(("failure",) if flavor == "failed" else ("", "in_progress") if flavor == "pending" else ()))]
+        state["statuses"][head] = []
+        state["runs"][str(run_id)] = workflow_run(head, path=CI_PATH, pulls=((number, "main"),), run_id=run_id, branch=branch)
+        state["reviews"][str(number)] = []
+
+
+def shop_and_crm(run: Run, shop: list[tuple], crm: list[tuple] | None = None) -> None:
+    def build(state: dict) -> None:
+        alt = copy.deepcopy({key: value for key, value in state.items() if key != "alt"})
+        alt["repo"] = "acme/crm"
+        open_state(alt, crm or [])
+        state["alt"] = {"acme/crm": alt}
+        open_state(state, shop)
+
+    run.update_gh(build)
+
+
+def batch(result: tuple[int, str, str]) -> tuple[dict, dict]:
+    lines = result[1].strip().splitlines()
+    return (json.loads(lines[0]), json.loads(lines[-1])) if len(lines) == 2 else ({}, {})
+
+
+def merge_open_scenario(run: Run) -> None:
+    saved = run.gh_now()
+    with OwnerBed(run):
+        def landed(project: str = "shop") -> list[int]:
+            state = run.gh_now()
+            return [m["pr"] for m in (state["alt"]["acme/crm"] if project == "crm" else state)["merges"]]
+
+        shop_and_crm(run, [(14, "Ship the last one", "feat/last", "ready"), (11, "Add search", "feat/search", "ready"), (13, "Wip card", "feat/wip", "draft"),
+                           (12, "Fix login", "feat/login", "failed")])
+        result = run.kit("merge", "--open", "--owner-approved")
+        listing, final = batch(result)
+        statuses = {r["pr"]: r for r in final.get("results", [])}
+        run.step("merge --open prints what it resolved and the skipped drafts first, then merges every open non-draft pull request in ascending order with bypassed gates per pull request",
+                 result[0] == 0 and result[1].startswith('{"resolved"') and [r["number"] for r in listing["resolved"]] == [11, 12, 14]
+                 and listing["resolved"][0] == {"project": "shop", "number": 11, "title": "Add search", "head": ready_head(11)[:12]}
+                 and listing["skipped_drafts"] == [{"project": "shop", "number": 13, "title": "Wip card"}] and landed() == [11, 12, 14]
+                 and statuses[11]["bypassed"] == [] and any("failed check check" in b for b in statuses[12]["bypassed"]) and final["complete"] is True, result[1].strip() or result[2].strip())
+
+        shop_and_crm(run, [(21, "First", "feat/a", "ready"), (22, "Second", "feat/b", "conflict"), (23, "Third", "feat/c", "ready")])
+        result = run.kit("merge", "--open", "--owner-approved")
+        listing, final = batch(result)
+        shown = [(r["pr"], r["status"]) for r in final.get("results", [])]
+        run.step("merge --open records a conflict on one pull request with its reason, still merges the next, and exits non-zero",
+                 result[0] == 1 and shown == [(21, "merged"), (22, "refused"), (23, "merged")] and "conflicts with its base branch" in final["results"][1]["reason"]
+                 and landed() == [21, 23] and final["complete"] is False and "not every open pull request merged" in result[2], result[1].strip() or result[2].strip())
+
+        shop_and_crm(run, [(31, "One", "feat/a", "pending"), (32, "Two", "feat/b", "pending"), (33, "Three", "feat/c", "pending")])
+        run.sleeps.clear()
+        run.on_sleep = [lambda: run.update_gh(lambda state: state["check_runs"].__setitem__(ready_head(31), [check_run("check", 23100)])), lambda: None]
+        result = run.kit("merge", "--open", "--owner-approved", "--wait", "60")
+        run.on_sleep = []
+        listing, final = batch(result)
+        shown = [(r["pr"], r["status"]) for r in final.get("results", [])]
+        run.step("merge --open shares one wait budget: each pull request draws on what is left, the one that outlasts it is refused with the wait, and the next is reported not attempted",
+                 result[0] == 1 and shown == [(31, "merged"), (32, "refused"), (33, "not attempted")] and "still pending after waiting 30 seconds" in final["results"][1]["reason"]
+                 and final["results"][2]["reason"] == "wait budget used" and landed() == [31] and run.sleeps == [30.0, 30.0], json.dumps(final)[:300])
+
+        shop_and_crm(run, [(41, "Only", "feat/a", "pending")])
+        run.sleeps.clear()
+        run.on_sleep = [lambda: run.update_gh(lambda state: state["check_runs"].__setitem__(ready_head(41), [check_run("check", 24100)]))]
+        result = run.kit("merge", "--open", "--owner-approved")
+        run.on_sleep = []
+        listing, final = batch(result)
+        run.step("merge --open waits for pending checks by default instead of bypassing them", result[0] == 0 and landed() == [41] and run.sleeps == [30.0] and final["results"][0]["bypassed"] == [],
+                 result[1].strip() or result[2].strip())
+
+        shop_and_crm(run, [(51, "Shop one", "feat/a", "ready"), (53, "Shop two", "feat/b", "ready")], [(52, "Crm one", "feat/a", "ready"), (54, "Crm draft", "feat/b", "draft")])
+        result = run.kit("merge", "--all-projects", "--owner-approved", bot=CHIEF_BOT)
+        listing, final = batch(result)
+        run.step("the chief's merge --all-projects merges the open pull requests of every project, projects in name order, and lists each project's skipped drafts",
+                 result[0] == 0 and [(r["project"], r["number"]) for r in listing["resolved"]] == [("crm", 52), ("shop", 51), ("shop", 53)] and listing["skipped_drafts"][0]["number"] == 54
+                 and landed("crm") == [52] and landed() == [51, 53] and final["merged"] == 3, result[1].strip() or result[2].strip())
+
+        shop_and_crm(run, [(61, "Add FREN card", "feat/card", "ready"), (62, "Fix sign-in", "feat/login", "ready"), (63, "Fren stats", "feat/stats", "draft"),
+                           (64, "Refactor fren api", "feat/api", "ready")])
+        result = run.kit("merge", "--match", "FEAT/LOGIN", "--owner-approved")
+        merged = json.loads(result[1]) if result[0] == 0 else {}
+        run.step("merge --match with one candidate (case-insensitive, by branch) merges it at once in the single-merge output shape",
+                 merged.get("pr") == 62 and merged.get("merged") is True and merged.get("owner_approved") is True and "resolved" not in merged
+                 and landed() == [62], result[1].strip() or result[2].strip())
+        result = run.kit("merge", "--match", "fren", "--owner-approved")
+        said = json.loads(result[1]) if result[1].strip() else {}
+        run.step("merge --match with two candidates merges nothing, prints them as ambiguous, skips the draft, and exits with the distinct code 3",
+                 result[0] == 3 and said == {"status": "ambiguous", "candidates": [
+                     {"project": "shop", "number": 61, "title": "Add FREN card"}, {"project": "shop", "number": 64, "title": "Refactor fren api"}]}
+                 and landed() == [62], result[1].strip() or result[2].strip())
+        result = run.kit("merge", "--match", "nothing-like-this", "--owner-approved")
+        run.step("merge --match with no candidate refuses and says so", result[0] == 1 and "no open pull request of shop" in result[2] and result[1] == "" and landed() == [62], result[2].strip())
+        result = run.kit("merge", "--project", "shop", "--match", "stats", "--owner-approved", bot=CHIEF_BOT)
+        run.step("the chief's merge --match skips a draft: a draft is never a candidate", result[0] == 1 and "no open pull request of shop" in result[2] and landed() == [62], result[2].strip())
+
+        shop_and_crm(run, [(70, "Gone", "feat/gone", "closed"), (71, "Other", "feat/a", "ready"), (72, "Named", "feat/b", "ready")])
+        result = run.kit("merge", "--pr", "72", "--owner-approved")
+        merged = json.loads(result[1]) if result[0] == 0 else {}
+        gone = run.kit("merge", "--pr", "70", "--owner-approved")
+        run.step("merge --pr N still merges exactly that pull request in the single-merge shape, and a number the owner typed is never replaced by another open pull request",
+                 merged == {"pr": 72, "merged": True, "head": ready_head(72), "method": "squash", "owner_approved": True} and landed() == [72]
+                 and gone[0] == 1 and "already closed" in gone[2] and landed() == [72], result[1].strip() or gone[2].strip())
+
+        refusals = [
+            ("--open without --owner-approved", run.kit("merge", "--open"), "--owner-approved"),
+            ("--match without --owner-approved", run.kit("merge", "--match", "other"), "--owner-approved"),
+            ("--open together with --pr", run.kit("merge", "--open", "--pr", "71", "--owner-approved"), "cannot be combined"),
+            ("--match together with --pr", run.kit("merge", "--match", "other", "--pr", "71", "--owner-approved"), "cannot be combined"),
+            ("--open together with --match", run.kit("merge", "--open", "--match", "other", "--owner-approved"), "cannot be combined"),
+            ("a project bot's --all-projects", run.kit("merge", "--all-projects", "--owner-approved"), "is for the chief of staff"),
+            ("the chief's --all-projects without --owner-approved", run.kit("merge", "--all-projects", bot=CHIEF_BOT), "--owner-approved"),
+            ("the chief's --open without --project", run.kit("merge", "--open", "--owner-approved", bot=CHIEF_BOT), "--project"),
+            ("a project bot's --open for another project", run.kit("merge", "--open", "--project", "crm", "--owner-approved"), "only its own project"),
+            ("no target at all", run.kit("merge", "--owner-approved"), "needs a target"),
+        ]
+        wrong = [name for name, result, needle in refusals if not (result[0] == 1 and needle in result[2] and result[1] == "")]
+        run.step("merge refuses --open, --all-projects and --match without the owner's approval, combined with --pr, from the wrong bot, or with no target, and merges nothing",
+                 not wrong and landed() == [72] and landed("crm") == [], wrong[0] if wrong else f"{len(refusals)} refusals")
+    run.set_gh(saved)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Stubbed end-to-end run of the faker-kit coordinator path")
     ap.add_argument("--artifact", type=Path, help="where to write the JSON transcript; defaults to a file in the run directory")
@@ -2963,6 +3101,7 @@ def main(argv: list[str] | None = None) -> int:
         owner_merge_scenario(run)
         owner_landing_scenario(run)
         owner_reviews_scenario(run)
+        merge_open_scenario(run)
     except Failure as err:
         print(f"e2e stopped at: {err}", file=sys.stderr)
         code = 1
