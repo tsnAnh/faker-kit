@@ -105,24 +105,6 @@ def apply_profile(root: Path, profile: str, snippet: Path, overrides: dict[tuple
         config_set(root, profile, keys, value)
 
 
-def cron_jobs(text: str) -> dict[str, dict]:
-    jobs: dict[str, dict] = {}
-    current: dict[str, object] = {}
-    for line in re.sub(r"\x1b\[[0-9;]*m", "", text).splitlines():
-        head = re.match(r"^\s*(\S+)\s+\[(active|paused|enabled|disabled)\]", line)
-        if head:
-            current = {"id": head.group(1), "enabled": head.group(2) in ("active", "enabled")}
-            continue
-        name = re.match(r"^\s*Name:\s*(.*?)\s*$", line)
-        if name and current:
-            jobs[name.group(1)] = current
-            continue
-        row = re.match(r"^\s*(Schedule|Script|Mode):\s*(.*?)\s*$", line)
-        if row and current:
-            current[row.group(1).lower()] = row.group(2)
-    return jobs
-
-
 JOB_NAME = re.compile(r"\Afaker-kit-[a-z][a-z0-9-]*\Z")
 KIT_GATE_SCRIPT = re.compile(r"\Afaker-kit-[a-z0-9-]+-gate\.py\Z")
 
