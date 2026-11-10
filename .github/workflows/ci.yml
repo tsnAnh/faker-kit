@@ -28,8 +28,18 @@ jobs:
         run: |
           npm i --prefix "$RUNNER_TEMP/agents" @anthropic-ai/claude-code
           echo "$RUNNER_TEMP/agents/node_modules/.bin" >> "$GITHUB_PATH"
-      - name: Single check command
-        run: scripts/check.sh
+      - name: Lint
+        run: |
+          python3 .agents/faker-kit/vendor_kit.py --check .
+          node scripts/agent-checks/ratchet.mjs check
+          node scripts/agent-checks/import-boundaries.mjs
+          node scripts/agent-checks/rule-fixtures.mjs
+          ruff check
+          mypy
+      - name: Commit messages
+        run: node scripts/check-commit-messages.mjs
+      - name: Hermes end-to-end
+        run: python3 hermes/e2e/run_dispatch_e2e.py --artifact artifacts/hermes-e2e.json
       - name: End-to-end transcripts
         if: always()
         uses: actions/upload-artifact@v4
