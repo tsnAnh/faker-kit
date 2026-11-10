@@ -49,7 +49,6 @@ class Project:
     project: str
     repo: str
     heartbeat_every: str | None = None
-    incidents_every: str | None = None
     model: str | None = None
     provider: str | None = None
 
@@ -153,10 +152,10 @@ def parse_machine(data: object) -> Machine:
     for i, item in enumerate(raw_projects):
         where = f"projects[{i}]"
         entry = _mapping(item, where)
-        every = {k: _text(entry, k, where, EVERY, required=False) for k in ("heartbeat_every", "incidents_every")}
+        heartbeat_every = _text(entry, "heartbeat_every", where, EVERY, required=False)
         model, provider = _model_choice(entry, "model", "provider", where, subscription)
         projects.append(Project(bot=str(_text(entry, "bot", where, NAME)), project=str(_text(entry, "project", where, NAME)),
-                                repo=str(_text(entry, "repo", where, REPO)), model=model, provider=provider, **every))
+                                repo=str(_text(entry, "repo", where, REPO)), heartbeat_every=heartbeat_every, model=model, provider=provider))
     bots = [p.bot for p in projects]
     bootstrap = str(_text(top, "bootstrap_bot", "machine config", NAME))
     bootstrap_model, bootstrap_provider = _model_choice(top, "bootstrap_model", "bootstrap_provider", "machine config", subscription)

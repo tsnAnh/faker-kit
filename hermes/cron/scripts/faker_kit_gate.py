@@ -23,6 +23,7 @@ TIMEOUT_SECONDS = 240
 HERMES_TIMEOUT_SECONDS = 60
 STDERR_TAIL = 400
 HEARTBEAT_SECONDS = 6 * 60 * 60
+MAX_RUN_RETRIES = 3
 NOTICE = "faker-kit notice:"
 NO_PULLS = "no open pull requests"
 NOT_RECORDED = "no earlier tick of this gate is recorded"
@@ -30,13 +31,13 @@ NOTICE_REASON = "a faker-kit notice printed"
 CHANGED = "the status changed"
 HEARTBEAT_REASON = "six hours passed since this gate last woke the agent while a pull request is open"
 RUN_FAILED = "the job's previous run after the last wake did not finish ok"
-RUN_UNREADABLE = "the job's last run could not be read from hermes cron list"
 
 
 @dataclass(frozen=True)
 class GateState:
     fingerprint: str
     woke_at: float
+    retries: int = 0
 
 
 def fail(message: str, stderr: str = "") -> NoReturn:
@@ -103,7 +104,8 @@ def read_state(path: Path) -> GateState | None:
     fingerprint, woke_at = data.get("fingerprint"), data.get("woke_at")
     if not isinstance(fingerprint, str) or isinstance(woke_at, bool) or not isinstance(woke_at, (int, float)) or not math.isfinite(woke_at):
         return None
-    return GateState(fingerprint, float(woke_at))
+    retries = data.get("retries", 0)
+    return GateState(fingerprint, float(woke_at), retries if isinstance(retries, int) and not isinstance(retries, bool) and retries > 0 else 0)
 
 
 def write_state(path: Path, state: GateState) -> None:
@@ -111,7 +113,7 @@ def write_state(path: Path, state: GateState) -> None:
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as out:
-            out.write(json.dumps({"fingerprint": state.fingerprint, "woke_at": state.woke_at}))
+            out.write(json.dumps({"fingerprint": state.fingerprint, "woke_at": state.woke_at, "retries": state.retries}))
         temp.replace(path)
     except OSError as err:
         with suppress(OSError):
@@ -128,17 +130,15 @@ def failed_run_reason(job: str, since: float) -> str | None:
         done = subprocess.run(["hermes", "-p", profile_name(), "cron", "list", "--all"], env=child_env(), capture_output=True, text=True,
                               timeout=HERMES_TIMEOUT_SECONDS, check=False)
     except (OSError, subprocess.SubprocessError):
-        return RUN_UNREADABLE
+        return None
     entry = cron_list.cron_jobs(done.stdout).get(job) if done.returncode == 0 else None
-    if entry is None:
-        return RUN_UNREADABLE
-    last = cron_list.last_run(entry)
+    last = cron_list.last_run(entry) if entry is not None else None
     if last is None:
         return None
     try:
         ran = datetime.fromisoformat(last.at).timestamp()
     except ValueError:
-        return RUN_UNREADABLE
+        return None
     return RUN_FAILED if ran > since and not last.finished else None
 
 
@@ -156,6 +156,8 @@ def wake_reason(job: str, stored: GateState | None, lines: list[str], now: float
     elapsed = now - stored.woke_at
     if elapsed < 0 or elapsed >= HEARTBEAT_SECONDS:
         return HEARTBEAT_REASON
+    if stored.retries >= MAX_RUN_RETRIES:
+        return None
     return failed_run_reason(job, stored.woke_at)
 
 
@@ -165,7 +167,8 @@ def tick(job: str, lines: list[str], now: float, news: str | None = None) -> str
     reason = wake_reason(job, stored, lines, now, news)
     current = fingerprint(lines)
     if reason is not None:
-        write_state(path, GateState(current, now))
+        retries = stored.retries + 1 if stored is not None and reason == RUN_FAILED else 0
+        write_state(path, GateState(current, now, retries))
     elif lines == [NO_PULLS] and (stored is None or stored.fingerprint != current):
         write_state(path, GateState(current, stored.woke_at if stored else now))
     return reason

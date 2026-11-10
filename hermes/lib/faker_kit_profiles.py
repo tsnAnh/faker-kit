@@ -33,9 +33,9 @@ SUBSCRIPTION_DEFAULT_MODEL = "sonnet"
 PLUGIN_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
 KIT_OWNED_MARK = "\nKIT_OWNED = True\n"
 GATE_LIBRARIES = (("cron/scripts", "faker_kit_gate.py"), ("lib", "faker_kit_cron_list.py"))
-RETIRED_JOBS = {"project-jobs.md": ("faker-kit-issues", "faker-kit-security")}
+RETIRED_JOBS = {"project-jobs.md": ("faker-kit-issues", "faker-kit-security", "faker-kit-incidents")}
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
-SCHEDULE_FIELDS = {"faker-kit-babysit": "heartbeat_every", "faker-kit-incidents": "incidents_every"}
+SCHEDULE_FIELDS = {"faker-kit-babysit": "heartbeat_every"}
 
 
 class JobChanges(NamedTuple):

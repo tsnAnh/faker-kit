@@ -34,7 +34,6 @@ from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_e
 from faker_kit_gh import NAME, Gh, Refused, Runner, run_gh
 from faker_kit_guard.policy import (
     DEFAULT_HEARTBEAT_EVERY,
-    DEFAULT_INCIDENTS_EVERY,
     INTERVAL,
     REPO,
     RESERVED_NAMES,
@@ -88,7 +87,7 @@ ROLE_COMMANDS = {
 OWNER_ONLY = {"install", "runner", "projects"}
 ANDON_COLOR = "b60205"
 ANDON_DESCRIPTION = "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"
-SCHEDULE_DEFAULTS = {"heartbeat_every": DEFAULT_HEARTBEAT_EVERY, "incidents_every": DEFAULT_INCIDENTS_EVERY}
+SCHEDULE_DEFAULTS = {"heartbeat_every": DEFAULT_HEARTBEAT_EVERY}
 
 
 def current_bot() -> str:
@@ -412,15 +411,13 @@ class Kit:
         return (f"the merge request for #{pr} was sent and the result could not be confirmed ({err}): #{pr} may or may not have merged; "
                 f"check #{pr} on GitHub before merging again")
 
-    def incidents(self, bot: Bot, ack: str | None, last: bool) -> dict:
+    def incidents(self, bot: Bot, ack: str | None) -> dict:
         try:
             env = parse_env_file(self.root / "profiles" / bot.name / ".env")
         except EnvFileError as err:
             raise Refused(str(err)) from None
         watch = Watch(Gh(self.home, bot.name, str(bot.repo), self.run), IncidentStore(self.home, bot.name), self.policy().alert_hosts, env, SECRET_SHAPES,
                       self.fetch_api, self.fetch_url, self.now)
-        if last:
-            return watch.last()
         return watch.acknowledge(ack) if ack else watch.run()
 
     def issues(self, bot: Bot, claim: int | None) -> dict:
@@ -789,7 +786,7 @@ class Kit:
         projects = []
         for item in machine.projects if machine else ():
             slack = machine.slack.channel_id if machine and machine.slack and machine.slack.bot == item.bot else None
-            intervals = {"heartbeat_every": item.heartbeat_every, "incidents_every": item.incidents_every}
+            intervals = {"heartbeat_every": item.heartbeat_every}
             projects.append(self.add_project(item.repo, item.bot, item.project, item.model, intervals, use_subscription, slack, refresh_webhooks=False,
                                              provider=item.provider))
         policy = self.policy()
@@ -871,7 +868,6 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--provider")
     cmd.add_argument("--claude-subscription", action="store_true", default=None)
     cmd.add_argument("--heartbeat-every")
-    cmd.add_argument("--incidents-every")
     cmd.add_argument("--check", action="store_true")
     cmd = sub.add_parser("vendor")
     cmd.add_argument("--project", required=True)
@@ -890,9 +886,7 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("issues")
     cmd.add_argument("--claim", type=int)
     cmd = sub.add_parser("incidents")
-    mode = cmd.add_mutually_exclusive_group()
-    mode.add_argument("--ack")
-    mode.add_argument("--last", action="store_true")
+    cmd.add_argument("--ack")
     cmd = sub.add_parser("handoff")
     cmd.add_argument("--project", required=True)
     cmd.add_argument("--part", required=True)
@@ -958,7 +952,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     if args.command == "incidents":
         if caller is None or caller.role != "project":
             raise Refused("incidents runs in a project bot's chat or job")
-        return kit.incidents(caller, args.ack, args.last)
+        return kit.incidents(caller, args.ack)
     if args.command in ("handoff", "loop"):
         if caller is None or caller.role != "chief":
             raise Refused(f"{args.command} runs in the chief of staff's chat or job")

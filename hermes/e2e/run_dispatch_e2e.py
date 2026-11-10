@@ -2004,7 +2004,7 @@ def install_scenario(run: Run, work: Path) -> None:
     listed = json.loads((hermes / "profiles" / BOT / "jobs.json").read_text())
     by_name = {j["name"]: j for j in listed}
     run.step("install.sh creates the project bot's faker-kit jobs",
-             all(by_name[n]["enabled"] for n in ("faker-kit-babysit", "faker-kit-incidents")) and len(listed) == 2
+             by_name["faker-kit-babysit"]["enabled"] and len(listed) == 1
              and all(n.startswith("faker-kit-") for n in by_name),
              ", ".join(f"{j['name']}={'on' if j['enabled'] else 'off'}" for j in listed))
     chief_jobs_file = hermes / "profiles" / CHIEF / "jobs.json"
@@ -2799,7 +2799,7 @@ def hermes_writes(calls: list[list[str]]) -> dict[str, int]:
     return {" ".join(write): verbs.count(write) for write in HERMES_WRITES}
 
 
-KIT_JOBS = {"faker-kit-babysit", "faker-kit-incidents"}
+KIT_JOBS = {"faker-kit-babysit"}
 
 
 def install_skip_scenario(run: Run, work: Path) -> None:
@@ -2875,27 +2875,33 @@ def install_skip_scenario(run: Run, work: Path) -> None:
     def legacy(name: str, script: str | None = None) -> dict:
         return {"id": f"legacy-{name}", "name": name, "schedule": "every 1h", "prompt": "old", "skill": "dispatch", "deliver": f"bot-chat:{BOT}", "script": script, "enabled": True}
 
-    seeded = [legacy("faker-kit-issues", "faker-kit-issues-gate.py"), legacy("faker-kit-security", "faker-kit-security-gate.py"), legacy("faker-kit-custom"), legacy("my-own-job")]
+    seeded = [legacy("faker-kit-issues", "faker-kit-issues-gate.py"), legacy("faker-kit-security", "faker-kit-security-gate.py"),
+              legacy("faker-kit-incidents", "faker-kit-incidents-gate.py"), legacy("faker-kit-custom"), legacy("my-own-job")]
     jobs_file.write_text(json.dumps([*json.loads(jobs_file.read_text()), *seeded], sort_keys=True))
     chief_jobs_file.write_text(json.dumps([*json.loads(chief_jobs_file.read_text()), legacy("faker-kit-issues", "faker-kit-issues-gate.py")], sort_keys=True))
     (scripts / "faker-kit-issues-gate.py").write_text(kit_script)
+    (scripts / "faker-kit-incidents-gate.py").write_text(kit_script)
     (scripts / "faker-kit-security-gate.py").write_text("print('written by someone else')\n")
     (scripts / "faker-kit-custom-gate.py").write_text(kit_script)
     gates.mkdir(parents=True, exist_ok=True)
     (gates / "faker-kit-issues.json").write_text("{}")
+    (gates / "faker-kit-incidents.json").write_text("{}")
     (gates / "faker-kit-babysit.json").write_text("{}")
     foreign_before = {name: job for name, job in job_rows().items() if name in ("faker-kit-custom", "my-own-job")}
     chief_before = chief_jobs_file.read_text()
     retired, _ = install()
     removals = sorted(call[call.index("remove") + 1] for call in retired if verb_of(call) == ("cron", "remove"))
-    run.step("install removes the retired faker-kit-issues and faker-kit-security jobs by id, and no other job of the project bot",
-             removals == ["legacy-faker-kit-issues", "legacy-faker-kit-security"] and sorted(job_rows()) == ["faker-kit-babysit", "faker-kit-custom", "faker-kit-incidents", "my-own-job"]
-             and {n: j for n, j in job_rows().items() if n in foreign_before} == foreign_before and set(json.loads(record.read_text())) == {"faker-kit-babysit", "faker-kit-incidents"},
+    run.step("install removes the retired faker-kit-issues, faker-kit-security, and faker-kit-incidents jobs by id, and no other job of the project bot",
+             removals == ["legacy-faker-kit-incidents", "legacy-faker-kit-issues", "legacy-faker-kit-security"]
+             and sorted(job_rows()) == ["faker-kit-babysit", "faker-kit-custom", "my-own-job"]
+             and {n: j for n, j in job_rows().items() if n in foreign_before} == foreign_before and set(json.loads(record.read_text())) == {"faker-kit-babysit"},
              json.dumps(removals))
-    run.step("install removes the retired job's kit-owned gate script and gate state, and keeps a script the kit did not write, a job the kit does not name, and the babysit gate's state",
-             not (scripts / "faker-kit-issues-gate.py").exists() and (scripts / "faker-kit-security-gate.py").read_text() == "print('written by someone else')\n"
+    run.step("install removes each retired job's kit-owned gate script and gate state, and keeps a script the kit did not write, a job the kit does not name, and the babysit gate's state",
+             not (scripts / "faker-kit-issues-gate.py").exists() and not (scripts / "faker-kit-incidents-gate.py").exists()
+             and (scripts / "faker-kit-security-gate.py").read_text() == "print('written by someone else')\n"
              and (scripts / "faker-kit-custom-gate.py").read_text() == kit_script and (scripts / "faker-kit-babysit-gate.py").is_file()
-             and not (gates / "faker-kit-issues.json").exists() and (gates / "faker-kit-babysit.json").exists(), ", ".join(sorted(p.name for p in scripts.iterdir())))
+             and not (gates / "faker-kit-issues.json").exists() and not (gates / "faker-kit-incidents.json").exists() and (gates / "faker-kit-babysit.json").exists(),
+             ", ".join(sorted(p.name for p in scripts.iterdir())))
     run.step("install never removes a job from the chief's profile, whatever its name: the retired names belong to the project bot's spec only",
              chief_jobs_file.read_text() == chief_before and "faker-kit-issues" in {j["name"] for j in json.loads(chief_jobs_file.read_text())}, chief_before[:80])
     before_files = (jobs_file.read_bytes(), sorted(p.name for p in scripts.iterdir()))
@@ -2905,13 +2911,13 @@ def install_skip_scenario(run: Run, work: Path) -> None:
 
     drifted = json.loads((other.hermes / "profiles" / BOT / "jobs.json").read_text())
     for job in drifted:
-        if job["name"] == "faker-kit-incidents":
+        if job["name"] == "faker-kit-babysit":
             job["schedule"] = "every 5m"
     (other.hermes / "profiles" / BOT / "jobs.json").write_text(json.dumps(drifted, sort_keys=True))
     repaired, _ = install()
     run.step("a job whose schedule was changed behind the kit's back is edited back to the kit's schedule",
-             [call[call.index("--schedule") + 1] for call in repaired if verb_of(call) == ("cron", "edit")] == ["every 10m"]
-             and job_rows()["faker-kit-incidents"]["schedule"] == "every 10m", json.dumps(hermes_writes(repaired)))
+             [call[call.index("--schedule") + 1] for call in repaired if verb_of(call) == ("cron", "edit")] == [jobs_before["faker-kit-babysit"]["schedule"]]
+             and job_rows()["faker-kit-babysit"]["schedule"] == jobs_before["faker-kit-babysit"]["schedule"], json.dumps(hermes_writes(repaired)))
 
     record.write_text("{not json")
     rebuilt, _ = install()

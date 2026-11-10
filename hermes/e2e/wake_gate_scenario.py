@@ -25,7 +25,6 @@ CHANGED = "the status changed"
 NOTICE_REASON = "a faker-kit notice printed"
 HEARTBEAT_REASON = "six hours passed since this gate last woke the agent while a pull request is open"
 RUN_FAILED = "the job's previous run after the last wake did not finish ok"
-RUN_UNREADABLE = "the job's last run could not be read from hermes cron list"
 SHAPE = "faker-kit loop --all printed an unexpected report shape"
 NO_PRS_PART = {"id": 1, "project": "shop", "state": "waiting", "waits_on": None}
 LOOP_REASON = "a waiting part is due or a part has news for the owner"
@@ -93,8 +92,8 @@ class Gates:
     def state(self, job: str) -> dict:
         return json.loads(self.states[job].read_text())
 
-    def set_woke_at(self, job: str, woke_at: float) -> None:
-        self.states[job].write_text(json.dumps({**self.state(job), "woke_at": woke_at}))
+    def set_woke_at(self, job: str, woke_at: float, retries: int | None = None) -> None:
+        self.states[job].write_text(json.dumps({**self.state(job), "woke_at": woke_at, **({} if retries is None else {"retries": retries})}))
 
     def set_last_run(self, outcome: str | None, at: float | None = None) -> None:
         jobs = json.loads(self.jobs_file.read_text())
@@ -232,7 +231,7 @@ class Gates:
              self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
              and self.calls() == ["issues", "status"], self.say(first))
         step("it stores the status fingerprint and the wake time as an owner-only file, with no temp file left beside it",
-             set(stored) == {"fingerprint", "woke_at"} and stored["fingerprint"] == fingerprint_of(STATUS) and bool(FINGERPRINT.match(stored["fingerprint"]))
+             set(stored) == {"fingerprint", "woke_at", "retries"} and stored["retries"] == 0 and stored["fingerprint"] == fingerprint_of(STATUS) and bool(FINGERPRINT.match(stored["fingerprint"]))
              and abs(stored["woke_at"] - time.time()) < MARGIN and stat.S_IMODE(self.states[BABYSIT].stat().st_mode) == 0o600
              and stat.S_IMODE(folder.stat().st_mode) == 0o700 and [p.name for p in folder.iterdir()] == [self.states[BABYSIT].name], json.dumps(stored))
 
@@ -303,7 +302,7 @@ class Gates:
         lists = self.hermes_lists()
         closed = self.tick(BABYSIT)
         step("when the last pull request closes the gate stays quiet, records the empty status, keeps the last wake time, and never reads the job's last run",
-             self.silent(closed) and self.state(BABYSIT) == {"fingerprint": fingerprint_of([NO_PULLS]), "woke_at": woke_at} and self.hermes_lists() == lists, self.say(closed))
+             self.silent(closed) and self.state(BABYSIT) == {"fingerprint": fingerprint_of([NO_PULLS]), "woke_at": woke_at, "retries": 0} and self.hermes_lists() == lists, self.say(closed))
         self.set_last_run("error: the previous woken turn failed", time.time())
         failed = self.tick(BABYSIT)
         step("a failed earlier run does not wake the gate while no pull request is open", self.silent(failed), self.say(failed))
@@ -328,7 +327,7 @@ class Gates:
         self.tick(BABYSIT)
 
         def probe(outcome: str | None, run_at: float, reason: str | None) -> bool:
-            self.set_woke_at(BABYSIT, time.time() - 600)
+            self.set_woke_at(BABYSIT, time.time() - 600, retries=0)
             self.set_last_run(outcome, run_at)
             done = self.tick(BABYSIT)
             return self.silent(done) if reason is None else self.woke(done, reason)
@@ -343,7 +342,7 @@ class Gates:
         step("a previous run that finished ok, finished with only its delivery pending or failed, was cancelled, never ran, or errored before the last wake does not wake it",
              all(left.values()), json.dumps(left))
 
-        self.set_woke_at(BABYSIT, time.time() - 600)
+        self.set_woke_at(BABYSIT, time.time() - 600, retries=0)
         self.set_last_run("error: model refused the turn", recent)
         first = self.tick(BABYSIT)
         woke_at = self.state(BABYSIT)["woke_at"]
@@ -352,7 +351,17 @@ class Gates:
              self.woke(first, RUN_FAILED) and woke_at > recent and self.silent(second), self.say(second))
         self.set_last_run("error: the retry failed too", time.time() + 5)
         again = self.tick(BABYSIT)
-        step("a retry that fails too is retried again, because each failed run after a wake is a new failure", self.woke(again, RUN_FAILED), self.say(again))
+        step("a retry that fails too is retried again, because each failed run after a wake is a new failure", self.woke(again, RUN_FAILED) and self.state(BABYSIT)["retries"] == 2, self.say(again))
+        self.set_last_run("error: the third try failed too", time.time() + 10)
+        third = self.tick(BABYSIT)
+        step("each wake for a failed run adds one to retries in the state file, up to three", self.woke(third, RUN_FAILED) and self.state(BABYSIT)["retries"] == 3, self.say(third))
+        self.set_last_run("error: the fourth try failed too", time.time() + 20)
+        lists = self.hermes_lists()
+        kept = self.snapshot(BABYSIT)
+        capped = self.tick(BABYSIT)
+        step("with three failed-run wakes in a row a failed last run no longer wakes the agent, nothing is written, and the run list is not even read",
+             self.silent(capped) and self.snapshot(BABYSIT) == kept and self.hermes_lists() == lists, self.say(capped))
+        self.reset_after_cap(lines)
 
         flag = self.hermes / "cron-list-fails"
         unreadable: dict[str, Callable[[], object]] = {
@@ -363,19 +372,52 @@ class Gates:
         }
         outcome = {}
         for label, arrange in unreadable.items():
-            self.set_woke_at(BABYSIT, time.time() - 600)
+            self.reset()
+            self.serve(lines)
+            self.tick(BABYSIT)
+            self.set_woke_at(BABYSIT, time.time() - 600, retries=2)
+            kept = self.snapshot(BABYSIT)
             arrange()
             done = self.tick(BABYSIT)
-            outcome[label] = self.woke(done, RUN_UNREADABLE) and abs(self.state(BABYSIT)["woke_at"] - time.time()) < MARGIN
+            outcome[label] = self.silent(done) and done.stderr == "" and self.snapshot(BABYSIT) == kept
             flag.unlink(missing_ok=True)
             for path in self.hermes_bins:
                 if path.with_name("hermes.aside").exists():
                     path.with_name("hermes.aside").rename(path)
             self.set_job_name(BABYSIT)
             self.set_last_run(None)
-        step("when the job's last run cannot be read (the listing fails, lacks the job, holds an unreadable time, or hermes cannot run) the gate fails open and wakes the agent",
+        step("when the last run cannot be read (listing fails, job absent, unreadable time, no hermes) the gate stays quiet, writes nothing, and prints nothing on stderr",
              all(outcome.values()), json.dumps(outcome))
         self.reset()
+
+    def reset_after_cap(self, lines: list[str]) -> None:
+        step = self.run.step
+        wakers: dict[str, tuple[Callable[[], None], str]] = {
+            "the heartbeat falling due": (lambda: self.set_woke_at(BABYSIT, time.time() - HEARTBEAT - MARGIN), HEARTBEAT_REASON),
+            "a changed status": (lambda: self.serve([*lines[:1], lines[1].replace("conflicts", "mergeable")]), CHANGED),
+            "a faker-kit notice": (lambda: self.serve([*lines, NOTICE]), NOTICE_REASON),
+            "a listed issue": (lambda: self.serve(lines, issues_json([LABELED])), ISSUES_REASON),
+        }
+        outcome = {}
+        for label, (arrange, reason) in wakers.items():
+            self.serve(lines)
+            self.tick(BABYSIT)
+            self.set_woke_at(BABYSIT, time.time() - 600, retries=3)
+            self.set_last_run("error: the model refused the turn", time.time() - 300)
+            arrange()
+            done = self.tick(BABYSIT)
+            reset = self.woke(done, reason) and self.state(BABYSIT)["retries"] == 0
+            self.serve(lines)
+            self.tick(BABYSIT)
+            self.set_woke_at(BABYSIT, time.time() - 600)
+            self.set_last_run("error: the model refused the turn", time.time() - 300)
+            retried = self.tick(BABYSIT)
+            outcome[label] = reset and self.woke(retried, RUN_FAILED) and self.state(BABYSIT)["retries"] == 1
+            self.set_last_run(None)
+        step("at the cap a due heartbeat, a changed status, a notice, or a listed issue still wakes the agent and resets retries to 0, after which failed runs wake it again",
+             all(outcome.values()), json.dumps(outcome))
+        self.serve(lines)
+        self.tick(BABYSIT)
 
     def set_job_name(self, name: str) -> None:
         jobs = json.loads(self.jobs_file.read_text())
@@ -404,6 +446,30 @@ class Gates:
             done = self.tick(BABYSIT)
             rewritten[label] = self.woke(done, NOT_RECORDED) and bool(FINGERPRINT.match(str(self.state(BABYSIT).get("fingerprint"))))
         step("a state file that is unreadable or malformed counts as no earlier tick: the agent wakes and the file is written whole again", all(rewritten.values()), json.dumps(rewritten))
+
+        self.reset()
+        self.serve(STATUS)
+        self.tick(BABYSIT)
+        stored = self.state(BABYSIT)
+        self.states[BABYSIT].write_text(json.dumps({"fingerprint": stored["fingerprint"], "woke_at": time.time() - 600}))
+        self.set_last_run(None)
+        kept = self.snapshot(BABYSIT)
+        legacy = self.tick(BABYSIT)
+        unwritten = self.snapshot(BABYSIT) == kept
+        self.set_last_run("error: the model refused the turn", time.time() - 300)
+        failed = self.tick(BABYSIT)
+        step("a state file written before retries existed reads as 0 retries: it stays quiet and unwritten while nothing changed, wakes for a failed run, and then holds retries 1",
+             self.silent(legacy) and unwritten and self.woke(failed, RUN_FAILED) and self.state(BABYSIT)["retries"] == 1, self.say(failed))
+        self.set_last_run(None)
+        invalid = {"a text count": "three", "a boolean count": True, "a negative count": -2, "a fractional count": 2.5, "a null count": None, "a list count": [3]}
+        counted = {}
+        for label, value in invalid.items():
+            self.states[BABYSIT].write_text(json.dumps({"fingerprint": stored["fingerprint"], "woke_at": time.time() - 600, "retries": value}))
+            self.set_last_run("error: the model refused the turn", time.time() - 300)
+            done = self.tick(BABYSIT)
+            counted[label] = self.woke(done, RUN_FAILED) and self.state(BABYSIT)["retries"] == 1
+            self.set_last_run(None)
+        step("a retries value that is not a count of at least one reads as 0 and does not stop the gate", all(counted.values()), json.dumps(counted))
 
         other = self.hermes / "profiles" / "other-bot"
         other.mkdir(exist_ok=True)
