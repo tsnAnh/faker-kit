@@ -7,12 +7,14 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
+from faker_kit_cron_list import cron_jobs
 from faker_kit_env import CLAUDE_CONFIG_DIR, parse_env_file, set_env
 from faker_kit_gh import Refused
 from faker_kit_incidents import redact
 from faker_kit_machine import SUBSCRIPTION_PROVIDER
-from install_config import KIT_GATE_SCRIPT, InstallError, apply_profile, config_set, cron_jobs, cron_spec, hermes, mapping, profile_home, value_at
+from install_config import KIT_GATE_SCRIPT, InstallError, apply_profile, config_set, cron_spec, hermes, mapping, profile_home, value_at
 
 PLUGIN = "faker_kit_guard"
 AGENT_CONTEXT_ENV = "HERMES_AGENT_TOOL_CONTEXT"
@@ -29,10 +31,15 @@ SUBSCRIPTION_MIN_CLI = (2, 1, 284)
 SUBSCRIPTION_DEFAULT_MODEL = "sonnet"
 PLUGIN_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
 KIT_OWNED_MARK = "\nKIT_OWNED = True\n"
-GATE_LIBRARY = "faker_kit_gate.py"
+GATE_LIBRARIES = (("cron/scripts", "faker_kit_gate.py"), ("lib", "faker_kit_cron_list.py"))
+RETIRED_JOBS = {"project-jobs.md": ("faker-kit-issues", "faker-kit-security")}
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
-SCHEDULE_FIELDS = {"faker-kit-babysit": "heartbeat_every", "faker-kit-incidents": "incidents_every", "faker-kit-security": "security_every",
-                   "faker-kit-issues": "heartbeat_every"}
+SCHEDULE_FIELDS = {"faker-kit-babysit": "heartbeat_every", "faker-kit-incidents": "incidents_every"}
+
+
+class JobChanges(NamedTuple):
+    created: list[str]
+    removed: list[str]
 
 
 class Profiles:
@@ -198,13 +205,13 @@ class Profiles:
     def github_login(self, home: Path, machine_login: bool) -> bool:
         return bool(parse_env_file(home / ".env").get("GH_TOKEN")) or machine_login
 
-    def ensure_jobs(self, bot: str, spec: str, intervals: dict[str, str], slack_channel: str | None, enabled: bool) -> list[str]:
+    def ensure_jobs(self, bot: str, spec: str, intervals: dict[str, str], slack_channel: str | None, enabled: bool) -> JobChanges:
         existing = cron_jobs(hermes("-p", bot, "cron", "list", "--all"))
         jobs = cron_spec(self.pkg / "cron" / spec, bot)
-        scripts = {job["name"]: self.job_script(bot, job["script"]) for job in jobs if job["script"]}
-        library = self.job_script(bot, GATE_LIBRARY) if scripts else None
+        scripts = {job["name"]: self.job_script(bot, self.pkg / "cron" / "scripts" / job["script"]) for job in jobs if job["script"]}
+        libraries = [self.job_script(bot, self.pkg / folder / name) for folder, name in GATE_LIBRARIES] if scripts else []
         created = []
-        if library:
+        for library in libraries:
             self.write_job_script(*library)
         for job in jobs:
             schedule = f"every {intervals[SCHEDULE_FIELDS[job['name']]]}" if intervals else job["schedule"]
@@ -226,10 +233,29 @@ class Profiles:
             hermes("-p", bot, "cron", "edit", current["id"], "--schedule", schedule, "--prompt", job["prompt"], *script_args)
             if enabled and not current["enabled"]:
                 hermes("-p", bot, "cron", "resume", current["id"])
-        return created
+        removed = self.retire_jobs(bot, spec, existing, {target.name for target, _ in scripts.values()})
+        return JobChanges(created, removed)
 
-    def job_script(self, bot: str, name: str) -> tuple[Path, str]:
-        source = self.pkg / "cron" / "scripts" / name
+    def retire_jobs(self, bot: str, spec: str, existing: dict[str, dict], kept_scripts: set[str]) -> list[str]:
+        removed = []
+        for name in RETIRED_JOBS.get(spec, ()):
+            current = existing.get(name)
+            if current is not None:
+                hermes("-p", bot, "cron", "remove", current["id"])
+                removed.append(name)
+            named = {f"{name}-gate.py", Path(str((current or {}).get("script") or "")).name} - kept_scripts
+            for script in sorted(n for n in named if KIT_GATE_SCRIPT.match(n)):
+                self.drop_kit_script(self.home(bot) / "scripts" / script)
+            (self.state / "gates" / bot / f"{name}.json").unlink(missing_ok=True)
+        return removed
+
+    @staticmethod
+    def drop_kit_script(target: Path) -> None:
+        if target.is_file() and not target.is_symlink() and KIT_OWNED_MARK.encode() in target.read_bytes():
+            target.unlink()
+
+    def job_script(self, bot: str, source: Path) -> tuple[Path, str]:
+        name = source.name
         if not source.is_file():
             raise InstallError(f"cron script {name} is not in the kit at {source}")
         text = source.read_text()

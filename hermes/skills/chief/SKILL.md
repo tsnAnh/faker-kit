@@ -79,9 +79,9 @@ Project bots tell you when a part's pull request opens, blocks, waits on the own
 
 ### Each loop pass
 
-The `faker-kit-loop` job runs a pass every weekday hour from 10:00 to 18:00; the owner can ask for one any time.
+The `faker-kit-loop` job runs a pass every weekday hour from 10:00 to 18:00; the owner can ask for one any time. The job's gate script runs `faker-kit loop --all` and skips the turn unless a `waiting` part is due or `to_report` lists a part, so a quiet hour never reaches you.
 
-1. Run `faker-kit loop` and `faker-kit status --all`. Run nothing else before step 2.
+1. Run `faker-kit loop` and `faker-kit status --all`. In a job wake the Script Output lists the due `waiting` parts and the `to_report` parts as printed by `faker-kit loop --all`, so run only `faker-kit status --all`; with a Script Error block, or in any other turn, run both. Run nothing else before step 2.
 2. For each `waiting` part whose provider part (the same project and pull request number in `faker-kit loop --all`) is `merged`, hand it to the consumer's bot now with the "Work from the chief of staff:" message, then `faker-kit loop set <id> --state handed-out`.
 3. Message no other bot: they report changes to you themselves.
 4. Tell this chat only the `to_report` parts (see When to speak), then mark each with `faker-kit loop set <id> --reported`. With nothing in `to_report`, answer `[SILENT]`.

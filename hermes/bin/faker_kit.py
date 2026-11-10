@@ -35,7 +35,6 @@ from faker_kit_gh import NAME, Gh, Refused, Runner, run_gh
 from faker_kit_guard.policy import (
     DEFAULT_HEARTBEAT_EVERY,
     DEFAULT_INCIDENTS_EVERY,
-    DEFAULT_SECURITY_EVERY,
     INTERVAL,
     REPO,
     RESERVED_NAMES,
@@ -69,6 +68,7 @@ STATUS_PRS = 30
 MERGEABLE_READS = 5
 MERGEABLE_PAUSE_SECONDS = 5.0
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
+UPDATED_AT = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 SECRET_SHAPES = re.compile(
     r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}"
     r"|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
@@ -86,7 +86,7 @@ ROLE_COMMANDS = {
 OWNER_ONLY = {"install", "runner", "projects"}
 ANDON_COLOR = "b60205"
 ANDON_DESCRIPTION = "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"
-SCHEDULE_DEFAULTS = {"heartbeat_every": DEFAULT_HEARTBEAT_EVERY, "incidents_every": DEFAULT_INCIDENTS_EVERY, "security_every": DEFAULT_SECURITY_EVERY}
+SCHEDULE_DEFAULTS = {"heartbeat_every": DEFAULT_HEARTBEAT_EVERY, "incidents_every": DEFAULT_INCIDENTS_EVERY}
 
 
 def current_bot() -> str:
@@ -424,8 +424,9 @@ class Kit:
         gate = {"merge": "ready to merge", "refuse": f"blocked: {verdict.message}"}[verdict.action]
         mergeable = {True: "mergeable", False: "conflicts", None: "mergeable unknown"}[detail.get("mergeable")]
         unit = UNIT_LINE.match(str(detail.get("body") or ""))
+        updated = str(pull.get("updated_at") or "")
         return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready", mergeable,
-                           f"head {head if SHA.match(head) else 'unknown'}", gate])
+                           f"updated {updated if UPDATED_AT.match(updated) else 'unknown'}", f"head {head if SHA.match(head) else 'unknown'}", gate])
 
     def handoff(self, caller: Bot, project: str, part: str) -> dict:
         owner = self.policy().projects().get(project)
@@ -598,11 +599,13 @@ class Kit:
                 self.profiles.record_config_dir(home, os.environ.get("CLAUDE_CONFIG_DIR", ""))
             intervals = {key: getattr(bot, key) for key in SCHEDULE_DEFAULTS}
             active = self.profiles.github_login(home, self.machine_login())
-            out["jobs_created"] = self.profiles.ensure_jobs(bot.name, "project-jobs.md", intervals, bot.slack_channel, active)
+            changes = self.profiles.ensure_jobs(bot.name, "project-jobs.md", intervals, bot.slack_channel, active)
+            out["jobs_created"], out["jobs_removed"] = changes.created, changes.removed
             out["jobs_active"] = active
         if bot.role == "chief":
             active = self.profiles.github_login(home, self.machine_login())
-            out["jobs_created"] = self.profiles.ensure_jobs(bot.name, "chief-jobs.md", {}, None, active)
+            changes = self.profiles.ensure_jobs(bot.name, "chief-jobs.md", {}, None, active)
+            out["jobs_created"], out["jobs_removed"] = changes.created, changes.removed
             out["jobs_active"] = active
         return out
 
@@ -746,7 +749,7 @@ class Kit:
         projects = []
         for item in machine.projects if machine else ():
             slack = machine.slack.channel_id if machine and machine.slack and machine.slack.bot == item.bot else None
-            intervals = {"heartbeat_every": item.heartbeat_every, "incidents_every": item.incidents_every, "security_every": item.security_every}
+            intervals = {"heartbeat_every": item.heartbeat_every, "incidents_every": item.incidents_every}
             projects.append(self.add_project(item.repo, item.bot, item.project, item.model, intervals, use_subscription, slack, refresh_webhooks=False,
                                              provider=item.provider))
         policy = self.policy()
@@ -829,7 +832,6 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--claude-subscription", action="store_true", default=None)
     cmd.add_argument("--heartbeat-every")
     cmd.add_argument("--incidents-every")
-    cmd.add_argument("--security-every")
     cmd.add_argument("--check", action="store_true")
     cmd = sub.add_parser("vendor")
     cmd.add_argument("--project", required=True)

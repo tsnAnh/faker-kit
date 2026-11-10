@@ -7,8 +7,11 @@ import subprocess
 import sys
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
+
+import faker_kit_cron_list as cron_list
 
 KIT_OWNED = True
 WRAPPER = "@WRAPPER@"
@@ -17,9 +20,17 @@ KIT_HOME = "@FAKER_KIT_HOME@"
 PATH = "@PATH@"
 SYSTEM_PATH = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 TIMEOUT_SECONDS = 240
+HERMES_TIMEOUT_SECONDS = 60
 STDERR_TAIL = 400
 HEARTBEAT_SECONDS = 6 * 60 * 60
 NOTICE = "faker-kit notice:"
+NO_PULLS = "no open pull requests"
+NOT_RECORDED = "no earlier tick of this gate is recorded"
+NOTICE_REASON = "a faker-kit notice printed"
+CHANGED = "the status changed"
+HEARTBEAT_REASON = "six hours passed since this gate last woke the agent while a pull request is open"
+RUN_FAILED = "the job's previous run after the last wake did not finish ok"
+RUN_UNREADABLE = "the job's last run could not be read from hermes cron list"
 
 
 @dataclass(frozen=True)
@@ -47,9 +58,10 @@ def child_env() -> dict[str, str]:
     }
 
 
-def run_kit(command: str) -> subprocess.CompletedProcess[str]:
+def run_kit(*argv: str) -> subprocess.CompletedProcess[str]:
+    command = " ".join(argv)
     try:
-        done = subprocess.run([WRAPPER, command], env=child_env(), capture_output=True, text=True, timeout=TIMEOUT_SECONDS, check=False)
+        done = subprocess.run([WRAPPER, *argv], env=child_env(), capture_output=True, text=True, timeout=TIMEOUT_SECONDS, check=False)
     except (OSError, subprocess.SubprocessError) as err:
         fail(f"faker-kit {command} did not run: {type(err).__name__}")
     if done.returncode != 0:
@@ -72,10 +84,13 @@ def status_lines() -> list[str]:
     return lines
 
 
-def state_path(job: str) -> Path:
+def profile_name() -> str:
     home = Path(os.environ.get("HERMES_HOME") or HERMES_HOME)
-    bot = home.name if home.parent.name == "profiles" else "default"
-    return Path(KIT_HOME) / "gates" / bot / f"{job}.json"
+    return home.name if home.parent.name == "profiles" else "default"
+
+
+def state_path(job: str) -> Path:
+    return Path(KIT_HOME) / "gates" / profile_name() / f"{job}.json"
 
 
 def read_state(path: Path) -> GateState | None:
@@ -108,26 +123,51 @@ def fingerprint(lines: list[str]) -> str:
     return hashlib.sha256("\n".join(lines).encode()).hexdigest()
 
 
-def wake_reason(stored: GateState | None, lines: list[str], now: float, news: str | None) -> str | None:
+def failed_run_reason(job: str, since: float) -> str | None:
+    try:
+        done = subprocess.run(["hermes", "-p", profile_name(), "cron", "list", "--all"], env=child_env(), capture_output=True, text=True,
+                              timeout=HERMES_TIMEOUT_SECONDS, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return RUN_UNREADABLE
+    entry = cron_list.cron_jobs(done.stdout).get(job) if done.returncode == 0 else None
+    if entry is None:
+        return RUN_UNREADABLE
+    last = cron_list.last_run(entry)
+    if last is None:
+        return None
+    try:
+        ran = datetime.fromisoformat(last.at).timestamp()
+    except ValueError:
+        return RUN_UNREADABLE
+    return RUN_FAILED if ran > since and not last.finished else None
+
+
+def wake_reason(job: str, stored: GateState | None, lines: list[str], now: float, news: str | None) -> str | None:
     if news:
         return news
-    if stored is None:
-        return "no earlier tick of this gate is recorded"
     if any(NOTICE in line for line in lines):
-        return "a faker-kit notice printed"
+        return NOTICE_REASON
+    if lines == [NO_PULLS]:
+        return None
+    if stored is None:
+        return NOT_RECORDED
     if stored.fingerprint != fingerprint(lines):
-        return "the status changed"
+        return CHANGED
     elapsed = now - stored.woke_at
     if elapsed < 0 or elapsed >= HEARTBEAT_SECONDS:
-        return "six hours passed since this gate last woke the agent"
-    return None
+        return HEARTBEAT_REASON
+    return failed_run_reason(job, stored.woke_at)
 
 
 def tick(job: str, lines: list[str], now: float, news: str | None = None) -> str | None:
     path = state_path(job)
-    reason = wake_reason(read_state(path), lines, now, news)
+    stored = read_state(path)
+    reason = wake_reason(job, stored, lines, now, news)
+    current = fingerprint(lines)
     if reason is not None:
-        write_state(path, GateState(fingerprint(lines), now))
+        write_state(path, GateState(current, now))
+    elif lines == [NO_PULLS] and (stored is None or stored.fingerprint != current):
+        write_state(path, GateState(current, stored.woke_at if stored else now))
     return reason
 
 
