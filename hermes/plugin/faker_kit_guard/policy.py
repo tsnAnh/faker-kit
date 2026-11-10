@@ -354,6 +354,11 @@ def load_policy(home: Path | None = None) -> Policy:
     return parse_policy(_yaml(home / "guard.yaml", False, home), _yaml(home / "bots.yaml", True, home), home)
 
 
+# A scheduled job's prompt is prose for a later model turn, and the guard checks every tool call that turn
+# makes; only these fields run without a model, so only they are scanned.
+CRON_EXECUTED = ("script", "command")
+
+
 def block(message: str) -> dict:
     return {"action": "block", "message": f"faker-kit guard: {message}"}
 
@@ -378,6 +383,8 @@ def scanned_text(tool_name: str, args: dict) -> list[str]:
         if tool_name == "patch":
             texts += PATCH_FILE.findall(str(args.get("patch") or ""))
         return texts
+    if fnmatch.fnmatchcase(tool_name, "cronjob*"):
+        return strings({k: args.get(k) for k in CRON_EXECUTED})
     return strings(args)
 
 
@@ -1050,7 +1057,8 @@ def hard_block(tool_name: str, args: dict) -> str | None:
     if tool_name == "execute_code":
         return code_problem(strings(args)) or code_push_problem(strings(args))
     if fnmatch.fnmatchcase(tool_name, "cronjob*"):
-        return code_problem(strings(args)) or code_push_problem(strings({k: args.get(k) for k in ("script", "command")}))
+        executed = scanned_text(tool_name, args)
+        return code_problem(executed) or code_push_problem(executed)
     if tool_name == "delegate_task":
         return code_problem(strings(args))
     return None
