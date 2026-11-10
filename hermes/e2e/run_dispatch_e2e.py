@@ -1918,7 +1918,7 @@ def install_scenario(run: Run, work: Path) -> None:
     listed = json.loads((hermes / "profiles" / BOT / "jobs.json").read_text())
     by_name = {j["name"]: j for j in listed}
     run.step("install.sh creates the project bot's faker-kit jobs",
-             all(by_name[n]["enabled"] for n in ("faker-kit-babysit", "faker-kit-incidents")) and len(listed) == 2
+             by_name["faker-kit-babysit"]["enabled"] and len(listed) == 1
              and all(n.startswith("faker-kit-") for n in by_name),
              ", ".join(f"{j['name']}={'on' if j['enabled'] else 'off'}" for j in listed))
     chief_jobs_file = hermes / "profiles" / CHIEF / "jobs.json"

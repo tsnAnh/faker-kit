@@ -14,7 +14,7 @@ If the shell does not find `faker-kit`, run it as `~/.hermes/bin/faker-kit`. Eve
 | Command | Does |
 |---|---|
 | `faker-kit status [--all]` | Every project on this machine with its bot, repository, andon cord, and open pull requests. Read-only |
-| `faker-kit add-project OWNER/REPO [--bot B] [--project P] [--provider PR --model M] [--heartbeat-every 1h] [--incidents-every 10m] [--claude-subscription] [--check]` | With `--check`, only validates the repository, bot, and project and says whether the bot's profile exists; it writes nothing. Without it, creates or refreshes project bot B for repository R: its profile's settings (the profile itself must exist first, step 3), guard, `dispatch` skill, the babysit, security, incident, and bug-report jobs, the schedules, the andon and bug-report labels, the webhook routes, and the launch checkout. The bot name and the project slug default to the repository's name. Safe to run again; it also starts the jobs once `gh` is signed in |
+| `faker-kit add-project OWNER/REPO [--bot B] [--project P] [--provider PR --model M] [--heartbeat-every 1h] [--claude-subscription] [--check]` | With `--check`, only validates the repository, bot, and project and says whether the bot's profile exists; it writes nothing. Without it, creates or refreshes project bot B for repository R: its profile's settings (the profile itself must exist first, step 3), guard, `dispatch` skill, the babysit job (which also handles bug reports), its schedule, the andon and bug-report labels, the webhook routes, and the launch checkout. The bot name and the project slug default to the repository's name. Safe to run again; it also starts the jobs once `gh` is signed in |
 | `faker-kit vendor --project P` | Opens a pull request that copies the pinned kit into the repository's `.agents/faker-kit/`, so cloud sessions there have its skills, and moves the repository's `kit_ref` |
 | `faker-kit launch --project P --brief-file <path>` | Starts one cloud session from a brief in your briefs folder. Used for the repository's setup session below |
 | `faker-kit andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows the machine's andon cord. Only when the owner asks |
@@ -39,7 +39,7 @@ Ask with `clarify`, one question at a time, only what you do not know yet:
 1. **The repository**, as `OWNER/REPO`. If the owner's product is split across several repositories (an API, a web app, a mobile app), say that a project is one repository and suggest combining them into one first, each app in its own folder, so one agent can carry a feature through all of them. Otherwise each repository becomes its own project.
 2. **The project's slug and the bot's name**, only if the owner does not want the defaults (the repository's name). Lowercase letters, digits, `-` and `_`, and not a reserved name (`default`, `hermes`, `test`, `tmp`, `root`, `sudo`, `gh`, `git`, `claude`, `faker-kit`, `python`, `node`, `uv`). The bot's name is the Hermes profile name; the owner can give it any display title in Bot Mode.
 3. **The model** for the project bot, if the owner wants a particular one.
-4. **The fallback cadence**, only if the owner wants lower or higher latency than the defaults: heartbeat every `1h` and incidents every `10m`. GitHub events wake the bot sooner. The heartbeat is the tick of the babysit job (it also handles bug reports); its gate lets it through only on news, or after six hours while a pull request is open, a fixed interval that `--heartbeat-every` does not change, and never while no pull request is open and no issue is listed.
+4. **The fallback cadence**, only if the owner wants lower or higher latency than the defaults: heartbeat every `1h`. GitHub events wake the bot sooner. The heartbeat is the tick of the babysit job (it also handles bug reports); its gate lets it through only on news, or after six hours while a pull request is open, a fixed interval that `--heartbeat-every` does not change, and never while no pull request is open and no issue is listed.
 
 Then restate the plan in a short list and ask the owner to confirm before step 3. With `ask_owner` false, restate it and go on.
 
@@ -60,7 +60,7 @@ Hermes denies that approval in a scheduled job and in a message relayed from ano
 Then:
 
 ```text
-faker-kit add-project <OWNER/REPO> [--bot <bot>] [--project <project>] [--provider <provider> --model <model>] [--heartbeat-every <interval>] [--incidents-every <interval>]
+faker-kit add-project <OWNER/REPO> [--bot <bot>] [--project <project>] [--provider <provider> --model <model>] [--heartbeat-every <interval>]
 ```
 
 Intervals are positive minutes or hours, such as `10m` or `1h`. It runs on the Claude subscription when an existing bot of this machine does, unless `--provider` and `--model` name another provider; pass both only when the owner named both, and never `--provider` with `--claude-subscription`. When re-running it for a bot the owner put on a provider, pass the same `--provider` and `--model` again. If it refuses because the bot has no profile, your next command is `hermes profile create <bot>`, alone on the line, and then `faker-kit add-project` again. It prints the jobs it created, whether they run, the `launch_checkout` Claude Code sessions start from, and next steps.
