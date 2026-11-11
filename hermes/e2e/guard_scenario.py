@@ -421,7 +421,10 @@ def chief_work(host: Host) -> None:
     )
     copies = {name: (HERMES / name).read_text() for name in ("profiles/OPERATING.md", "skills/dispatch/SKILL.md", "skills/bootstrap/SKILL.md", "skills/chief/SKILL.md")}
     drifted = {**copies, "skills/chief/SKILL.md": copies["skills/chief/SKILL.md"].replace("no emoji", "no emojis")}
-    carriers = lambda texts: [name for name, text in texts.items() if rule not in text]  # noqa: E731
+
+    def carriers(texts: dict[str, str]) -> list[str]:
+        return [name for name, text in texts.items() if rule not in text]
+
     host.step("guard: the bot-to-bot terse rule is in the bot-origin reminder and verbatim in the guide and three skills; an altered copy fails; no owner reminder",
               rule in ack_text and rule in from_chief["context"] and not carriers(copies) and carriers(drifted) == ["skills/chief/SKILL.md"] and owner is None,
               f"missing={carriers(copies)} altered copy flags={carriers(drifted)}")
