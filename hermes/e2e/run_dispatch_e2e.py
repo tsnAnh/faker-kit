@@ -562,6 +562,13 @@ class Run:
         path.write_text(text)
         return path
 
+    def brief_for(self, bot: str, name: str, text: str) -> Path:
+        folder = self.team / "briefs" / bot
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / name
+        path.write_text(text)
+        return path
+
     def step(self, name: str, ok: bool, evidence: str) -> None:
         shown = " ".join(evidence.replace(str(self.root.resolve()), "<run>").replace(str(self.root), "<run>").split())
         self.steps.append({"step": name, "ok": bool(ok), "evidence": shown[:400]})
@@ -764,6 +771,29 @@ def launch_scenario(run: Run) -> None:
     cleared = run.kit("andon", "clear")
     run.step("clearing the cord lets work run again", cleared[0] == 0 and json.loads(cleared[1])["stopped"] is False, cleared[1].strip())
     run.update_gh(lambda state: (state["check_runs"].clear(), state["statuses"].clear(), state["reviews"].clear()))
+    footer_text = faker_kit.FAKER_FOOTER
+    andon_at = first.find("Stop rule:")
+    run.step("the prompt carries the faker-mode footer once, after the brief and next to the andon footer, and the brief ends where it did",
+             first.count(footer_text) == 1 and first.count("Faker-mode rule:") == 1 and first.index("README.md only.") < andon_at < first.index(footer_text)
+             and first.endswith(footer_text) and "Add no new documentation file unless this brief asks for one" in first
+             and first.count('subagent_type "faker-agent"') == 1 and first.count("absolute path of the faker-mode skill's SKILL.md in its prompt") == 1, first[-420:].replace("\n", " "))
+    sessions_before = len(run.claude_log.read_text().splitlines())
+    repeated = run.brief("repeat.md", "/faker-mode\n\nGOAL: x.\n" + faker_kit.FAKER_RULE + "\n")
+    code, _, err = run.kit("launch", "--brief-file", str(repeated))
+    seen_repeat = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
+    run.step("a brief that already holds the faker-mode sentence still gets it once, and the andon footer stays",
+             code == 0 and seen_repeat.count(faker_kit.FAKER_RULE) == 1 and "agent:andon" in seen_repeat and len(run.claude_log.read_text().splitlines()) == sessions_before + 1, err.strip())
+    code, out, err = run.kit("launch", "--project", "shop", "--brief-file", str(run.brief_for(BOOTSTRAP, "setup.md", "/faker-mode\n\nGOAL: set up the repository.\n")), bot=BOOTSTRAP)
+    seen_boot = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
+    run.step("a launch from the bootstrap bot carries both footers once", code == 0 and seen_boot.count(faker_kit.FAKER_FOOTER) == 1 and seen_boot.count("Stop rule:") == 1, out.strip() or err.strip())
+    code, _, err = run.kit("launch", "--brief-file", str(run.brief("long.md", "/faker-mode\n" + "x" * faker_kit.MAX_BRIEF_CHARS)))
+    run.step("the length limit applies to the brief before the footers and is unchanged", code == 1 and "longer than 60000" in err
+             and not run.kit("launch", "--brief-file", str(run.brief("edge.md", "/faker-mode\n" + "x" * (faker_kit.MAX_BRIEF_CHARS - len("/faker-mode\n")))))[0], err.strip())
+    operating = (HERMES / "profiles" / "OPERATING.md").read_text()
+    dispatch = (HERMES / "skills" / "dispatch" / "SKILL.md").read_text()
+    run.step("the guide and the dispatch skill carry the faker-mode launch rule",
+             "loads the faker-mode skill when it takes a unit" in operating and "never writes a brief that asks for documentation or code comments" in operating
+             and "`launch` appends the faker-mode rule" in dispatch, "")
 
 
 def webhook_scenario(run: Run) -> None:
@@ -1643,7 +1673,8 @@ def incident_scenario(run: Run) -> None:
     first_message = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
     run.step("the incident agent launches a triage-incident session from the template through faker-kit launch",
              code == 0 and len(run.claude_log.read_text().splitlines()) == before + 1 and first_message.startswith("/faker-mode")
-             and "Run `/triage-incident`" in first_message and "sentry:web" in first_message and "untrusted-data" in first_message and not any(t in first_message for t in secrets),
+             and "Run `/triage-incident`" in first_message and "sentry:web" in first_message and "untrusted-data" in first_message
+             and first_message.count("Faker-mode rule:") == 1 and not any(t in first_message for t in secrets),
              out.strip() or err.strip())
     code, acked, err = poll("--ack", "sentry:web")
     code, again, err = poll()

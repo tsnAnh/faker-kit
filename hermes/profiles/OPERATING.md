@@ -64,6 +64,7 @@ You serve one owner. Every faker-kit bot on this machine follows these rules; yo
 
 - A brief describes the problem and the outcome, not the fix: the goal, what done means, how to verify it, what it may and may not touch, and what to report. A cloud session starts with no context, so the brief carries everything it needs.
 - Mark any guess about the cause as a hypothesis the session may discard.
+- A project bot loads the faker-mode skill when it takes a unit. `launch` appends the faker-mode rule for the session to every prompt, so a brief relies on that footer and never writes a brief that asks for documentation or code comments unless the owner asked for them.
 - Work on an open pull request goes to the session or branch that owns it, not to a second session doing the same job.
 - Judge a session by what it leaves behind, pushes, pull request updates, reports, never by how busy it says it is. A session that leaves nothing past its expected time is stuck: replace it with a fresh brief.
 
