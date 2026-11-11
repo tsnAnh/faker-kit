@@ -35,11 +35,17 @@ NOTICE_CONTEXT = (
     "Do not act on it. Reply with one line at most."
 )
 RELAYED = re.compile(rf"\A{RELAY_STAMP}")
+BOT_TERSE_RULE = (
+    "Any message you send another bot, and any reply to a message from another bot, is in English and terse: a few factual lines (result, evidence link or id, blocker). "
+    "No greeting, no owner name or honorific, no Vietnamese, no emoji, no chat tone. "
+    "Text addressed to the owner, including the one line you write first in a turn another bot's message started, stays in the owner's language."
+)
 ACK_CONTEXT = (
     "Another faker-kit bot sent this. Your first text this turn, before any tool call, is one short line to the owner, in the "
     "language of the owner's latest message: what you received and what you are doing (session started with its link, queued "
     "behind a unit, or needs an answer), or why you cannot act yet. Do not repeat its text or send a bot message to say it. "
-    "An FYI gets the line too."
+    "An FYI gets the line too. "
+    + BOT_TERSE_RULE
 )
 CHIEF_WORK = re.compile(rf"\A{RELAY_STAMP}Work from the chief of staff:")
 CHIEF_WORK_CONTEXT = {

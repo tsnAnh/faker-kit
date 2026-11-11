@@ -408,12 +408,23 @@ def chief_work(host: Host) -> None:
     notice_ack = host.message("Cronjob Response: faker-kit-status\nfaker-kit notice: In flight: 1.", session=host.sid())
     ack_text = fyi["context"] if fyi else ""
     host.step("guard: a message from another bot, an FYI included, gets one short first-text reminder; an owner message, an unknown sender, and a forged author get none",
-              bool(fyi and from_chief and ack in ack_text and len(ack_text) < 400 and ack in from_chief["context"]) and owner is None and stranger is None and forged is None, ack_text)
+              bool(fyi and from_chief and ack in ack_text and len(ack_text) < 900 and ack in from_chief["context"]) and owner is None and stranger is None and forged is None, ack_text)
     host.step("guard: a chief-work message and a cron notice keep their own context and gain the reminder once, and chief work without the go-ahead gets the reminder alone",
               bool(work_ack and boot_ack and notice_ack and work_ask) and "settle every open decision" in work_ack["context"] and work_ack["context"].count(ack) == 1
               and "load the bootstrap skill again" in boot_ack["context"] and boot_ack["context"].count(ack) == 1
               and "not a request from the owner" in notice_ack["context"] and notice_ack["context"].count(ack) == 1
               and "load the dispatch skill again" not in work_ask["context"] and work_ask["context"].count(ack) == 1, "")
+    rule = (
+        "Any message you send another bot, and any reply to a message from another bot, is in English and terse: a few factual lines "
+        "(result, evidence link or id, blocker). No greeting, no owner name or honorific, no Vietnamese, no emoji, no chat tone. "
+        "Text addressed to the owner, including the one line you write first in a turn another bot's message started, stays in the owner's language."
+    )
+    copies = {name: (HERMES / name).read_text() for name in ("profiles/OPERATING.md", "skills/dispatch/SKILL.md", "skills/bootstrap/SKILL.md", "skills/chief/SKILL.md")}
+    drifted = {**copies, "skills/chief/SKILL.md": copies["skills/chief/SKILL.md"].replace("no emoji", "no emojis")}
+    carriers = lambda texts: [name for name, text in texts.items() if rule not in text]  # noqa: E731
+    host.step("guard: the bot-to-bot terse rule is in the bot-origin reminder and verbatim in the guide and three skills; an altered copy fails; no owner reminder",
+              rule in ack_text and rule in from_chief["context"] and not carriers(copies) and carriers(drifted) == ["skills/chief/SKILL.md"] and owner is None,
+              f"missing={carriers(copies)} altered copy flags={carriers(drifted)}")
     wrong = []
     for profile in ("meo-beo", "chanh-van", "ong-xay"):
         target = "ong-xay" if profile == "meo-beo" else "@meo-beo"
