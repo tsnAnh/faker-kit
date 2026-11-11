@@ -76,6 +76,13 @@ ANDON_FOOTER = (
     "If it prints anything but 0, do not push or update a pull request; say so and end the session.\n"
     "\nEffort rule: you and any subagent run Sonnet at medium effort by default, never at effort xhigh or max, whatever a playbook says; high is the highest allowed. Never use Opus for coding.\n"
 )
+FAKER_FOOTER = (
+    "\nFaker-mode rule: Work as faker-mode says: load the faker-mode skill first and follow it. Make the smallest change that meets the goal. "
+    "Add no new documentation file unless this brief asks for one. Write no code comment except a non-obvious why. "
+    "Run the no-comments pass before the pull request opens. If faker-mode is not installed in this session, "
+    "say so in the pull request body and follow these rules anyway.\n"
+)
+FAKER_RULE = FAKER_FOOTER.strip().removeprefix("Faker-mode rule: ")
 ROLE_COMMANDS = {
     "project": {"launch", "merge", "status", "andon", "incidents", "issues"},
     "bootstrap": {"add-project", "launch", "status", "andon"},
@@ -215,6 +222,8 @@ class Kit:
         except EnvFileError as err:
             raise Refused(str(err)) from None
         prompt = text + ANDON_FOOTER.format(repo=repo)
+        if FAKER_RULE not in text:
+            prompt += FAKER_FOOTER
         digest = hashlib.sha256(prompt.encode()).hexdigest()[:8]
         owner, name = repo.split("/")
         workdir = self.home / "checkouts" / f"{owner}__{name}" / f"launch-{int(self.now())}-{digest}"
