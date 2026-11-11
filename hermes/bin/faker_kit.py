@@ -77,7 +77,9 @@ ANDON_FOOTER = (
     "\nEffort rule: you and any subagent run Sonnet at medium effort by default, never at effort xhigh or max, whatever a playbook says; high is the highest allowed. Never use Opus for coding.\n"
 )
 FAKER_FOOTER = (
-    "\nFaker-mode rule: Work as faker-mode says: load the faker-mode skill first and follow it. Make the smallest change that meets the goal. "
+    "\nFaker-mode rule: Work as faker-mode says: load the faker-mode skill first and follow it. Spawn every subagent you start inside a playbook step "
+    "as subagent_type \"faker-agent\" and put the absolute path of the faker-mode skill's SKILL.md in its prompt. "
+    "Make the smallest change that meets the goal. "
     "Add no new documentation file unless this brief asks for one. Write no code comment except a non-obvious why. "
     "Run the no-comments pass before the pull request opens. If faker-mode is not installed in this session, "
     "say so in the pull request body and follow these rules anyway.\n"

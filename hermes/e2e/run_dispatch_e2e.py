@@ -775,7 +775,8 @@ def launch_scenario(run: Run) -> None:
     andon_at = first.find("Stop rule:")
     run.step("the prompt carries the faker-mode footer once, after the brief and next to the andon footer, and the brief ends where it did",
              first.count(footer_text) == 1 and first.count("Faker-mode rule:") == 1 and first.index("README.md only.") < andon_at < first.index(footer_text)
-             and first.endswith(footer_text) and "Add no new documentation file unless this brief asks for one" in first, first[-420:].replace("\n", " "))
+             and first.endswith(footer_text) and "Add no new documentation file unless this brief asks for one" in first
+             and first.count('subagent_type "faker-agent"') == 1 and first.count("absolute path of the faker-mode skill's SKILL.md in its prompt") == 1, first[-420:].replace("\n", " "))
     sessions_before = len(run.claude_log.read_text().splitlines())
     repeated = run.brief("repeat.md", "/faker-mode\n\nGOAL: x.\n" + faker_kit.FAKER_RULE + "\n")
     code, _, err = run.kit("launch", "--brief-file", str(repeated))
