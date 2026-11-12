@@ -99,6 +99,7 @@ PING_ATTEMPTS = 6
 PING_PAUSE_SECONDS = 1.0
 PING_TIMEOUT_SECONDS = 5
 GATEWAY_RESTART = "hermes -p default gateway restart"
+PUBLIC_PATH_REPAIR = "bash hermes/setup-machine.sh --config ~/.hermes/faker-kit/machine.yaml"
 Poster = Callable[[str, dict[str, str], bytes], "int | str"]
 
 
@@ -699,14 +700,20 @@ class Kit:
         kept = self.home / "machine.yaml"
         webhook_url = load_machine(kept).webhook_url if refresh_webhooks and kept.exists() else None
         failed: list[str] = []
+        unreachable: list[str] = []
         if webhook_url:
             out["webhooks"] = self.webhooks(webhook_url, [(name, repo)])
             problem = self.restart_gateway() if reload_gateway else None
-            failed = self.ping_routes(name, out["webhooks"], problem)
+            failed, unreachable = self.ping_routes(name, out["webhooks"], problem)
         trust_checkout(checkout, os.environ.get(CLAUDE_CONFIG_DIR, ""))
         steps: list[str] = []
         if webhook_url:
             out["webhooks_live"] = not failed
+            out["public_path_live"] = not failed and not unreachable
+            if unreachable:
+                owner_step = f"`{PUBLIC_PATH_REPAIR}`"
+                steps.append(f"The public webhook path is not live: {'; '.join(unreachable)} while the local listener answered. "
+                             f"The owner runs {owner_step} in the kit checkout to rewrite the tunnel config and restart faker-kit-tunnel, then faker-kit add-project {repo} again to prove it")
             if failed:
                 steps.append(f"The webhook routes are not live: {'; '.join(failed)}. The owner runs `{GATEWAY_RESTART}` in their own shell, then faker-kit add-project {repo} again to prove them")
         if not out["jobs_active"]:
@@ -721,27 +728,37 @@ class Kit:
             return f"the gateway restart failed ({err})"
         return None
 
-    def ping_routes(self, bot: str, hooks: list[dict], problem: str | None) -> list[str]:
+    def signed_ping(self, url: str, secret: str) -> int | str:
+        body = json.dumps({"zen": "faker-kit ping"}).encode()
+        headers = {"Content-Type": "application/json", "X-GitHub-Event": "ping",
+                   "X-Hub-Signature-256": "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()}
+        answer: int | str = "no answer"
+        for attempt in range(PING_ATTEMPTS):
+            answer = self.post(url, headers, body)
+            if isinstance(answer, int) and 200 <= answer < 300:
+                break
+            if attempt + 1 < PING_ATTEMPTS:
+                self.sleep(PING_PAUSE_SECONDS)
+        return answer
+
+    def ping_routes(self, bot: str, hooks: list[dict], problem: str | None) -> tuple[list[str], list[str]]:
         secret = parse_env_file(self.root / ".env").get(secret_env(bot), "")
         listener = os.environ.get(LISTENER_ENV) or f"http://{WEBHOOK_HOST}:{WEBHOOK_PORT}"
-        failed = []
+        failed, unreachable = [], []
         for hook in hooks:
             path = urlsplit(hook["url"]).path
-            body = json.dumps({"zen": "faker-kit ping"}).encode()
-            headers = {"Content-Type": "application/json", "X-GitHub-Event": "ping",
-                       "X-Hub-Signature-256": "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()}
-            answer: int | str = "no answer"
-            for attempt in range(PING_ATTEMPTS):
-                answer = self.post(listener.rstrip("/") + path, headers, body)
-                if isinstance(answer, int) and 200 <= answer < 300:
-                    break
-                if attempt + 1 < PING_ATTEMPTS:
-                    self.sleep(PING_PAUSE_SECONDS)
+            route = path.rsplit("/", 1)[-1]
+            answer = self.signed_ping(listener.rstrip("/") + path, secret)
             ok = isinstance(answer, int) and 200 <= answer < 300
             hook["ping"] = "ok" if ok else str(answer)
             if not ok:
-                failed.append(f"{path.rsplit('/', 1)[-1]} answered {answer}" + (f" and {problem}" if problem else ""))
-        return failed
+                failed.append(f"{route} answered {answer}" + (f" and {problem}" if problem else ""))
+                continue
+            public = self.signed_ping(hook["url"], secret)
+            hook["public_ping"] = "ok" if isinstance(public, int) and 200 <= public < 300 else str(public)
+            if hook["public_ping"] != "ok":
+                unreachable.append(f"{route} answered {public}")
+        return failed, unreachable
 
     def check_repo_readable(self, repo: str) -> None:
         try:
