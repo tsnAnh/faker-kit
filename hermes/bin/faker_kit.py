@@ -16,7 +16,6 @@ import stat
 import sys
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import IO, NoReturn
@@ -141,6 +140,10 @@ class UsageError(Exception):
 class Parser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         raise UsageError(message, self)
+
+
+def iso_utc(stamp: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stamp))
 
 
 def read_offered_secret(stdin: IO[bytes]) -> bytes:
@@ -842,7 +845,7 @@ class Kit:
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
-        return datetime.fromtimestamp(stamp, timezone.utc).isoformat()
+        return iso_utc(stamp)
 
     def mint_host_secret(self) -> bool:
         if self.host_secret_path().exists():
@@ -855,7 +858,7 @@ class Kit:
             stamp = self.host_secret_path().stat().st_mtime
         except OSError:
             return {"present": False, "created_at": None}
-        return {"present": True, "created_at": datetime.fromtimestamp(stamp, timezone.utc).isoformat()}
+        return {"present": True, "created_at": iso_utc(stamp)}
 
     def authorize_owner(self, who: str, offered: bool, stdin: IO[bytes]) -> bool:
         known = self.host_secret()
