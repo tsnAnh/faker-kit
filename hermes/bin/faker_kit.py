@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import hashlib
 import hmac
@@ -17,6 +18,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
+from typing import IO, NoReturn
 from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
@@ -95,8 +97,12 @@ ROLE_COMMANDS = {
     "chief": {"status", "handoff", "loop", "add-project", "merge", "refresh"},
 }
 OWNER_ONLY = {"install", "runner", "projects", "host"}
+SECRET_COMMANDS = {"install", "projects", "host"}
 HOST_LOCK = "host-update.lock"
-HOST_ACTIONS = ("status", "update", "reload")
+HOST_ACTIONS = ("status", "update", "reload", "rotate")
+OWNER_CREDENTIAL_FILE = "host-secret"
+SECRET_STDIN_BYTES = 128
+OWNER_CREDENTIAL_NEEDED = "this command needs the machine owner's credential"
 LISTENER_ENV = "FAKER_KIT_WEBHOOK_LISTENER"
 PING_ATTEMPTS = 6
 PING_PAUSE_SECONDS = 1.0
@@ -123,6 +129,30 @@ def post_ping(url: str, headers: dict[str, str], body: bytes) -> int | str:
 ANDON_COLOR = "b60205"
 ANDON_DESCRIPTION = "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"
 SCHEDULE_DEFAULTS = {"heartbeat_every": DEFAULT_HEARTBEAT_EVERY}
+
+
+class UsageError(Exception):
+    def __init__(self, message: str, source: argparse.ArgumentParser) -> None:
+        super().__init__(message)
+        self.source = source
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise UsageError(message, self)
+
+
+def iso_utc(stamp: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stamp))
+
+
+def read_offered_secret(stdin: IO[bytes]) -> bytes:
+    try:
+        line = stdin.readline(SECRET_STDIN_BYTES + 2)
+    except (OSError, ValueError):
+        return b""
+    line = line.removesuffix(b"\n")
+    return line if len(line) <= SECRET_STDIN_BYTES else b""
 
 
 def current_bot() -> str:
@@ -781,10 +811,72 @@ class Kit:
         return failed, unreachable
 
     def secrets_known(self) -> tuple[str, ...]:
+        found: tuple[str, ...] = ()
+        with contextlib.suppress(OSError, EnvFileError):
+            found = tuple(v for v in parse_env_file(self.root / ".env").values() if v)
+        owner = self.host_secret()
+        return (*found, owner.decode("utf-8", "replace")) if owner else found
+
+    def host_secret_path(self) -> Path:
+        return self.home / OWNER_CREDENTIAL_FILE
+
+    def host_secret(self) -> bytes | None:
         try:
-            return tuple(v for v in parse_env_file(self.root / ".env").values() if v)
-        except (OSError, EnvFileError):
-            return ()
+            return self.host_secret_path().read_bytes().removesuffix(b"\n")
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return b""
+
+    def write_host_secret(self) -> str:
+        self.home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.home.chmod(0o700)
+        path = self.host_secret_path()
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        stamp = self.now()
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as out:
+                out.write(secrets.token_urlsafe(32).encode() + b"\n")
+                out.flush()
+                os.fsync(out.fileno())
+            os.utime(tmp, (stamp, stamp))
+            tmp.replace(path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        return iso_utc(stamp)
+
+    def mint_host_secret(self) -> bool:
+        if self.host_secret_path().exists():
+            return False
+        self.write_host_secret()
+        return True
+
+    def host_credential(self) -> dict:
+        try:
+            stamp = self.host_secret_path().stat().st_mtime
+        except OSError:
+            return {"present": False, "created_at": None}
+        return {"present": True, "created_at": iso_utc(stamp)}
+
+    def authorize_owner(self, who: str, offered: bool, stdin: IO[bytes]) -> bool:
+        known = self.host_secret()
+        if known is None:
+            if who != "default":
+                raise Refused("this command runs only from the owner's own shell, never from a bot")
+            return False
+        given = read_offered_secret(stdin) if offered else b""
+        if not (known and given and hmac.compare_digest(given, known)):
+            raise Refused(OWNER_CREDENTIAL_NEEDED)
+        return True
+
+    def host_rotate(self) -> dict:
+        if self.host_secret() is None:
+            raise Refused("there is no owner credential to rotate yet; run host update first")
+        with exclusive(self.home, HOST_LOCK):
+            created_at = self.write_host_secret()
+        return envelope("ok", "The owner credential was replaced.", {"rotated": True, "created_at": created_at})
 
     def listener_base(self) -> str:
         return (os.environ.get(LISTENER_ENV) or f"http://{WEBHOOK_HOST}:{WEBHOOK_PORT}").rstrip("/")
@@ -855,6 +947,7 @@ class Kit:
             elif row["public_path_live"] is False:
                 issues.append(("public_path_down", f"The public address for {row['project']} is not answering.", "reconnect_public_path"))
         data = {"kit": kit, "gateway": {"reachable": up, "port": urlsplit(self.listener_base()).port}, "github": {"state": state}, "projects": rows,
+                "owner_credential": self.host_credential(),
                 "issues": [{"code": code, "message": message} for code, message, _ in issues]}
         first = next((i for i in issues if i[2]), issues[0] if issues else None)
         return envelope("ok", first[1] if first else "This machine is up to date and reachable.", data, first[2] if first else None)
@@ -899,24 +992,25 @@ class Kit:
         return None
 
     def host_update(self) -> dict:
-        secrets = self.secrets_known()
         steps: list[dict] = []
         data: dict = {"from_commit": None, "to_commit": None, "changed": False, "steps": steps}
         first: list[Coded] = []
 
         def record(name: str, failure: Coded | None, detail: str) -> None:
-            steps.append({"name": name, "ok": failure is None, "detail": clean(detail, secrets)})
+            steps.append({"name": name, "ok": failure is None, "detail": clean(detail, known_secrets)})
             if failure and not first:
                 first.append(failure)
 
         with exclusive(self.home, HOST_LOCK):
+            data["owner_credential"] = {"created": self.mint_host_secret()}
+            known_secrets = self.secrets_known()
             try:
                 data["from_commit"] = installed_commit(self.home)
                 line = self.refresher(self.home)
                 data["to_commit"] = installed_commit(self.home)
             except Coded as err:
                 record("kit", err, str(err))
-                raise Coded(clean(str(err), secrets), err.code, {"kit_source_missing": "contact_support", "kit_install_failed": "contact_support"}.get(err.code), data) from None
+                raise Coded(clean(str(err), known_secrets), err.code, {"kit_source_missing": "contact_support", "kit_install_failed": "contact_support"}.get(err.code), data) from None
             data["changed"] = data["from_commit"] != data["to_commit"]
             record("kit", None, line)
             try:
@@ -937,7 +1031,7 @@ class Kit:
                 if not any(s["name"] == "reload_routes" and not s["ok"] for s in steps):
                     record("public_path", self.reconcile_public_path(machine, parse_env_file(self.root / ".env")), "The public address answers for every project.")
         if first:
-            raise Coded(clean(str(first[0]), secrets), first[0].code, first[0].action, data)
+            raise Coded(clean(str(first[0]), known_secrets), first[0].code, first[0].action, data)
         moved = f"The kit moved to {data['to_commit'][:12]} and the machine was reconciled." if data["changed"] else "The kit is already current and the machine was reconciled."
         return envelope("ok", moved, data)
 
@@ -993,6 +1087,7 @@ class Kit:
         return sorted(self.policy().projects())
 
     def install(self, config: Path | None, bootstrap: str | None, model: str | None, subscription: bool, provider: str | None = None) -> dict:
+        self.mint_host_secret()
         machine = load_machine(config) if config else None
         wanted = self.kit_skill_dirs(machine) if machine else []
         use_subscription = subscription or bool(machine and machine.claude_subscription)
@@ -1086,8 +1181,12 @@ class Kit:
         return "updated"
 
 
+def secret_flag(cmd: argparse.ArgumentParser) -> None:
+    cmd.add_argument("--secret-stdin", action="store_true")
+
+
 def parser() -> argparse.ArgumentParser:
-    top = argparse.ArgumentParser(prog="faker-kit")
+    top = Parser(prog="faker-kit")
     sub = top.add_subparsers(dest="command", required=True)
     cmd = sub.add_parser("install")
     cmd.add_argument("--config", type=Path)
@@ -1095,11 +1194,14 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--model")
     cmd.add_argument("--provider")
     cmd.add_argument("--claude-subscription", action="store_true")
+    secret_flag(cmd)
     cmd = sub.add_parser("refresh")
     cmd = sub.add_parser("host")
     cmd.add_argument("action", choices=HOST_ACTIONS)
     cmd.add_argument("--json", action="store_true")
+    secret_flag(cmd)
     cmd = sub.add_parser("projects")
+    secret_flag(cmd)
     cmd = sub.add_parser("add-project")
     cmd.add_argument("repo")
     cmd.add_argument("--bot")
@@ -1145,9 +1247,10 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("reason", nargs="*")
     cmd = sub.add_parser("runner")
     steps = cmd.add_subparsers(dest="step", required=True)
-    steps.add_parser("build")
+    secret_flag(steps.add_parser("build"))
     sub_up = steps.add_parser("up")
     sub_up.add_argument("--config", required=True, type=Path)
+    secret_flag(sub_up)
     sub_slot = steps.add_parser("slot")
     sub_slot.add_argument("--repo", required=True)
     sub_slot.add_argument("--slot", required=True, type=int)
@@ -1164,8 +1267,11 @@ def run_runner(args: argparse.Namespace) -> object:
     return up(args.config, Services(Path.home(), platform.system()), sys.executable, str(Path(__file__).resolve()))
 
 
-def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
-    if args.command in OWNER_ONLY and who != "default":
+def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) -> object:
+    if args.command in SECRET_COMMANDS or (args.command == "runner" and args.step != "slot"):
+        if kit.authorize_owner(who, args.secret_stdin, stdin):
+            who = "default"
+    elif args.command in OWNER_ONLY and who != "default":
         raise Refused(f"{args.command} runs only from the owner's own shell, never from a bot")
     caller = None if who == "default" else kit.policy().bot(who)
     if caller is not None and args.command not in ROLE_COMMANDS[caller.role]:
@@ -1183,7 +1289,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     if args.command == "host":
         if not args.json:
             raise Refused("host commands print JSON for the Pal app; add --json")
-        return {"status": kit.host_status, "update": kit.host_update, "reload": kit.host_reload}[args.action]()
+        return {"status": kit.host_status, "update": kit.host_update, "reload": kit.host_reload, "rotate": kit.host_rotate}[args.action]()
     if args.command == "add-project":
         intervals = {key: getattr(args, key) for key in SCHEDULE_DEFAULTS}
         added = kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider, check=args.check, reload_gateway=caller is None)
@@ -1223,13 +1329,25 @@ def failure_envelope(err: BaseException, secrets: tuple[str, ...]) -> dict:
 
 def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | None = None, bot: str | None = None,
          now: Callable[[], float] = time.time, fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status,
-         sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping, tool: Tool = run_tool, refresher: Refresher = refresh) -> int:
-    args = parser().parse_args(argv)
+         sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping, tool: Tool = run_tool, refresher: Refresher = refresh,
+         stdin: IO[bytes] | None = None) -> int:
+    given = sys.argv[1:] if argv is None else argv
+    try:
+        args = parser().parse_args(argv)
+    except UsageError as err:
+        if given[:1] and given[0] in OWNER_ONLY:
+            if "--json" in given:
+                print(json.dumps(envelope("request_refused", OWNER_CREDENTIAL_NEEDED), ensure_ascii=False))
+            else:
+                print(f"faker-kit: refused: {OWNER_CREDENTIAL_NEEDED}", file=sys.stderr)
+            return EXIT_REFUSED
+        err.source.print_usage(sys.stderr)
+        err.source.exit(2, f"{err.source.prog}: error: {err}\n")
     wants_json = bool(getattr(args, "json", False))
     kit: Kit | None = None
     try:
         kit = Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep, post=post, tool=tool, refresher=refresher)
-        out = run_command(args, kit, bot or current_bot())
+        out = run_command(args, kit, bot or current_bot(), stdin or sys.stdin.buffer)
     except Exception as err:
         known = (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError)
         if wants_json:

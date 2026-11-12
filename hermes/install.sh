@@ -163,18 +163,21 @@ link_on_hermes_path
 export FAKER_KIT_HOME=$kit_home
 unset HERMES_HOME
 machine=$kit_home/machine.yaml
+owner_kit() {
+  if [ -f "$kit_home/host-secret" ]; then "$@" --secret-stdin < "$kit_home/host-secret"; else "$@"; fi
+}
 runner_failed=''
 if [ -f "$machine" ]; then
-  "$py" "$pkg/bin/faker_kit.py" install --config "$machine" ${bootstrap_bot:+--bootstrap-bot "$bootstrap_bot"} ${model:+--model "$model"} ${provider:+--provider "$provider"} ${claude_subscription:+--claude-subscription} >/dev/null \
+  owner_kit "$py" "$pkg/bin/faker_kit.py" install --config "$machine" ${bootstrap_bot:+--bootstrap-bot "$bootstrap_bot"} ${model:+--model "$model"} ${provider:+--provider "$provider"} ${claude_subscription:+--claude-subscription} >/dev/null \
     || die "faker-kit install --config $machine failed; fix the config, then run install.sh again"
-  if "$py" "$pkg/bin/faker_kit.py" runner up --config "$machine" >/dev/null; then
+  if owner_kit "$py" "$pkg/bin/faker_kit.py" runner up --config "$machine" >/dev/null; then
     printf 'refreshed the bots, webhook routes, and CI runner services from %s\n' "$machine"
   else
     runner_failed=1
     printf 'install.sh: faker-kit runner up --config %s failed; the CI runner services are not refreshed (is Docker running?)\n' "$machine" >&2
   fi
 else
-  "$py" "$pkg/bin/faker_kit.py" install ${bootstrap_bot:+--bootstrap-bot "$bootstrap_bot"} ${model:+--model "$model"} ${provider:+--provider "$provider"} ${claude_subscription:+--claude-subscription} >/dev/null
+  owner_kit "$py" "$pkg/bin/faker_kit.py" install ${bootstrap_bot:+--bootstrap-bot "$bootstrap_bot"} ${model:+--model "$model"} ${provider:+--provider "$provider"} ${claude_subscription:+--claude-subscription} >/dev/null
 fi
 [ -z "$bootstrap_bot" ] || printf 'bootstrap bot %s ready; add it in Hermes Desktop Bot Mode and ask it for a project\n' "$bootstrap_bot"
 

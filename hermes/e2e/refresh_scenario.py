@@ -146,9 +146,11 @@ def refresh_scenario(work: Path, step: Step, base_env: dict[str, str], fake_herm
     def refused_for_every_bot(*command: str) -> bool:
         bots = [subprocess.run([str(wrapper), *command], env={**env, "HERMES_HOME": str(hermes_home / "profiles" / bot)}, capture_output=True, text=True, timeout=120)
                 for bot in guarded]
-        return all(done.returncode == 1 and "runs only from the owner's own shell, never from a bot" in done.stderr for done in bots)
+        return all(done.returncode == 1 and ("runs only from the owner's own shell, never from a bot" in done.stderr or "needs the machine owner's credential" in done.stderr) for done in bots)
 
-    owner_projects = subprocess.run([str(wrapper), "projects"], env=env, capture_output=True, text=True, timeout=120)
+    credential = state / "host-secret"
+    owner_projects = subprocess.run([str(wrapper), "projects", *(["--secret-stdin"] if credential.exists() else [])], env=env, input=credential.read_text() if credential.exists() else None,
+                                    capture_output=True, text=True, timeout=120)
     step("install, runner and projects stay owner-only: every bot role is refused, and the owner's own shell still runs projects",
          all(refused_for_every_bot(*command) for command in (("install",), ("runner", "build"), ("projects",))) and owner_projects.returncode == 0 and installed() == newer,
          (owner_projects.stdout + owner_projects.stderr).strip())
@@ -167,7 +169,8 @@ def refresh_scenario(work: Path, step: Step, base_env: dict[str, str], fake_herm
     away.mkdir()
 
     def host_update() -> tuple[subprocess.CompletedProcess[str], dict]:
-        done = subprocess.run([str(wrapper), "host", "update", "--json"], env=env, cwd=away, capture_output=True, text=True, timeout=600)
+        done = subprocess.run([str(wrapper), "host", "update", "--json", *(["--secret-stdin"] if credential.exists() else [])], env=env, cwd=away,
+                              input=credential.read_text() if credential.exists() else None, capture_output=True, text=True, timeout=600)
         try:
             return done, json.loads(done.stdout)
         except ValueError:
