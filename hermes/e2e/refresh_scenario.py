@@ -169,7 +169,8 @@ def refresh_scenario(work: Path, step: Step, base_env: dict[str, str], fake_herm
     away.mkdir()
 
     def host_update() -> tuple[subprocess.CompletedProcess[str], dict]:
-        done = subprocess.run([str(wrapper), "host", "update", "--json"], env=env, cwd=away, capture_output=True, text=True, timeout=600)
+        done = subprocess.run([str(wrapper), "host", "update", "--json", *(["--secret-stdin"] if credential.exists() else [])], env=env, cwd=away,
+                              input=credential.read_text() if credential.exists() else None, capture_output=True, text=True, timeout=600)
         try:
             return done, json.loads(done.stdout)
         except ValueError:
