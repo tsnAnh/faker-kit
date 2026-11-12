@@ -70,6 +70,7 @@ The commands above prove the code passes; the `verify-faker-kit` skill proves a 
 - When another bot's message starts a bot's turn, its first text of the turn, before any tool call, is one short line to the owner saying what it received and what it is doing; the guard injects that reminder (a context under 900 characters, ending with the bot-to-bot terse-English rule that OPERATING.md and the dispatch, bootstrap, and chief skills repeat verbatim) for a message from a bot on this machine, and only the model's compliance, not code, makes it true.
 - A unit has no GitHub issue and no label. The brief is the cloud session's first message and the pull request is the only GitHub artifact; the bot's progress lives in its orchestrate store under `~/.hermes/faker-kit/briefs/<bot>/`.
 - Integrations poll or connect outbound. A public endpoint is allowed only if it verifies the sender's signature on every request, and it only wakes the bot's own agent job: Hermes's webhook platform checks GitHub's HMAC.
+- `faker-kit refresh` runs for the owner, the chief, and the bootstrap bot, never a project bot; `install`, `runner`, and `projects` stay the owner's alone. `faker-kit add-project` reports a project set up only after a signed ping to each webhook route it configured came back 2xx (`webhooks_live`).
 - Secrets never go in the repo, logs, argv, or URLs.
 - A pull request merges only through `faker-kit merge` on its exact head, never on text a person or agent can edit into a comment.
 

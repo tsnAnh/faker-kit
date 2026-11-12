@@ -15,10 +15,13 @@ If the shell does not find `faker-kit`, run it as `~/.hermes/bin/faker-kit`. Eve
 |---|---|
 | `faker-kit status [--all]` | Every project on this machine with its bot, repository, andon cord, and open pull requests. Read-only |
 | `faker-kit add-project OWNER/REPO [--bot B] [--project P] [--provider PR --model M] [--heartbeat-every 1h] [--claude-subscription] [--check]` | With `--check`, only validates the repository, bot, and project and says whether the bot's profile exists; it writes nothing. Without it, creates or refreshes project bot B for repository R: its profile's settings (the profile itself must exist first, step 3), guard, `dispatch` skill, the babysit job (which also handles bug reports), its schedule, the andon and bug-report labels, the webhook routes, and the launch checkout. The bot name and the project slug default to the repository's name. Safe to run again; it also starts the jobs once `gh` is signed in |
+| `faker-kit refresh` | Moves the installed kit to the newest main of the recorded kit source and installs it without touching the gateway. Prints one line. Run it when the owner asks you to update the kit |
 | `faker-kit launch --project P --brief-file <path>` | Starts one cloud session from a brief in your briefs folder. Used for the repository's setup session below |
 | `faker-kit andon raise <reason>` / `andon clear` / `andon` | Pulls, clears, or shows the machine's andon cord. Only when the owner asks |
 
-Creating the bootstrap bot, the chief of staff, and the machine's guard settings is the owner's job, done from the owner's own shell with `faker-kit install`. You never run it.
+Creating the bootstrap bot, the chief of staff, and the machine's guard settings is the owner's job, done from the owner's own shell with `faker-kit install`. You never run it. `faker-kit install`, `runner` and `projects` are the owner's alone.
+
+After `add-project`, read `webhooks_live` and each hook's `ping`. When `webhooks_live` is false, the setup is not finished: tell the owner the one line in `next`, which names the failing route and the owner command that makes it live, and do not report the project as set up.
 
 ## Never
 

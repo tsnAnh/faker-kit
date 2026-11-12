@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import json
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -128,12 +129,30 @@ def refresh_scenario(work: Path, step: Step, base_env: dict[str, str], fake_herm
          (unknown.stdout + unknown.stderr).strip())
     (state / "kit-source").write_text(str(source) + "\n")
 
-    profile = hermes_home / "profiles" / "some-bot"
-    profile.mkdir(parents=True)
-    from_bot = refresh({"HERMES_HOME": str(profile)})
-    step("a bot cannot run refresh", from_bot.returncode == 1 and "owner's own shell" in from_bot.stderr and installed() == fixed,
-         (from_bot.stdout + from_bot.stderr).strip())
+    (state / "bots.yaml").write_text(yaml.safe_dump({"version": 1, "bots": {
+        "ong-xay": {"role": "bootstrap"}, "ba-truong": {"role": "chief"}, "meo-beo": {"role": "project", "project": "shop", "repo": "acme/shop"}}}))
+    guarded = {}
+    for bot in ("ong-xay", "ba-truong", "meo-beo"):
+        profile = hermes_home / "profiles" / bot
+        profile.mkdir(parents=True, exist_ok=True)
+        guarded[bot] = refresh({"HERMES_HOME": str(profile)})
+    step("a bootstrap bot's refresh takes the newest main, a chief's right after finds it current, and a project bot is refused as not its command",
+         guarded["ong-xay"].returncode == 0 and guarded["ong-xay"].stdout.strip() == f"kit moved {fixed[:12]} -> {newer[:12]}"
+         and guarded["ba-truong"].returncode == 0 and guarded["ba-truong"].stdout.strip() == f"kit already current at {newer[:12]}"
+         and guarded["meo-beo"].returncode == 1 and "meo-beo is a project bot; faker-kit refresh is not one of its commands" in guarded["meo-beo"].stderr and installed() == newer,
+         json.dumps({bot: (done.returncode, (done.stdout + done.stderr).strip()) for bot, done in guarded.items()}))
 
+    def refused_for_every_bot(*command: str) -> bool:
+        bots = [subprocess.run([str(wrapper), *command], env={**env, "HERMES_HOME": str(hermes_home / "profiles" / bot)}, capture_output=True, text=True, timeout=120)
+                for bot in guarded]
+        return all(done.returncode == 1 and "runs only from the owner's own shell, never from a bot" in done.stderr for done in bots)
+
+    owner_projects = subprocess.run([str(wrapper), "projects"], env=env, capture_output=True, text=True, timeout=120)
+    step("install, runner and projects stay owner-only: every bot role is refused, and the owner's own shell still runs projects",
+         all(refused_for_every_bot(*command) for command in (("install",), ("runner", "build"), ("projects",))) and owner_projects.returncode == 0 and installed() == newer,
+         (owner_projects.stdout + owner_projects.stderr).strip())
+
+    last = commit(source, "hermes/templates/refresh-marker", "fifth\n", "fifth kit commit")
     final = refresh()
-    step("with the source reachable and the lock free, refresh takes the newest main",
-         final.returncode == 0 and final.stdout.strip() == f"kit moved {fixed[:12]} -> {newer[:12]}" and installed() == newer, (final.stdout + final.stderr).strip())
+    step("with the source reachable and the lock free, the owner's refresh takes the newest main",
+         final.returncode == 0 and final.stdout.strip() == f"kit moved {newer[:12]} -> {last[:12]}" and installed() == last, (final.stdout + final.stderr).strip())
