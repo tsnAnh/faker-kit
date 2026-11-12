@@ -111,6 +111,26 @@
     {"tool": "patch", "args": {"mode": "patch", "patch": "*** Begin Patch\n*** Update File: /Users/x/.hermes/faker-kit/guard.yaml\n@@\n-a\n+b\n*** End Patch"}},
     {"tool": "terminal", "args": {"command": "HERMES_HOME=/tmp/x hermes profile create shop"}}
   ]},
+  {"name": "no tool reads, searches, or writes the owner credential file in the kit home", "policy": "quiet", "profiles": ["meo-beo", "ba-truong", "ong-xay"], "expect": "block", "calls": [
+    {"tool": "terminal", "args": {"command": "cat ~/.hermes/faker-kit/host-secret"}},
+    {"tool": "terminal", "args": {"command": "head -c 64 $HOME/.hermes/faker-kit/host-secret"}},
+    {"tool": "terminal", "args": {"command": "less /Users/x/.hermes/faker-kit/host-secret"}},
+    {"tool": "terminal", "args": {"command": "faker-kit host status --json --secret-stdin < ~/.hermes/faker-kit/host-secret"}},
+    {"tool": "terminal", "args": {"command": "cd ~/.hermes/faker-kit && cat host-secret"}},
+    {"tool": "terminal", "args": {"command": "cd $FAKER_KIT_HOME; cat host-secret"}},
+    {"tool": "terminal", "args": {"command": "env -u HERMES_HOME faker-kit host status --json"}},
+    {"tool": "terminal", "args": {"command": "HERMES_HOME= faker-kit host status --json"}},
+    {"tool": "terminal", "args": {"command": "python3 -c \"print(open('/Users/x/.hermes/faker-kit/host-secret').read())\""}},
+    {"tool": "read_file", "args": {"path": "~/.hermes/faker-kit/host-secret"}},
+    {"tool": "search_files", "args": {"path": "/Users/x/.hermes/faker-kit", "pattern": "host-secret"}},
+    {"tool": "execute_code", "args": {"code": "print(open('/Users/x/.hermes/faker-kit/host-secret').read())"}},
+    {"tool": "write_file", "args": {"path": "~/.hermes/faker-kit/host-secret", "content": "x"}},
+    {"tool": "patch", "args": {"path": "~/.hermes/faker-kit/host-secret"}}
+  ]},
+  {"name": "faker-kit host is still attempted by a project bot, and the credential check refuses it, not the guard", "policy": "quiet", "profiles": ["meo-beo"], "expect": "allow", "calls": [
+    {"tool": "terminal", "args": {"command": "faker-kit host status --json"}},
+    {"tool": "terminal", "args": {"command": "faker-kit host rotate --json --secret-stdin < /dev/null"}}
+  ]},
   {"name": "a path under .hermes outside bin, the kit, and briefs is a secret touch, hermes binary or not", "policy": "quiet", "profiles": ["chanh-van"], "expect": "block", "calls": [
     {"tool": "terminal", "args": {"command": "~/.hermes/hermes-agent/.hermes/bin/hermes chat"}}
   ]},

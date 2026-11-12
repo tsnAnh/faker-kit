@@ -7,6 +7,7 @@ import copy
 import fcntl
 import hashlib
 import hmac
+import inspect
 import io
 import json
 import os
@@ -554,7 +555,12 @@ class Run:
         self.pings.append((path, headers, body))
         return 202
 
-    def kit(self, *argv: str, bot: str | None = BOT, env: dict[str, str] | None = None, post: object = None, tool: object = None, refresher: object = None) -> tuple[int, str, str]:
+    def kit(self, *argv: str, bot: str | None = BOT, env: dict[str, str] | None = None, post: object = None, tool: object = None, refresher: object = None,
+            stdin: bytes | None = None, owner: bool = True) -> tuple[int, str, str]:
+        secret_file = self.team / "host-secret"
+        if owner and bot is None and stdin is None and argv[:1] and argv[0] in ("install", "projects", "host", "runner") and secret_file.exists():
+            argv = (*argv, "--secret-stdin")
+            stdin = secret_file.read_bytes()
         wanted = {**self.env(), **(env or {})}
         saved = {key: os.environ.get(key) for key in wanted}
         os.environ.update(wanted)
@@ -563,7 +569,7 @@ class Run:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 code = faker_kit.main(list(argv), bot=bot or "default", now=lambda: self.clock, sleep=self.sleep, fetch_api=self.fetch_api, fetch_url=self.fetch_url,
                                   post=post or (lambda url, headers, body: self.listener(headers, body, url)),
-                                  **({"tool": tool} if tool else {}), **({"refresher": refresher} if refresher else {}))
+                                  stdin=io.BytesIO(stdin or b""), **({"tool": tool} if tool else {}), **({"refresher": refresher} if refresher else {}))
         finally:
             for key, value in saved.items():
                 if value is None:
@@ -3527,6 +3533,164 @@ def host_scenario(run: Run, work: Path) -> None:
              and HOST_SECRET not in "".join((h.hermes / "hermes-calls.log").read_text() for _ in [0]), f"{len(seen)} outputs; problems: {json.dumps(bad)}")
 
 
+def host_secret_scenario(run: Run, work: Path) -> None:
+    h = Run(work)
+    h.steps, h.verdicts = run.steps, run.verdicts
+    h.build()
+    source, ref = kit_source(work / "source-clone")
+    subprocess.run(["git", "-C", str(source), "branch", "-M", "main"], check=True, capture_output=True)
+    (h.team / "kit-source").write_text(str(source) + "\n")
+    (h.team / "installed-ref").write_text(ref + "\n")
+    (h.team / "machine.yaml").write_text(PROFILE_MACHINE_YAML)
+    (h.team / "machine.yaml").chmod(0o600)
+    (h.hermes / ".env").write_text(f"{secret_env(BOT)}={HOST_SECRET}\n")
+    (h.team / "bots.yaml").write_text(BOTS_YAML.format(slack="") + f"  {CHIEF}:\n    role: chief\n  {BOOTSTRAP}:\n    role: bootstrap\n")
+    secret_file = h.team / "host-secret"
+    fixed = "this command needs the machine owner's credential"
+    outputs: list[str] = []
+    seen_secrets: list[str] = []
+    tunnel = Tunnel(work / "tunnel")
+
+    def refresher(_home: Path) -> str:
+        return "kit already current"
+
+    def current() -> bytes:
+        value = secret_file.read_bytes().rstrip(b"\n")
+        if value.decode() not in seen_secrets:
+            seen_secrets.append(value.decode())
+        return value
+
+    def call(*argv: str, stdin: bytes | None = b"", bot: str | None = None, **kw: object) -> tuple[int, str, str, dict]:
+        c, o, e = h.kit(*argv, bot=bot, stdin=stdin, owner=False, **kw)
+        outputs.append(o + e)
+        try:
+            parsed = json.loads(o)
+        except ValueError:
+            parsed = {}
+        return c, o, e, parsed
+
+    def gateway(action: str, secret: bytes | None = None, **kw: object) -> tuple[int, str, str, dict]:
+        return call("host", action, "--json", "--secret-stdin", stdin=(secret if secret is not None else current()) + b"\n", **kw)
+
+    c, o, e, early = call("host", "status", "--json")
+    run.step("with no secret file yet, host status runs from a profile-less caller and reports owner_credential absent",
+             c == 0 and early["data"]["owner_credential"] == {"present": False, "created_at": None} and not secret_file.exists(), o[:200])
+    bot_early = [call("host", "status", "--json", bot=who)[1:3] for who in (BOT, CHIEF, BOOTSTRAP)]
+    run.step("with no secret file yet, a bot is still refused host by the old owner-shell rule",
+             all("runs only from the owner's own shell, never from a bot" in o + e for o, e in bot_early), json.dumps(bot_early)[:200])
+    c, o, e, rotate_early = call("host", "rotate", "--json")
+    run.step("host rotate with no secret file refuses and creates nothing", c == 1 and rotate_early["code"] == "request_refused" and not secret_file.exists(), o[:200])
+
+    fsyncs: list[int] = []
+    real_fsync = os.fsync
+    os.fsync = lambda fd: (fsyncs.append(fd), real_fsync(fd))[1]
+    try:
+        c, o, e, first = call("host", "update", "--json", tool=tunnel, refresher=refresher)
+    finally:
+        os.fsync = real_fsync
+    value = current()
+    run.step("the first host update creates the secret file mode 0600 in a 0700 directory with a synced temp file replaced into place, and never prints it",
+             c == 0 and first["data"]["owner_credential"] == {"created": True} and stat.S_IMODE(secret_file.stat().st_mode) == 0o600
+             and stat.S_IMODE(h.team.stat().st_mode) == 0o700 and fsyncs and not list(h.team.glob(".host-secret.*")) and value.decode() not in o + e and len(value) >= 43, o[:200])
+    c, o, e, second = call("host", "update", "--json", "--secret-stdin", stdin=value + b"\n", tool=tunnel, refresher=refresher)
+    run.step("a second host update reports created false and leaves the secret as it was", c == 0 and second["data"]["owner_credential"] == {"created": False} and current() == value, o[:200])
+
+    both = {action: gateway(action, **kw) for action, kw in (("status", {}), ("reload", {}), ("update", {"tool": tunnel, "refresher": refresher}))}
+    run.step("a gateway caller that pipes the secret through --secret-stdin runs host status, reload and update, even with no profile-less environment guarantee",
+             all(r[0] == 0 and r[3]["ok"] for r in both.values()) and both["status"][3]["data"]["owner_credential"]["present"] is True
+             and isinstance(both["status"][3]["data"]["owner_credential"]["created_at"], str), json.dumps({k: v[3].get("code") for k, v in both.items()}))
+    c1, o1, e1, _ = call("projects", "--secret-stdin", stdin=current() + b"\n")
+    c2, o2, e2, _ = call("install", "--secret-stdin", stdin=current() + b"\n")
+    run.step("projects and install run with the secret", c1 == 0 and c2 == 0, (o1 + e1 + o2 + e2)[:200])
+    refused = {
+        "projects, no flag": call("projects"),
+        "install, no flag": call("install"),
+        "runner build, no flag": call("runner", "build"),
+        "runner build, wrong secret": call("runner", "build", "--secret-stdin", stdin=b"x" * 43 + b"\n"),
+    }
+    run.step("projects, install and runner build are refused without the secret once the file exists",
+             all(r[0] == 1 and fixed in r[1] + r[2] for r in refused.values()), json.dumps({k: v[0] for k, v in refused.items()}))
+
+    shown = secret_file.read_bytes().rstrip(b"\n").decode()
+    cases: dict[str, tuple[int, str, str, dict]] = {}
+    for who in (BOT, CHIEF, BOOTSTRAP):
+        cases[f"{who} with profile"] = call("host", "status", "--json", bot=who)
+        cases[f"{who} with profile and wrong secret"] = gateway("status", b"w" * 43, bot=who)
+    cases["no flag, profile-less"] = call("host", "status", "--json")
+    cases["wrong secret"] = gateway("status", b"w" * 43)
+    cases["wrong secret, same length"] = gateway("status", (shown[:-1] + ("a" if shown[-1] != "a" else "b")).encode())
+    cases["empty stdin"] = call("host", "status", "--json", "--secret-stdin", stdin=b"")
+    cases["blank line"] = call("host", "status", "--json", "--secret-stdin", stdin=b"\n")
+    cases["over-long stdin"] = call("host", "status", "--json", "--secret-stdin", stdin=b"a" * 4096 + b"\n")
+    cases["over-long with the secret as prefix"] = call("host", "status", "--json", "--secret-stdin", stdin=shown.encode() + b"a" * 200 + b"\n")
+    cases["argv value"] = call("host", "status", "--json", "--secret", shown)
+    cases["argv value after the flag"] = call("host", "status", "--json", "--secret-stdin", shown)
+    cases["flag with a value"] = call("host", "status", "--json", f"--secret-stdin={shown}")
+    cases["env var"] = call("host", "status", "--json", env={"FAKER_KIT_HOST_SECRET": shown, "HOST_SECRET": shown})
+    run.step("every refusal is request_refused with one fixed message, so it does not say whether the secret was missing or wrong",
+             all(r[0] == 1 and r[3].get("code") == "request_refused" and r[3].get("message") == fixed and r[3].get("ok") is False for r in cases.values()),
+             json.dumps({k: (v[0], v[3].get("message")) for k, v in cases.items()})[:400])
+    run.step("no refusal output holds the secret, not even for an argv value or an environment variable",
+             not any(shown in r[1] + r[2] for r in cases.values()), "checked " + str(len(cases)) + " refusals")
+
+    def real(*argv: str, env: dict[str, str] | None = None, stdin: bytes = b"") -> subprocess.CompletedProcess[bytes]:
+        base = {key: value for key, value in h.env().items() if key != "HERMES_HOME"}
+        return subprocess.run([sys.executable, str(HERMES / "bin" / "faker_kit.py"), *argv], env={**base, **(env or {})}, input=stdin, capture_output=True, timeout=120)
+
+    profile_home = str(h.hermes / "profiles" / BOT)
+    held = {
+        "bot terminal that unsets the profile home": real("host", "status", "--json"),
+        "bot terminal that rewrites the profile home": real("host", "status", "--json", env={"HERMES_HOME": str(h.hermes)}),
+        "bot terminal with its profile home": real("host", "status", "--json", env={"HERMES_HOME": profile_home}),
+        "bot terminal that clears the home and sets the secret as an env var": real("host", "status", "--json", env={"HOST_SECRET": shown, "FAKER_KIT_HOST_SECRET": shown}),
+    }
+    bodies = {k: json.loads(v.stdout) for k, v in held.items()}
+    run.step("the hole is closed: a real faker-kit process whose bot terminal clears or rewrites the profile home is refused host status with the fixed message",
+             all(v.returncode == 1 and bodies[k]["code"] == "request_refused" and bodies[k]["message"] == fixed and shown.encode() not in v.stdout + v.stderr for k, v in held.items()),
+             json.dumps({k: v.returncode for k, v in held.items()}))
+    granted = real("host", "status", "--json", "--secret-stdin", stdin=shown.encode() + b"\n", env={"HERMES_HOME": profile_home})
+    run.step("a correct secret is what grants the owner commands, not the environment: it is accepted whatever the profile home says, and still no bot gets a command outside its role",
+             json.loads(granted.stdout)["code"] != "request_refused" and shown.encode() not in granted.stdout + granted.stderr
+             and "is not one of its commands" in call("launch", "--brief-file", "x", "--secret-stdin", bot=CHIEF)[2], granted.stdout.decode()[:200])
+
+    compared: list[tuple[bytes, bytes]] = []
+    real_compare = faker_kit.hmac.compare_digest
+    faker_kit.hmac.compare_digest = lambda a, b: (compared.append((a, b)), real_compare(a, b))[1]
+    try:
+        gateway("status")
+    finally:
+        faker_kit.hmac.compare_digest = real_compare
+    run.step("the secret is compared with hmac.compare_digest", len(compared) == 1 and compared[0][0] == compared[0][1] == current()
+             and "hmac.compare_digest" in inspect.getsource(faker_kit.Kit.authorize_owner), str(len(compared)))
+
+    old = current()
+    c, o, e, rotated = gateway("rotate")
+    new = current()
+    run.step("host rotate with the current secret writes a new one with the same mode and returns rotated and created_at only",
+             c == 0 and rotated["data"].keys() == {"rotated", "created_at"} and rotated["data"]["rotated"] is True and isinstance(rotated["data"]["created_at"], str)
+             and new != old and stat.S_IMODE(secret_file.stat().st_mode) == 0o600 and not list(h.team.glob(".host-secret.*")) and new.decode() not in o + e and old.decode() not in o + e, o[:200])
+    c, o, e, stale = gateway("status", old)
+    c2, o2, e2, fresh = gateway("status", new)
+    run.step("after rotation the old secret stops working and the new one works", c == 1 and stale["code"] == "request_refused" and c2 == 0 and fresh["ok"], o[:120])
+    before = secret_file.read_bytes()
+    c, o, e, bad_rotate = gateway("rotate", b"w" * 43)
+    run.step("host rotate with a wrong secret is refused and changes nothing", c == 1 and bad_rotate["message"] == fixed and secret_file.read_bytes() == before, o[:120])
+    with (h.team / "host-update.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        c, o, e, busy_update = gateway("update", tool=tunnel, refresher=refresher)
+        c2, o2, e2, busy_rotate = gateway("rotate")
+    run.step("while the host lock is held, update and rotate both return update_in_progress and rotation changes nothing",
+             c == 1 and busy_update["code"] == "update_in_progress" and c2 == 1 and busy_rotate["code"] == "update_in_progress" and secret_file.read_bytes() == before, o[:120])
+
+    secret_file.unlink()
+    c, o, e, _ = call("install")
+    run.step("faker-kit install creates the secret file when it is absent, mode 0600, and never prints it",
+             c == 0 and secret_file.exists() and stat.S_IMODE(secret_file.stat().st_mode) == 0o600 and current().decode() not in o + e, o[:120])
+    logs = "".join(path.read_text() for path in (h.hermes / "hermes-calls.log", h.gh_log) if path.exists())
+    leaked = [value[:4] for value in seen_secrets if any(value in text for text in outputs) or value in logs]
+    run.step("no secret value of this scenario appears in any stdout, stderr, JSON, or stub log", not leaked and len(seen_secrets) >= 3, f"{len(outputs)} outputs, {len(seen_secrets)} secrets")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Stubbed end-to-end run of the faker-kit coordinator path")
     ap.add_argument("--artifact", type=Path, help="where to write the JSON transcript; defaults to a file in the run directory")
@@ -3551,6 +3715,7 @@ def main(argv: list[str] | None = None) -> int:
         runner_scenario(run, root / "runner")
         profile_approval_scenario(run, root / "profile-approval")
         host_scenario(run, root / "host")
+        host_secret_scenario(run, root / "host-secret")
         install_skip_scenario(run, root / "install-skip")
         tooling_scenario.environment_scenario(root / "environment-setup", run.step)
         tooling_scenario.ratchet_scenario(root / "ratchet", run.step)

@@ -197,11 +197,15 @@ mkdir -p "$HOME/.hermes/faker-kit"
 install -m 600 "$config" "$HOME/.hermes/faker-kit/machine.yaml"
 bash "$here/install.sh" "${install_args[@]}"
 kitlib=$HOME/.hermes/faker-kit/kit/hermes/lib
+owner_kit() {
+  local secret=${FAKER_KIT_HOME:-$HOME/.hermes/faker-kit}/host-secret
+  if [ -f "$secret" ]; then env -u HERMES_HOME "$@" --secret-stdin < "$secret"; else env -u HERMES_HOME "$@"; fi
+}
 
 # ---------------------------------------------------------------------------------------------------
 say "5/8 Bots and webhooks"
 # A plain shell, never a bot profile: faker-kit install runs only here.
-result=$(env -u HERMES_HOME faker-kit install --config "$config")
+result=$(owner_kit faker-kit install --config "$config")
 python3 - "$result" <<'PY'
 import json, sys
 out = json.loads(sys.argv[1])
@@ -236,7 +240,7 @@ for bot in $project_bots; do
     unset token
   fi
 done
-[ "$token_stored" = 0 ] || env -u HERMES_HOME faker-kit install --config "$config" >/dev/null
+[ "$token_stored" = 0 ] || owner_kit faker-kit install --config "$config" >/dev/null
 if [ -n "$slack_bot" ]; then
   env_file=$HOME/.hermes/.env
   for key in SLACK_APP_TOKEN SLACK_BOT_TOKEN; do
@@ -327,7 +331,7 @@ if [ -n "$webhook_url" ]; then
   note "Cloudflare Tunnel $tunnel: https://$public_host serves only this machine's signed webhook routes"
 fi
 # Also stops the runner services of repositories the config no longer lists.
-faker-kit runner up --config "$config" >/dev/null || die "the CI runners did not start; see faker-kit runner's message above"
+owner_kit faker-kit runner up --config "$config" >/dev/null || die "the CI runners did not start; see faker-kit runner's message above"
 [ -z "$ci_runners" ] || note "CI runners: $ci_runners, one fresh container per job; workflows use runs-on: [self-hosted, faker-kit]"
 
 # ---------------------------------------------------------------------------------------------------
