@@ -321,8 +321,8 @@ if [ -n "$webhook_url" ]; then
   chmod 600 "$creds"
   cloudflared tunnel route dns --overwrite-dns "$tunnel" "$public_host" >/dev/null
   tunnel_config=$HOME/.cloudflared/$tunnel.yml
-  PYTHONPATH=$kitlib:$kitlib/../vendor python3 -c 'import sys, pathlib, faker_kit_machine as m; sys.stdout.write(m.cloudflared_config(sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3], m.load_machine(pathlib.Path(sys.argv[4]))))' \
-    "$id" "$creds" "$public_host" "$config" > "$tunnel_config"
+  PYTHONPATH=$kitlib:$kitlib/../vendor python3 -c 'import sys, pathlib, faker_kit_machine as m; sys.stdout.write(m.cloudflared_config(sys.argv[1], pathlib.Path(sys.argv[2]), sys.argv[3]))' \
+    "$id" "$creds" "$public_host" > "$tunnel_config"
   service_user faker-kit-tunnel "$(command -v cloudflared)" --no-autoupdate --config "$tunnel_config" tunnel run
   note "Cloudflare Tunnel $tunnel: https://$public_host serves only this machine's signed webhook routes"
 fi

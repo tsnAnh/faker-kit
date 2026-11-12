@@ -236,11 +236,13 @@ def stale_hook(url: str, base: str, bot: str) -> bool:
     return stale_route(url.removeprefix(route_url(base, bot, "")), bot) if url.startswith(route_url(base, bot, "")) else False
 
 
-def cloudflared_config(tunnel_id: str, credentials: Path, hostname: str, machine: Machine) -> str:
-    rules = "".join(f"  - hostname: {hostname}\n    path: ^{re.escape(f'/p/{project.bot}/webhooks/')}[a-z0-9_-]+$\n"
-                    f"    service: http://{WEBHOOK_HOST}:{WEBHOOK_PORT}\n"
-                    for project in machine.projects)
-    return f"tunnel: {tunnel_id}\ncredentials-file: {credentials}\n\ningress:\n{rules}  - service: http_status:404\n"
+PUBLIC_ROUTE_PATH = r"^/p/[a-z0-9][a-z0-9_-]{0,63}/webhooks/[a-z0-9_-]+$"
+
+
+def cloudflared_config(tunnel_id: str, credentials: Path, hostname: str) -> str:
+    return (f"tunnel: {tunnel_id}\ncredentials-file: {credentials}\n\ningress:\n"
+            f"  - hostname: {hostname}\n    path: {PUBLIC_ROUTE_PATH}\n    service: http://{WEBHOOK_HOST}:{WEBHOOK_PORT}\n"
+            "  - service: http_status:404\n")
 
 
 GUARD_SCALARS = ("max_in_flight_total", "ask_owner")

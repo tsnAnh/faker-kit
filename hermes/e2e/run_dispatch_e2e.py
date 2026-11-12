@@ -36,7 +36,7 @@ for folder in (HERMES / "lib", HERMES / "bin", HERMES / "plugin"):
 
 import faker_kit  # noqa: E402
 from faker_kit_guard.policy import decide, load_policy, reader_source  # noqa: E402
-from faker_kit_machine import ROUTE_JOBS, routes, secret_env  # noqa: E402
+from faker_kit_machine import ROUTE_JOBS, cloudflared_config, routes, secret_env  # noqa: E402
 
 yaml = faker_kit.yaml
 
@@ -2451,7 +2451,7 @@ def profile_approval_scenario(run: Run, work: Path) -> None:
     live = json.loads(out)
     run.step("add-project pings every route it configured with a signed GitHub ping and reports ping ok, webhooks_live true, and no next step; a bot's turn never restarts the gateway",
              code == 0 and [h["ping"] for h in live["webhooks"]] == ["ok", "ok"] and live["webhooks_live"] is True and live["next"] == []
-             and sorted(urlsplit(p).path for p, _, _ in other.pings) == [f"/p/crm-bot/webhooks/crm-bot-{kind}" for kind in ("issues", "pr")]
+             and sorted(urlsplit(p).path for p, _, _ in other.pings if p.startswith("http://127.0.0.1")) == [f"/p/crm-bot/webhooks/crm-bot-{kind}" for kind in ("issues", "pr")]
              and all(h["X-GitHub-Event"] == "ping" and h["X-Hub-Signature-256"] == signed(b) for _, h, b in other.pings)
              and secret not in out + err and (other.hermes / "hermes-calls.log").read_text().count('"gateway"') == calls_before, out[:300])
 
@@ -2463,6 +2463,41 @@ def profile_approval_scenario(run: Run, work: Path) -> None:
              and "crm-bot-pr answered 404" in down["next"][0] and "crm-bot-issues answered 404" in down["next"][0] and "hermes -p default gateway restart" in down["next"][0]
              and len(other.sleeps) >= 10 and secret not in out + err, out[:400])
 
+    code, out, err = other.kit(*crm, bot=BOOTSTRAP, env=AGENT_TURN)
+    ok_all = json.loads(out)
+    run.step("when the local and the public ping both answer, add-project reports public_ping ok per hook, public_path_live true, and no next step",
+             code == 0 and [h["public_ping"] for h in ok_all["webhooks"]] == ["ok", "ok"] and ok_all["public_path_live"] is True and ok_all["next"] == [], out[:300])
+
+    other.pings.clear()
+
+    def public_down(url: str, headers: dict[str, str], body: bytes) -> int:
+        other.listener(headers, body, url)
+        return 502 if url.startswith(WEBHOOK_BASE) else 202
+
+    code, out, err = other.kit(*crm, bot=BOOTSTRAP, env=AGENT_TURN, post=public_down)
+    cut = json.loads(out)
+    public_hits = [(p, h, b) for p, h, b in other.pings if p.startswith(WEBHOOK_BASE)]
+    run.step("a public 502 with a local 202 leaves webhooks_live true, public_path_live false, public_ping 502 per hook, one owner next line, and no secret printed",
+             code == 0 and cut["webhooks_live"] is True and cut["public_path_live"] is False and [h["public_ping"] for h in cut["webhooks"]] == ["502", "502"]
+             and len(cut["next"]) == 1 and "public webhook path is not live" in cut["next"][0] and "hermes/setup-machine.sh --config" in cut["next"][0]
+             and all(h["X-Hub-Signature-256"] == signed(b) for _, h, b in public_hits) and len(public_hits) >= 2 and secret not in out + err, out[:400])
+
+    ingress = yaml.safe_load(cloudflared_config("tid", Path("/creds.json"), "hermes.example.com"))["ingress"]
+    pattern = ingress[0]["path"]
+    names = ["paint_by_number", "fren", "kith-2", "a", "9lives", "x" * 64, "crm-bot"]
+    accepted = [f"/p/{n}/webhooks/{n}-{kind}" for n in names for kind in ("pr", "issues")]
+    rejected = ["/p/x/other/y", "/p/x/webhooks/", "/p/x/webhooks/a/b", "/p/X/webhooks/y", "/p/-x/webhooks/y", "/p//webhooks/y", "/p/x/webhooks/y?z", "/webhooks/y",
+                "/p/" + "x" * 65 + "/webhooks/y", "/p/x/webhooks/Y"]
+    go = shutil.which("go")
+    if go:
+        probe = subprocess.run([go, "run", str(Path(__file__).parent / "ingress_match.go"), pattern], input="\n".join(accepted + rejected), capture_output=True, text=True, check=False)
+        verdicts = [line.split("\t")[0] == "true" for line in probe.stdout.splitlines()]
+    else:
+        verdicts = [re.search(pattern, path) is not None for path in accepted + rejected]
+    run.step("one tunnel rule routes every valid project name, underscores and unlisted projects included, rejects other shapes, and the catch-all stays 404",
+             len(ingress) == 2 and ingress[0] == {"hostname": "hermes.example.com", "path": pattern, "service": "http://127.0.0.1:8644"} and ingress[1] == {"service": "http_status:404"}
+             and verdicts == [True] * len(accepted) + [False] * len(rejected), f"{'Go regexp' if go else 'Python re, go not found'}: {json.dumps(verdicts)}")
+
     order: list[str] = []
 
     def after_restart(*_: object) -> int:
@@ -2473,7 +2508,7 @@ def profile_approval_scenario(run: Run, work: Path) -> None:
     owned = json.loads(out)
     restarts = [json.loads(line) for line in (other.hermes / "hermes-calls.log").read_text().splitlines() if '"gateway"' in line][calls_before:]
     run.step("from the owner's shell add-project restarts the default profile's gateway once, before the first ping, and the pings then pass",
-             code == 0 and restarts == [["-p", "default", "gateway", "restart"]] and order == ["ping:restarted", "ping:restarted"] and owned["webhooks_live"] is True, json.dumps(order))
+             code == 0 and restarts == [["-p", "default", "gateway", "restart"]] and order == ["ping:restarted"] * 4 and owned["webhooks_live"] is True, json.dumps(order))
 
     kept_machine = other.team / "machine.yaml"
     held = kept_machine.read_text()
