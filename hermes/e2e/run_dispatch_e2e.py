@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
+import fcntl
 import hashlib
 import hmac
 import io
@@ -15,6 +16,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -39,6 +41,7 @@ from faker_kit_guard.policy import decide, load_policy, reader_source  # noqa: E
 from faker_kit_machine import ROUTE_JOBS, cloudflared_config, routes, secret_env  # noqa: E402
 
 yaml = faker_kit.yaml
+Coded = faker_kit.Coded
 
 REPO = "acme/shop"
 BOT = "meo-beo"
@@ -551,7 +554,7 @@ class Run:
         self.pings.append((path, headers, body))
         return 202
 
-    def kit(self, *argv: str, bot: str | None = BOT, env: dict[str, str] | None = None, post: object = None) -> tuple[int, str, str]:
+    def kit(self, *argv: str, bot: str | None = BOT, env: dict[str, str] | None = None, post: object = None, tool: object = None, refresher: object = None) -> tuple[int, str, str]:
         wanted = {**self.env(), **(env or {})}
         saved = {key: os.environ.get(key) for key in wanted}
         os.environ.update(wanted)
@@ -559,7 +562,8 @@ class Run:
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 code = faker_kit.main(list(argv), bot=bot or "default", now=lambda: self.clock, sleep=self.sleep, fetch_api=self.fetch_api, fetch_url=self.fetch_url,
-                                  post=post or (lambda url, headers, body: self.listener(headers, body, url)))
+                                  post=post or (lambda url, headers, body: self.listener(headers, body, url)),
+                                  **({"tool": tool} if tool else {}), **({"refresher": refresher} if refresher else {}))
         finally:
             for key, value in saved.items():
                 if value is None:
@@ -3180,6 +3184,349 @@ def merge_open_scenario(run: Run) -> None:
     run.set_gh(saved)
 
 
+HOST_CODES = {"ok", "github_not_signed_in", "github_sign_in_expired", "github_unreachable", "kit_source_missing", "kit_fetch_failed", "kit_install_failed", "kit_behind",
+              "update_in_progress", "gateway_unreachable", "routes_not_loaded", "public_path_down", "tunnel_config_unmanaged", "tunnel_restart_failed",
+              "machine_config_invalid", "request_refused", "unexpected"}
+HOST_ACTIONS = {"sign_in_github", "update_kit", "reload_routes", "reconnect_public_path", "restart_gateway", "contact_support"}
+HOST_SECRET = "hook-secret-" + "q" * 28
+HOST_TOKEN = "gh" + "p_" + "Z9y8X7w6V5u4T3s2R1q0P9o8N7m6"
+LIVE_TUNNEL = """tunnel: 00000000-0000-0000-0000-000000000000
+credentials-file: /home/pi/.local/share/hermes-domain/tunnel.json
+
+ingress:
+  - hostname: hermes.example.com
+    path: ^/p/faker-kit/webhooks/[a-z0-9_-]+$
+    service: http://127.0.0.1:8644
+  - hostname: hermes.example.com
+    path: ^/p/fren/webhooks/[a-z0-9_-]+$
+    service: http://127.0.0.1:8644
+  - hostname: hermes.example.com
+    service: http://127.0.0.1:9119
+  - service: http_status:404
+"""
+OTHER_TUNNEL = "tunnel: x\ningress:\n  - hostname: hermes.example.com\n    service: http://127.0.0.1:9119\n  - service: http_status:404\n"
+
+
+def envelope_problems(shown: object) -> list[str]:
+    problems = []
+    if not isinstance(shown, dict) or set(shown) != {"ok", "code", "message", "next", "data"}:
+        return ["keys"]
+    if not isinstance(shown["ok"], bool) or shown["code"] not in HOST_CODES or shown["ok"] != (shown["code"] == "ok"):
+        problems.append("ok/code")
+    if not isinstance(shown["message"], str) or not shown["message"] or "\n" in shown["message"]:
+        problems.append("message")
+    follow = shown["next"]
+    if follow is not None and (not isinstance(follow, dict) or set(follow) != {"action", "label"} or follow["action"] not in HOST_ACTIONS or not isinstance(follow["label"], str)):
+        problems.append("next")
+    if not isinstance(shown["data"], dict):
+        problems.append("data")
+    text = shown["message"] + (follow["label"] if isinstance(follow, dict) else "")
+    if re.search(r"\bssh\b|systemctl|sudo|\bbash\b|`|hermes -p", text):
+        problems.append("command in text")
+    return problems
+
+
+class Tunnel:
+    def __init__(self, directory: Path, text: str = LIVE_TUNNEL, restart_ok: bool = True, validator: bool = False) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        self.directory, self.config = directory, directory / "config.yml"
+        self.config.write_text(text)
+        self.config.chmod(0o600)
+        self.restart_ok, self.calls, self.loaded, self.validator_ok = restart_ok, [], True, True
+        self.program = directory / "cloudflared-2026.10.1"
+        if validator:
+            self.program.write_text("#!/bin/sh\n")
+            self.program.chmod(0o755)
+
+    def __call__(self, argv: list[str], _seconds: int) -> tuple[int, str]:
+        self.calls.append(argv)
+        if argv[0] == str(self.program):
+            return (0 if self.validator_ok else 1), f"validation output {HOST_TOKEN}"
+        verb = next(a for a in argv[1:] if not a.startswith("--"))
+        if verb == "show":
+            if self.loaded and "--user" in argv:
+                command = f"{self.program} tunnel --config {self.config} --no-autoupdate --metrics 127.0.0.1:20241 run"
+                return 0, f"LoadState=loaded\nExecStart={{ path={self.program} ; argv[]={command} ; ignore_errors=no }}\n"
+            return 0, "LoadState=not-found\n"
+        return (0 if self.restart_ok else 1), f"restart failed {HOST_TOKEN}"
+
+    def restarts(self) -> int:
+        return sum(1 for argv in self.calls if "restart" in argv)
+
+    def backups(self) -> list[Path]:
+        return sorted(self.directory.glob("config.yml.bak-*"))
+
+
+def host_scenario(run: Run, work: Path) -> None:
+    h = Run(work)
+    h.steps, h.verdicts = run.steps, run.verdicts
+    h.build()
+    source, ref = kit_source(work / "source-clone")
+    subprocess.run(["git", "-C", str(source), "branch", "-M", "main"], check=True, capture_output=True)
+    (h.team / "kit-source").write_text(str(source) + "\n")
+    (h.team / "installed-ref").write_text(ref + "\n")
+    (h.team / "machine.yaml").write_text(PROFILE_MACHINE_YAML)
+    (h.team / "machine.yaml").chmod(0o600)
+    (h.hermes / ".env").write_text(f"{secret_env(BOT)}={HOST_SECRET}\n")
+    (h.team / "bots.yaml").write_text(BOTS_YAML.format(slack="") + f"  {CHIEF}:\n    role: chief\n")
+    machine_bytes = (h.team / "machine.yaml").read_bytes()
+    seen: list[tuple[str, dict]] = []
+    leaks: list[str] = []
+
+    def host(action: str, *extra: str, bot: str | None = None, **kw: object) -> tuple[int, str, str, dict]:
+        code, out, err = h.kit("host", action, "--json", *extra, bot=bot, **kw)
+        try:
+            parsed = json.loads(out)
+        except ValueError:
+            parsed = {}
+        if parsed:
+            seen.append((f"host {action}", parsed))
+        leaks.extend(name for name in (HOST_SECRET, HOST_TOKEN) if name in out + err)
+        return code, out, err, parsed
+
+    def single(out: str) -> bool:
+        return out.endswith("\n") and out.count("\n") == 1
+
+    def up(url: str, headers: dict[str, str], body: bytes) -> int:
+        return h.listener(headers, body, url)
+
+    def answers(local: object, public: object) -> Callable[[str, dict[str, str], bytes], object]:
+        def post(url: str, _headers: dict[str, str], _body: bytes) -> object:
+            return public if url.startswith(WEBHOOK_BASE) else local
+        return post
+
+    def steps_of(parsed: dict) -> dict[str, bool]:
+        return {s["name"]: s["ok"] for s in parsed["data"]["steps"]}
+
+    before = json.dumps(tree(h.hermes), sort_keys=True)
+    calls_before = (h.hermes / "hermes-calls.log").exists()
+    code, out, err, status = host("status")
+    data = status.get("data", {})
+    row = (data.get("projects") or [{}])[0]
+    run.step("host status prints one clean JSON object with the kit, gateway, github and per-project state, and writes nothing",
+             code == 0 and single(out) and err == "" and status["ok"] is True and status["code"] == "ok" and status["next"] is None
+             and data["kit"] == {"installed_commit": ref, "latest_main_commit": ref, "behind": False, "source": str(source)}
+             and data["gateway"] == {"reachable": True, "port": 8644} and data["github"] == {"state": "signed_in"}
+             and row == {"project": "shop", "bot": BOT, "repo": REPO, "routes_loaded": True, "public_path_live": True, "reason": None}
+             and json.dumps(tree(h.hermes), sort_keys=True) == before and calls_before == (h.hermes / "hermes-calls.log").exists(), out[:300])
+
+    (source / "marker").write_text("new\n")
+    subprocess.run(["git", "-C", str(source), "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(source), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "newer"], check=True, capture_output=True)
+    code, out, err, behind = host("status")
+    run.step("host status behind main stays ok, says behind, and points at update_kit",
+             code == 0 and behind["ok"] is True and behind["data"]["kit"]["behind"] is True and behind["next"]["action"] == "update_kit"
+             and [i["code"] for i in behind["data"]["issues"]] == ["kit_behind"], out[:300])
+
+    seen_states = {}
+    for mode, state, _action in (("not_signed_in", "not_signed_in", "sign_in_github"), ("expired_or_revoked", "sign_in_expired", "sign_in_github"), ("unreachable", "unreachable", None)):
+        h.update_gh(lambda st, m=mode: st.update({"gh_auth": m, "gh_auth_text": f"Authorization failed for {HOST_TOKEN}\nsecond line" if m == "unreachable" else None}))
+        code, out, err, shown = host("status")
+        h.update_gh(lambda st: [st.pop("gh_auth", None), st.pop("gh_auth_text", None)])
+        seen_states[state] = (code, shown.get("data", {}).get("github"), (shown.get("next") or {}).get("action"), shown.get("data", {}).get("issues", [{}])[0].get("code"))
+    run.step("host status reports each GitHub state from the sign-in probe, with next pointing at the sign-in first, and never prints the token",
+             seen_states == {"not_signed_in": (0, {"state": "not_signed_in"}, "sign_in_github", "github_not_signed_in"),
+                             "sign_in_expired": (0, {"state": "sign_in_expired"}, "sign_in_github", "github_sign_in_expired"),
+                             "unreachable": (0, {"state": "unreachable"}, "update_kit", "github_unreachable")} and not leaks, json.dumps(seen_states))
+
+    code, out, err, down = host("status", post=lambda *_: "unreachable (OSError)")
+    run.step("host status with the gateway down says gateway_unreachable with restart_gateway next, reasons per project, and public null",
+             code == 0 and down["data"]["gateway"]["reachable"] is False and down["data"]["projects"][0]["routes_loaded"] is False and down["data"]["projects"][0]["public_path_live"] is None
+             and down["data"]["projects"][0]["reason"] and down["next"]["action"] == "update_kit" and down["data"]["issues"][1]["code"] == "gateway_unreachable", out[:300])
+    (h.team / "installed-ref").write_text(subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], capture_output=True, text=True).stdout)
+    code, out, err, down = host("status", post=lambda *_: "unreachable (OSError)")
+    code2, out2, _err2, noroute = host("status", post=answers(404, 202))
+    _code3, out3, _err3, cut = host("status", post=answers(202, 502))
+    run.step("with the kit current, host status points at the gateway, then routes not loaded, then the public path, in that order",
+             down["next"]["action"] == "restart_gateway" and noroute["next"]["action"] == "reload_routes" and noroute["data"]["projects"][0]["routes_loaded"] is False
+             and noroute["data"]["projects"][0]["public_path_live"] is None and cut["next"]["action"] == "reconnect_public_path"
+             and cut["data"]["projects"][0]["public_path_live"] is False and cut["data"]["projects"][0]["reason"] == "The public address answered 502.", out3[:300])
+
+    plain = h.kit("host", "status", bot=None)
+    run.step("host without --json refuses with one line and prints nothing on stdout", plain[0] == 1 and plain[1] == "" and len(plain[2].strip().splitlines()) == 1
+             and "--json" in plain[2], plain[2].strip())
+
+    refusals = {}
+    for who in (CHIEF, BOOTSTRAP, BOT):
+        for action in ("status", "update", "reload"):
+            c, o, e = h.kit("host", action, "--json", bot=who)
+            refusals[f"{who}:{action}"] = c == 1 and "runs only from the owner's own shell, never from a bot" in o + e
+    run.step("chief, bootstrap and project bots are refused host status, update and reload; the owner's own shell was allowed above",
+             all(refusals.values()) and len(refusals) == 9, json.dumps(refusals))
+
+    def written() -> str:
+        return json.dumps(h.gh_now()["hooks"])
+
+    gh_before = written()
+    code, out, err, reloaded = host("reload")
+    gateway_calls = [json.loads(line) for line in (h.hermes / "hermes-calls.log").read_text().splitlines() if '"gateway"' in line]
+    run.step("host reload writes the routes, restarts the gateway once, pings each route locally, writes no GitHub hook, and says per project routes_loaded and local_ping",
+             code == 0 and single(out) and reloaded["ok"] is True and reloaded["data"]["projects"] == [{"project": "shop", "bot": BOT, "routes_loaded": True, "local_ping": "ok"}]
+             and "restarted" in reloaded["message"].lower() and gateway_calls[-1:] == [["-p", "default", "gateway", "restart"]] and written() == gh_before
+             and f"{BOT}-pr" in yaml.safe_load((h.hermes / "config.yaml").read_text())["platforms"]["webhook"]["extra"]["routes"], out[:300])
+    h.pings.clear()
+    code, out, err, gone = host("reload", post=lambda *_: "unreachable (OSError)")
+    code2, out2, _err2, missing = host("reload", post=lambda *_: 404)
+    run.step("host reload with the gateway not answering returns gateway_unreachable, and with unknown routes returns routes_not_loaded, both non-zero with a typed next",
+             code == 1 and gone["code"] == "gateway_unreachable" and gone["next"]["action"] == "restart_gateway" and gone["ok"] is False
+             and code2 == 1 and missing["code"] == "routes_not_loaded" and missing["data"]["projects"][0]["local_ping"] == "404", out[:200] + out2[:200])
+
+    tunnel = Tunnel(work / "tunnel")
+    (h.team / "installed-ref").write_text(ref + "\n")
+    new_commit = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    ran: list[str] = []
+
+    def refresher(home: Path) -> str:
+        ran.append("refresh")
+        current = (home / "installed-ref").read_text().strip()
+        (home / "installed-ref").write_text(new_commit + "\n")
+        return "kit already current" if current == new_commit else f"kit moved {current[:12]} -> {new_commit[:12]}"
+
+    elsewhere = work / "elsewhere"
+    elsewhere.mkdir()
+    here = Path.cwd()
+    os.chdir(elsewhere)
+    try:
+        code, out, err, updated = host("update", tool=tunnel, refresher=refresher)
+    finally:
+        os.chdir(here)
+    after = tunnel.config.read_text()
+    old, new = LIVE_TUNNEL.splitlines(keepends=True), after.splitlines(keepends=True)
+    rule_path = yaml.safe_load(after)["ingress"][2]["path"]
+    run.step("host update from another directory with no clone moves the kit, reloads the routes, adds exactly one generic rule before the pathless rule, "
+             "keeps a 0600 backup and restarts the tunnel once",
+             code == 0 and single(out) and updated["ok"] is True and updated["data"]["changed"] is True and updated["data"]["from_commit"] == ref and updated["data"]["to_commit"] == new_commit
+             and steps_of(updated) == {"kit": True, "reload_routes": True, "public_tunnel": True, "public_path": True}
+             and len(new) == len(old) + 3 and new[:10] + new[13:] == old and new[10:13] == ["  - hostname: hermes.example.com\n", f"    path: {rule_path}\n", "    service: http://127.0.0.1:8644\n"]
+             and yaml.safe_load(after)["ingress"][3] == {"hostname": "hermes.example.com", "service": "http://127.0.0.1:9119"}
+             and tunnel.restarts() == 1 and len(tunnel.backups()) == 1 and tunnel.backups()[0].read_text() == LIVE_TUNNEL
+             and stat.S_IMODE(tunnel.backups()[0].stat().st_mode) == 0o600 and stat.S_IMODE(tunnel.config.stat().st_mode) == 0o600
+             and re.fullmatch(r"config\.yml\.bak-\d{8}-\d{6}", tunnel.backups()[0].name) and (h.team / "machine.yaml").read_bytes() == machine_bytes
+             and stat.S_IMODE((h.team / "machine.yaml").stat().st_mode) == 0o600 and not list(tunnel.directory.glob(".config.yml.*")), out[:400])
+    names = ["paint_by_number", "fren", "kith-2", "memolly", "9lives", "x" * 64]
+    rejected = ["/p/x/other/y", "/p/x/webhooks/", "/p/X/webhooks/y", "/p/-x/webhooks/y", "/p/x/webhooks/y?z", "/p/" + "x" * 65 + "/webhooks/y"]
+    paths = [f"/p/{n}/webhooks/{n}-pr" for n in names] + rejected
+    go = shutil.which("go")
+    if go:
+        probe = subprocess.run([go, "run", str(Path(__file__).parent / "ingress_match.go"), rule_path], input="\n".join(paths), capture_output=True, text=True, check=False)
+        verdicts = [line.split("\t")[0] == "true" for line in probe.stdout.splitlines()]
+    else:
+        verdicts = [re.search(rule_path, path) is not None for path in paths]
+    run.step("the added rule matches paint_by_number and every valid project name and rejects other shapes",
+             verdicts == [True] * len(names) + [False] * len(rejected), f"{'Go regexp' if go else 'Python re, go not found'}: {json.dumps(verdicts)}")
+
+    snapshot = (after, tunnel.restarts(), len(tunnel.backups()))
+    code, out, err, again = host("update", tool=tunnel, refresher=refresher)
+    run.step("a second host update changes nothing in the tunnel: same bytes, no new backup, no restart, changed false",
+             code == 0 and again["data"]["changed"] is False and (tunnel.config.read_text(), tunnel.restarts(), len(tunnel.backups())) == snapshot
+             and "already" in next(s["detail"] for s in again["data"]["steps"] if s["name"] == "public_tunnel"), out[:300])
+
+    odd = Tunnel(work / "tunnel-odd", OTHER_TUNNEL)
+    code, out, err, unmanaged = host("update", tool=odd, refresher=refresher)
+    run.step("a tunnel config of an unexpected shape returns tunnel_config_unmanaged with reconnect_public_path, writes nothing and restarts nothing",
+             code == 1 and unmanaged["code"] == "tunnel_config_unmanaged" and unmanaged["next"]["action"] == "reconnect_public_path" and odd.config.read_text() == OTHER_TUNNEL
+             and odd.restarts() == 0 and odd.backups() == [] and steps_of(unmanaged)["public_tunnel"] is False, out[:300])
+
+    broken = Tunnel(work / "tunnel-broken", restart_ok=False, validator=True)
+    code, out, err, restart = host("update", tool=broken, refresher=refresher)
+    run.step("a failed tunnel restart returns tunnel_restart_failed, puts the old config and no backup back, and validates with the tunnel program first",
+             code == 1 and restart["code"] == "tunnel_restart_failed" and restart["next"]["action"] == "reconnect_public_path" and broken.config.read_text() == LIVE_TUNNEL and broken.backups() == []
+             and any(argv[0] == str(broken.program) and argv[1:2] == ["tunnel"] and argv[-2:] == ["ingress", "validate"] for argv in broken.calls) and not leaks, out[:300])
+    broken.restart_ok = True
+    code, out, err, healed = host("update", tool=broken, refresher=refresher)
+    run.step("after the cause is fixed the next update applies the rule, because the failed one left the config as it was",
+             code == 0 and healed["ok"] is True and broken.restarts() == 2 and len(yaml.safe_load(broken.config.read_text())["ingress"]) == 5, out[:300])
+    broken.validator_ok = False
+    rejected_config = Tunnel(work / "tunnel-rejected", validator=True)
+    rejected_config.validator_ok = False
+    code, out, err, refusal = host("update", tool=rejected_config, refresher=refresher)
+    run.step("a rule the tunnel program rejects is never written", code == 1 and refusal["code"] == "tunnel_config_unmanaged" and rejected_config.config.read_text() == LIVE_TUNNEL
+             and rejected_config.restarts() == 0, out[:300])
+
+    ran.clear()
+    with (h.team / "host-update.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        code, out, err, busy = host("update", tool=tunnel, refresher=refresher)
+    run.step("a second concurrent host update returns update_in_progress and does nothing", code == 1 and busy["code"] == "update_in_progress" and ran == [] and busy["ok"] is False, out[:200])
+
+    def failing(code_name: str) -> Callable[[Path], str]:
+        def refresh_fails(_home: Path) -> str:
+            raise Coded(f"fetching the kit failed ({HOST_TOKEN} {HOST_SECRET})", code_name)
+        return refresh_fails
+
+    outcomes = {}
+    for code_name in ("kit_source_missing", "kit_fetch_failed", "kit_install_failed"):
+        c, o, e, shown = host("update", tool=tunnel, refresher=failing(code_name))
+        outcomes[code_name] = (c, shown["code"], (shown["next"] or {}).get("action"), [s["name"] for s in shown["data"]["steps"]])
+    run.step("a kit step that fails returns its typed code, stops before any reconcile step, and never prints the token or the webhook secret",
+             outcomes == {"kit_source_missing": (1, "kit_source_missing", "contact_support", ["kit"]), "kit_fetch_failed": (1, "kit_fetch_failed", None, ["kit"]),
+                          "kit_install_failed": (1, "kit_install_failed", "contact_support", ["kit"])} and not leaks, json.dumps(outcomes))
+
+    c, o, e, public_cut = host("update", tool=tunnel, refresher=refresher, post=answers(202, 502))
+    c2, o2, _e2, gateway_gone = host("update", tool=tunnel, refresher=refresher, post=lambda *_: "unreachable (OSError)")
+    run.step("after the reconcile a still-failing public ping returns public_path_down with reconnect_public_path, and a gateway that does not answer returns gateway_unreachable",
+             c == 1 and public_cut["code"] == "public_path_down" and public_cut["next"]["action"] == "reconnect_public_path" and steps_of(public_cut)["public_path"] is False
+             and c2 == 1 and gateway_gone["code"] == "gateway_unreachable" and "public_path" not in steps_of(gateway_gone), o[:200] + o2[:200])
+
+    (h.team / "machine.yaml").write_text("version: 2\n")
+    c, o, e, invalid = host("update", tool=tunnel, refresher=refresher)
+    c2, o2, _e2, invalid_status = host("status")
+    c3, o3, _e3, invalid_reload = host("reload")
+    (h.team / "machine.yaml").write_bytes(machine_bytes)
+    run.step("an unusable machine config returns machine_config_invalid for status, update and reload, with the kit step already done and nothing reconciled",
+             (c, c2, c3) == (1, 1, 1) and {invalid["code"], invalid_status["code"], invalid_reload["code"]} == {"machine_config_invalid"}
+             and steps_of(invalid) == {"kit": True, "machine": False} and invalid["next"]["action"] == "contact_support", o[:300])
+
+    h.update_gh(lambda st: st.update({"repo": "acme/crm"}))
+    crm = ("add-project", "acme/crm", "--bot", "crm-bot", "--project", "crm", "--json")
+
+    def add(*extra: str, **kw: object) -> tuple[int, str, str, dict]:
+        c, o, e = h.kit(*crm, *extra, bot=None, **kw)
+        try:
+            parsed = json.loads(o)
+        except ValueError:
+            parsed = {}
+        if parsed:
+            seen.append(("add-project", parsed))
+        leaks.extend(name for name in (HOST_SECRET, HOST_TOKEN) if name in o + e)
+        return c, o, e, parsed
+
+    c, o, e, added_ok = add()
+    run.step("add-project --json prints one envelope with the add-project fields in data, no next commands, and exits 0",
+             c == 0 and single(o) and added_ok["ok"] is True and added_ok["code"] == "ok" and added_ok["next"] is None and added_ok["data"]["webhooks_live"] is True
+             and added_ok["data"]["public_path_live"] is True and added_ok["data"]["project"] == "crm" and "next" not in added_ok["data"], o[:300])
+    c, o, e, no_routes = add(post=answers(404, 202))
+    c2, o2, _e2, no_public = add(post=answers(202, 502))
+    h.update_gh(lambda st: st.update({"gh_auth": "not_signed_in"}))
+    c3, o3, _e3, signed_out = add()
+    h.update_gh(lambda st: st.update({"gh_auth": "expired_or_revoked"}))
+    c4, _o4, _e4, expired = add()
+    h.update_gh(lambda st: st.update({"gh_auth": "unreachable", "gh_auth_text": f"error connecting {HOST_TOKEN}"}))
+    c5, _o5, _e5, offline = add()
+    h.update_gh(lambda st: [st.pop("gh_auth", None), st.pop("gh_auth_text", None)])
+    c6, _o6, _e6, bad_repo = (lambda r: (*r[:3], json.loads(r[1])))(h.kit("add-project", "not a repo", "--json", bot=None))
+    run.step("add-project --json types its failures: routes_not_loaded, public_path_down, the three GitHub states, and a refused request, each non-zero with a typed next",
+             (c, no_routes["code"], no_routes["next"]["action"]) == (1, "routes_not_loaded", "reload_routes")
+             and (c2, no_public["code"], no_public["next"]["action"]) == (1, "public_path_down", "reconnect_public_path")
+             and (c3, signed_out["code"], signed_out["next"]["action"]) == (1, "github_not_signed_in", "sign_in_github")
+             and (c4, expired["code"], expired["next"]["action"]) == (1, "github_sign_in_expired", "sign_in_github")
+             and (c5, offline["code"], offline["next"]) == (1, "github_unreachable", None) and (c6, bad_repo["code"]) == (1, "request_refused") and not leaks, o3[:200])
+    (h.team / "machine.yaml").write_text("version: 2\n")
+    c, o, e, broken_machine = add()
+    (h.team / "machine.yaml").write_bytes(machine_bytes)
+    run.step("add-project --json with an unusable machine config returns machine_config_invalid", c == 1 and broken_machine["code"] == "machine_config_invalid", o[:200])
+
+    plain_out = h.kit("add-project", "acme/crm", "--bot", "crm-bot", "--project", "crm", bot=None)
+    run.step("add-project without --json prints what it printed before: the bare result object with the next lines",
+             plain_out[0] == 0 and "ok" not in json.loads(plain_out[1]) and json.loads(plain_out[1])["next"] == [], plain_out[1][:200])
+
+    families = {name for name, _ in seen}
+    bad = {name: envelope_problems(shown) for name, shown in seen if envelope_problems(shown)}
+    run.step("every output of host status, host update, host reload and add-project --json validates against the one envelope schema, and none holds a secret",
+             families == {"host status", "host update", "host reload", "add-project"} and not bad and len(seen) >= 30 and not leaks
+             and HOST_SECRET not in "".join((h.hermes / "hermes-calls.log").read_text() for _ in [0]), f"{len(seen)} outputs; problems: {json.dumps(bad)}")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Stubbed end-to-end run of the faker-kit coordinator path")
     ap.add_argument("--artifact", type=Path, help="where to write the JSON transcript; defaults to a file in the run directory")
@@ -3203,6 +3550,7 @@ def main(argv: list[str] | None = None) -> int:
         provider_scenario(run, root / "provider")
         runner_scenario(run, root / "runner")
         profile_approval_scenario(run, root / "profile-approval")
+        host_scenario(run, root / "host")
         install_skip_scenario(run, root / "install-skip")
         tooling_scenario.environment_scenario(root / "environment-setup", run.step)
         tooling_scenario.ratchet_scenario(root / "ratchet", run.step)

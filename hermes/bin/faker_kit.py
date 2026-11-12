@@ -30,7 +30,7 @@ import yaml
 from faker_kit_andon import LABEL, MACHINE, Andon, AndonError, Cord, clean_reason, issue_body
 from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, PERMISSION_MODE, Cloud, CloudError, session_effort, session_model, trust_checkout
 from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
-from faker_kit_gh import NAME, Gh, Refused, Runner, credential_problem, fix_git_protocol, run_gh
+from faker_kit_gh import NAME, Coded, Gh, Refused, Runner, credential_problem, credential_state, fix_git_protocol, run_gh
 from faker_kit_guard.policy import (
     DEFAULT_HEARTBEAT_EVERY,
     INTERVAL,
@@ -44,14 +44,15 @@ from faker_kit_guard.policy import (
     load_policy,
     parse_policy,
 )
+from faker_kit_host import GITHUB_CODES, Tool, clean, envelope, reconcile_tunnel, run_tool
 from faker_kit_incident_sources import FetchJson, fetch_json
 from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
 from faker_kit_loop import Loop, LoopError
-from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
+from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, Project, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
 from faker_kit_merge import MERGE_METHOD, Evidence, MergeLock, decide, from_fork, token
 from faker_kit_profiles import Profiles
-from faker_kit_refresh import refresh
+from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
 from install_config import InstallError, config_set, hermes, mapping, value_at
 
@@ -93,7 +94,9 @@ ROLE_COMMANDS = {
     "bootstrap": {"add-project", "launch", "status", "andon", "refresh"},
     "chief": {"status", "handoff", "loop", "add-project", "merge", "refresh"},
 }
-OWNER_ONLY = {"install", "runner", "projects"}
+OWNER_ONLY = {"install", "runner", "projects", "host"}
+HOST_LOCK = "host-update.lock"
+HOST_ACTIONS = ("status", "update", "reload")
 LISTENER_ENV = "FAKER_KIT_WEBHOOK_LISTENER"
 PING_ATTEMPTS = 6
 PING_PAUSE_SECONDS = 1.0
@@ -101,6 +104,7 @@ PING_TIMEOUT_SECONDS = 5
 GATEWAY_RESTART = "hermes -p default gateway restart"
 PUBLIC_PATH_REPAIR = "bash hermes/setup-machine.sh --config ~/.hermes/faker-kit/machine.yaml"
 Poster = Callable[[str, dict[str, str], bytes], "int | str"]
+Refresher = Callable[[Path], str]
 
 
 def post_ping(url: str, headers: dict[str, str], body: bytes) -> int | str:
@@ -155,8 +159,10 @@ class PutFailed(Refused):
 
 class Kit:
     def __init__(self, run: Runner = run_gh, cloud: Cloud | None = None, home: Path | None = None, now: Callable[[], float] = time.time,
-                 fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status, sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping) -> None:
+                 fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status, sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping,
+                 tool: Tool = run_tool, refresher: Refresher = refresh) -> None:
         self.run, self.now, self.fetch_api, self.fetch_url, self.sleep, self.post = run, now, fetch_api, fetch_url, sleep, post
+        self.tool, self.refresher = tool, refresher
         self.home = home or faker_kit_home()
         self.root = self.home.parent
         self.kit = self.home / "kit"
@@ -196,9 +202,9 @@ class Kit:
         return self.machine_login_known
 
     def require_credential(self) -> None:
-        problem = credential_problem(self.run)
+        state, problem = credential_state(self.run)
         if problem:
-            raise Refused(problem)
+            raise Coded(problem, GITHUB_CODES[state], "sign_in_github" if state != "unreachable" else None)
 
     def project_bot(self, policy: Policy, project: str) -> Bot:
         bot = policy.projects().get(project)
@@ -740,20 +746,20 @@ class Kit:
             return f"the gateway restart failed ({err})"
         return None
 
-    def signed_ping(self, url: str, secret: str) -> int | str:
+    def signed_ping(self, url: str, secret: str, attempts: int = PING_ATTEMPTS) -> int | str:
         body = json.dumps({"zen": "faker-kit ping"}).encode()
         headers = {"Content-Type": "application/json", "X-GitHub-Event": "ping",
                    "X-Hub-Signature-256": "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()}
         answer: int | str = "no answer"
-        for attempt in range(PING_ATTEMPTS):
+        for attempt in range(attempts):
             answer = self.post(url, headers, body)
             if isinstance(answer, int) and 200 <= answer < 300:
                 break
-            if attempt + 1 < PING_ATTEMPTS:
+            if attempt + 1 < attempts:
                 self.sleep(PING_PAUSE_SECONDS)
         return answer
 
-    def ping_routes(self, bot: str, hooks: list[dict], problem: str | None) -> tuple[list[str], list[str]]:
+    def ping_routes(self, bot: str, hooks: list[dict], problem: str | None, public: bool = True) -> tuple[list[str], list[str]]:
         secret = parse_env_file(self.root / ".env").get(secret_env(bot), "")
         listener = os.environ.get(LISTENER_ENV) or f"http://{WEBHOOK_HOST}:{WEBHOOK_PORT}"
         failed, unreachable = [], []
@@ -766,11 +772,184 @@ class Kit:
             if not ok:
                 failed.append(f"{route} answered {answer}" + (f" and {problem}" if problem else ""))
                 continue
-            public = self.signed_ping(hook["url"], secret)
-            hook["public_ping"] = "ok" if isinstance(public, int) and 200 <= public < 300 else str(public)
+            if not public:
+                continue
+            answer = self.signed_ping(hook["url"], secret)
+            hook["public_ping"] = "ok" if isinstance(answer, int) and 200 <= answer < 300 else str(answer)
             if hook["public_ping"] != "ok":
-                unreachable.append(f"{route} answered {public}")
+                unreachable.append(f"{route} answered {answer}")
         return failed, unreachable
+
+    def secrets_known(self) -> tuple[str, ...]:
+        try:
+            return tuple(v for v in parse_env_file(self.root / ".env").values() if v)
+        except (OSError, EnvFileError):
+            return ()
+
+    def listener_base(self) -> str:
+        return (os.environ.get(LISTENER_ENV) or f"http://{WEBHOOK_HOST}:{WEBHOOK_PORT}").rstrip("/")
+
+    def host_machine(self) -> Machine:
+        try:
+            return load_machine(self.home / "machine.yaml")
+        except MachineError as err:
+            raise Coded(f"This machine's saved configuration cannot be used ({clean(str(err), self.secrets_known())}).", "machine_config_invalid", "contact_support") from None
+
+    def gateway_answers(self) -> bool:
+        return isinstance(self.post(self.listener_base() + "/health", {}, b""), int)
+
+    def probe_project(self, machine: Machine, project: Project, secret: str, gateway_up: bool) -> dict:
+        row: dict = {"project": project.project, "bot": project.bot, "repo": project.repo, "routes_loaded": False, "public_path_live": None, "reason": None}
+        route = next(iter(routes(project.bot)))
+        if not secret:
+            row["reason"] = "No webhook secret is saved for this project yet."
+        elif not gateway_up:
+            row["reason"] = "The gateway is not answering."
+        else:
+            local = self.signed_ping(f"{self.listener_base()}/p/{project.bot}/webhooks/{route}", secret, 1)
+            row["routes_loaded"] = isinstance(local, int) and 200 <= local < 300
+            if not row["routes_loaded"]:
+                row["reason"] = "The gateway does not know this project's routes yet."
+            elif machine.webhook_url:
+                public = self.signed_ping(route_url(machine.webhook_url, project.bot, route), secret, 1)
+                row["public_path_live"] = isinstance(public, int) and 200 <= public < 300
+                row["reason"] = None if row["public_path_live"] else f"The public address answered {public}."
+            else:
+                row["reason"] = "No public address is set for this machine."
+        return row
+
+    def host_status(self) -> dict:
+        machine = self.host_machine()
+        env = parse_env_file(self.root / ".env")
+        issues: list[tuple[str, str, str | None]] = []
+        state, _ = credential_state(self.run)
+        if state != "signed_in":
+            wording = {"not_signed_in": "GitHub is not signed in for this machine.", "sign_in_expired": "The GitHub sign-in for this machine expired.",
+                       "unreachable": "GitHub could not be reached from this machine."}
+            issues.append((GITHUB_CODES[state], wording[state], "sign_in_github" if state != "unreachable" else None))
+        kit: dict = {"installed_commit": None, "latest_main_commit": None, "behind": None, "source": None}
+        try:
+            source = recorded_source(self.home)
+            kit["source"] = clean_source(source)
+            try:
+                kit["installed_commit"] = installed_commit(self.home)
+            except Coded:
+                issues.append(("kit_install_failed", "The installed kit could not be read.", "contact_support"))
+            try:
+                kit["latest_main_commit"] = latest_main(source)
+            except Coded:
+                issues.append(("kit_fetch_failed", "The newest kit could not be looked up.", None))
+            if kit["installed_commit"] and kit["latest_main_commit"]:
+                kit["behind"] = kit["installed_commit"] != kit["latest_main_commit"]
+                if kit["behind"]:
+                    issues.append(("kit_behind", "A newer kit is available for this machine.", "update_kit"))
+        except Coded:
+            issues.append(("kit_source_missing", "No kit source is recorded on this machine.", "contact_support"))
+        up = self.gateway_answers()
+        if not up:
+            issues.append(("gateway_unreachable", "The Hermes gateway is not answering.", "restart_gateway"))
+        rows = [self.probe_project(machine, p, env.get(secret_env(p.bot), ""), up) for p in machine.projects]
+        for row in rows:
+            if up and not row["routes_loaded"]:
+                issues.append(("routes_not_loaded", f"The gateway has not loaded the routes for {row['project']}.", "reload_routes"))
+            elif row["public_path_live"] is False:
+                issues.append(("public_path_down", f"The public address for {row['project']} is not answering.", "reconnect_public_path"))
+        data = {"kit": kit, "gateway": {"reachable": up, "port": urlsplit(self.listener_base()).port}, "github": {"state": state}, "projects": rows,
+                "issues": [{"code": code, "message": message} for code, message, _ in issues]}
+        first = next((i for i in issues if i[2]), issues[0] if issues else None)
+        return envelope("ok", first[1] if first else "This machine is up to date and reachable.", data, first[2] if first else None)
+
+    def reload_routes(self, machine: Machine) -> tuple[dict, Coded | None]:
+        assert machine.webhook_url
+        hooks = self.webhooks(machine.webhook_url, [(p.bot, p.repo) for p in machine.projects], github=False)
+        problem = self.restart_gateway()
+        rows: list[dict] = []
+        gateway_down = problem is not None
+        for p in machine.projects:
+            mine = [h for h in hooks if h["repo"] == p.repo]
+            failed, _ = self.ping_routes(p.bot, mine, problem, public=False)
+            pings = [str(h["ping"]) for h in mine]
+            gateway_down = gateway_down or any(ping.startswith("unreachable") for ping in pings)
+            rows.append({"project": p.project, "bot": p.bot, "routes_loaded": not failed, "local_ping": next((ping for ping in pings if ping != "ok"), "ok")})
+        data = {"projects": rows, "restarted_gateway": True}
+        if gateway_down:
+            return data, Coded("The Hermes gateway did not come back after the restart.", "gateway_unreachable", "restart_gateway", data)
+        if not all(r["routes_loaded"] for r in rows):
+            return data, Coded("The gateway still has not loaded every project's routes.", "routes_not_loaded", "restart_gateway", data)
+        return data, None
+
+    def host_reload(self) -> dict:
+        machine = self.host_machine()
+        if not machine.webhook_url:
+            return envelope("ok", "This machine has no public address configured, so there are no webhook routes to load.", {"projects": [], "restarted_gateway": False})
+        data, failure = self.reload_routes(machine)
+        if failure:
+            raise failure
+        return envelope("ok", "Restarted the gateway, the only way it loads routes, and every project's routes now answer.", data)
+
+    def reconcile_public_path(self, machine: Machine, secrets: dict[str, str]) -> Coded | None:
+        down = []
+        for p in machine.projects:
+            route = next(iter(routes(p.bot)))
+            answer = self.signed_ping(route_url(str(machine.webhook_url), p.bot, route), secrets.get(secret_env(p.bot), ""))
+            if not (isinstance(answer, int) and 200 <= answer < 300):
+                down.append(p.project)
+        if down:
+            return Coded(f"The public address is not answering for {', '.join(down)}.", "public_path_down", "reconnect_public_path")
+        return None
+
+    def host_update(self) -> dict:
+        secrets = self.secrets_known()
+        steps: list[dict] = []
+        data: dict = {"from_commit": None, "to_commit": None, "changed": False, "steps": steps}
+        first: list[Coded] = []
+
+        def record(name: str, failure: Coded | None, detail: str) -> None:
+            steps.append({"name": name, "ok": failure is None, "detail": clean(detail, secrets)})
+            if failure and not first:
+                first.append(failure)
+
+        with exclusive(self.home, HOST_LOCK):
+            try:
+                data["from_commit"] = installed_commit(self.home)
+                line = self.refresher(self.home)
+                data["to_commit"] = installed_commit(self.home)
+            except Coded as err:
+                record("kit", err, str(err))
+                raise Coded(clean(str(err), secrets), err.code, {"kit_source_missing": "contact_support", "kit_install_failed": "contact_support"}.get(err.code), data) from None
+            data["changed"] = data["from_commit"] != data["to_commit"]
+            record("kit", None, line)
+            try:
+                machine = self.host_machine()
+            except Coded as err:
+                record("machine", err, str(err))
+                raise Coded(str(err), err.code, err.action, data) from None
+            if not machine.webhook_url:
+                record("reload_routes", None, "No public address is set for this machine, so routes are not managed here.")
+            else:
+                _, failure = self.reload_routes(machine)
+                record("reload_routes", failure, str(failure) if failure else "The gateway was restarted and every project's routes answer.")
+                try:
+                    _, detail = reconcile_tunnel(Path(machine.tunnel_config) if machine.tunnel_config else None, machine.tunnel_unit, self.now(), self.tool)
+                    record("public_tunnel", None, detail)
+                except Coded as err:
+                    record("public_tunnel", err, str(err))
+                if not any(s["name"] == "reload_routes" and not s["ok"] for s in steps):
+                    record("public_path", self.reconcile_public_path(machine, parse_env_file(self.root / ".env")), "The public address answers for every project.")
+        if first:
+            raise Coded(clean(str(first[0]), secrets), first[0].code, first[0].action, data)
+        moved = f"The kit moved to {data['to_commit'][:12]} and the machine was reconciled." if data["changed"] else "The kit is already current and the machine was reconciled."
+        return envelope("ok", moved, data)
+
+    def add_project_envelope(self, out: dict) -> dict:
+        data = {key: value for key, value in out.items() if key != "next"}
+        if out.get("webhooks_live") is False:
+            return envelope("routes_not_loaded", "The gateway has not loaded this project's routes.", data, "reload_routes")
+        if out.get("public_path_live") is False:
+            return envelope("public_path_down", "The public address for this project is not answering.", data, "reconnect_public_path")
+        if out.get("jobs_active") is False:
+            return envelope("github_not_signed_in", "The project is set up, but its jobs start once GitHub is signed in for this machine.", data, "sign_in_github")
+        return envelope("ok", "Project checked." if out.get("check") else "Project is set up and its routes answer.", data)
 
     def check_repo_readable(self, repo: str) -> None:
         try:
@@ -863,7 +1042,7 @@ class Kit:
         self.profiles.register_update_step()
         return {"projects": projects, "refreshed": refreshed, "skills": skills, "webhooks": hooks}
 
-    def webhooks(self, base_url: str, projects: list[tuple[str, str]]) -> list[dict]:
+    def webhooks(self, base_url: str, projects: list[tuple[str, str]], github: bool = True) -> list[dict]:
         listener = ("platforms", "webhook")
         config_set(self.root, "default", (*listener, "enabled"), True)
         config_set(self.root, "default", (*listener, "extra", "host"), WEBHOOK_HOST)
@@ -879,9 +1058,10 @@ class Kit:
                 for field, value in route.items():
                     config_set(self.root, "default", (*listener, "extra", "routes", name, field), value)
                 url = route_url(base_url, bot, name)
-                done.append({"repo": repo, "url": url, "hook": self.github_hook(repo, url, route["events"], secret)})
+                done.append({"repo": repo, "url": url, "hook": self.github_hook(repo, url, route["events"], secret) if github else None})
             self.prune_routes(bot, listener)
-            for hook in json.loads(self.run(["api", f"repos/{repo}/hooks?per_page=100"]) or "[]"):
+            stale = json.loads(self.run(["api", f"repos/{repo}/hooks?per_page=100"]) or "[]") if github else []
+            for hook in stale:
                 url = str((hook.get("config") or {}).get("url") or "")
                 if stale_hook(url, base_url, bot):
                     self.run(["api", "-X", "DELETE", f"repos/{repo}/hooks/{int(hook['id'])}"])
@@ -916,6 +1096,9 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--provider")
     cmd.add_argument("--claude-subscription", action="store_true")
     cmd = sub.add_parser("refresh")
+    cmd = sub.add_parser("host")
+    cmd.add_argument("action", choices=HOST_ACTIONS)
+    cmd.add_argument("--json", action="store_true")
     cmd = sub.add_parser("projects")
     cmd = sub.add_parser("add-project")
     cmd.add_argument("repo")
@@ -926,6 +1109,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--claude-subscription", action="store_true", default=None)
     cmd.add_argument("--heartbeat-every")
     cmd.add_argument("--check", action="store_true")
+    cmd.add_argument("--json", action="store_true")
     cmd = sub.add_parser("status")
     cmd.add_argument("--all", action="store_true")
     cmd = sub.add_parser("launch")
@@ -996,9 +1180,14 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
         return [refresh(kit.home)]
     if args.command == "projects":
         return kit.project_names()
+    if args.command == "host":
+        if not args.json:
+            raise Refused("host commands print JSON for the Pal app; add --json")
+        return {"status": kit.host_status, "update": kit.host_update, "reload": kit.host_reload}[args.action]()
     if args.command == "add-project":
         intervals = {key: getattr(args, key) for key in SCHEDULE_DEFAULTS}
-        return kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider, check=args.check, reload_gateway=caller is None)
+        added = kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider, check=args.check, reload_gateway=caller is None)
+        return kit.add_project_envelope(added) if args.json else added
     if args.command == "launch":
         return kit.launch(caller, args.project, args.brief_file, args.model, args.effort)
     if args.command == "merge":
@@ -1022,15 +1211,38 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
     return run_runner(args)
 
 
+def failure_envelope(err: BaseException, secrets: tuple[str, ...]) -> dict:
+    if isinstance(err, Coded):
+        return envelope(err.code, clean(str(err), secrets), err.data, err.action, ok=False)
+    if isinstance(err, MachineError):
+        return envelope("machine_config_invalid", clean(str(err), secrets), None, "contact_support")
+    if isinstance(err, (Refused, CloudError, PolicyError, AndonError, LoopError, InstallError, RunnerError)):
+        return envelope("request_refused", clean(str(err), secrets))
+    return envelope("unexpected", "Something unexpected went wrong on this machine.", None, "contact_support")
+
+
 def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | None = None, bot: str | None = None,
          now: Callable[[], float] = time.time, fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status,
-         sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping) -> int:
+         sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping, tool: Tool = run_tool, refresher: Refresher = refresh) -> int:
     args = parser().parse_args(argv)
+    wants_json = bool(getattr(args, "json", False))
+    kit: Kit | None = None
     try:
-        out = run_command(args, Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep, post=post), bot or current_bot())
-    except (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError) as err:
+        kit = Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep, post=post, tool=tool, refresher=refresher)
+        out = run_command(args, kit, bot or current_bot())
+    except Exception as err:
+        known = (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError)
+        if wants_json:
+            report = failure_envelope(err, kit.secrets_known() if kit else ())
+            print(json.dumps(report, ensure_ascii=False))
+            return EXIT_REFUSED
+        if not isinstance(err, known):
+            raise
         print(f"faker-kit: refused: {err}", file=sys.stderr)
         return EXIT_REFUSED
+    if wants_json and isinstance(out, dict) and "ok" in out and "code" in out:
+        print(json.dumps(out, ensure_ascii=False))
+        return 0 if out["ok"] else EXIT_REFUSED
     print("\n".join(out) if isinstance(out, list) else json.dumps(out, ensure_ascii=False))
     if isinstance(out, dict) and out.get("status") == "ambiguous":
         print("faker-kit: refused: more than one pull request matches; nothing was merged, ask the owner which one and run --pr <number>", file=sys.stderr)

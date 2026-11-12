@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import json
 import shutil
+import stat
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -156,3 +157,45 @@ def refresh_scenario(work: Path, step: Step, base_env: dict[str, str], fake_herm
     final = refresh()
     step("with the source reachable and the lock free, the owner's refresh takes the newest main",
          final.returncode == 0 and final.stdout.strip() == f"kit moved {newer[:12]} -> {last[:12]}" and installed() == last, (final.stdout + final.stderr).strip())
+
+    machine = state / "machine.yaml"
+    machine.write_text("version: 1\nbootstrap_bot: ong-xay\nguard:\n  trusted_authors:\n    - Codertocat\nprojects:\n  - bot: meo-beo\n    project: shop\n    repo: acme/shop\n")
+    machine.chmod(0o600)
+    held = machine.read_bytes()
+    newest = commit(source, "hermes/templates/refresh-marker", "sixth\n", "sixth kit commit")
+    away = work / "cwd-away"
+    away.mkdir()
+
+    def host_update() -> tuple[subprocess.CompletedProcess[str], dict]:
+        done = subprocess.run([str(wrapper), "host", "update", "--json"], env=env, cwd=away, capture_output=True, text=True, timeout=600)
+        try:
+            return done, json.loads(done.stdout)
+        except ValueError:
+            return done, {}
+
+    done, moved = host_update()
+    step("host update --json from another directory, with no clone and no ref, takes the source's newest main and prints one envelope with from and to",
+         done.returncode == 0 and done.stdout.count("\n") == 1 and moved.get("ok") is True and moved["data"]["from_commit"] == last and moved["data"]["to_commit"] == newest
+         and moved["data"]["changed"] is True and installed() == newest and [s["name"] for s in moved["data"]["steps"]] == ["kit", "reload_routes"]
+         and machine.read_bytes() == held and stat.S_IMODE(machine.stat().st_mode) == 0o600, (done.stdout + done.stderr).strip()[:300])
+
+    done, current = host_update()
+    step("a second host update finds the kit current, reports changed false, and leaves machine.yaml byte for byte as it was",
+         done.returncode == 0 and current["data"]["changed"] is False and current["data"]["to_commit"] == newest and machine.read_bytes() == held, (done.stdout + done.stderr).strip()[:300])
+
+    newer_still = commit(source, "hermes/templates/refresh-marker", "seventh\n", "seventh kit commit")
+    with (state / "refresh.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        done, busy = host_update()
+    step("a host update that finds a refresh running returns update_in_progress and leaves the installed kit alone",
+         done.returncode == 1 and busy.get("code") == "update_in_progress" and busy["ok"] is False and installed() == newest and newer_still != newest, (done.stdout + done.stderr).strip()[:300])
+
+    (state / "kit-source").unlink()
+    done, nosource = host_update()
+    (state / "kit-source").write_text(str(source) + "\n")
+    step("a host update with no recorded kit source returns kit_source_missing with contact_support and no path to run",
+         done.returncode == 1 and nosource.get("code") == "kit_source_missing" and nosource["next"]["action"] == "contact_support", (done.stdout + done.stderr).strip()[:300])
+
+    refused = subprocess.run([str(wrapper), "host", "update", "--json"], env={**env, "HERMES_HOME": str(hermes_home / "profiles" / "meo-beo")}, cwd=away, capture_output=True, text=True, timeout=120)
+    step("a project bot is refused host update with a typed envelope and the kit stays where it was",
+         refused.returncode == 1 and json.loads(refused.stdout)["code"] == "request_refused" and installed() == newest, (refused.stdout + refused.stderr).strip()[:300])
