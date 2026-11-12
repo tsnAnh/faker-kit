@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import hmac
+import http.client
 import json
 import os
 import platform
@@ -15,6 +17,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 for candidate in (HERE, HERE.parent / "lib", HERE.parent / "plugin"):
@@ -87,10 +90,31 @@ FAKER_FOOTER = (
 FAKER_RULE = FAKER_FOOTER.strip().removeprefix("Faker-mode rule: ")
 ROLE_COMMANDS = {
     "project": {"launch", "merge", "status", "andon", "incidents", "issues"},
-    "bootstrap": {"add-project", "launch", "status", "andon"},
-    "chief": {"status", "handoff", "loop", "add-project", "merge"},
+    "bootstrap": {"add-project", "launch", "status", "andon", "refresh"},
+    "chief": {"status", "handoff", "loop", "add-project", "merge", "refresh"},
 }
-OWNER_ONLY = {"install", "refresh", "runner", "projects"}
+OWNER_ONLY = {"install", "runner", "projects"}
+LISTENER_ENV = "FAKER_KIT_WEBHOOK_LISTENER"
+PING_ATTEMPTS = 6
+PING_PAUSE_SECONDS = 1.0
+PING_TIMEOUT_SECONDS = 5
+GATEWAY_RESTART = "hermes -p default gateway restart"
+Poster = Callable[[str, dict[str, str], bytes], "int | str"]
+
+
+def post_ping(url: str, headers: dict[str, str], body: bytes) -> int | str:
+    parts = urlsplit(url)
+    connect = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+    conn = connect(parts.hostname or WEBHOOK_HOST, parts.port, timeout=PING_TIMEOUT_SECONDS)
+    try:
+        conn.request("POST", parts.path or "/", body=body, headers=headers)
+        return conn.getresponse().status
+    except (OSError, http.client.HTTPException) as err:
+        return f"unreachable ({err.__class__.__name__})"
+    finally:
+        conn.close()
+
+
 ANDON_COLOR = "b60205"
 ANDON_DESCRIPTION = "The andon cord: agents stop, and nothing new starts until the owner clears it in Hermes"
 SCHEDULE_DEFAULTS = {"heartbeat_every": DEFAULT_HEARTBEAT_EVERY}
@@ -130,8 +154,8 @@ class PutFailed(Refused):
 
 class Kit:
     def __init__(self, run: Runner = run_gh, cloud: Cloud | None = None, home: Path | None = None, now: Callable[[], float] = time.time,
-                 fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status, sleep: Callable[[float], None] = time.sleep) -> None:
-        self.run, self.now, self.fetch_api, self.fetch_url, self.sleep = run, now, fetch_api, fetch_url, sleep
+                 fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status, sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping) -> None:
+        self.run, self.now, self.fetch_api, self.fetch_url, self.sleep, self.post = run, now, fetch_api, fetch_url, sleep, post
         self.home = home or faker_kit_home()
         self.root = self.home.parent
         self.kit = self.home / "kit"
@@ -634,7 +658,7 @@ class Kit:
 
     def add_project(self, repo: str, bot: str | None = None, project: str | None = None, model: str | None = None,
                     intervals: dict[str, str | None] | None = None, subscription: bool | None = None, slack_channel: str | None = None,
-                    refresh_webhooks: bool = True, provider: str | None = None, check: bool = False) -> dict:
+                    refresh_webhooks: bool = True, provider: str | None = None, check: bool = False, reload_gateway: bool = False) -> dict:
         check_repo(repo)
         slug = project or slugify(repo.split("/")[1])
         name = bot or slug
@@ -674,14 +698,50 @@ class Kit:
             raise Refused(f"cannot prepare the launch checkout: {err}") from err
         kept = self.home / "machine.yaml"
         webhook_url = load_machine(kept).webhook_url if refresh_webhooks and kept.exists() else None
+        failed: list[str] = []
         if webhook_url:
             out["webhooks"] = self.webhooks(webhook_url, [(name, repo)])
+            problem = self.restart_gateway() if reload_gateway else None
+            failed = self.ping_routes(name, out["webhooks"], problem)
         trust_checkout(checkout, os.environ.get(CLAUDE_CONFIG_DIR, ""))
         steps: list[str] = []
+        if webhook_url:
+            out["webhooks_live"] = not failed
+            if failed:
+                steps.append(f"The webhook routes are not live: {'; '.join(failed)}. The owner runs `{GATEWAY_RESTART}` in their own shell, then faker-kit add-project {repo} again to prove them")
         if not out["jobs_active"]:
             again = f"{repo} --provider {provider} --model {model}" if provider else repo
             steps.append(f"The owner signs gh in on this machine (gh auth login), then runs faker-kit add-project {again} again to start the jobs")
         return {**out, "project": slug, "repo": repo, "launch_checkout": str(checkout), "next": steps}
+
+    def restart_gateway(self) -> str | None:
+        try:
+            hermes("-p", "default", "gateway", "restart", timeout=120)
+        except InstallError as err:
+            return f"the gateway restart failed ({err})"
+        return None
+
+    def ping_routes(self, bot: str, hooks: list[dict], problem: str | None) -> list[str]:
+        secret = parse_env_file(self.root / ".env").get(secret_env(bot), "")
+        listener = os.environ.get(LISTENER_ENV) or f"http://{WEBHOOK_HOST}:{WEBHOOK_PORT}"
+        failed = []
+        for hook in hooks:
+            path = urlsplit(hook["url"]).path
+            body = json.dumps({"zen": "faker-kit ping"}).encode()
+            headers = {"Content-Type": "application/json", "X-GitHub-Event": "ping",
+                       "X-Hub-Signature-256": "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()}
+            answer: int | str = "no answer"
+            for attempt in range(PING_ATTEMPTS):
+                answer = self.post(listener.rstrip("/") + path, headers, body)
+                if isinstance(answer, int) and 200 <= answer < 300:
+                    break
+                if attempt + 1 < PING_ATTEMPTS:
+                    self.sleep(PING_PAUSE_SECONDS)
+            ok = isinstance(answer, int) and 200 <= answer < 300
+            hook["ping"] = "ok" if ok else str(answer)
+            if not ok:
+                failed.append(f"{path.rsplit('/', 1)[-1]} answered {answer}" + (f" and {problem}" if problem else ""))
+        return failed
 
     def check_repo_readable(self, repo: str) -> None:
         try:
@@ -909,7 +969,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
         return kit.project_names()
     if args.command == "add-project":
         intervals = {key: getattr(args, key) for key in SCHEDULE_DEFAULTS}
-        return kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider, check=args.check)
+        return kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider, check=args.check, reload_gateway=caller is None)
     if args.command == "launch":
         return kit.launch(caller, args.project, args.brief_file, args.model, args.effort)
     if args.command == "merge":
@@ -935,10 +995,10 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str) -> object:
 
 def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | None = None, bot: str | None = None,
          now: Callable[[], float] = time.time, fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status,
-         sleep: Callable[[float], None] = time.sleep) -> int:
+         sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping) -> int:
     args = parser().parse_args(argv)
     try:
-        out = run_command(args, Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep), bot or current_bot())
+        out = run_command(args, Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep, post=post), bot or current_bot())
     except (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError) as err:
         print(f"faker-kit: refused: {err}", file=sys.stderr)
         return EXIT_REFUSED

@@ -26,7 +26,8 @@ One command, `faker-kit` (`bin/faker_kit.py`, installed as `~/.hermes/bin/faker-
 | Command | Who | Does |
 |---|---|---|
 | `install` | owner's shell | Creates the bootstrap bot and chief, guard settings, webhooks and tunnel from a machine config, and sets each bot's model (see Choose each bot's model) |
-| `add-project OWNER/REPO` | bootstrap | Creates or refreshes a project bot: profile, guard, skills, jobs, the andon and bug-report labels, webhook routes (when the machine config is kept), launch checkout. Safe to rerun |
+| `add-project OWNER/REPO` | bootstrap | Creates or refreshes a project bot: profile, guard, skills, jobs, the andon and bug-report labels, webhook routes (when the machine config is kept) proved by a signed ping (`webhooks_live`, a `ping` per hook; a failing ping puts the owner command in `next`), launch checkout. Safe to rerun |
+| `refresh` | chief, bootstrap, owner's shell | Fetches the recorded kit source's newest main and runs `install.sh --no-gateway` on it; the gateway is not restarted. Project bots are refused |
 | `launch --brief-file F` | project (bootstrap adds `--project P`) | Starts one cloud session; the brief must start with `/faker-mode` and live in the bot's briefs folder |
 | `merge --pr N` | project | The merge gate above |
 | `status [--all]` | every bot | Projects, open pull requests with their last update, full head commit, and gate state, andon cords |

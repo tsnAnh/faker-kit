@@ -21,6 +21,7 @@ import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import gate_scenario
 import guard_scenario
@@ -474,6 +475,7 @@ class Run:
         self.gh_log = root / "gh-calls.log"
         self.claude_log = root / "claude-calls.log"
         self.sleeps: list[float] = []
+        self.pings: list[tuple[str, dict[str, str], bytes]] = []
         self.on_sleep: list = []
         self.clock = T0
         self.fetch_api = no_network
@@ -533,14 +535,19 @@ class Run:
         change(state)
         self.set_gh(state)
 
-    def kit(self, *argv: str, bot: str | None = BOT, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+    def listener(self, headers: dict[str, str], body: bytes, path: str) -> int:
+        self.pings.append((path, headers, body))
+        return 202
+
+    def kit(self, *argv: str, bot: str | None = BOT, env: dict[str, str] | None = None, post: object = None) -> tuple[int, str, str]:
         wanted = {**self.env(), **(env or {})}
         saved = {key: os.environ.get(key) for key in wanted}
         os.environ.update(wanted)
         out, err = io.StringIO(), io.StringIO()
         try:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                code = faker_kit.main(list(argv), bot=bot or "default", now=lambda: self.clock, sleep=self.sleep, fetch_api=self.fetch_api, fetch_url=self.fetch_url)
+                code = faker_kit.main(list(argv), bot=bot or "default", now=lambda: self.clock, sleep=self.sleep, fetch_api=self.fetch_api, fetch_url=self.fetch_url,
+                                  post=post or (lambda url, headers, body: self.listener(headers, body, url)))
         finally:
             for key, value in saved.items():
                 if value is None:
@@ -2432,6 +2439,51 @@ def profile_approval_scenario(run: Run, work: Path) -> None:
     hooks = sorted(h["config"]["url"] for h in other.gh_now()["hooks"])
     run.step("add-project refreshes the new project's own webhook routes when the machine keeps a webhook url",
              hooks == [f"{WEBHOOK_BASE}/p/crm-bot/webhooks/crm-bot-{kind}" for kind in ("issues", "pr")], json.dumps(hooks))
+
+    secret = dict(line.split("=", 1) for line in (other.hermes / ".env").read_text().splitlines() if "=" in line)[secret_env("crm-bot")].strip("\"'")
+
+    def signed(body: bytes) -> str:
+        return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+    other.pings.clear()
+    calls_before = (other.hermes / "hermes-calls.log").read_text().count('"gateway"')
+    code, out, err = other.kit(*crm, bot=BOOTSTRAP, env=AGENT_TURN)
+    live = json.loads(out)
+    run.step("add-project pings every route it configured with a signed GitHub ping and reports ping ok, webhooks_live true, and no next step; a bot's turn never restarts the gateway",
+             code == 0 and [h["ping"] for h in live["webhooks"]] == ["ok", "ok"] and live["webhooks_live"] is True and live["next"] == []
+             and sorted(urlsplit(p).path for p, _, _ in other.pings) == [f"/p/crm-bot/webhooks/crm-bot-{kind}" for kind in ("issues", "pr")]
+             and all(h["X-GitHub-Event"] == "ping" and h["X-Hub-Signature-256"] == signed(b) for _, h, b in other.pings)
+             and secret not in out + err and (other.hermes / "hermes-calls.log").read_text().count('"gateway"') == calls_before, out[:300])
+
+    other.pings.clear()
+    code, out, err = other.kit(*crm, bot=BOOTSTRAP, env=AGENT_TURN, post=lambda *_: 404)
+    down = json.loads(out)
+    run.step("a listener that answers 404 on every try leaves add-project at exit 0 with webhooks_live false, ping 404 per hook, and one next line naming the routes and the owner command",
+             code == 0 and [h["ping"] for h in down["webhooks"]] == ["404", "404"] and down["webhooks_live"] is False and len(down["next"]) == 1
+             and "crm-bot-pr answered 404" in down["next"][0] and "crm-bot-issues answered 404" in down["next"][0] and "hermes -p default gateway restart" in down["next"][0]
+             and len(other.sleeps) >= 10 and secret not in out + err, out[:400])
+
+    order: list[str] = []
+
+    def after_restart(*_: object) -> int:
+        order.append("ping:" + ("restarted" if (other.hermes / "hermes-calls.log").read_text().count('"gateway"') > calls_before else "before-restart"))
+        return 202
+
+    code, out, err = other.kit(*crm, bot=None, post=after_restart)
+    owned = json.loads(out)
+    restarts = [json.loads(line) for line in (other.hermes / "hermes-calls.log").read_text().splitlines() if '"gateway"' in line][calls_before:]
+    run.step("from the owner's shell add-project restarts the default profile's gateway once, before the first ping, and the pings then pass",
+             code == 0 and restarts == [["-p", "default", "gateway", "restart"]] and order == ["ping:restarted", "ping:restarted"] and owned["webhooks_live"] is True, json.dumps(order))
+
+    kept_machine = other.team / "machine.yaml"
+    held = kept_machine.read_text()
+    kept_machine.unlink()
+    other.pings.clear()
+    code, out, err = other.kit(*crm, bot=BOOTSTRAP, env=AGENT_TURN, post=lambda *_: 500)
+    quiet = json.loads(out)
+    kept_machine.write_text(held)
+    run.step("with no webhook url on the machine add-project sends no ping and reports no webhooks field or webhooks_live, as before",
+             code == 0 and "webhooks" not in quiet and "webhooks_live" not in quiet and quiet["next"] == [] and other.pings == [], out[:300])
 
     code, status, err = other.kit("status", bot=BOOTSTRAP)
     crm_line = [line for line in status.splitlines() if line.startswith("crm (crm-bot, acme/crm)")]
