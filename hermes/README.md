@@ -89,7 +89,7 @@ Under `~/.hermes/faker-kit/`: `kit/` (the kit at the pinned commit), `guard.yaml
 ## What only you do
 
 - Merge pull requests the gate leaves to you (protected paths, forks).
-- Sign `gh` in on the machine once (`gh auth login`); every bot shares that login. No bot ever sees a token in chat.
+- Sign in to GitHub for this machine in the Pal app; every bot shares that login, and `faker-kit status`, `add-project` and `launch` say so in one line when it is not signed in or the sign-in expired or was revoked. No bot ever sees a token in chat.
 - Sign Claude Code in on the machine. `faker-kit add-project` and every `faker-kit launch` mark the launch checkout trusted in Claude Code's config, so nobody trusts a folder by hand.
 
 ## Troubleshooting

@@ -77,7 +77,7 @@ bash hermes/install.sh --ref <kit commit> --bootstrap-bot <name>
 
 Then edit `~/.hermes/faker-kit/guard.yaml`: `trusted_authors` (your GitHub login, and the account the cloud sessions post as) and `max_in_flight_total`.
 
-Every bot runs `gh` with the machine's one login: sign `gh` in once with `gh auth login`, and sign Claude Code in too.
+Every bot runs `gh` with the machine's one login: sign in to GitHub for this machine in the Pal app, and sign Claude Code in too.
 
 ### Where each bot's model runs
 

@@ -67,6 +67,11 @@ root_state = state
 args = sys.argv[1:]
 with open(os.environ["E2E_GH_LOG"], "a") as log:
     log.write(json.dumps(args) + "\n")
+GH_AUTH_FAILURES = {"not_signed_in": "To get started with GitHub CLI, please run:  gh auth login", "expired_or_revoked": "gh: Bad credentials (HTTP 401)",
+                    "unreachable": "error connecting to api.github.com"}
+if state.get("gh_auth"):
+    print(state.get("gh_auth_text") or GH_AUTH_FAILURES[state["gh_auth"]], file=sys.stderr)
+    sys.exit(1)
 
 
 def save():
@@ -256,6 +261,13 @@ if args[0] == "api":
         fail(f"gh: Not Found (HTTP 404) {route}")
 elif args[:2] == ["auth", "status"]:
     print("Logged in")
+elif args[:2] == ["config", "get"]:
+    print(state.get("git_protocol", "https"))
+elif args[:2] == ["config", "set"]:
+    if state.get("git_protocol_set_fails"):
+        fail("gh: could not write the config file")
+    state["git_protocol"] = args[-1]
+    save()
 elif args[:2] == ["label", "create"]:
     state["labels"].append({"name": args[2], "description": args[args.index("--description") + 1], "force": "--force" in args})
     save()
@@ -722,6 +734,81 @@ def effort_scenario(run: Run, brief: Path) -> None:
              and len(run.claude_log.read_text().splitlines()) == before, err.strip())
     seen_efforts = [json.loads(line).get("effort") for line in run.claude_log.read_text().splitlines()]
     run.step("no session in this run started above high", not {"xhigh", "max"} & set(seen_efforts), ", ".join(str(e) for e in seen_efforts))
+
+
+def gh_calls(run: Run) -> list[list[str]]:
+    return [json.loads(line) for line in run.gh_log.read_text().splitlines()]
+
+
+def credential_scenario(run: Run) -> None:
+    brief = run.brief("credential.md", "/faker-mode\n\nGOAL: fix the README typo.\n")
+    token_like = "gh" + "p_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"
+    wording = {"not_signed_in": "GitHub is not signed in for this machine: sign in to GitHub for this machine in the Pal app.",
+               "expired_or_revoked": "GitHub sign-in expired or revoked: sign in to GitHub for this machine in the Pal app."}
+
+    def commands() -> dict[str, tuple[int, str, str]]:
+        sessions = len(run.claude_log.read_text().splitlines())
+        results = {"status --all": run.kit("status", "--all"), "status": run.kit("status"),
+                   "add-project --check": run.kit("add-project", REPO, "--bot", BOT, "--project", "shop", "--check", bot=BOOTSTRAP),
+                   "launch": run.kit("launch", "--brief-file", str(brief))}
+        results["sessions"] = (len(run.claude_log.read_text().splitlines()) - sessions, "", "")
+        return results
+
+    def bad(mode: str, text: str | None = None) -> None:
+        run.update_gh(lambda state: state.update({"gh_auth": mode, "gh_auth_text": text}))
+
+    for mode in ("not_signed_in", "expired_or_revoked"):
+        bad(mode)
+        before = len(gh_calls(run))
+        seen = commands()
+        run.update_gh(lambda state: state.pop("gh_auth", None))
+        shown = {name: (r[1] if name.startswith("status") else r[2]).strip() for name, r in seen.items() if name != "sessions"}
+        probes = gh_calls(run)[before:]
+        run.step(f"with GitHub {mode}, status, status --all, add-project --check and launch each print the one Pal app line and no raw gh text",
+                 all(line == wording[mode] for name, line in shown.items() if name != "add-project --check" and name != "launch")
+                 and all(wording[mode] in shown[name] and len(shown[name].splitlines()) == 1 and "gh auth login" not in shown[name] for name in ("add-project --check", "launch"))
+                 and seen["status --all"][0] == 0 and seen["status"][0] == 0 and seen["add-project --check"][0] == 1 and seen["launch"][0] == 1,
+                 json.dumps(shown))
+        run.step(f"with GitHub {mode}, each command makes one credential probe and nothing else: no per-project call, no clone, no session",
+                 probes == [["api", "user", "--jq", ".login"]] * 4 and seen["sessions"][0] == 0, json.dumps(probes[:2]))
+    bad("unreachable")
+    seen = commands()
+    run.update_gh(lambda state: state.pop("gh_auth", None))
+    lines = [seen["status --all"][1].strip(), seen["status"][1].strip(), seen["add-project --check"][2].strip(), seen["launch"][2].strip()]
+    run.step("with GitHub unreachable, every command says it cannot reach GitHub and does not blame the token",
+             all("cannot reach GitHub: error connecting to api.github.com" in line and "token" not in line.lower() for line in lines) and seen["sessions"][0] == 0, json.dumps(lines))
+    bad("unreachable", f"Authorization failed for {token_like}\nsecond line")
+    seen = commands()
+    run.update_gh(lambda state: state.pop("gh_auth", None))
+    shown = " ".join(r[1] + r[2] for name, r in seen.items() if name != "sessions")
+    run.step("an error text with a token-shaped string is surfaced without the token or its second line",
+             token_like not in shown and "[removed]" in shown and "second line" not in shown, shown[:200])
+
+    before = len(gh_calls(run))
+    code, out, err = run.kit("launch", "--brief-file", str(brief))
+    calls = gh_calls(run)[before:]
+    run.step("a healthy launch with git protocol https makes no protocol change and prints no git_protocol_fixed",
+             code == 0 and "git_protocol_fixed" not in json.loads(out) and not any(call[:2] == ["config", "set"] for call in calls), out.strip() or err.strip())
+    run.update_gh(lambda state: state.update({"git_protocol": "ssh"}))
+    before = len(gh_calls(run))
+    code, out, err = run.kit("launch", "--brief-file", str(brief))
+    calls = gh_calls(run)[before:]
+    sets = [call for call in calls if call[:2] == ["config", "set"]]
+    run.step("a launch with git protocol ssh sets https exactly once before starting the session, reports it in one field, and proceeds",
+             code == 0 and sets == [["config", "set", "-h", "github.com", "git_protocol", "https"]] and json.loads(out).get("git_protocol_fixed") == "ssh -> https"
+             and run.gh_now()["git_protocol"] == "https" and json.loads(out)["session"].startswith("https://claude.ai/code/"), out.strip() or err.strip())
+    code, out, err = run.kit("launch", "--brief-file", str(brief))
+    run.step("the next launch finds https and sets nothing", code == 0 and "git_protocol_fixed" not in json.loads(out), out.strip() or err.strip())
+    run.update_gh(lambda state: state.update({"git_protocol": "ssh", "git_protocol_set_fails": True}))
+    sessions = len(run.claude_log.read_text().splitlines())
+    code, _, err = run.kit("launch", "--brief-file", str(brief))
+    run.update_gh(lambda state: [state.pop("git_protocol", None), state.pop("git_protocol_set_fails", None)])
+    run.step("a launch whose protocol change fails stops with one plain line and starts no session",
+             code == 1 and "could not be set to https" in err and len(err.strip().splitlines()) == 1 and len(run.claude_log.read_text().splitlines()) == sessions, err.strip())
+
+    spawns = {path.name for folder in ("bin", "lib") for path in (HERMES / folder).glob("*.py") if re.search(r"""\[\s*["']gh["']""", path.read_text())}
+    run.step("run_gh in faker_kit_gh.py is the only gh spawn on the status, add-project and launch path; the owner-only runner slot is the other spawn site",
+             spawns == {"faker_kit_gh.py", "faker_kit_runner.py"}, ", ".join(sorted(spawns)))
 
 
 def launch_scenario(run: Run) -> None:
@@ -3104,6 +3191,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         run.build()
         launch_scenario(run)
+        credential_scenario(run)
         webhook_scenario(run)
         merge_scenario(run)
         incident_scenario(run)

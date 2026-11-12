@@ -137,7 +137,7 @@ The first time the owner talks to you, or when they ask you to set up, learn the
 2. For each project, read `AGENTS.md` from its default branch: what the code is and how it is checked.
 3. The work tracker is each repository's GitHub issues: a collaborator's `faker:fix` label sends a bug to that project's bot.
 4. Bots act with this machine's GitHub login, so pull requests and comments appear as the owner.
-5. Your reports and digest go to this chat. Check with `hermes -p <your bot name> cron list` that `faker-kit-loop` and `faker-kit-digest` are active; if they are paused, tell the owner this machine needs a GitHub login (`gh auth login`), then running `hermes/install.sh` again turns them on.
+5. Your reports and digest go to this chat. Check with `hermes -p <your bot name> cron list` that `faker-kit-loop` and `faker-kit-digest` are active; if they are paused, tell the owner to sign in to GitHub for this machine in the Pal app, then running `hermes/install.sh` again turns them on.
 
 ## New projects
 

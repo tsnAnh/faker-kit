@@ -30,7 +30,7 @@ import yaml
 from faker_kit_andon import LABEL, MACHINE, Andon, AndonError, Cord, clean_reason, issue_body
 from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, PERMISSION_MODE, Cloud, CloudError, session_effort, session_model, trust_checkout
 from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
-from faker_kit_gh import NAME, Gh, Refused, Runner, run_gh
+from faker_kit_gh import NAME, Gh, Refused, Runner, credential_problem, fix_git_protocol, run_gh
 from faker_kit_guard.policy import (
     DEFAULT_HEARTBEAT_EVERY,
     INTERVAL,
@@ -195,6 +195,11 @@ class Kit:
                 self.machine_login_known = False
         return self.machine_login_known
 
+    def require_credential(self) -> None:
+        problem = credential_problem(self.run)
+        if problem:
+            raise Refused(problem)
+
     def project_bot(self, policy: Policy, project: str) -> Bot:
         bot = policy.projects().get(project)
         if bot is None:
@@ -248,6 +253,8 @@ class Kit:
             use_bot_env(self.root / "profiles" / target.name)
         except EnvFileError as err:
             raise Refused(str(err)) from None
+        self.require_credential()
+        fixed = fix_git_protocol(self.run)
         prompt = text + ANDON_FOOTER.format(repo=repo)
         if FAKER_RULE not in text:
             prompt += FAKER_FOOTER
@@ -261,7 +268,7 @@ class Kit:
         used, effort_note = session_effort(effort)
         used_model, model_note = session_model(model)
         printed = {"repo": repo, "session": session, "brief": digest, "model": used_model, "effort": used, "permission_mode": PERMISSION_MODE}
-        return {**printed, **model_note, **effort_note}
+        return {**printed, **model_note, **effort_note, **({"git_protocol_fixed": fixed} if fixed else {})}
 
     def evidence(self, gh: Gh, pr: int, head: str, default: str, pull: dict) -> Evidence:
         head_info = pull.get("head") or {}
@@ -524,6 +531,9 @@ class Kit:
         return reports.claim(claim) if claim else {"issues": reports.eligible()}
 
     def status(self, caller: Bot | None, everything: bool) -> list[str]:
+        problem = credential_problem(self.run)
+        if problem:
+            return [problem]
         policy = self.policy()
         if everything or caller is None or caller.role != "project":
             machine = self.andon.read(MACHINE)
@@ -677,11 +687,13 @@ class Kit:
         proposed = copy.deepcopy(self.bots_file())
         self.register_project(proposed, repo, name, slug, {key: wanted.get(key) for key in SCHEDULE_DEFAULTS}, slack_channel)
         checked_policy = self.policy_from(proposed)
+        self.require_credential()
         self.check_repo_readable(repo)
         self.profiles.check_skill_dirs(name)
         if check:
             profile = self.profiles.live(name)
             return {"check": True, "bot": name, "project": slug, "repo": repo, "profile": {True: "exists", False: "missing", None: "unknown"}[profile], "ask_owner": checked_policy.ask_owner}
+        fixed = fix_git_protocol(self.run)
         self.profiles.ensure(name)
         data = self.bots_file()
         self.register_project(data, repo, name, slug, {key: wanted.get(key) for key in SCHEDULE_DEFAULTS}, slack_channel)
@@ -718,8 +730,8 @@ class Kit:
                 steps.append(f"The webhook routes are not live: {'; '.join(failed)}. The owner runs `{GATEWAY_RESTART}` in their own shell, then faker-kit add-project {repo} again to prove them")
         if not out["jobs_active"]:
             again = f"{repo} --provider {provider} --model {model}" if provider else repo
-            steps.append(f"The owner signs gh in on this machine (gh auth login), then runs faker-kit add-project {again} again to start the jobs")
-        return {**out, "project": slug, "repo": repo, "launch_checkout": str(checkout), "next": steps}
+            steps.append(f"The owner signs in to GitHub for this machine in the Pal app, then runs faker-kit add-project {again} again to start the jobs")
+        return {**out, "project": slug, "repo": repo, "launch_checkout": str(checkout), "next": steps, **({"git_protocol_fixed": fixed} if fixed else {})}
 
     def restart_gateway(self) -> str | None:
         try:
