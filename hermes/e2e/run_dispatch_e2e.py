@@ -3654,7 +3654,7 @@ def host_secret_scenario(run: Run, work: Path) -> None:
     granted = real("host", "status", "--json", "--secret-stdin", stdin=shown.encode() + b"\n", env={"HERMES_HOME": profile_home})
     run.step("a correct secret is what grants the owner commands, not the environment: it is accepted whatever the profile home says, and still no bot gets a command outside its role",
              json.loads(granted.stdout)["code"] != "request_refused" and shown.encode() not in granted.stdout + granted.stderr
-             and "is not one of its commands" in call("launch", "--brief-file", "x", "--secret-stdin", bot=CHIEF)[2], granted.stdout.decode()[:200])
+             and "is not one of its commands" in call("launch", "--brief-file", "x", bot=CHIEF)[2], granted.stdout.decode()[:200])
 
     compared: list[tuple[bytes, bytes]] = []
     real_compare = faker_kit.hmac.compare_digest
