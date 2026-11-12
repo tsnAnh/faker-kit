@@ -34,6 +34,45 @@ def run_gh(args: list[str], input: str | None = None) -> str:
     return done.stdout
 
 
+TOKEN_SHAPES = re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|(?:bearer|token)\s+\S+", re.IGNORECASE)
+INVALID_MARKERS = ("bad credentials", "401", "invalid", "expired")
+MISSING_MARKERS = ("gh auth login", "not logged in", "no token", "not authenticated", "authentication required")
+CREDENTIAL_FIX = "sign in to GitHub for this machine in the Pal app"
+GIT_HOST = "github.com"
+
+
+def scrub(text: str) -> str:
+    first = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    return TOKEN_SHAPES.sub("[removed]", first)[:200]
+
+
+def credential_problem(run: Runner) -> str | None:
+    try:
+        run(["api", "user", "--jq", ".login"])
+    except Refused as err:
+        raw = str(err).lower()
+        if any(marker in raw for marker in INVALID_MARKERS):
+            return f"GitHub sign-in expired or revoked: {CREDENTIAL_FIX}."
+        if any(marker in raw for marker in MISSING_MARKERS):
+            return f"GitHub is not signed in for this machine: {CREDENTIAL_FIX}."
+        return f"cannot reach GitHub: {scrub(str(err).partition('failed:')[2] or str(err)) or 'no answer'}"
+    return None
+
+
+def fix_git_protocol(run: Runner) -> str | None:
+    try:
+        current = run(["config", "get", "git_protocol", "-h", GIT_HOST]).strip()
+    except Refused:
+        return None
+    if current in ("", "https"):
+        return None
+    try:
+        run(["config", "set", "-h", GIT_HOST, "git_protocol", "https"])
+    except Refused as err:
+        raise Refused(f"gh git protocol for {GIT_HOST} is {scrub(current)} and could not be set to https: {scrub(str(err).partition('failed:')[2])}") from None
+    return f"{scrub(current)} -> https"
+
+
 def included_response(text: str) -> tuple[int, dict[str, str], str]:
     normal = text.replace("\r\n", "\n")
     if not normal.startswith("HTTP/"):

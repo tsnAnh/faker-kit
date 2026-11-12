@@ -93,7 +93,7 @@ It prints the cloud `session`. Tell the owner the session link, that the pull re
 
 ## 5. The bot's GitHub login
 
-Every bot shares this machine's `gh` login (`gh auth login`, once per machine). A bot needs a `GH_TOKEN` in its profile's `.env` only to act as a different GitHub account. So there is no token step: never ask the owner to create one. If `add-project` says the jobs are not running, tell the owner to run `gh auth login` once on this machine, then run `add-project` again for the repository. The login must be in `trusted_authors` in `~/.hermes/faker-kit/guard.yaml`. Also make sure Claude Code is signed in on this machine. `add-project` and every `launch` mark the launch checkout trusted in Claude Code's config, so never ask the owner to trust a folder.
+Every bot shares this machine's `gh` login (the owner signs in to GitHub for this machine in the Pal app). A bot needs a `GH_TOKEN` in its profile's `.env` only to act as a different GitHub account. So there is no token step: never ask the owner to create one. If `add-project` says the jobs are not running, tell the owner to sign in to GitHub for this machine in the Pal app, then run `add-project` again for the repository. The login must be in `trusted_authors` in `~/.hermes/faker-kit/guard.yaml`. Also make sure Claude Code is signed in on this machine. `add-project` and every `launch` mark the launch checkout trusted in Claude Code's config, so never ask the owner to trust a folder.
 
 ## 6. Check and hand over
 
