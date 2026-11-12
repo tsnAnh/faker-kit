@@ -16,6 +16,8 @@ CONTEXT:
 
 ACCEPTANCE: One comment on the head commit, posted as the skill's step 4 says, whose first line is `triage: suspect <full commit or none>, confidence <high|medium|low>`.
 
+OWNER DECISIONS: none: triage only
+
 VERIFY: Reproduce the failure yourself where the skill says to, and say what you could not check.
 
 TIMEBOX: 45 minutes.

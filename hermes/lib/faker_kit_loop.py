@@ -12,6 +12,7 @@ STATES = ("handed-out", "in-progress", "waiting", "blocked", "ready-to-merge", "
 CLOSED = ("merged", "abandoned", "taken-back")
 OWNER_NEWS = ("blocked", "ready-to-merge", *CLOSED)
 MAX_PART = 300
+MAX_DECISIONS = 600
 REQUIRED = frozenset({"id", "project", "bot", "part", "state", "prs", "waits_on", "updated", "reported"})
 MAX_PRS = 20
 LINE_BREAKS = frozenset("\u0085\u2028\u2029")
@@ -32,6 +33,18 @@ def clean_part(text: str) -> str:
     if len(part) > MAX_PART:
         raise LoopError(f"the part must fit in {MAX_PART} characters; name the outcome, and let the project bot hold the detail")
     return part
+
+
+def clean_decisions(text: str) -> str:
+    raw = str(text).strip()
+    if not raw:
+        raise LoopError('say which requirements the owner decided: --decisions "<the owner\'s answers>", or "none: <why>" for a bug fix whose expected behaviour is obvious')
+    if not raw.isprintable() or any(ch in LINE_BREAKS for ch in raw):
+        raise LoopError("--decisions must be plain text on one line")
+    decisions = " ".join(raw.split())
+    if len(decisions) > MAX_DECISIONS:
+        raise LoopError(f"--decisions must fit in {MAX_DECISIONS} characters; keep the owner's answers short")
+    return decisions
 
 
 def same_part(a: str, b: str) -> bool:
@@ -67,14 +80,15 @@ class Loop:
         tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False))
         tmp.replace(self.path)
 
-    def add(self, project: str, bot: str, text: str, now: float) -> dict:
+    def add(self, project: str, bot: str, text: str, decisions: str, now: float) -> dict:
         part = clean_part(text)
+        owner_decisions = clean_decisions(decisions)
         with self.locked():
             data = self.read()
             held = next((p for p in data["parts"] if p["project"] == project and p["state"] not in CLOSED and same_part(p["part"], part)), None)
             if held:
                 raise LoopError(f"part {held['id']} already holds this for {project} ({held['state']}); follow up with {held['bot']} about it instead of handing it out again")
-            entry = {"id": max((int(p["id"]) for p in data["parts"]), default=0) + 1, "project": project, "bot": bot, "part": part,
+            entry = {"id": max((int(p["id"]) for p in data["parts"]), default=0) + 1, "project": project, "bot": bot, "part": part, "decisions": owner_decisions,
                      "state": "handed-out", "prs": [], "waits_on": None, "added": now, "updated": now, "reported": None}
             data["parts"].append(entry)
             self.write(data)

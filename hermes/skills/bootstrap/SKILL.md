@@ -80,6 +80,7 @@ Then run /setup-hermes-project and follow its section "The repository side" for 
 - trusted_dispatchers: <the logins>
 - project: <project>
 The repository must have GitHub Actions CI in a workflow other than faker-kit-checks.yml that builds and tests every pull request, triggered by push or pull_request; if it filters by path, it filters at job level and keeps a job that always runs, because a workflow-level path filter leaves a docs-only pull request with no CI and the merge gate refuses it. The bot merges only when that CI passes on the exact head.
+OWNER DECISIONS: none: repository setup for the dispatch files
 Open exactly one pull request. Never merge it.
 ```
 
