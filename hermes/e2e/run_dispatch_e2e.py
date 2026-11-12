@@ -801,6 +801,9 @@ def launch_scenario(run: Run) -> None:
     run.step("the guide and the dispatch skill carry the faker-mode launch rule",
              "loads the faker-mode skill when it takes a unit" in operating and "never writes a brief that asks for documentation or code comments" in operating
              and "`launch` appends the faker-mode rule" in dispatch, "")
+    chief = (HERMES / "skills" / "chief" / "SKILL.md").read_text()
+    run.step("the chief skill runs an owner-invoked skill in its own turn and never hands the skill to a bot",
+             "runs in your own turn, with your own tools" in chief and "Never hand the skill itself to a project bot or a cloud session." in chief, "")
 
 
 def webhook_scenario(run: Run) -> None:
