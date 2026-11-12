@@ -17,6 +17,8 @@ STEPS:
 
 ACCEPTANCE: The report is settled by one of the two outcomes above. A fix has a test that fails without it and passes with it.
 
+OWNER DECISIONS: none: bug fix reported by a collaborator
+
 VERIFY: Re-run your own reproduction on your head and on the default branch, and show both.
 
 TIMEBOX: 60 minutes.

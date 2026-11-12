@@ -59,6 +59,7 @@ from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slo
 from install_config import InstallError, config_set, hermes, mapping, value_at
 
 BRIEF_START = "/faker-mode"
+OWNER_DECISIONS_LINE = re.compile(r"^OWNER DECISIONS:[ \t]*\S", re.M)
 MAX_BRIEF_CHARS = 60_000
 SESSION_MODEL = re.compile(r"\A(?:opus|sonnet|haiku|fable|claude-[a-z0-9]+(?:-[a-z0-9]+){1,6})\Z")
 UNIT_LINE = re.compile(r"\AUnit: ([a-z0-9][a-z0-9-]{0,63})[ \t]*\r?(?:\n|\Z)")
@@ -88,7 +89,10 @@ FAKER_FOOTER = (
     "Make the smallest change that meets the goal. "
     "Add no new documentation file unless this brief asks for one. Write no code comment except a non-obvious why. "
     "Run the no-comments pass before the pull request opens. If faker-mode is not installed in this session, "
-    "say so in the pull request body and follow these rules anyway.\n"
+    "say so in the pull request body and follow these rules anyway. "
+    "Do not decide an unspecified requirement or choose between visible patterns (a new switch, screen, flag) yourself: "
+    "use the pattern the existing items use; if nothing settles it, leave that part out, finish the rest, "
+    "and list the question under \"Open questions\" in the pull request body.\n"
 )
 FAKER_RULE = FAKER_FOOTER.strip().removeprefix("Faker-mode rule: ")
 ROLE_COMMANDS = {
@@ -277,6 +281,8 @@ class Kit:
         text = self.brief_text(caller.name if caller else "default", brief_file).strip()
         if not text.startswith(BRIEF_START):
             raise Refused(f"the brief must start with {BRIEF_START}, so the session works in faker-mode")
+        if not OWNER_DECISIONS_LINE.search(text):
+            raise Refused('the brief must list the owner\'s decisions on an OWNER DECISIONS: line; write "none: <why>" when there are none')
         if len(text) > MAX_BRIEF_CHARS:
             raise Refused(f"the brief is longer than {MAX_BRIEF_CHARS} characters; write the detail into a file in the repository and point to it")
         if SECRET_SHAPES.search(text):
@@ -610,11 +616,11 @@ class Kit:
         return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready", mergeable,
                            f"updated {updated if UPDATED_AT.match(updated) else 'unknown'}", f"head {head if SHA.match(head) else 'unknown'}", gate])
 
-    def handoff(self, caller: Bot, project: str, part: str) -> dict:
+    def handoff(self, caller: Bot, project: str, part: str, decisions: str) -> dict:
         owner = self.policy().projects().get(project)
         if owner is None:
             raise Refused(f"no project {project} on this machine; faker-kit status --all lists them")
-        return Loop(self.home, caller.name).add(project, owner.name, part, self.now())
+        return Loop(self.home, caller.name).add(project, owner.name, part, decisions, self.now())
 
     def loop(self, caller: Bot, action: str, part_id: int | None, state: str | None, prs: list[int], waits_on: str | None, reported: bool,
              everything: bool) -> dict:
@@ -1234,6 +1240,7 @@ def parser() -> argparse.ArgumentParser:
     cmd = sub.add_parser("handoff")
     cmd.add_argument("--project", required=True)
     cmd.add_argument("--part", required=True)
+    cmd.add_argument("--decisions", required=True, help='the requirements the owner decided, in their words; "none: <why>" for a bug fix whose expected behaviour is obvious')
     cmd = sub.add_parser("loop")
     cmd.add_argument("action", nargs="?", choices=["show", "set", "digest"], default="show")
     cmd.add_argument("id", nargs="?", type=int)
@@ -1310,7 +1317,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
         if caller is None or caller.role != "chief":
             raise Refused(f"{args.command} runs in the chief of staff's chat or job")
         if args.command == "handoff":
-            return kit.handoff(caller, args.project, args.part)
+            return kit.handoff(caller, args.project, args.part, args.decisions)
         return kit.loop(caller, args.action, args.id, args.state, args.pr, args.waits_on, args.reported, args.all)
     if args.command == "andon":
         return kit.andon_command(caller, args.action, args.reason)

@@ -583,7 +583,7 @@ class Gates:
             return subprocess.run([str(self.wrapper), *argv], env={**env, "HERMES_HOME": str(self.chief_profile)}, capture_output=True, text=True, timeout=120, check=False)
 
         quiet = self.tick(LOOP)
-        handed = kit("handoff", "--project", "shop", "--part", "Add search to the catalog")
+        handed = kit("handoff", "--project", "shop", "--part", "Add search to the catalog", "--decisions", "none: fixture")
         working = self.tick(LOOP)
         step("the loop gate runs the installed faker-kit loop --all as the chief: an empty loop and a freshly handed-out part are both quiet",
              handed.returncode == 0 and self.silent(quiet) and self.silent(working), handed.stderr.strip() or self.say(working))
@@ -596,7 +596,7 @@ class Gates:
         step("once the chief marks it reported the gate is quiet again", self.silent(told), self.say(told))
         kit("loop", "set", "1", "--state", "merged")
         kit("loop", "set", "1", "--reported")
-        consumer = kit("handoff", "--project", "shop", "--part", "Wire search into the app")
+        consumer = kit("handoff", "--project", "shop", "--part", "Wire search into the app", "--decisions", "none: fixture")
         kit("loop", "set", "2", "--state", "waiting", "--waits-on", "shop#12")
         due = self.tick(LOOP)
         step("a waiting part whose provider's pull request is in a merged part is due: the real loop wakes the chief with it",
