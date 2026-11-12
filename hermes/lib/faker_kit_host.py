@@ -216,12 +216,17 @@ def reconcile_tunnel(config: Path | None, unit: str | None, now: float, tool: To
     try:
         write_exact(backup, original, mode, False)
     except FileExistsError:
-        raise unmanaged("a backup with this timestamp already exists") from None
+        if backup.read_text() != original:
+            raise unmanaged("a backup with this timestamp already exists") from None
     swap_in(path, updated, mode)
     argv = ["systemctl", *(["--user"] if user else ["--no-ask-password"]), "restart", name]
     code, _ = tool(argv, SERVICE_SECONDS)
     if code != 0:
         swap_in(path, original, mode)
-        backup.unlink(missing_ok=True)
-        raise Coded("The public tunnel could not be restarted, so the previous setup was put back.", "tunnel_restart_failed", "reconnect_public_path")
+        again, _ = tool(argv, SERVICE_SECONDS)
+        if again == 0:
+            backup.unlink(missing_ok=True)
+            raise Coded("The public tunnel could not be restarted with the new rule, so the previous setup was put back and the tunnel restarted on it.",
+                        "tunnel_restart_failed", "reconnect_public_path")
+        raise Coded("The public tunnel could not be restarted, even after the previous setup was put back, so it may be stopped.", "tunnel_restart_failed", "reconnect_public_path")
     return True, f"added the one-rule public path ahead of the pathless host rule, kept a timestamped backup, {checked}, and restarted the tunnel service once"

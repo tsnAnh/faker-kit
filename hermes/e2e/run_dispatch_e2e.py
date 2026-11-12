@@ -3233,6 +3233,7 @@ class Tunnel:
         self.config.write_text(text)
         self.config.chmod(0o600)
         self.restart_ok, self.calls, self.loaded, self.validator_ok = restart_ok, [], True, True
+        self.restart_script: list[bool] = []
         self.program = directory / "cloudflared-2026.10.1"
         if validator:
             self.program.write_text("#!/bin/sh\n")
@@ -3248,7 +3249,8 @@ class Tunnel:
                 command = f"{self.program} tunnel --config {self.config} --no-autoupdate --metrics 127.0.0.1:20241 run"
                 return 0, f"LoadState=loaded\nExecStart={{ path={self.program} ; argv[]={command} ; ignore_errors=no }}\n"
             return 0, "LoadState=not-found\n"
-        return (0 if self.restart_ok else 1), f"restart failed {HOST_TOKEN}"
+        outcome = self.restart_script.pop(0) if self.restart_script else self.restart_ok
+        return (0 if outcome else 1), f"restart failed {HOST_TOKEN}"
 
     def restarts(self) -> int:
         return sum(1 for argv in self.calls if "restart" in argv)
@@ -3429,14 +3431,20 @@ def host_scenario(run: Run, work: Path) -> None:
 
     broken = Tunnel(work / "tunnel-broken", restart_ok=False, validator=True)
     code, out, err, restart = host("update", tool=broken, refresher=refresher)
-    run.step("a failed tunnel restart returns tunnel_restart_failed, puts the old config and no backup back, and validates with the tunnel program first",
-             code == 1 and restart["code"] == "tunnel_restart_failed" and restart["next"]["action"] == "reconnect_public_path" and broken.config.read_text() == LIVE_TUNNEL and broken.backups() == []
+    run.step("a failed tunnel restart returns tunnel_restart_failed, restores the config, restarts again, keeps the backup and says the tunnel may be stopped",
+             code == 1 and restart["code"] == "tunnel_restart_failed" and restart["next"]["action"] == "reconnect_public_path" and broken.config.read_text() == LIVE_TUNNEL
+             and broken.restarts() == 2 and len(broken.backups()) == 1 and "may be stopped" in restart["message"]
              and any(argv[0] == str(broken.program) and argv[1:2] == ["tunnel"] and argv[-2:] == ["ingress", "validate"] for argv in broken.calls) and not leaks, out[:300])
     broken.restart_ok = True
     code, out, err, healed = host("update", tool=broken, refresher=refresher)
     run.step("after the cause is fixed the next update applies the rule, because the failed one left the config as it was",
-             code == 0 and healed["ok"] is True and broken.restarts() == 2 and len(yaml.safe_load(broken.config.read_text())["ingress"]) == 5, out[:300])
-    broken.validator_ok = False
+             code == 0 and healed["ok"] is True and broken.restarts() == 3 and len(yaml.safe_load(broken.config.read_text())["ingress"]) == 5, out[:300])
+    recovering = Tunnel(work / "tunnel-recovering")
+    recovering.restart_script = [False, True]
+    code, out, err, recovered = host("update", tool=recovering, refresher=refresher)
+    run.step("when the first restart fails and the second, on the restored config, works, the update says so, restarts twice, and leaves the old config with no backup",
+             code == 1 and recovered["code"] == "tunnel_restart_failed" and recovering.restarts() == 2 and recovering.config.read_text() == LIVE_TUNNEL and recovering.backups() == []
+             and "restarted on it" in recovered["message"], out[:300])
     rejected_config = Tunnel(work / "tunnel-rejected", validator=True)
     rejected_config.validator_ok = False
     code, out, err, refusal = host("update", tool=rejected_config, refresher=refresher)
