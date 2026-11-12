@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from faker_kit_gh import Refused
+from faker_kit_gh import Coded
 
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SOURCE_FILE = "kit-source"
@@ -51,7 +51,7 @@ def recorded_source(home: Path) -> str:
     source = read_line(home / SOURCE_FILE)
     if source:
         return source
-    raise Refused(f"no kit source is recorded in {home}; run hermes/install.sh once from a kit clone with --source")
+    raise Coded(f"no kit source is recorded in {home}; run hermes/install.sh once from a kit clone with --source", "kit_source_missing", "contact_support")
 
 
 def installed_commit(home: Path) -> str:
@@ -61,7 +61,7 @@ def installed_commit(home: Path) -> str:
     done = subprocess.run(["git", "-C", str(home / "kit"), "rev-parse", "HEAD"], capture_output=True, text=True)
     commit = done.stdout.strip()
     if done.returncode or not SHA.match(commit):
-        raise Refused(f"no kit checkout at {home / 'kit'}; run hermes/install.sh")
+        raise Coded(f"no kit checkout at {home / 'kit'}; run hermes/install.sh", "kit_install_failed", "contact_support")
     return commit
 
 
@@ -74,15 +74,16 @@ def note(text: str) -> str:
     return " | ".join(lines[-NOTE_LINES:])
 
 
-def run(argv: list[str], seconds: int, what: str, source: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> str:
+def run(argv: list[str], seconds: int, what: str, source: str, cwd: Path | None = None, env: dict[str, str] | None = None,
+        code: str = "kit_fetch_failed") -> str:
     try:
         done = subprocess.run(argv, capture_output=True, text=True, timeout=seconds, cwd=cwd, env=env or git_env())
     except subprocess.TimeoutExpired:
-        raise Refused(f"{what} did not finish within {seconds}s ({clean_source(source)})") from None
+        raise Coded(f"{what} did not finish within {seconds}s ({clean_source(source)})", code) from None
     except OSError as err:
-        raise Refused(f"{what} could not run: {err.strerror or err}") from None
+        raise Coded(f"{what} could not run: {err.strerror or err}", code) from None
     if done.returncode:
-        raise Refused(f"{what} failed ({clean_source(source)}): {note(done.stderr) or note(done.stdout) or f'exit {done.returncode}'}")
+        raise Coded(f"{what} failed ({clean_source(source)}): {note(done.stderr) or note(done.stdout) or f'exit {done.returncode}'}", code)
     return done.stdout
 
 
@@ -92,16 +93,16 @@ def latest_main(source: str) -> str:
         sha, _, ref = line.partition("\t")
         if ref == MAIN and SHA.match(sha):
             return sha
-    raise Refused(f"the kit source has no main branch ({clean_source(source)})")
+    raise Coded(f"the kit source has no main branch ({clean_source(source)})", "kit_fetch_failed")
 
 
 @contextmanager
-def exclusive(home: Path) -> Iterator[None]:
-    with (home / LOCK_FILE).open("a") as lock:
+def exclusive(home: Path, name: str = LOCK_FILE) -> Iterator[None]:
+    with (home / name).open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            raise Refused("another kit refresh is already running") from None
+            raise Coded("another kit refresh is already running", "update_in_progress") from None
         yield
 
 
@@ -110,19 +111,19 @@ def fetch_kit(source: str, commit: str, into: Path) -> None:
     run(["git", "-C", str(into), "fetch", "-q", "--depth", "1", source, commit], FETCH_SECONDS, "fetching the kit", source)
     run(["git", "-C", str(into), "checkout", "-q", "-f", "FETCH_HEAD"], FETCH_SECONDS, "checking out the kit", source)
     if run(["git", "-C", str(into), "rev-parse", "HEAD"], FETCH_SECONDS, "reading the fetched kit", source).strip() != commit:
-        raise Refused(f"the fetched kit is not {short(commit)} ({clean_source(source)})")
+        raise Coded(f"the fetched kit is not {short(commit)} ({clean_source(source)})", "kit_fetch_failed")
 
 
 def install_kit(staged: Path, home: Path, source: str, commit: str) -> None:
     script = staged / "hermes" / "install.sh"
     for needed in (script, staged / "hermes" / "bin" / "faker_kit.py"):
         if not needed.is_file():
-            raise Refused(f"kit {short(commit)} has no {needed.relative_to(staged)}; the installed kit was not changed")
+            raise Coded(f"kit {short(commit)} has no {needed.relative_to(staged)}; the installed kit was not changed", "kit_install_failed")
     env = {**git_env(), "FAKER_KIT_HOME": str(home)}
     run(["bash", str(script), "--ref", commit, "--source", source, *INSTALL_ARGS], INSTALL_SECONDS,
-        f"installing kit {short(commit)}", source, cwd=home, env=env)
+        f"installing kit {short(commit)}", source, cwd=home, env=env, code="kit_install_failed")
     if installed_commit(home) != commit:
-        raise Refused(f"the install of kit {short(commit)} finished without recording it; run it again")
+        raise Coded(f"the install of kit {short(commit)} finished without recording it; run it again", "kit_install_failed")
 
 
 def refresh(home: Path) -> str:

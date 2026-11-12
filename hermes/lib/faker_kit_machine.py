@@ -13,6 +13,8 @@ LOGIN = re.compile(r"\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\Z")
 EVERY = re.compile(r"\A[1-9][0-9]*[mh]\Z")
 HTTPS_URL = re.compile(r"\Ahttps://[a-z0-9.-]+\.[a-z]{2,}\Z")
 SLACK_CHANNEL = re.compile(r"\A[CG][A-Z0-9]{8,}\Z")
+ABSOLUTE_PATH = re.compile(r"\A/[A-Za-z0-9_./-]+\Z")
+SERVICE_UNIT = re.compile(r"\A[A-Za-z0-9_.@-]+\.service\Z")
 PLACEHOLDER = "CHANGE-ME"
 SUBSCRIPTION_PROVIDER = "claude-subscription-directsdk-experimental"
 
@@ -80,6 +82,8 @@ class Machine:
     bootstrap_provider: str | None = None
     webhook_url: str | None = None
     tunnel: str | None = None
+    tunnel_config: str | None = None
+    tunnel_unit: str | None = None
     slack: Slack | None = None
     kit_ref: str | None = None
     skills: tuple[str, ...] = ()
@@ -175,6 +179,8 @@ def parse_machine(data: object) -> Machine:
     tunnel = _text(webhooks, "tunnel", "webhooks", NAME, required=False)
     if bool(url) != bool(tunnel):
         raise MachineError("webhooks needs both url and tunnel, or neither")
+    tunnel_config = _text(webhooks, "tunnel_config", "webhooks", ABSOLUTE_PATH, required=False)
+    tunnel_unit = _text(webhooks, "tunnel_unit", "webhooks", SERVICE_UNIT, required=False)
 
     slack = None
     if top.get("slack") is not None:
@@ -202,7 +208,7 @@ def parse_machine(data: object) -> Machine:
     return Machine(bootstrap_bot=bootstrap, trusted_authors=tuple(authors), ask_owner=ask_owner, max_in_flight_total=total,
                    claude_subscription=subscription, projects=tuple(projects), chief=chief_bot,
                    chief_model=chief_model, chief_provider=chief_provider, bootstrap_model=bootstrap_model,
-                   bootstrap_provider=bootstrap_provider, webhook_url=url, tunnel=tunnel, slack=slack, kit_ref=kit_ref,
+                   bootstrap_provider=bootstrap_provider, webhook_url=url, tunnel=tunnel, tunnel_config=tunnel_config, tunnel_unit=tunnel_unit, slack=slack, kit_ref=kit_ref,
                    skills=tuple(dict.fromkeys(skills)), ci_runners=tuple(runners))
 
 

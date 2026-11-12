@@ -23,6 +23,12 @@ class Refused(Exception):
     pass
 
 
+class Coded(Refused):
+    def __init__(self, message: str, code: str, action: str | None = None, data: dict | None = None) -> None:
+        super().__init__(message)
+        self.code, self.action, self.data = code, action, data or {}
+
+
 def run_gh(args: list[str], input: str | None = None) -> str:
     done = subprocess.run(["gh", *args], capture_output=True, text=True, input=input)
     if done.returncode != 0:
@@ -46,17 +52,21 @@ def scrub(text: str) -> str:
     return TOKEN_SHAPES.sub("[removed]", first)[:200]
 
 
-def credential_problem(run: Runner) -> str | None:
+def credential_state(run: Runner) -> tuple[str, str | None]:
     try:
         run(["api", "user", "--jq", ".login"])
     except Refused as err:
         raw = str(err).lower()
         if any(marker in raw for marker in INVALID_MARKERS):
-            return f"GitHub sign-in expired or revoked: {CREDENTIAL_FIX}."
+            return "sign_in_expired", f"GitHub sign-in expired or revoked: {CREDENTIAL_FIX}."
         if any(marker in raw for marker in MISSING_MARKERS):
-            return f"GitHub is not signed in for this machine: {CREDENTIAL_FIX}."
-        return f"cannot reach GitHub: {scrub(str(err).partition('failed:')[2] or str(err)) or 'no answer'}"
-    return None
+            return "not_signed_in", f"GitHub is not signed in for this machine: {CREDENTIAL_FIX}."
+        return "unreachable", f"cannot reach GitHub: {scrub(str(err).partition('failed:')[2] or str(err)) or 'no answer'}"
+    return "signed_in", None
+
+
+def credential_problem(run: Runner) -> str | None:
+    return credential_state(run)[1]
 
 
 def fix_git_protocol(run: Runner) -> str | None:
