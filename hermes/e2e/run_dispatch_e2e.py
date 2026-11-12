@@ -2270,7 +2270,10 @@ def provider_scenario(run: Run, work: Path) -> None:
                               env=env, capture_output=True, text=True, timeout=300)
 
     def kit(*argv: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run([str(hermes / "bin" / "faker-kit"), *argv], env=env, capture_output=True, text=True, timeout=300)
+        credential = hermes / "faker-kit" / "host-secret"
+        owned = argv[:1] in (("install",), ("projects",)) and credential.exists()
+        return subprocess.run([str(hermes / "bin" / "faker-kit"), *argv, *(["--secret-stdin"] if owned else [])], env=env, input=credential.read_text() if owned else None,
+                              capture_output=True, text=True, timeout=300)
 
     def model_of(bot: str) -> dict:
         return (yaml.safe_load((hermes / "profiles" / bot / "config.yaml").read_text()) or {}).get("model") or {}
