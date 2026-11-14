@@ -85,7 +85,7 @@ The setup brief gives these values. If you run this part by hand, ask the owner 
 
 | Value | What it is |
 |---|---|
-| `backend` | `claude`: Claude Code cloud, started with `claude --cloud` |
+| `backend` | `claude`: Claude Code cloud, started with `claude --cloud`; or `t3code`: T3 Code on the owner's Mac, driven through the `mcp_t3code_*` tools Hermes exposes once the owner connects T3 Code in the Pal app |
 | `trusted_dispatchers` | The GitHub logins that open unit issues: the project bot's login, and the owner's |
 | `project` | The project's slug |
 
@@ -116,7 +116,7 @@ Keep it to what an agent needs to plan a change. Do not repeat the README.
 
 Copy `templates/dispatch/dispatch.json` and fill it:
 
-- `backend` from the values.
+- `backend` from the values. For `t3code`, also add a `t3code` object: `project` (the T3 project id or the absolute path of the project on the owner's Mac, which you ask the owner for), `base_ref` (leave it out to branch from `origin/<default branch>`; set it only for a repository with no remote or to branch from another ref), `provider` and `model` (the T3 provider instance id and model slug, both or neither, only if the owner names them; without them T3 uses the project's default), and `max_in_flight` (how many T3 threads may run at once, default 2, separate from the top-level `max_in_flight`, which counts cloud sessions). Without the object, `faker-kit launch` refuses every launch.
 - `max_in_flight`: how many units may run here at once. The owner sets it in `.agents/dispatch.json`: ask the owner for the number, and put it in the pull request. The machine has its own total across projects.
 - `forbidden_paths`: paths no unit may touch. Keep the template's and add the repository's own, such as generated code or vendored files. The lockfile stays forbidden, because parallel agents that each change it conflict.
 - `trusted_dispatchers` from the values. Coding agents follow only issues these logins wrote.

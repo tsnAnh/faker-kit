@@ -1,8 +1,8 @@
 # Dispatch work with Hermes
 
-You tell a Hermes project bot what you want in Hermes Desktop. The bot is the long-lived coordinator chat for that project. It splits the work into units, writes a brief for each, and starts a Claude Code cloud session on every brief. Each unit ends as one pull request. The bot babysits the pull requests until they are green, has a separate cloud session verify them, and lands the ones that pass the merge gate. You answer the questions it cannot, and you keep every pull request the gate leaves to you.
+You tell a Hermes project bot what you want in Hermes Desktop. The bot is the long-lived coordinator chat for that project. It splits the work into units, writes a brief for each, and starts a Claude Code cloud session on every brief, or, for a repository that names T3 Code as its backend, a thread in T3 Code on your Mac. Each unit ends as one pull request. The bot babysits the pull requests until they are green, has a separate cloud session verify them, and lands the ones that pass the merge gate. You answer the questions it cannot, and you keep every pull request the gate leaves to you.
 
-This is the Orchestrate, Autopilot, Babysit, and Shipping playbooks (see the pstack guide's [Run work while you sleep](../../plugins/pstack/docs/guide/07-overnight.md)) with a Hermes bot as the coordinator and Claude Code cloud as the place sessions run. How many sessions run at once comes from `max_in_flight` in the repository's `.agents/dispatch.json`, which the owner sets.
+This is the Orchestrate, Autopilot, Babysit, and Shipping playbooks (see the pstack guide's [Run work while you sleep](../../plugins/pstack/docs/guide/07-overnight.md)) with a Hermes bot as the coordinator and Claude Code cloud (or T3 Code on your Mac) as the place sessions run. How many sessions run at once comes from `max_in_flight` in the repository's `.agents/dispatch.json`, which the owner sets; T3 Code threads have their own `t3code.max_in_flight`.
 
 The Hermes side is the kit's [`hermes/`](../../hermes/) module. Its [README](../../hermes/README.md) lists every file it installs.
 
@@ -15,7 +15,7 @@ One Hermes machine runs one bootstrap bot, one bot per project, and, if you want
 | Bootstrap bot | One per machine | Sets up a project: its project bot, the andon label, a cloud session that opens the setup pull request. Loads the [bootstrap](../../hermes/skills/bootstrap/SKILL.md) skill | `faker-kit add-project`, `launch --project`, `status`, `andon` |
 | Project bot | One per project | The coordinator chat: plans units, writes a brief per unit, launches cloud sessions, babysits their pull requests, has them verified, and lands them. Loads the [dispatch](../../hermes/skills/dispatch/SKILL.md) skill | `faker-kit launch`, `merge`, `status`, `andon`, `incidents`, `issues`, for its own repository only |
 | Chief of staff | Optional, one per machine | An engineering lead that owns the loop. Tell it what you want across projects; it hands each part to the right project bot in a message, records every part with `faker-kit handoff` and keeps it open in `faker-kit loop` until its pull request merges or you drop it, and hears from the bot that owns it when its pull request opens, blocks, waits on you, or merges. It runs weekdays (`faker-kit-loop` hourly 10:00 to 18:00, with a gate script that skips the turn unless a waiting part is due or a part has news for you, and `faker-kit-digest` at 09:00), stays quiet while work is healthy, and tells you only what is blocked, ready for you to merge, or done; the rest goes in the morning digest. Loads the [chief](../../hermes/skills/chief/SKILL.md) skill | `faker-kit status --all` |
-| Cloud session | One per unit, in the cloud | Works the brief in faker-mode, opens one pull request, gets its checks green | none |
+| Cloud session or T3 Code thread | One per unit, in the cloud or in T3 Code on your Mac | Works the brief in faker-mode, opens one pull request, gets its checks green | none |
 
 A project is one repository. When a product has an API, a web app, and a mobile app, keep them side by side in that one repository so one cloud session can carry a feature through all of them in one pull request.
 
@@ -55,9 +55,39 @@ A collaborator with write access turns a GitHub issue into work by adding the la
 
 `faker-kit add-project` creates the three labels `faker:fix`, `faker:not-reproduced`, and `faker:expected`. A collaborator who disagrees with a `faker:not-reproduced` or `faker:expected` outcome adds `faker:fix` again to start a new round.
 
+### T3 Code instead of the cloud
+
+A repository can hand its units to T3 Code running on your Mac instead of a Claude Code cloud session. The repository's `.agents/dispatch.json` on the default branch decides, so every unit of that repository goes the same way:
+
+```json
+{
+  "backend": "t3code",
+  "t3code": {
+    "project": "<T3 project id, or the absolute path of the project on your Mac>",
+    "base_ref": "origin/main",
+    "provider": "<T3 provider instance id>",
+    "model": "<model slug>",
+    "max_in_flight": 2
+  }
+}
+```
+
+Only `project` is required. `base_ref` defaults to `origin/<default branch>`, so the thread's worktree starts from the fresh remote branch (set it to a local branch for a repository with no remote). `provider` and `model` go together; without them T3 uses the project's default model. `faker-kit launch` refuses an unknown backend, an unreadable file, and an invalid `t3code` object.
+
+Connect T3 Code in the Pal app on your Mac. Hermes then exposes T3 Code's tools to the bots as `mcp_t3code_<tool>`. The `t3` command line is not used: the Hermes machine never reaches it.
+
+A unit goes through the same steps as a cloud unit, except the session:
+
+1. The bot runs `faker-kit launch --brief-file <unit-id>.md`. Every check a cloud launch makes still runs: the brief rules, the andon cord, both footers. Nothing starts yet. `launch` prints the one `mcp_t3code_t3_thread_launch` call to make (project, the title `Unit: <unit-id>`, a worktree from `base_ref`, the model from `dispatch.json`, and the brief as the message) and records a prepared launch in `~/.hermes/faker-kit/launches/<bot>/`.
+2. The bot makes that call. The guard passes it only for the message `launch` printed, from the bot that ran `launch`, within one hour, with no argument added or changed, and only once.
+3. T3 Code runs the brief in its own worktree and opens one pull request whose body begins `Unit: <unit-id>`. The bot finds it, babysits it, and lands it with `faker-kit merge`, as for any unit.
+4. The bot reads and waits on the thread with `mcp_t3code_t3_thread_read` and `_wait`, steers it with `_send`, and stops a turn with `_interrupt`. Text from a thread arrives wrapped as untrusted data.
+
+If T3 Code is not connected, the bot starts nothing and tells you to connect it in the Pal app. It never falls back to a cloud session. The guard also refuses the T3 tools that change work outside `launch`: merging a thread back, forking or handing off a thread, creating, cloning, changing, or deleting a project, changing a thread's model, files, linking machines, and requesting a secret.
+
 ### How many run at once
 
-`max_in_flight_total` in `guard.yaml` is how many sessions the machine carries, because every project draws on the same Claude subscription. The bot counts the running rows in its store and launches the next wave only when there is room.
+`max_in_flight_total` in `guard.yaml` is how many sessions the machine carries, because every project draws on the same Claude subscription. The bot counts the running rows in its store and launches the next wave only when there is room. T3 Code threads run on your Mac, so they have their own cap, `t3code.max_in_flight` (default 2): the bot counts the running rows whose backend is `t3code` for it and counts them against neither `max_in_flight` nor the machine total.
 
 ## Install
 
@@ -156,6 +186,7 @@ Then add the project bot in Bot Mode and ask it for one small change, such as a 
 - **Every tool call is blocked.** `~/.hermes/faker-kit/guard.yaml` or `bots.yaml` is missing or does not parse. The block message names the problem.
 - **A cloud session says the kit's skills did not load.** Read `~/.claude/faker-kit-setup.log` in the session. It says when `FAKER_KIT_READ_TOKEN` is not set in the cloud environment or the fetch failed. The environment's setup script must end with the snippet from [`/setup-cloud-agents`](../../plugins/trust-ladder/skills/setup-cloud-agents/SKILL.md) step 2.
 - **Nothing launches.** The andon cord is pulled. Ask the bot that pulled it to clear it.
+- **A T3 Code launch is refused.** `faker-kit launch` names the problem: the `t3code` object is missing or invalid, or `backend` is not `claude` or `t3code`. If the guard refuses the `mcp_t3code_t3_thread_launch` call, run `faker-kit launch` again and send the printed call unchanged (a prepared launch works once, for an hour). If the `mcp_t3code_*` tools are missing, connect T3 Code in the Pal app on your Mac.
 - **`faker-kit merge` refuses.** The message names the gate: checks, protected paths, window, conflict, fork, andon, or an untrusted read in the turn. `faker-kit status` shows each pull request's gate.
 - **Desktop keeps asking you to approve tool calls.** That turn read untrusted text. Approve only a call you asked for.
 - **A webhook does not wake the bot.** Run `hermes/setup-machine.sh` again (a Cloudflare Tunnel set up before the `issues` route existed lists exact route paths, and setup-machine.sh rewrites it to cover every route of a project bot): it sends a signed `ping` to the bot's route. A `401` means the secret differs from the repository webhook's.
