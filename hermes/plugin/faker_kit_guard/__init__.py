@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -96,7 +97,8 @@ def kit_skill_digest(policy: Policy, skill: str) -> str | None:
 
 class Guard:
     def __init__(self, load: Callable[[], Policy], profile: Callable[[], str], timeout: float = DECISION_TIMEOUT_SECONDS,  # noqa: ANN204
-                 skill_digest: Callable[[Policy, str], str | None] | None = None):
+                 skill_digest: Callable[[Policy, str], str | None] | None = None, now: Callable[[], float] = time.time):
+        self._now = now
         self._load = load
         self._profile = profile
         self._timeout = timeout
@@ -110,7 +112,7 @@ class Guard:
 
     def pre_tool_call(self, tool_name="", args=None, **_):  # noqa: ANN001, ANN003, ANN201
         try:
-            return self._bounded(lambda: decide(self._load(), self._profile(), tool_name, args or {}))
+            return self._bounded(lambda: decide(self._load(), self._profile(), tool_name, args or {}, self._now))
         except concurrent.futures.TimeoutError:
             return block(f"policy check for {tool_name} timed out; blocked")
         except PolicyError as err:

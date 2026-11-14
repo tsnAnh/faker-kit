@@ -24,10 +24,12 @@
         "faker_kit_gh",
         "faker_kit_incident_sources",
         "faker_kit_incidents",
+        "faker_kit_launch",
         "faker_kit_machine",
         "faker_kit_merge",
         "faker_kit_profiles",
         "faker_kit_runner",
+        "faker_kit_t3code",
         "install_config"
       ],
       "allow": [],

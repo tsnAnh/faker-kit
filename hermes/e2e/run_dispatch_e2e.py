@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 import gate_scenario
 import guard_scenario
 import refresh_scenario
+import t3code_scenario
 import tooling_scenario
 import wake_gate_scenario
 
@@ -483,7 +484,7 @@ class Failure(Exception):
 
 
 class Run:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, steps: list[dict] | None = None, verdicts: list[dict] | None = None) -> None:
         self.root = root
         self.home = root / "home"
         self.hermes = self.home / ".hermes"
@@ -499,8 +500,8 @@ class Run:
         self.clock = T0
         self.fetch_api = no_network
         self.fetch_url = no_network
-        self.steps: list[dict] = []
-        self.verdicts: list[dict] = []
+        self.steps: list[dict] = steps if steps is not None else []
+        self.verdicts: list[dict] = verdicts if verdicts is not None else []
 
     def env(self) -> dict[str, str]:
         return {
@@ -3762,6 +3763,9 @@ def main(argv: list[str] | None = None) -> int:
         tooling_scenario.environment_scenario(root / "environment-setup", run.step)
         tooling_scenario.ratchet_scenario(root / "ratchet", run.step)
         guard_scenario.guard_scenario(root / "guard", run.step, run.verdicts.append)
+        t3code_run = Run(root / "t3code", run.steps, run.verdicts)
+        t3code_run.build()
+        t3code_scenario.t3code_scenario(t3code_run, BOT)
         owner_merge_scenario(run)
         owner_landing_scenario(run)
         owner_reviews_scenario(run)
