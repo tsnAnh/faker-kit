@@ -12,10 +12,14 @@ import re
 import shlex
 import sys
 import threading
+import time
 import types
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from . import t3code
 
 GUARD_VERSION = 2
 BOTS_VERSION = 1
@@ -385,6 +389,8 @@ def scanned_text(tool_name: str, args: dict) -> list[str]:
         return texts
     if fnmatch.fnmatchcase(tool_name, "cronjob*"):
         return strings({k: args.get(k) for k in CRON_EXECUTED})
+    if tool_name == t3code.LAUNCH_TOOL:
+        return strings(t3code.launch_scan_args(args))
     return strings(args)
 
 
@@ -1052,6 +1058,9 @@ def hard_block(tool_name: str, args: dict) -> str | None:
         return protected_write(tool_name, args)
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS) or tool_name in PATH_ARGS:
         return None
+    t3_reason = t3code.denied(tool_name, args)
+    if t3_reason:
+        return t3_reason
     if tool_name in ("terminal", "process_manage"):
         return terminal_problem(str(args.get("command", "")))
     if tool_name == "execute_code":
@@ -1133,7 +1142,7 @@ def reads_only(command: str, verbs: tuple[str, ...]) -> bool:
     return bool(parts)
 
 
-def decide(policy: Policy, profile: str, tool_name: str, args: dict) -> dict | None:
+def decide(policy: Policy, profile: str, tool_name: str, args: dict, now: Callable[[], float] = time.time) -> dict | None:
     why = hard_block(tool_name, args)
     if why:
         return block(f"{tool_name} is blocked for every bot: {why}")
@@ -1146,6 +1155,9 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict) -> dict | N
     bot = policy.bots.get(profile)
     if bot is None:
         return block(f"profile {profile} is not a faker-kit bot in bots.yaml; every tool call is blocked")
+    if tool_name == t3code.LAUNCH_TOOL:
+        problem = t3code.launch_problem(policy.home, bot.name, args, now())
+        return block(f"{tool_name} {problem}") if problem else None
     if not policy.ask_owner or bot.role != "bootstrap" or tool_name in policy.read_only_tools:
         return None
     command = str(args.get("command", "")) if tool_name == "terminal" else ""
@@ -1166,6 +1178,8 @@ ADD_PROJECT_CHECK = re.compile(rf"{FAKER_KIT_LAUNCHER} +add-project(?: +[A-Za-z0
 
 
 def reader_source(policy: Policy, tool_name: str, args: dict) -> str | None:
+    if t3code.reader(tool_name):
+        return tool_name
     if not any(rule.matches(tool_name, args) for rule in policy.untrusted_readers):
         return None
     segments = command_segments(str(args.get("command", "")))

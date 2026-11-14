@@ -30,7 +30,7 @@ if (HERE.parent / "vendor").is_dir() and str(HERE.parent / "vendor") not in sys.
 
 import yaml
 from faker_kit_andon import LABEL, MACHINE, Andon, AndonError, Cord, clean_reason, issue_body
-from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, PERMISSION_MODE, Cloud, CloudError, session_effort, session_model, trust_checkout
+from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, Cloud, CloudError, trust_checkout
 from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
 from faker_kit_gh import NAME, Coded, Gh, Refused, Runner, credential_problem, credential_state, fix_git_protocol, run_gh
 from faker_kit_guard.policy import (
@@ -46,16 +46,19 @@ from faker_kit_guard.policy import (
     load_policy,
     parse_policy,
 )
+from faker_kit_guard.t3code import SECRET_SHAPES
 from faker_kit_host import GITHUB_CODES, Tool, clean, envelope, reconcile_tunnel, run_tool
 from faker_kit_incident_sources import FetchJson, fetch_json
 from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
+from faker_kit_launch import DISPATCH_FILE, ClaudeLauncher, Dispatch, Factory, pick_factory, read_dispatch
 from faker_kit_loop import Loop, LoopError
 from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, Project, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
 from faker_kit_merge import MERGE_METHOD, Evidence, MergeLock, decide, from_fork, token
 from faker_kit_profiles import Profiles
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
+from faker_kit_t3code import T3CodeLauncher, parse_settings, unit_id
 from install_config import InstallError, config_set, hermes, mapping, value_at
 
 BRIEF_START = "/faker-mode"
@@ -74,10 +77,6 @@ EXIT_AMBIGUOUS = 3
 MATCH_MAX_CHARS = 100
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 UPDATED_AT = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
-SECRET_SHAPES = re.compile(
-    r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}"
-    r"|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
-)
 ANDON_FOOTER = (
     "\n\nStop rule: before every push, run `gh api 'repos/{repo}/issues?labels=agent:andon&state=open' --jq length`. "
     "If it prints anything but 0, do not push or update a pull request; say so and end the session.\n"
@@ -296,21 +295,29 @@ class Kit:
         except EnvFileError as err:
             raise Refused(str(err)) from None
         self.require_credential()
-        fixed = fix_git_protocol(self.run)
+        dispatch = self.dispatch(target.name, repo)
+        launcher = pick_factory(dispatch, self.backends(caller.name if caller else "default", brief_file))(dispatch)
         prompt = text + ANDON_FOOTER.format(repo=repo)
         if FAKER_RULE not in text:
             prompt += FAKER_FOOTER
         digest = hashlib.sha256(prompt.encode()).hexdigest()[:8]
         owner, name = repo.split("/")
         workdir = self.home / "checkouts" / f"{owner}__{name}" / f"launch-{int(self.now())}-{digest}"
-        try:
-            session = self.cloud.start(repo, prompt, workdir, model, effort)
-        except CloudError as err:
-            raise Refused(f"launch failed: {err}") from err
-        used, effort_note = session_effort(effort)
-        used_model, model_note = session_model(model)
-        printed = {"repo": repo, "session": session, "brief": digest, "model": used_model, "effort": used, "permission_mode": PERMISSION_MODE}
-        return {**printed, **model_note, **effort_note, **({"git_protocol_fixed": fixed} if fixed else {})}
+        result = launcher.start(repo, prompt, workdir, model, effort)
+        return {"repo": repo, "backend": dispatch.backend, "brief": digest, **result.fields}
+
+    def dispatch(self, bot: str, repo: str) -> Dispatch:
+        gh = Gh(self.home, bot, repo, self.run)
+        default = gh.default_branch()
+        if not default:
+            raise Refused(f"cannot read the default branch of {repo}")
+        return read_dispatch(gh.file_text(DISPATCH_FILE, default), default)
+
+    def backends(self, owner: str, brief_file: str) -> dict[str, Factory]:
+        return {
+            "claude": lambda _dispatch: ClaudeLauncher(self.cloud, self.run),
+            "t3code": lambda dispatch: T3CodeLauncher(parse_settings(dispatch.t3code, dispatch.default_branch), self.home, owner, unit_id(Path(brief_file).name), self.now),
+        }
 
     def evidence(self, gh: Gh, pr: int, head: str, default: str, pull: dict) -> Evidence:
         head_info = pull.get("head") or {}
