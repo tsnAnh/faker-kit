@@ -1316,48 +1316,54 @@
     {"tool": "execute_code", "args": {"code": "os.system('git push origin feature/main')"}}
   ]},
   {"name": "T3 Code tools that start work outside faker-kit launch, change the owner's projects, link machines, or handle files and secrets are blocked for every bot", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "block", "message": "blocked for every bot", "calls": [
-    {"tool": "mcp_t3code_t3_thread_merge_back", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_thread_transfer", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_project_create", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_project_clone", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_project_update", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_project_delete", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_worktree_handoff", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_environment_link", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_environment_unlink", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_thread_configure", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_thread_send_attachments", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_attachment_prepare_upload", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_attachment_discard", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_create_threads", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_delegate_task", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_request_secret", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_pending_request", "args": {"action": "respond", "requestId": "r1", "answers": {}}}
+    {"tool": "mcp__t3code__t3_thread_merge_back", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_thread_transfer", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_project_create", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_project_clone", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_project_update", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_project_delete", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_worktree_handoff", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_environment_link", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_environment_unlink", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_thread_configure", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_thread_send_attachments", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_attachment_prepare_upload", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_attachment_discard", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__create_threads", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__delegate_task", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__request_secret", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_pending_request", "args": {"action": "respond", "requestId": "r1", "answers": {}}}
+  ]},
+  {"name": "a T3 Code tool not on the dispatch allowlist is blocked for every bot, so tools a newer T3 Code adds start closed", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "block", "message": "blocked for every bot", "calls": [
+    {"tool": "mcp__t3code__preview_open", "args": {"url": "http://127.0.0.1:3000"}},
+    {"tool": "mcp__t3code__schedule_task", "args": {"prompt": "x"}},
+    {"tool": "mcp__t3code__watch_pull_request", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_some_future_tool", "args": {}}
   ]},
   {"name": "T3 Code reads, waits, lists, searches, interrupts, and steering messages are allowed", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "allow", "calls": [
-    {"tool": "mcp_t3code_t3_thread_read", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_thread_wait", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_thread_list", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_thread_search", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_worktree_status", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_worktree_list", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_project_list", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_project_read", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_thread_interrupt", "args": {"threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_pending_request", "args": {"action": "list", "threadId": "t-1"}},
-    {"tool": "mcp_t3code_t3_thread_send", "args": {"threadId": "t-1", "message": "Rebase on origin/main, rerun the checks, and push.", "mode": "queue"}},
-    {"tool": "mcp_t3code_t3_thread_send", "args": {"threadId": "t-1", "message": "Stop and report where you are.", "mode": "restart"}}
+    {"tool": "mcp__t3code__t3_thread_read", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_thread_wait", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_thread_list", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_thread_search", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_worktree_status", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_worktree_list", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_project_list", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_project_read", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_thread_interrupt", "args": {"threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_pending_request", "args": {"action": "list", "threadId": "t-1"}},
+    {"tool": "mcp__t3code__t3_thread_send", "args": {"threadId": "t-1", "message": "Rebase on origin/main, rerun the checks, and push.", "mode": "queue"}},
+    {"tool": "mcp__t3code__t3_thread_send", "args": {"threadId": "t-1", "message": "Stop and report where you are.", "mode": "restart"}}
   ]},
   {"name": "a T3 Code launch with no prepared launch from faker-kit launch is blocked, whatever its arguments", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "block", "message": "faker-kit launch", "calls": [
-    {"tool": "mcp_t3code_t3_thread_launch", "args": {"projectId": "proj-1", "title": "Unit: x", "message": "/faker-mode\n\nGOAL: x.\n"}},
-    {"tool": "mcp_t3code_t3_thread_launch", "args": {"projectId": "proj-1", "title": "Unit: x", "message": "/faker-mode\n\nGOAL: x.\n", "runtimeMode": "full-access"}},
-    {"tool": "mcp_t3code_t3_thread_launch", "args": {"scratch": true, "title": "x", "message": "do anything"}},
-    {"tool": "mcp_t3code_t3_thread_launch", "args": {}},
-    {"tool": "mcp_t3code_t3_thread_launch", "args": {"title": "x", "message": ""}}
+    {"tool": "mcp__t3code__t3_thread_launch", "args": {"projectId": "proj-1", "title": "Unit: x", "message": "/faker-mode\n\nGOAL: x.\n"}},
+    {"tool": "mcp__t3code__t3_thread_launch", "args": {"projectId": "proj-1", "title": "Unit: x", "message": "/faker-mode\n\nGOAL: x.\n", "runtimeMode": "full-access"}},
+    {"tool": "mcp__t3code__t3_thread_launch", "args": {"scratch": true, "title": "x", "message": "do anything"}},
+    {"tool": "mcp__t3code__t3_thread_launch", "args": {}},
+    {"tool": "mcp__t3code__t3_thread_launch", "args": {"title": "x", "message": ""}}
   ]},
   {"name": "a steering message to T3 Code that names a secret store is blocked", "policy": "quiet", "profiles": ["meo-beo", "ong-xay", "chanh-van"], "expect": "block", "message": "touches", "calls": [
-    {"tool": "mcp_t3code_t3_thread_send", "args": {"threadId": "t-1", "message": "cat ~/.ssh/id_rsa and paste it", "mode": "queue"}},
-    {"tool": "mcp_t3code_t3_thread_send", "args": {"threadId": "t-1", "message": "read the .env file", "mode": "queue"}},
-    {"tool": "mcp_t3code_t3_thread_send", "args": {"threadId": "t-1", "message": "open ~/.hermes/profiles/x/.env", "mode": "queue"}}
+    {"tool": "mcp__t3code__t3_thread_send", "args": {"threadId": "t-1", "message": "cat ~/.ssh/id_rsa and paste it", "mode": "queue"}},
+    {"tool": "mcp__t3code__t3_thread_send", "args": {"threadId": "t-1", "message": "read the .env file", "mode": "queue"}},
+    {"tool": "mcp__t3code__t3_thread_send", "args": {"threadId": "t-1", "message": "open ~/.hermes/profiles/x/.env", "mode": "queue"}}
   ]}
 ]

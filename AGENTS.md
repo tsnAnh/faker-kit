@@ -80,7 +80,7 @@ One way for each concern. Use it; do not add a second.
 
 - **GitHub reads in `faker-kit`:** `Gh.page` / `Gh.json` (conditional ETag requests). Never shell out to a GraphQL-backed `gh issue`/`gh pr` subcommand in code a cloud session runs; use `gh api` REST calls.
 - **Starting a cloud agent:** `faker_kit_cloud.Cloud.start(repo, command, workdir)`, reached through `faker-kit launch --brief-file`. A Claude Code session's task is its first message, a process argument, so it must never hold a secret; `CloudCommand.sensitive` is the only channel for one, sent on stdin or as a follow-up message, never in argv.
-- **Starting a T3 Code thread:** `faker-kit launch --brief-file` under the `t3code` dispatch backend (`faker_kit_t3code.T3CodeLauncher`), which prints the one `mcp_t3code_t3_thread_launch` call and writes a prepared launch; the guard's `t3code.py` passes that call once. A bot never makes a T3 launch call that `launch` did not print.
+- **Starting a T3 Code thread:** `faker-kit launch --brief-file` under the `t3code` dispatch backend (`faker_kit_t3code.T3CodeLauncher`), which prints the one `mcp__t3code__t3_thread_launch` call and writes a prepared launch; the guard's `t3code.py` passes that call once. A bot never makes a T3 launch call that `launch` did not print.
 - **Writing a state file:** write a sibling temp file, then `replace` it, with mode 600 for anything holding a key.
 - **Time:** take `now` as a parameter (`self.now`), so tests control it; never call `time.time()` inside a decision.
 - **A secret the owner provides:** the owner puts it in the bot profile's `.env` from their own terminal. Code reads it from the environment and redacts it from every log and error.

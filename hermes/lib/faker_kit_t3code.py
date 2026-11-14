@@ -119,7 +119,7 @@ class T3CodeLauncher:
         fields: dict[str, object] = {"unit": self.unit, "call": {"tool": LAUNCH_TOOL, "args": {**prepared, "message": prompt}}, "max_in_flight": self.settings.max_in_flight}
         if self.settings.project_is_path:
             fields["resolve_project"] = {
-                "tool": "mcp_t3code_t3_project_list", "workspaceRoot": self.settings.project,
+                "tool": "mcp__t3code__t3_project_list", "workspaceRoot": self.settings.project,
                 "then": "add the id of the project with that workspaceRoot to call.args as projectId",
             }
         if self.settings.provider and self.settings.model:

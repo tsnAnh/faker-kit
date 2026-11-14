@@ -85,7 +85,7 @@ The setup brief gives these values. If you run this part by hand, ask the owner 
 
 | Value | What it is |
 |---|---|
-| `backend` | `claude`: Claude Code cloud, started with `claude --cloud`; or `t3code`: T3 Code on the owner's Mac, driven through the `mcp_t3code_*` tools Hermes exposes once the owner connects T3 Code in the Pal app |
+| `backend` | `claude`: Claude Code cloud, started with `claude --cloud`; or `t3code`: T3 Code on the owner's Mac, driven through the `mcp__t3code__*` tools Hermes exposes once the owner connects T3 Code in the Pal app |
 | `trusted_dispatchers` | The GitHub logins that open unit issues: the project bot's login, and the owner's |
 | `project` | The project's slug |
 

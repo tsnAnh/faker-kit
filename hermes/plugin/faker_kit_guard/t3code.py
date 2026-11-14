@@ -9,7 +9,7 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 
-PREFIX = "mcp_t3code_"
+PREFIX = "mcp__t3code__"
 LAUNCH_TOOL = f"{PREFIX}t3_thread_launch"
 SEND_TOOL = f"{PREFIX}t3_thread_send"
 LAUNCHES = "launches"
@@ -38,6 +38,7 @@ DENIED_REASONS = {
 READERS = frozenset({
     "t3_thread_read", "t3_thread_wait", "t3_thread_list", "t3_thread_search", "t3_pending_request", "t3_worktree_status", "t3_worktree_list",
 })
+ALLOWED = READERS | {"t3_thread_launch", "t3_thread_send", "t3_thread_interrupt", "t3_project_list", "t3_project_read"}
 SECRET_SHAPES = re.compile(
     r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}"
     r"|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
@@ -105,6 +106,8 @@ def denied(tool_name: str, args: dict[str, object]) -> str | None:
     short = tool_name.removeprefix(PREFIX)
     if short in DENIED_REASONS:
         return DENIED_REASONS[short]
+    if short not in ALLOWED:
+        return "only the T3 Code tools faker-kit dispatch needs are open to a bot: launch, read, wait, list, search, steer, and interrupt"
     if short == "t3_pending_request" and args.get("action") == "respond":
         return "answering a thread's question is the owner's: ask with clarify, then steer with t3_thread_send"
     if tool_name == SEND_TOOL and any(SECRET_SHAPES.search(text) for text in strings_of(args)):

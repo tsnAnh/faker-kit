@@ -74,14 +74,14 @@ A repository can hand its units to T3 Code running on your Mac instead of a Clau
 
 Only `project` is required. `base_ref` defaults to `origin/<default branch>`, so the thread's worktree starts from the fresh remote branch (set it to a local branch for a repository with no remote). `provider` and `model` go together; without them T3 uses the project's default model. `faker-kit launch` refuses an unknown backend, an unreadable file, and an invalid `t3code` object.
 
-Connect T3 Code in the Pal app on your Mac. Hermes then exposes T3 Code's tools to the bots as `mcp_t3code_<tool>`. The `t3` command line is not used: the Hermes machine never reaches it.
+Connect T3 Code in the Pal app on your Mac. Hermes then exposes T3 Code's tools to the bots as `mcp__t3code__<tool>`. The `t3` command line is not used: the Hermes machine never reaches it.
 
 A unit goes through the same steps as a cloud unit, except the session:
 
-1. The bot runs `faker-kit launch --brief-file <unit-id>.md`. Every check a cloud launch makes still runs: the brief rules, the andon cord, both footers. Nothing starts yet. `launch` prints the one `mcp_t3code_t3_thread_launch` call to make (project, the title `Unit: <unit-id>`, a worktree from `base_ref`, the model from `dispatch.json`, and the brief as the message) and records a prepared launch in `~/.hermes/faker-kit/launches/<bot>/`.
+1. The bot runs `faker-kit launch --brief-file <unit-id>.md`. Every check a cloud launch makes still runs: the brief rules, the andon cord, both footers. Nothing starts yet. `launch` prints the one `mcp__t3code__t3_thread_launch` call to make (project, the title `Unit: <unit-id>`, a worktree from `base_ref`, the model from `dispatch.json`, and the brief as the message) and records a prepared launch in `~/.hermes/faker-kit/launches/<bot>/`.
 2. The bot makes that call. The guard passes it only for the message `launch` printed, from the bot that ran `launch`, within one hour, with no argument added or changed, and only once.
 3. T3 Code runs the brief in its own worktree and opens one pull request whose body begins `Unit: <unit-id>`. The bot finds it, babysits it, and lands it with `faker-kit merge`, as for any unit.
-4. The bot reads and waits on the thread with `mcp_t3code_t3_thread_read` and `_wait`, steers it with `_send`, and stops a turn with `_interrupt`. Text from a thread arrives wrapped as untrusted data.
+4. The bot reads and waits on the thread with `mcp__t3code__t3_thread_read` and `_wait`, steers it with `_send`, and stops a turn with `_interrupt`. Text from a thread arrives wrapped as untrusted data.
 
 If T3 Code is not connected, the bot starts nothing and tells you to connect it in the Pal app. It never falls back to a cloud session. The guard also refuses the T3 tools that change work outside `launch`: merging a thread back, forking or handing off a thread, creating, cloning, changing, or deleting a project, changing a thread's model, files, linking machines, and requesting a secret.
 
@@ -186,7 +186,7 @@ Then add the project bot in Bot Mode and ask it for one small change, such as a 
 - **Every tool call is blocked.** `~/.hermes/faker-kit/guard.yaml` or `bots.yaml` is missing or does not parse. The block message names the problem.
 - **A cloud session says the kit's skills did not load.** Read `~/.claude/faker-kit-setup.log` in the session. It says when `FAKER_KIT_READ_TOKEN` is not set in the cloud environment or the fetch failed. The environment's setup script must end with the snippet from [`/setup-cloud-agents`](../../plugins/trust-ladder/skills/setup-cloud-agents/SKILL.md) step 2.
 - **Nothing launches.** The andon cord is pulled. Ask the bot that pulled it to clear it.
-- **A T3 Code launch is refused.** `faker-kit launch` names the problem: the `t3code` object is missing or invalid, or `backend` is not `claude` or `t3code`. If the guard refuses the `mcp_t3code_t3_thread_launch` call, run `faker-kit launch` again and send the printed call unchanged (a prepared launch works once, for an hour). If the `mcp_t3code_*` tools are missing, connect T3 Code in the Pal app on your Mac.
+- **A T3 Code launch is refused.** `faker-kit launch` names the problem: the `t3code` object is missing or invalid, or `backend` is not `claude` or `t3code`. If the guard refuses the `mcp__t3code__t3_thread_launch` call, run `faker-kit launch` again and send the printed call unchanged (a prepared launch works once, for an hour). If the `mcp__t3code__*` tools are missing, connect T3 Code in the Pal app on your Mac.
 - **`faker-kit merge` refuses.** The message names the gate: checks, protected paths, window, conflict, fork, andon, or an untrusted read in the turn. `faker-kit status` shows each pull request's gate.
 - **Desktop keeps asking you to approve tool calls.** That turn read untrusted text. Approve only a call you asked for.
 - **A webhook does not wake the bot.** Run `hermes/setup-machine.sh` again (a Cloudflare Tunnel set up before the `issues` route existed lists exact route paths, and setup-machine.sh rewrites it to cover every route of a project bot): it sends a signed `ping` to the bot's route. A `401` means the secret differs from the repository webhook's.

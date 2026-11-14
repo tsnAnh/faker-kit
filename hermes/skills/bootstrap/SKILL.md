@@ -90,7 +90,7 @@ Then:
 faker-kit launch --project <project> --brief-file ~/.hermes/faker-kit/briefs/<your bot>/setup-<project>.md
 ```
 
-It prints the cloud `session`. If it prints `backend: t3code` instead, the repository already dispatches to T3 Code: make the one printed `call` unchanged and tell the owner the `threadId` it returns, or, when the `mcp_t3code_*` tools are missing, tell the owner to connect T3 Code in the Pal app on their Mac. Tell the owner the session link, that the pull request it opens is theirs to review and merge. If the owner wants required checks on the default branch, they set them in the repository's GitHub settings (the kit cannot, on a plan without branch protection; `faker-kit merge` enforces its gate in code either way).
+It prints the cloud `session`. If it prints `backend: t3code` instead, the repository already dispatches to T3 Code: make the one printed `call` unchanged and tell the owner the `threadId` it returns, or, when the `mcp__t3code__*` tools are missing, tell the owner to connect T3 Code in the Pal app on their Mac. Tell the owner the session link, that the pull request it opens is theirs to review and merge. If the owner wants required checks on the default branch, they set them in the repository's GitHub settings (the kit cannot, on a plan without branch protection; `faker-kit merge` enforces its gate in code either way).
 
 ## 5. The bot's GitHub login
 

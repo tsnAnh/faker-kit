@@ -14,8 +14,8 @@ from guard_scenario import Host, action, blocked
 if TYPE_CHECKING:
     from run_dispatch_e2e import Run
 
-LAUNCH = "mcp_t3code_t3_thread_launch"
-SEND = "mcp_t3code_t3_thread_send"
+LAUNCH = "mcp__t3code__t3_thread_launch"
+SEND = "mcp__t3code__t3_thread_send"
 SHOP_PROJECT = "proj-shop-1"
 PROJECT_PATH = "/Users/owner/Code/shop"
 PROVIDER, MODEL = "claudeAgent", "claude-sonnet-4-5"
@@ -263,7 +263,7 @@ def path_cases(run: Run, host: Host, bot: str, real: float) -> None:
     args = printed.get("call", {}).get("args", {})
     resolve = printed.get("resolve_project", {})
     run.step("t3code: a project given as a Mac path prints no projectId and says how to resolve it; a base_ref of main is used as given, a model left to the T3 project",
-             code == 0 and "projectId" not in args and resolve.get("tool") == "mcp_t3code_t3_project_list" and resolve.get("workspaceRoot") == PROJECT_PATH
+             code == 0 and "projectId" not in args and resolve.get("tool") == "mcp__t3code__t3_project_list" and resolve.get("workspaceRoot") == PROJECT_PATH
              and args.get("workspaceStrategy") == {"type": "worktree", "baseRef": "main"} and "modelSelection" not in args and printed.get("model_defaulted"), err or json.dumps(printed)[:200])
     resolved = {**args, "projectId": "proj-resolved-from-list"}
     missing = host.tool(LAUNCH, args, bot, host.sid(), "t1", "a path project launch with no projectId")
@@ -281,8 +281,8 @@ def tool_cases(run: Run, host: Host) -> None:
     leaked = host.tool(SEND, {"threadId": "t-1", "message": f"push with {token}", "mode": "queue"}, "meo-beo", host.sid(), "t1", "t3code steering with a token")
     clean = host.tool(SEND, {"threadId": "t-1", "message": "Rebase on origin/main and push.", "mode": "queue"}, "meo-beo", host.sid(), "t1", "t3code steering")
     run.step("t3code guard: a steering message holding a token shape is refused and a plain one passes", blocked(leaked, "token or key") and clean is None, f"{action(leaked)}, {action(clean)}")
-    wrapped = {short: host.result(f"mcp_t3code_{short}", {"threadId": "t-1"}, "agent text", session="read", turn="t1") for short in (*READ_TOOLS, *PLAIN_TOOLS, "t3_thread_launch")}
-    got = {short for short, out in wrapped.items() if out is not None and out.startswith(f'<untrusted source="mcp_t3code_{short}">')}
+    wrapped = {short: host.result(f"mcp__t3code__{short}", {"threadId": "t-1"}, "agent text", session="read", turn="t1") for short in (*READ_TOOLS, *PLAIN_TOOLS, "t3_thread_launch")}
+    got = {short for short, out in wrapped.items() if out is not None and out.startswith(f'<untrusted source="mcp__t3code__{short}">')}
     run.step("t3code guard: results of thread reads, waits, lists, and searches arrive wrapped as untrusted data and project lists and launches do not", got == set(READ_TOOLS),
              f"{len(got)} wrapped")
 
