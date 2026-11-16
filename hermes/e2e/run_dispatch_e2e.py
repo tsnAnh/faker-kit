@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 import gate_scenario
 import guard_scenario
 import import_scenario
+import kanban_scenario
 import refresh_scenario
 import t3code_scenario
 import tooling_scenario
@@ -137,6 +138,7 @@ def pull_row(pull):
         "head": {"sha": pull["head"], "ref": pull["branch"], "repo": {"full_name": pull.get("head_repo", state["repo"]), "owner": {"login": pull.get("head_repo", state["repo"]).split("/")[0]}}},
         "base": {"ref": pull.get("base", "main"), "repo": {"full_name": state["repo"]}},
         **({} if pull.get("omit_labels") else {"labels": pull.get("labels", [{"name": "faker-kit"}])}),
+        **({"merge_commit_sha": pull["merge_commit_sha"]} if pull.get("merge_commit_sha") else {}),
     }
 
 
@@ -157,7 +159,7 @@ if args[0] == "api":
         if state.get("put_mode") == "reject":
             save()
             fail("gh: Pull Request is not mergeable (HTTP 405)")
-        pull["state"], pull["merged_at"] = "closed", "2026-10-20T00:00:00Z"
+        pull["state"], pull["merged_at"], pull["merge_commit_sha"] = "closed", "2026-10-20T00:00:00Z", f"{number:040x}"
         state["merges"].append({"pr": number, "sha": fields["sha"], "method": fields["merge_method"]})
         save()
         if state.get("on_put_write"):
@@ -376,6 +378,9 @@ if args[:1] == ["-p"]:
 base = root if profile == "default" else root / "profiles" / profile
 
 
+#KANBAN#
+
+
 def load(path, default):
     return (yaml.safe_load(path.read_text()) if path.exists() else None) or default
 
@@ -475,9 +480,11 @@ elif args[:2] == ["plugins", "enable"]:
     (base / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=True))
 elif args[:1] == ["send"]:
     pass
+elif args[:1] == ["kanban"]:
+    kanban_main()
 elif args[:1] != ["gateway"]:
     sys.exit(2)
-'''
+'''.replace("#KANBAN#", kanban_scenario.FAKE_KANBAN)
 
 
 def no_network(*_args: object) -> object:
@@ -829,6 +836,25 @@ def credential_scenario(run: Run) -> None:
              spawns == {"faker_kit_gh.py", "faker_kit_runner.py"}, ", ".join(sorted(spawns)))
 
 
+def claude_preflight_steps(run: Run, brief: Path) -> None:
+    before = len(run.claude_log.read_text().splitlines())
+    only_gh = run.root / "only-gh"
+    only_gh.mkdir()
+    (only_gh / "gh").symlink_to(run.bin / "gh")
+    code, _, err = run.kit("launch", "--brief-file", str(brief), env={"PATH": str(only_gh)})
+    run.step("launch preflight: a claude repository on a machine with no claude CLI is refused naming the CLI, with install and sign-in recovery only",
+             code == 1 and "claude CLI is not installed" in err and "claude auth login" in err and "t3" not in err.lower() and "dispatch.json" not in err, err.strip())
+    signed_out = run.root / "signed-out"
+    signed_out.mkdir()
+    (signed_out / "gh").symlink_to(run.bin / "gh")
+    (signed_out / "claude").write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps({{'loggedIn': False}}) if sys.argv[1:] == ['auth', 'status'] else '')\n")
+    (signed_out / "claude").chmod(0o755)
+    code, _, err = run.kit("launch", "--brief-file", str(brief), env={"PATH": str(signed_out)})
+    run.step("launch preflight: a claude CLI that is not signed in is refused naming sign-in, with no T3 recovery",
+             code == 1 and "not signed in" in err and "claude auth login" in err and "t3" not in err.lower(), err.strip())
+    run.step("launch preflight: those refusals started no session", len(run.claude_log.read_text().splitlines()) == before, "")
+
+
 def launch_scenario(run: Run) -> None:
     good = run.brief("typo.md", "/faker-mode\n\nGOAL: fix the README typo.\nSCOPE: README.md only.\n")
     code, out, err = run.kit("launch", "--brief-file", str(good))
@@ -868,6 +894,7 @@ def launch_scenario(run: Run) -> None:
     run.step("launch starts the session on the model and effort the bot chose for the task", code == 0 and chosen.get("model") == "sonnet"
              and chosen.get("effort") == "low" and chosen["argv"][-1].startswith("/faker-mode") and json.loads(out)["model"] == "sonnet", out.strip() or err.strip())
     effort_scenario(run, good)
+    claude_preflight_steps(run, good)
     sessions = len(run.claude_log.read_text().splitlines())
 
     code, _, err = run.kit("merge", "--pr", "1", bot=BOOTSTRAP)
@@ -1654,6 +1681,68 @@ def action_of(verdict: dict | None) -> str:
     return "allow" if verdict is None else verdict["action"]
 
 
+def outcome_steps(run: Run, chief: Callable[..., tuple[int, dict | None, str]]) -> None:
+    run.clock += 60
+    code, plain, err = chief("handoff", "--project", "shop", "--part", "Ship the changelog page", "--decisions", NONE_DECISIONS)
+    run.step("handoff without --outcome asks for a merged pull request, with no stages recorded and nothing reached",
+             code == 0 and plain is not None and plain["outcome"] == "merged-pr" and plain["stages"] == {} and plain["reached"] == "none", err or json.dumps(plain))
+    code, built, err = chief("handoff", "--project", "shop", "--part", "Build the release archive", "--decisions", NONE_DECISIONS, "--outcome", "built")
+    run.step("handoff --outcome built records the requested outcome", code == 0 and built is not None and built["outcome"] == "built", err or json.dumps(built))
+    try:
+        invalid = chief("handoff", "--project", "shop", "--part", "Install it", "--decisions", NONE_DECISIONS, "--outcome", "shipped")
+    except SystemExit as stop:
+        invalid = (int(stop.code or 0), None, "--outcome is not one of the outcomes")
+    run.step("handoff refuses an outcome that is not merged-pr, built, installed, or verified and records nothing",
+             invalid[0] != 0 and "--outcome" in invalid[2] and len((chief("loop")[1] or {})["open"]) == 2, invalid[2])
+    assert built is not None and plain is not None
+    refused = chief("loop", "set", str(built["id"]), "--state", "merged", "--pr", "30")
+    still = next(p for p in (chief("loop", "--all")[1] or {})["open"] if p["id"] == built["id"])
+    run.step("a merged pull request does not complete a built part: set merged is refused, naming the missing built evidence, and the state stays",
+             refused[0] == 1 and "built evidence" in refused[2] and "--evidence built=" in refused[2] and still["state"] == "handed-out" and still["reached"] == "none", refused[2])
+    wrong_stage = chief("loop", "set", str(built["id"]), "--state", "merged", "--evidence", "installed=app-1.2.dmg")
+    run.step("evidence for another stage does not complete a built part", wrong_stage[0] == 1 and "built evidence" in wrong_stage[2], wrong_stage[2])
+    bad_evidence = [chief("loop", "set", str(built["id"]), "--evidence", value) for value in ("built", "shipped=x", "built=", "built=a\nb", "built=" + "x" * 201, "built=ghp_" + "A" * 36)]
+    run.step("loop set refuses evidence with no stage, an unknown stage, an empty or multi-line or oversized reference, or a token, and records nothing",
+             all(code == 1 for code, _, _ in bad_evidence) and chief("loop", "set", str(built["id"]))[1]["stages"] == {}, " | ".join(e.strip()[:60] for _, _, e in bad_evidence))
+    accepted = chief("loop", "set", str(built["id"]), "--state", "merged", "--evidence", "built=artifacts/release-1.2.tgz sha256:abc123")
+    run.step("set merged is accepted for a built part once its built evidence is recorded, in the same call",
+             accepted[0] == 0 and accepted[1] is not None and accepted[1]["state"] == "merged" and accepted[1]["stages"] == {"built": "artifacts/release-1.2.tgz sha256:abc123"}
+             and accepted[1]["reached"] == "built", accepted[2] or json.dumps(accepted[1]))
+    ready = chief("loop", "set", str(plain["id"]), "--state", "merged", "--pr", "31")
+    verified = chief("handoff", "--project", "shop", "--part", "Verify the installer on a clean Mac", "--decisions", NONE_DECISIONS, "--outcome", "verified")[1]
+    assert verified is not None
+    chief("loop", "set", str(verified["id"]), "--evidence", "built=run-17")
+    early = chief("loop", "set", str(verified["id"]), "--state", "merged")
+    chief("loop", "set", str(verified["id"]), "--evidence", "installed=mac-mini-2", "--evidence", "verified=transcript-17")
+    done = chief("loop", "set", str(verified["id"]), "--state", "merged")
+    run.step("a merged-pr part is done when merged as before, and a verified part is refused with only earlier stages and accepted once verified is recorded",
+             ready[0] == 0 and ready[1] is not None and ready[1]["reached"] == "merged-pr" and early[0] == 1 and "verified evidence" in early[2]
+             and done[0] == 0 and done[1] is not None and done[1]["reached"] == "verified", early[2])
+    abandoned = chief("handoff", "--project", "shop", "--part", "Install the beta everywhere", "--decisions", NONE_DECISIONS, "--outcome", "installed")[1]
+    assert abandoned is not None
+    gone = chief("loop", "set", str(abandoned["id"]), "--state", "abandoned")
+    taken = chief("handoff", "--project", "shop", "--part", "Verify the beta on a device", "--decisions", NONE_DECISIONS, "--outcome", "verified")[1]
+    assert taken is not None
+    back = chief("loop", "set", str(taken["id"]), "--state", "taken-back")
+    run.step("abandoned and taken-back are always allowed, without evidence", gone[0] == 0 and back[0] == 0 and back[1] is not None and back[1]["reached"] == "none", gone[2] + back[2])
+    run.clock += 60
+    digest = chief("loop", "digest")[1] or {}
+    rows = {p["id"]: p for p in digest["closed"]}
+    run.step("loop digest rows carry the requested outcome and the highest stage reached",
+             rows[built["id"]]["outcome"] == "built" and rows[built["id"]]["reached"] == "built" and rows[verified["id"]]["outcome"] == "verified"
+             and rows[verified["id"]]["reached"] == "verified" and rows[plain["id"]]["outcome"] == "merged-pr" and rows[plain["id"]]["reached"] == "merged-pr"
+             and rows[abandoned["id"]]["reached"] == "none", json.dumps({i: (p["outcome"], p["reached"]) for i, p in rows.items()}))
+    store = run.team / "loop" / f"{CHIEF}.json"
+    data = json.loads(store.read_text())
+    for old in data["parts"]:
+        if old["id"] == plain["id"]:
+            old.pop("outcome"), old.pop("stages")
+    store.write_text(json.dumps(data))
+    legacy = next(p for p in (chief("loop", "--all")[1] or {})["open"] if p["id"] == plain["id"])
+    run.step("a loop entry written before outcomes existed still loads, reads as merged-pr, and shows what it reached",
+             legacy["outcome"] == "merged-pr" and legacy["stages"] == {} and legacy["reached"] == "merged-pr" and chief("loop", "set", str(plain["id"]), "--reported")[0] == 0, json.dumps(legacy))
+
+
 def loop_scenario(run: Run) -> None:
     bots = run.team / "bots.yaml"
     before = bots.read_text()
@@ -1717,6 +1806,7 @@ def loop_scenario(run: Run) -> None:
     run.step("the digest names a merged part once, then starts the next window",
              first is not None and first["waiting_on_owner"] and second is not None and [p["id"] for p in second["closed"]] == [1] and second["in_flight"] == []
              and third is not None and third["closed"] == [], json.dumps(second))
+    outcome_steps(run, chief)
     store = run.team / "loop" / f"{CHIEF}.json"
     run.step("the loop store is written by faker-kit only, readable by its owner only", store.exists() and oct(store.stat().st_mode & 0o777) == "0o600", oct(store.stat().st_mode & 0o777))
     kept = store.read_text()
@@ -3914,6 +4004,12 @@ def main(argv: list[str] | None = None) -> int:
         owner_landing_scenario(run)
         owner_reviews_scenario(run)
         merge_open_scenario(run)
+        kanban_run = Run(root / "kanban", run.steps, run.verdicts)
+        kanban_run.build()
+        kanban_scenario.kanban_scenario(kanban_run, faker_kit.Loop, faker_kit.LoopError)
+        kanban_merge_run = Run(root / "kanban-merge", run.steps, run.verdicts)
+        kanban_merge_run.build()
+        kanban_scenario.kanban_merge_scenario(kanban_merge_run, open_gates)
     except Failure as err:
         print(f"e2e stopped at: {err}", file=sys.stderr)
         code = 1

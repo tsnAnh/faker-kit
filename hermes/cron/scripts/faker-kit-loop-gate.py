@@ -20,6 +20,20 @@ def read_report(done: subprocess.CompletedProcess[str]) -> tuple[list[dict], lis
     return parts, to_report
 
 
+def distinct(parts: list[dict]) -> list[dict]:
+    ids: set[object] = set()
+    pulls: set[tuple[str, object]] = set()
+    kept = []
+    for part in parts:
+        claimed = {(str(part["project"]), pr) for pr in part["prs"]}
+        if part["id"] in ids or (claimed and claimed <= pulls):
+            continue
+        ids.add(part["id"])
+        pulls |= claimed
+        kept.append(part)
+    return kept
+
+
 def due_waiting(parts: list[dict]) -> list[dict]:
     merged = {(part["project"], pr) for part in parts if part["state"] == "merged" for pr in part["prs"]}
     due = []
@@ -32,7 +46,7 @@ def due_waiting(parts: list[dict]) -> list[dict]:
 
 def main() -> None:
     parts, to_report = read_report(gate.run_kit("loop", "--all"))
-    due = due_waiting(parts)
+    due, to_report = distinct(due_waiting(parts)), distinct(to_report)
     if not due and not to_report:
         gate.quiet()
         return

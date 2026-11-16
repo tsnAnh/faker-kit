@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from faker_kit_gh import scrub
+from faker_kit_kanban import Card
+
 MERGE_METHOD = "squash"
 REVIEW_WORKFLOW = ".github/workflows/claude-review.yml"
 KIT_CHECKS_WORKFLOW = ".github/workflows/faker-kit-checks.yml"
@@ -18,6 +21,7 @@ PASSING_CONCLUSIONS = ("success", "neutral", "skipped")
 FORMAL_REVIEWS = ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
 IGNORED_STATUS = "security-review"
 TOKEN_CHARS = 40
+UNIT_LINE = re.compile(r"\AUnit: ([a-z0-9][a-z0-9-]{0,63})[ \t]*\r?(?:\n|\Z)")
 PR_LABEL = "faker-kit"
 PR_LABEL_COLOR = "0e8a16"
 PR_LABEL_DESCRIPTION = "Opened by a faker-kit bot session; autonomous bots act only on pull requests with this label"
@@ -66,6 +70,35 @@ def label_refusal(pull: dict, owner_approved: bool) -> str | None:
     if owner_approved or state == "labeled":
         return None
     return f"{unlabeled_text(state)}; it is not a bot session's pull request (an owner-requested merge uses --owner-approved)"
+
+
+def unit_of(pull: dict) -> str | None:
+    found = UNIT_LINE.match(str(pull.get("body") or ""))
+    return found.group(1) if found else None
+
+
+def card_refusal(pull: dict, card: Card | None, bot: str, owner_approved: bool, cutover: bool, board_external: bool, read_error: str | None, bound_pr: str | None) -> str | None:
+    if owner_approved or not cutover:
+        return None
+    number = pull.get("number")
+    unit = unit_of(pull)
+    if read_error:
+        return f"#{number} cannot be checked against its Kanban card: {read_error.removesuffix('; nothing was changed')}; nothing was merged"
+    if not board_external:
+        return f"#{number}: Kanban board default is not an external board, so no unit card can own it; nothing was merged, and the owner merges it with --owner-approved"
+    if unit is None:
+        return (f"#{number} has no `Unit: <id>` first line in its body, so no unit card owns it; add the line and run `faker-kit loop unit <id> --pr {number}`, "
+                "or the owner merges it with --owner-approved")
+    if card is None:
+        return f"#{number} has no unit card for {unit}; create it with `faker-kit loop unit {unit} --pr {number}`, or the owner merges it with --owner-approved"
+    if card.status == "done" or card.archived:
+        return f"#{number}: unit card {card.id} for {unit} is already {'archived' if card.archived else 'done'}, so it does not own this pull request; the owner merges it with --owner-approved"
+    if card.assignee != bot:
+        return f"#{number}: unit card {card.id} for {unit} belongs to {token(card.assignee or 'nobody')}, not {bot}; the card's owner merges it, or the owner with --owner-approved"
+    url = str(pull.get("html_url") or "")
+    if bound_pr is not None and bound_pr != url:
+        return f"#{number}: unit card {card.id} for {unit} is bound to another pull request ({scrub(bound_pr)}); a card holds one pull request, so create a new unit with `faker-kit loop unit`"
+    return None
 
 
 def token(text: str) -> str:

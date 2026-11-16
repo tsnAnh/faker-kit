@@ -184,8 +184,9 @@ class Gates:
 
         update(mark(updated_at="2026-11-10T09:30:00Z"))
         commented = self.tick(BABYSIT)
-        step("a comment or review on an open pull request moves only its updated time in the real status, which wakes the gate and shows the agent the new time",
-             self.woke(commented, CHANGED) and "updated 2026-11-10T09:30:00Z" in commented.stdout, self.say(commented))
+        healthy = not first.stdout.splitlines()[4].split(" | ")[-1].startswith("blocked:")
+        step("a comment or review on an open pull request moves only its updated time in the real status: a healthy line stays quiet, a blocked one wakes the gate with the new time",
+             self.silent(commented) if healthy else self.woke(commented, CHANGED) and "updated 2026-11-10T09:30:00Z" in commented.stdout, self.say(commented))
         update(mark(mergeable=False))
         moved = self.tick(BABYSIT)
         update(mark(mergeable=shown["mergeable"], updated_at="2026-10-01T00:00:00Z"))
@@ -234,7 +235,8 @@ class Gates:
              self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
              and self.calls() == ["issues", "status"], self.say(first))
         step("it stores the status fingerprint and the wake time as an owner-only file, with no temp file left beside it",
-             set(stored) == {"fingerprint", "woke_at", "retries"} and stored["retries"] == 0 and stored["fingerprint"] == fingerprint_of(STATUS) and bool(FINGERPRINT.match(stored["fingerprint"]))
+             set(stored) == {"fingerprint", "woke_at", "retries", "pulls"} and stored["retries"] == 0 and set(stored["pulls"]) == {"#1", "#2"} and stored["fingerprint"] == fingerprint_of(STATUS)
+             and bool(FINGERPRINT.match(stored["fingerprint"]))
              and abs(stored["woke_at"] - time.time()) < MARGIN and stat.S_IMODE(self.states[BABYSIT].stat().st_mode) == 0o600
              and stat.S_IMODE(folder.stat().st_mode) == 0o700 and [p.name for p in folder.iterdir()] == [self.states[BABYSIT].name], json.dumps(stored))
 
@@ -249,15 +251,17 @@ class Gates:
 
         commented = [STATUS[0].replace("2026-11-09T01:00:00Z", "2026-11-10T03:00:00Z"), STATUS[1]]
         self.serve(commented)
+        kept = self.snapshot(BABYSIT)
         touched = self.tick(BABYSIT)
-        step("a comment-only change, which moves a pull request's updated time and nothing else, wakes the agent with the new time and stores the new fingerprint",
-             self.woke(touched, CHANGED) and touched.stdout.splitlines()[4:] == commented and self.state(BABYSIT)["fingerprint"] == fingerprint_of(commented), self.say(touched))
+        step("healthy progress wakes nothing: a pull request whose only difference is its updated time, with the same head and a gate that is not blocked, stays quiet and writes nothing",
+             self.silent(touched) and self.snapshot(BABYSIT) == kept, self.say(touched))
 
         changed = [commented[0], commented[1].replace("pending", "failed")]
         self.serve(changed)
         woken = self.tick(BABYSIT)
-        step("a changed status wakes the agent with the new lines and stores the new fingerprint",
-             self.woke(woken, CHANGED) and woken.stdout.splitlines()[4:] == changed and self.state(BABYSIT)["fingerprint"] == fingerprint_of(changed), self.say(woken))
+        step("a changed status wakes the agent with only the changed pull request's line and stores the new fingerprint",
+             self.woke(woken, CHANGED) and woken.stdout.splitlines()[4:] == [changed[1]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of(changed), self.say(woken))
+        self.news_steps(changed)
 
         self.serve([*changed, NOTICE])
         notice_first, notice_again = self.tick(BABYSIT), self.tick(BABYSIT)
@@ -283,6 +287,45 @@ class Gates:
         self.failed_runs(changed)
         self.damaged_state()
         self.failing_commands()
+
+    def news_steps(self, settled: list[str]) -> None:
+        step = self.run.step
+        self.reset()
+        newer = STATUS[0].replace("2026-11-09T01:00:00Z", "2026-11-10T05:00:00Z")
+        self.serve([STATUS[0], STATUS[1], STATUS[0], newer])
+        first = self.tick(BABYSIT)
+        step("status lines for one pull request collapse to the last one and exact duplicates to one, so the agent sees one line per pull request and the fingerprint covers the collapsed lines",
+             self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[4:] == [newer, STATUS[1]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of([newer, STATUS[1]]), self.say(first))
+        blocker = f"#3 | by dana | ready | labeled | mergeable | updated 2026-11-10T06:00:00Z | head {'d' * 40} | blocked: a person requested changes"
+        self.serve([newer, STATUS[1], blocker])
+        opened = self.tick(BABYSIT)
+        step("a new blocker wakes the agent with its one line and not the lines of the pull requests that did not change",
+             self.woke(opened, CHANGED) and opened.stdout.splitlines()[4:] == [blocker], self.say(opened))
+        touched_blocker = blocker.replace("2026-11-10T06:00:00Z", "2026-11-10T07:00:00Z")
+        self.serve([newer, STATUS[1], touched_blocker])
+        retouched = self.tick(BABYSIT)
+        step("a blocked pull request whose updated time moved is a changed blocker and wakes the agent",
+             self.woke(retouched, CHANGED) and retouched.stdout.splitlines()[4:] == [touched_blocker], self.say(retouched))
+        self.serve([newer, STATUS[1], touched_blocker.replace("2026-11-10T07:00:00Z", "2026-11-10T08:00:00Z").replace("blocked: a person requested changes", "ready to merge")])
+        unblocked = self.tick(BABYSIT)
+        step("a blocker that clears is a changed pull request and wakes the agent with its new line",
+             self.woke(unblocked, CHANGED) and unblocked.stdout.splitlines()[4:] == [self.served_last()], self.say(unblocked))
+        self.serve([newer, STATUS[1]])
+        completed = self.tick(BABYSIT)
+        step("a pull request that was in the stored status and is gone wakes the agent with one completion line and nothing else",
+             self.woke(completed, CHANGED) and completed.stdout.splitlines()[4:] == ["#3 merged or closed"], self.say(completed))
+        kept = self.snapshot(BABYSIT)
+        again = self.tick(BABYSIT)
+        step("an unchanged tick after that is quiet and writes nothing", self.silent(again) and self.snapshot(BABYSIT) == kept, self.say(again))
+        stored = self.state(BABYSIT)
+        self.states[BABYSIT].write_text(json.dumps({"fingerprint": fingerprint_of(["#9 | old"]), "woke_at": stored["woke_at"], "retries": 0}))
+        legacy = self.tick(BABYSIT)
+        step("a state file with no per-pull-request fingerprints reads as changed once: the agent wakes with every line, and the file gains them",
+             self.woke(legacy, CHANGED) and legacy.stdout.splitlines()[4:] == [newer, STATUS[1]] and set(self.state(BABYSIT)["pulls"]) == {"#1", "#2"}, self.say(legacy))
+        self.serve(settled)
+
+    def served_last(self) -> str:
+        return (self.fake / "status.out").read_text().splitlines()[-1]
 
     def unlabeled_pulls(self) -> None:
         step = self.run.step
@@ -604,6 +647,10 @@ class Gates:
         reported = serve_loop([part(3, "blocked")], [news])
         step("a part listed under to_report wakes the chief with it",
              self.woke(reported, LOOP_REASON) and json.loads(reported.stdout.splitlines()[2]) == {"due_waiting": [], "to_report": [news]}, self.say(reported))
+        ready = part(14, "ready-to-merge", prs=[21])
+        repeated = serve_loop([provider, waiting, waiting], [news, news, ready, part(15, "ready-to-merge", prs=[21])])
+        step("a part listed twice, or a second part naming a pull request another part already reports, is reported once in the chief's wake",
+             self.woke(repeated, LOOP_REASON) and json.loads(repeated.stdout.splitlines()[2]) == {"due_waiting": due, "to_report": [news, ready]}, self.say(repeated))
         both = serve_loop([provider, waiting, news], [news])
         step("a due part and a reportable part wake the chief once with both",
              self.woke(both, LOOP_REASON) and json.loads(both.stdout.splitlines()[2]) == {"due_waiting": due, "to_report": [news]}, self.say(both))

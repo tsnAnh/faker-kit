@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Mapping
+import shutil
+import subprocess
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -13,6 +15,10 @@ from faker_kit_gh import Refused, Runner, fix_git_protocol
 DEFAULT_BACKEND = "claude"
 DISPATCH_FILE = ".agents/dispatch.json"
 BACKEND_NAME = re.compile(r"[^A-Za-z0-9_-]")
+CLAUDE_READY = "ready"
+CLAUDE_MISSING = "missing"
+CLAUDE_SIGNED_OUT = "signed_out"
+CLAUDE_PROBE_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -66,11 +72,47 @@ def read_dispatch(text: str | None, default_branch: str) -> Dispatch:
 
 
 Factory = Callable[[Dispatch], Launcher]
+ClaudeState = Callable[[], str]
+BackendCheck = Callable[[Dispatch], None]
+
+
+def unknown_backend(dispatch: Dispatch, known: Iterable[str]) -> Refused:
+    shown = BACKEND_NAME.sub("?", dispatch.backend)[:32]
+    return Refused(f"{DISPATCH_FILE} names the backend {shown!r}; launch knows {', '.join(sorted(known))}")
 
 
 def pick_factory(dispatch: Dispatch, registry: Mapping[str, Factory]) -> Factory:
     found = registry.get(dispatch.backend)
     if found is None:
-        shown = BACKEND_NAME.sub("?", dispatch.backend)[:32]
-        raise Refused(f"{DISPATCH_FILE} names the backend {shown!r}; launch knows {', '.join(sorted(registry))}")
+        raise unknown_backend(dispatch, registry)
     return found
+
+
+def claude_cli_state() -> str:
+    claude = shutil.which("claude")
+    if not claude:
+        return CLAUDE_MISSING
+    try:
+        status = subprocess.run([claude, "auth", "status"], capture_output=True, text=True, timeout=CLAUDE_PROBE_SECONDS).stdout
+        return CLAUDE_READY if json.loads(status).get("loggedIn") is True else CLAUDE_SIGNED_OUT
+    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError):
+        return CLAUDE_SIGNED_OUT
+
+
+def check_claude_backend(claude_state: ClaudeState) -> BackendCheck:
+    def check(_dispatch: Dispatch) -> None:
+        state = claude_state()
+        if state == CLAUDE_MISSING:
+            raise Refused("launch is blocked: the claude CLI is not installed on this machine; install it (npm install -g @anthropic-ai/claude-code), "
+                          "run claude auth login, then launch again")
+        if state != CLAUDE_READY:
+            raise Refused("launch is blocked: the claude CLI is not signed in on this machine; run claude auth login, then launch again")
+
+    return check
+
+
+def preflight(dispatch: Dispatch, checks: Mapping[str, BackendCheck]) -> None:
+    check = checks.get(dispatch.backend)
+    if check is None:
+        raise unknown_backend(dispatch, checks)
+    check(dispatch)
