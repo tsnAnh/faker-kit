@@ -17,6 +17,7 @@ MARKER = "kanban-cutover.json"
 TIMEOUT_SECONDS = 60
 EXTERNAL = "external"
 MUTATING = frozenset({"create", "link", "edit", "claim", "evidence", "complete", "archive"})
+ACCEPTANCE_CLASSIFICATIONS = ("pending", "failure", "missing", "stale", "provenance", "auth", "infra", "mismatch")
 EVIDENCE_KINDS = ("execution_ref", "pr_published", "pr_merged", "artifact_built", "app_installed", "other_result")
 SINGLE = ("Key", "Kind", "Project", "Bot", "Outcome", "State", "Waits-on", "PRs", "Reported", "Part", "Added", "Updated", "Decisions")
 REPEATED = ("Stage", "History", "PR", "Session")
@@ -329,3 +330,17 @@ class Kanban:
             raise KanbanError("could not read Kanban (the runs are not a list); nothing was changed")
         open_ids = [r["id"] for r in runs if isinstance(r, dict) and isinstance(r.get("id"), int) and r.get("ended_at") is None]
         return max(open_ids) if open_ids else None
+
+    def acceptance(self, card: str, run_id: int) -> tuple[str, str] | None:
+        events = self.shown(card).get("events")
+        if not isinstance(events, list):
+            raise KanbanError("could not read Kanban (the events are not a list); nothing was changed")
+        found: tuple[str, str] | None = None
+        for event in events:
+            payload = event.get("payload") if isinstance(event, dict) else None
+            if not isinstance(event, dict) or event.get("kind") != "pr_acceptance" or event.get("run_id") != run_id or not isinstance(payload, dict):
+                continue
+            classification = payload.get("classification")
+            if classification in ACCEPTANCE_CLASSIFICATIONS or classification == "success":
+                found = (str(classification), str(payload.get("detail") or ""))
+        return found

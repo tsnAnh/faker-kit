@@ -4,9 +4,11 @@ import contextlib
 import json
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
-from faker_kit_kanban import Card, Header, Kanban, KanbanError, NewCard
+from faker_kit_gh import scrub
+from faker_kit_kanban import ACCEPTANCE_CLASSIFICATIONS, Card, EvidenceRow, Header, Kanban, KanbanError, NewCard
 from faker_kit_loop import (
     CLOSED,
     DEFAULT_OUTCOME,
@@ -34,6 +36,8 @@ VERIFIED_NAME = "faker-kit-verified"
 MAX_CARD_REF = 600
 UNIT_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,63}\Z")
 DIGEST_FILE = "kanban-digest.json"
+PR_EVIDENCE = ("pr_published", "pr_merged")
+REFUSAL_CLASS = re.compile(r"PR acceptance (" + "|".join(ACCEPTANCE_CLASSIFICATIONS) + r")\b")
 
 
 def part_key(part_id: int) -> str:
@@ -253,3 +257,45 @@ def unit_rows(kanban: Kanban, project: str) -> dict:
             rows.append({"unit": card.title, "card": card.id, "state": fields.get("State"), "prs": [int(p) for p in fields.get("PRs", "").split(",") if p.isdigit()],
                          "part": int(fields["Part"]) if fields.get("Part", "").isdigit() else None, "outcome": fields.get("Outcome"), "closed": card.archived or fields.get("State") in CLOSED})
     return {"units": sorted(rows, key=lambda r: r["unit"])}
+
+
+def bound_pr_url(rows: list[EvidenceRow]) -> str | None:
+    urls = sorted({str(row.payload["pr_url"]) for row in rows if row.kind in PR_EVIDENCE and isinstance(row.payload.get("pr_url"), str)})
+    return urls[0] if urls else None
+
+
+@dataclass(frozen=True)
+class Merged:
+    pr: int
+    url: str
+    head: str
+    merge_commit: str
+
+
+def complete_card(kanban: Kanban, card: Card, outcome: str, merged: Merged) -> dict:
+    run_id: int | None = None
+    try:
+        run_id = kanban.open_run(card.id)
+        if run_id is None:
+            run_id = kanban.claim(card.id)
+        have = {(row.kind, row.payload.get("pr_url")) for row in kanban.evidence_list(card.id)}
+        if ("pr_published", merged.url) not in have:
+            kanban.evidence_add(card.id, run_id, "pr_published", {"pr_url": merged.url, "head_sha": merged.head})
+        if outcome == DEFAULT_OUTCOME and ("pr_merged", merged.url) not in have:
+            kanban.evidence_add(card.id, run_id, "pr_merged", {"pr_url": merged.url, "head_sha": merged.head, "merge_commit": merged.merge_commit})
+        kanban.complete(card.id, run_id, merged.url, f"Merged pull request #{merged.pr}")
+    except KanbanError as err:
+        return {"id": card.id, "completion": "refused", **refusal_detail(kanban, card.id, run_id, str(err))}
+    return {"id": card.id, "completion": "done"}
+
+
+def refusal_detail(kanban: Kanban, card_id: str, run_id: int | None, text: str) -> dict:
+    receipt = None
+    if run_id is not None:
+        try:
+            receipt = kanban.acceptance(card_id, run_id)
+        except KanbanError:
+            receipt = None
+    named = REFUSAL_CLASS.search(text)
+    classification = receipt[0] if receipt else (named.group(1) if named else "unknown")
+    return {"classification": classification, "detail": scrub(receipt[1] if receipt and receipt[1] else text)[:160]}
