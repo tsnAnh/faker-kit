@@ -30,6 +30,7 @@ if (HERE.parent / "vendor").is_dir() and str(HERE.parent / "vendor") not in sys.
 
 import yaml
 from faker_kit_andon import LABEL, MACHINE, Andon, AndonError, Cord, clean_reason, issue_body
+from faker_kit_cards import CardLoop, create_unit, unit_rows
 from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, Cloud, CloudError, trust_checkout
 from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
 from faker_kit_gh import NAME, Coded, Gh, Refused, Runner, credential_problem, credential_state, fix_git_protocol, run_gh
@@ -54,10 +55,12 @@ from faker_kit_import import verify as verify_import
 from faker_kit_incident_sources import FetchJson, fetch_json
 from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
+from faker_kit_kanban import Kanban, KanbanRunner, cutover, hermes_runner
 from faker_kit_launch import DISPATCH_FILE, BackendCheck, ClaudeLauncher, ClaudeState, Dispatch, Factory, check_claude_backend, claude_cli_state, pick_factory, preflight, read_dispatch
 from faker_kit_loop import DEFAULT_OUTCOME, OUTCOMES, Loop, LoopError, part_row
 from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, Project, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
 from faker_kit_merge import MERGE_METHOD, PR_LABEL, PR_LABEL_COLOR, PR_LABEL_DESCRIPTION, Evidence, MergeLock, decide, from_fork, label_refusal, label_state, token, unlabeled_text
+from faker_kit_migrate import migrate_chief, migrate_project
 from faker_kit_profiles import Profiles
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
@@ -100,8 +103,9 @@ FAKER_FOOTER = (
     "and list the question under \"Open questions\" in the pull request body.\n"
 )
 FAKER_RULE = FAKER_FOOTER.strip().removeprefix("Faker-mode rule: ")
+LOOP_ACTIONS = {"chief": ("show", "set", "digest", "migrate"), "project": ("show", "migrate", "unit")}
 ROLE_COMMANDS = {
-    "project": {"launch", "merge", "status", "andon", "incidents", "issues"},
+    "project": {"launch", "merge", "status", "andon", "incidents", "issues", "loop"},
     "bootstrap": {"add-project", "launch", "status", "andon", "refresh", "import"},
     "chief": {"status", "handoff", "loop", "add-project", "merge", "refresh"},
 }
@@ -199,8 +203,10 @@ class PutFailed(Refused):
 class Kit:
     def __init__(self, run: Runner = run_gh, cloud: Cloud | None = None, home: Path | None = None, now: Callable[[], float] = time.time,
                  fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status, sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping,
-                 tool: Tool = run_tool, refresher: Refresher = refresh, claude_state: ClaudeState = claude_cli_state) -> None:
+                 tool: Tool = run_tool, refresher: Refresher = refresh, claude_state: ClaudeState = claude_cli_state,
+                 kanban_runner: Callable[[str], KanbanRunner] = hermes_runner) -> None:
         self.claude_state = claude_state
+        self.kanban_runner = kanban_runner
         self.run, self.now, self.fetch_api, self.fetch_url, self.sleep, self.post = run, now, fetch_api, fetch_url, sleep, post
         self.tool, self.refresher = tool, refresher
         self.home = home or faker_kit_home()
@@ -669,22 +675,82 @@ class Kit:
                            "labeled" if labels == "labeled" else "unlabeled", mergeable,
                            f"updated {updated if UPDATED_AT.match(updated) else 'unknown'}", f"head {head if SHA.match(head) else 'unknown'}", gate])
 
+    def kanban(self, caller: Bot) -> Kanban:
+        return Kanban(self.kanban_runner(caller.name))
+
     def handoff(self, caller: Bot, project: str, part: str, decisions: str, outcome: str = DEFAULT_OUTCOME) -> dict:
         owner = self.policy().projects().get(project)
         if owner is None:
             raise Refused(f"no project {project} on this machine; faker-kit status --all lists them")
+        if cutover(self.home):
+            return CardLoop(self.kanban(caller), self.home, caller.name).add(project, owner.name, str(owner.repo), part, decisions, self.now(), outcome)
         return part_row(Loop(self.home, caller.name).add(project, owner.name, part, decisions, self.now(), outcome))
 
-    def loop(self, caller: Bot, action: str, part_id: int | None, state: str | None, prs: list[int], waits_on: str | None, reported: bool,
-             everything: bool, evidence: list[str] | None = None) -> dict:
+    def loop(self, caller: Bot, action: str, part_id: int | str | None, state: str | None, prs: list[int], waits_on: str | None, reported: bool,
+             everything: bool, evidence: list[str] | None = None, dry_run: bool = False, apply: bool = False, part: int | None = None) -> dict:
+        if action not in LOOP_ACTIONS[caller.role]:
+            raise Refused(f"loop {action} is not one of {caller.name}'s actions ({', '.join(LOOP_ACTIONS[caller.role])})")
+        if action == "migrate":
+            return self.loop_migrate(caller, part_id, state, prs, waits_on, reported, evidence, dry_run, apply, part)
+        if dry_run or apply:
+            raise Refused("--dry-run and --apply belong to loop migrate")
+        if action == "unit":
+            return self.loop_unit(caller, part_id, state, waits_on, reported, evidence, prs, part)
+        if part is not None:
+            raise Refused("--part belongs to loop unit")
+        if caller.role == "project":
+            if part_id is not None or state or prs or waits_on or reported or evidence:
+                raise Refused("loop show takes no part id or changes")
+            if not cutover(self.home):
+                raise Refused("the Kanban cutover is not done: units still live in units.tsv, and loop migrate --dry-run shows what moving them would do")
+            return unit_rows(self.kanban(caller), str(caller.project))
+        if not cutover(self.home):
+            return self.old_loop(caller, action, part_id, state, prs, waits_on, reported, everything, evidence)
+        cards = CardLoop(self.kanban(caller), self.home, caller.name)
+        if action == "set":
+            if part_id is None:
+                raise Refused("loop set takes the part's id: faker-kit loop set <id> --state <state>")
+            return cards.update(self.part_number(part_id), state, prs, waits_on, reported, self.now(), evidence)
+        if part_id is not None or state or prs or waits_on or reported or evidence:
+            raise Refused(f"loop {action} takes no part id or changes; use loop set <id>")
+        return cards.digest(self.now()) if action == "digest" else cards.show(everything)
+
+    @staticmethod
+    def part_number(value: int | str) -> int:
+        if isinstance(value, int):
+            return value
+        raise Refused("a part id is a number")
+
+    def old_loop(self, caller: Bot, action: str, part_id: int | str | None, state: str | None, prs: list[int], waits_on: str | None, reported: bool,
+                 everything: bool, evidence: list[str] | None) -> dict:
         loop = Loop(self.home, caller.name)
         if action == "set":
             if part_id is None:
                 raise Refused("loop set takes the part's id: faker-kit loop set <id> --state <state>")
-            return part_row(loop.update(part_id, state, prs, waits_on, reported, self.now(), evidence))
+            return part_row(loop.update(self.part_number(part_id), state, prs, waits_on, reported, self.now(), evidence))
         if part_id is not None or state or prs or waits_on or reported or evidence:
             raise Refused(f"loop {action} takes no part id or changes; use loop set <id>")
         return loop.digest(self.now()) if action == "digest" else loop.show(everything)
+
+    def loop_migrate(self, caller: Bot, part_id: int | str | None, state: str | None, prs: list[int], waits_on: str | None, reported: bool,
+                     evidence: list[str] | None, dry_run: bool, apply: bool, part: int | None) -> dict:
+        if part_id is not None or state or prs or waits_on or reported or evidence or part is not None:
+            raise Refused("loop migrate takes only --dry-run or --apply")
+        if dry_run == apply:
+            raise Refused("loop migrate takes exactly one of --dry-run (read only) or --apply")
+        kanban = self.kanban(caller)
+        if caller.role == "chief":
+            repos = {name: str(bot.repo) for name, bot in self.policy().projects().items()}
+            return migrate_chief(kanban, self.home, caller.name, repos, apply, self.now())
+        return migrate_project(kanban, self.home, caller.name, str(caller.project), str(caller.repo), apply, self.now())
+
+    def loop_unit(self, caller: Bot, unit: int | str | None, state: str | None, waits_on: str | None, reported: bool, evidence: list[str] | None,
+                  prs: list[int], part: int | None) -> dict:
+        if not isinstance(unit, str) or state or waits_on or reported or evidence:
+            raise Refused("loop unit takes the unit id: faker-kit loop unit <unit-id> [--part N] [--pr N]")
+        if not cutover(self.home):
+            raise Refused("the Kanban cutover is not done: units still live in units.tsv, so no unit card was created")
+        return create_unit(self.kanban(caller), caller.name, str(caller.project), str(caller.repo), unit, part, prs, self.now())
 
     def andon_command(self, caller: Bot | None, action: str, words: list[str]) -> dict:
         project = caller is not None and caller.role == "project"
@@ -1258,6 +1324,10 @@ def secret_flag(cmd: argparse.ArgumentParser) -> None:
     cmd.add_argument("--secret-stdin", action="store_true")
 
 
+def part_or_unit(text: str) -> int | str:
+    return int(text) if text.isdecimal() else text
+
+
 def parser() -> argparse.ArgumentParser:
     top = Parser(prog="faker-kit")
     sub = top.add_subparsers(dest="command", required=True)
@@ -1319,8 +1389,11 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--decisions", required=True, help='the requirements the owner decided, in their words; "none: <why>" for a bug fix whose expected behaviour is obvious')
     cmd.add_argument("--outcome", choices=OUTCOMES, default=DEFAULT_OUTCOME, help="what done means: a merged pull request (default), or a built, installed, or verified result with evidence")
     cmd = sub.add_parser("loop")
-    cmd.add_argument("action", nargs="?", choices=["show", "set", "digest"], default="show")
-    cmd.add_argument("id", nargs="?", type=int)
+    cmd.add_argument("action", nargs="?", choices=["show", "set", "digest", "migrate", "unit"], default="show")
+    cmd.add_argument("id", nargs="?", type=part_or_unit)
+    cmd.add_argument("--dry-run", action="store_true", help="loop migrate: read the loop and units and print what moving them to Kanban cards would do; writes nothing")
+    cmd.add_argument("--apply", action="store_true", help="loop migrate: create the cards, then the cutover marker")
+    cmd.add_argument("--part", type=int, help="loop unit: the part this unit serves")
     cmd.add_argument("--state")
     cmd.add_argument("--pr", type=int, action="append", default=[])
     cmd.add_argument("--waits-on")
@@ -1393,12 +1466,14 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
         if caller is None or caller.role != "project":
             raise Refused("incidents runs in a project bot's chat or job")
         return kit.incidents(caller, args.ack)
-    if args.command in ("handoff", "loop"):
+    if args.command == "loop":
+        if caller is None or caller.role not in LOOP_ACTIONS:
+            raise Refused("loop runs in the chief of staff's or a project bot's chat or job")
+        return kit.loop(caller, args.action, args.id, args.state, args.pr, args.waits_on, args.reported, args.all, args.evidence, args.dry_run, args.apply, args.part)
+    if args.command == "handoff":
         if caller is None or caller.role != "chief":
-            raise Refused(f"{args.command} runs in the chief of staff's chat or job")
-        if args.command == "handoff":
-            return kit.handoff(caller, args.project, args.part, args.decisions, args.outcome)
-        return kit.loop(caller, args.action, args.id, args.state, args.pr, args.waits_on, args.reported, args.all, args.evidence)
+            raise Refused("handoff runs in the chief of staff's chat or job")
+        return kit.handoff(caller, args.project, args.part, args.decisions, args.outcome)
     if args.command == "andon":
         return kit.andon_command(caller, args.action, args.reason)
     return run_runner(args)
@@ -1417,7 +1492,7 @@ def failure_envelope(err: BaseException, secrets: tuple[str, ...]) -> dict:
 def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | None = None, bot: str | None = None,
          now: Callable[[], float] = time.time, fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status,
          sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping, tool: Tool = run_tool, refresher: Refresher = refresh,
-         stdin: IO[bytes] | None = None, claude_state: ClaudeState = claude_cli_state) -> int:
+         stdin: IO[bytes] | None = None, claude_state: ClaudeState = claude_cli_state, kanban_runner: Callable[[str], KanbanRunner] = hermes_runner) -> int:
     given = sys.argv[1:] if argv is None else argv
     try:
         args = parser().parse_args(argv)
@@ -1433,7 +1508,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
     wants_json = bool(getattr(args, "json", False))
     kit: Kit | None = None
     try:
-        kit = Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep, post=post, tool=tool, refresher=refresher, claude_state=claude_state)
+        kit = Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep, post=post, tool=tool, refresher=refresher, claude_state=claude_state, kanban_runner=kanban_runner)
         out = run_command(args, kit, bot or current_bot(), stdin or sys.stdin.buffer)
     except Exception as err:
         known = (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError)

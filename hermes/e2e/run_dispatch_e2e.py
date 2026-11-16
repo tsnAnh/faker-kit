@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 import gate_scenario
 import guard_scenario
 import import_scenario
+import kanban_scenario
 import refresh_scenario
 import t3code_scenario
 import tooling_scenario
@@ -376,6 +377,9 @@ if args[:1] == ["-p"]:
 base = root if profile == "default" else root / "profiles" / profile
 
 
+#KANBAN#
+
+
 def load(path, default):
     return (yaml.safe_load(path.read_text()) if path.exists() else None) or default
 
@@ -475,9 +479,11 @@ elif args[:2] == ["plugins", "enable"]:
     (base / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=True))
 elif args[:1] == ["send"]:
     pass
+elif args[:1] == ["kanban"]:
+    kanban_main()
 elif args[:1] != ["gateway"]:
     sys.exit(2)
-'''
+'''.replace("#KANBAN#", kanban_scenario.FAKE_KANBAN)
 
 
 def no_network(*_args: object) -> object:
@@ -3997,6 +4003,9 @@ def main(argv: list[str] | None = None) -> int:
         owner_landing_scenario(run)
         owner_reviews_scenario(run)
         merge_open_scenario(run)
+        kanban_run = Run(root / "kanban", run.steps, run.verdicts)
+        kanban_run.build()
+        kanban_scenario.kanban_scenario(kanban_run, faker_kit.Loop, faker_kit.LoopError)
     except Failure as err:
         print(f"e2e stopped at: {err}", file=sys.stderr)
         code = 1
