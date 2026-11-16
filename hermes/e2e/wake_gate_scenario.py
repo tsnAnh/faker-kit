@@ -63,6 +63,10 @@ def iso(moment: float) -> str:
     return datetime.fromtimestamp(moment).astimezone().isoformat()
 
 
+def summary_lines(done: subprocess.CompletedProcess[str]) -> list[str]:
+    return [line for line in done.stdout.splitlines() if line.startswith("Closing summaries to read:")]
+
+
 def part(number: int, state: str, **fields: object) -> dict:
     return {"id": number, "project": "shop", "bot": "meo-beo", "part": f"part {number}", "state": state, "prs": [], "waits_on": None,
             "added": 1.0, "updated": 1.0, "reported": None, **fields}
@@ -233,9 +237,6 @@ class Gates:
         def pull(number: int, unit: str, head: str, kind: str = "ready", gate: str = "ready to merge") -> str:
             return f"#{number} | unit {unit} | by alice | {kind} | labeled | mergeable | updated 2026-11-09T01:00:00Z | head {head * 40} | {gate}"
 
-        def summary_lines(done: subprocess.CompletedProcess[str]) -> list[str]:
-            return [line for line in done.stdout.splitlines() if line.startswith("Closing summaries to read:")]
-
         self.reset()
         self.set_last_run(None)
         self.serve([pull(1, "alpha", "a")])
@@ -366,7 +367,8 @@ class Gates:
         self.states[BABYSIT].write_text(json.dumps({"fingerprint": fingerprint_of(["#9 | old"]), "woke_at": stored["woke_at"], "retries": 0}))
         legacy = self.tick(BABYSIT)
         step("a state file with no per-pull-request fingerprints reads as changed once: the agent wakes with every line, and the file gains them",
-             self.woke(legacy, CHANGED) and legacy.stdout.splitlines()[4:] == [newer, STATUS[1]] and set(self.state(BABYSIT)["pulls"]) == {"#1", "#2"}, self.say(legacy))
+             self.woke(legacy, CHANGED) and legacy.stdout.splitlines()[4:6] == [newer, STATUS[1]] and len(summary_lines(legacy)) == 1
+             and set(self.state(BABYSIT)["pulls"]) == {"#1", "#2"}, self.say(legacy))
         self.serve(settled)
 
     def served_last(self) -> str:
