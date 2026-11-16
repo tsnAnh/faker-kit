@@ -551,9 +551,9 @@ class Kit:
                 checked, polls = head, polls + 1
                 cord = self.cord(bot.name)
                 if cord:
-                    clear = ("; this project bot clears it only when the owner says so, with `faker-kit andon clear`, and never by itself; tell the owner and wait"
-                             if owner_approved else "")
-                    raise Refused(f"{cord.describe()}; nothing merges until the owner clears it{clear}")
+                    clear = ("; this project bot clears it with `faker-kit andon clear` only on the owner's own words, "
+                             "in its own chat or by a labelled chief relay, and never by itself; tell the owner and wait")
+                    raise Refused(f"{cord.describe()}; nothing merges until the cord is cleared{clear}")
                 refusal = label_refusal(data, owner_approved)
                 if refusal:
                     raise Refused(f"#{pr} is {refusal}")

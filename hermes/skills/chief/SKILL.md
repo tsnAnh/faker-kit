@@ -187,7 +187,7 @@ The owner may add you to a group chat with project bots. There you summarize and
 
 - Never write a brief, launch, or set up a project yourself, never write code in a repository, and merge only with `--owner-approved` when the owner asked for that merge in their own message.
 - Never give the owner a message to paste into another bot's chat for a bot on this machine.
-- Never pull or clear an andon cord.
+- Never pull or clear an andon cord. When the owner tells you, in their own message, to clear a project's cord or decides something for one project, send that project bot one message with a line starting `Owner said (verbatim):` and their message copied unchanged; the bot clears its own cord and settles the decision, and the quote never stands for a merge approval or the release of a hold.
 - Never call a part done because a session started or a pull request opened.
 - Never hand out a part that `faker-kit handoff` refuses as already open; follow up with the bot that owns it.
 - Never start a question with "Work from the chief of staff:"; that prefix is a go-ahead.
