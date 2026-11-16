@@ -113,7 +113,7 @@ Stay quiet while work is healthy. The owner hears about a part, one line each wi
 - `ready-to-merge` and waiting on the owner: say which pull request and why the bot cannot merge it;
 - `merged`, `abandoned`, or `taken-back`.
 
-`faker-kit loop` lists exactly these, until you mark them `--reported`. Everything else (a session started, checks running, a pull request opened, a review in progress) waits for the digest; in a turn a bot's news started, it gets the one short line When a bot replies asks for.
+Each message is one line per part or pull request, with a part and a pull request named once even when several bots report them. Healthy progress goes only into the daily digest. `faker-kit loop` lists exactly these, until you mark them `--reported`. Everything else (a session started, checks running, a pull request opened, a review in progress) waits for the digest; in a turn a bot's news started, it gets the one short line When a bot replies asks for.
 
 When the owner says to drop a part or that they will finish it themselves, set it `abandoned` or `taken-back` and mark it `--reported`.
 

@@ -26,6 +26,7 @@ HEARTBEAT_SECONDS = 6 * 60 * 60
 MAX_RUN_RETRIES = 3
 NOTICE = "faker-kit notice:"
 NO_PULLS = "no open pull requests"
+BLOCKED = "blocked:"
 NOT_RECORDED = "no earlier tick of this gate is recorded"
 NOTICE_REASON = "a faker-kit notice printed"
 CHANGED = "the status changed"
@@ -35,10 +36,34 @@ RUN_FAILED = "the job's previous run after the last wake did not finish ok"
 
 
 @dataclass(frozen=True)
+class Mark:
+    line: str
+    stable: str
+    blocked: bool
+
+
+@dataclass(frozen=True)
 class GateState:
     fingerprint: str
     woke_at: float
     retries: int = 0
+    marks: dict[str, Mark] | None = None
+
+
+@dataclass(frozen=True)
+class Changes:
+    shown: list[str]
+    gone: list[str]
+
+    @property
+    def any(self) -> bool:
+        return bool(self.shown or self.gone)
+
+
+@dataclass(frozen=True)
+class Wake:
+    reason: str
+    lines: list[str]
 
 
 def fail(message: str, stderr: str = "") -> NoReturn:
@@ -109,6 +134,55 @@ def labeled_lines(lines: list[str]) -> list[str]:
     return kept
 
 
+def collapse(lines: list[str]) -> list[str]:
+    kept: dict[str, str] = {}
+    for line in lines:
+        kept[mark_key(line)] = line
+    return list(kept.values())
+
+
+def digest_of(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def stable_line(fields: list[str]) -> str:
+    return " | ".join("updated" if field.startswith("updated ") else field for field in fields)
+
+
+def mark_key(line: str) -> str:
+    fields = pull_fields(line)
+    return fields[0] if fields else f"line:{digest_of(line)[:16]}"
+
+
+def marks_of(lines: list[str]) -> dict[str, Mark]:
+    found: dict[str, Mark] = {}
+    for line in lines:
+        fields = pull_fields(line)
+        if fields:
+            found[fields[0]] = Mark(digest_of(line), digest_of(stable_line(fields)), fields[-1].startswith(BLOCKED))
+        elif NOTICE not in line and line != NO_PULLS:
+            found[mark_key(line)] = Mark(digest_of(line), digest_of(line), False)
+    return found
+
+
+def changes_since(stored: GateState | None, lines: list[str]) -> Changes:
+    marks = marks_of(lines)
+    before = stored.marks if stored is not None and stored.marks is not None else {}
+    shown = []
+    for line in lines:
+        now = marks.get(mark_key(line))
+        if now is None:
+            continue
+        old = before.get(mark_key(line))
+        if old is not None and old.line == now.line:
+            continue
+        if old is not None and old.stable == now.stable and not old.blocked and not now.blocked:
+            continue
+        shown.append(line)
+    gone = [f"{key} merged or closed" for key in before if key.startswith("#") and key not in marks]
+    return Changes(shown, gone)
+
+
 def profile_name() -> str:
     home = Path(os.environ.get("HERMES_HOME") or HERMES_HOME)
     return home.name if home.parent.name == "profiles" else "default"
@@ -116,6 +190,20 @@ def profile_name() -> str:
 
 def state_path(job: str) -> Path:
     return Path(KIT_HOME) / "gates" / profile_name() / f"{job}.json"
+
+
+def read_marks(raw: object) -> dict[str, Mark] | None:
+    if not isinstance(raw, dict):
+        return None
+    found = {}
+    for key, entry in raw.items():
+        if not isinstance(key, str) or not isinstance(entry, dict):
+            return None
+        line, stable, blocked = entry.get("line"), entry.get("stable"), entry.get("blocked")
+        if not isinstance(line, str) or not isinstance(stable, str) or not isinstance(blocked, bool):
+            return None
+        found[key] = Mark(line, stable, blocked)
+    return found
 
 
 def read_state(path: Path) -> GateState | None:
@@ -129,7 +217,7 @@ def read_state(path: Path) -> GateState | None:
     if not isinstance(fingerprint, str) or isinstance(woke_at, bool) or not isinstance(woke_at, (int, float)) or not math.isfinite(woke_at):
         return None
     retries = data.get("retries", 0)
-    return GateState(fingerprint, float(woke_at), retries if isinstance(retries, int) and not isinstance(retries, bool) and retries > 0 else 0)
+    return GateState(fingerprint, float(woke_at), retries if isinstance(retries, int) and not isinstance(retries, bool) and retries > 0 else 0, read_marks(data.get("pulls")))
 
 
 def write_state(path: Path, state: GateState) -> None:
@@ -137,7 +225,8 @@ def write_state(path: Path, state: GateState) -> None:
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as out:
-            out.write(json.dumps({"fingerprint": state.fingerprint, "woke_at": state.woke_at, "retries": state.retries}))
+            pulls = {key: {"line": mark.line, "stable": mark.stable, "blocked": mark.blocked} for key, mark in (state.marks or {}).items()}
+            out.write(json.dumps({"fingerprint": state.fingerprint, "woke_at": state.woke_at, "retries": state.retries, "pulls": pulls}))
         temp.replace(path)
     except OSError as err:
         with suppress(OSError):
@@ -166,7 +255,7 @@ def failed_run_reason(job: str, since: float) -> str | None:
     return RUN_FAILED if ran > since and not last.finished else None
 
 
-def wake_reason(job: str, stored: GateState | None, lines: list[str], now: float, news: str | None) -> str | None:
+def wake_reason(job: str, stored: GateState | None, lines: list[str], now: float, news: str | None, change: Changes) -> str | None:
     if news:
         return news
     if any(NOTICE in line for line in lines):
@@ -175,7 +264,7 @@ def wake_reason(job: str, stored: GateState | None, lines: list[str], now: float
         return LAST_GONE if stored is not None and stored.fingerprint != fingerprint(lines) else None
     if stored is None:
         return NOT_RECORDED
-    if stored.fingerprint != fingerprint(lines):
+    if stored.fingerprint != fingerprint(lines) and change.any:
         return CHANGED
     elapsed = now - stored.woke_at
     if elapsed < 0 or elapsed >= HEARTBEAT_SECONDS:
@@ -185,18 +274,27 @@ def wake_reason(job: str, stored: GateState | None, lines: list[str], now: float
     return failed_run_reason(job, stored.woke_at)
 
 
-def tick(job: str, lines: list[str], now: float, news: str | None = None) -> str | None:
+def tick(job: str, lines: list[str], now: float, news: str | None = None) -> Wake | None:
     path = state_path(job)
     stored = read_state(path)
-    reason = wake_reason(job, stored, lines, now, news)
+    change = changes_since(stored, lines)
+    reason = wake_reason(job, stored, lines, now, news, change)
     empty = NO_PULLS in lines
-    current = fingerprint([line for line in lines if NOTICE not in line] if empty else lines)
+    kept = [line for line in lines if NOTICE not in line] if empty else lines
+    current = fingerprint(kept)
+    marks = marks_of(lines)
     if reason is not None:
         retries = stored.retries + 1 if stored is not None and reason == RUN_FAILED else 0
-        write_state(path, GateState(current, now, retries))
+        write_state(path, GateState(current, now, retries, marks))
     elif lines == [NO_PULLS] and (stored is None or stored.fingerprint != current):
-        write_state(path, GateState(current, stored.woke_at if stored else now))
-    return reason
+        write_state(path, GateState(current, stored.woke_at if stored else now, 0, marks))
+    if reason is None:
+        return None
+    if reason == CHANGED:
+        return Wake(reason, [*change.shown, *change.gone])
+    if reason == LAST_GONE:
+        return Wake(reason, [*change.gone, *lines])
+    return Wake(reason, lines)
 
 
 def quiet() -> None:
