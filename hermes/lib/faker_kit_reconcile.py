@@ -138,11 +138,13 @@ def land(found: Findings, item: Tracked, last: Seen, settle: Settler | None) -> 
 
 
 def entries(found: Findings) -> dict[str, object]:
-    return {"unchanged": found.unchanged, "unreadable": found.unreadable, "awaiting_stage_evidence": found.awaiting, "waiting_on_units": found.waiting, "refused": found.refused, "stale_blocked": found.stale_blocked}
+    return {"unchanged": found.unchanged, "unreadable": found.unreadable, "awaiting_stage_evidence": found.awaiting, "waiting_on_units": found.waiting,
+            "refused": found.refused, "stale_blocked": found.stale_blocked}
 
 
 def render(found: Findings, mode: str) -> dict:
-    rest = {"unchanged": len(found.unchanged), "unreadable": len(found.unreadable), "refused": len(found.refused), "stale_blocked": len(found.stale_blocked)}
+    rest = {"unchanged": len(found.unchanged), "unreadable": len(found.unreadable), "refused": len(found.refused),
+            "stale_blocked": len(found.stale_blocked)}
     if mode == "dry-run":
         return {"read": found.read, "would_set_merged": len(found.merged), "would_set_closed": len(found.closed), **rest,
                 "entries": {"merged": found.merged, "closed": found.closed, **entries(found)}}
@@ -154,7 +156,8 @@ def render(found: Findings, mode: str) -> dict:
 
 
 def counts(rendered: dict) -> dict[str, object]:
-    return {k: rendered[k] for k in ("mode", "read", "set_merged", "set_closed", "unchanged", "unreadable", "refused", "stale_blocked")} | {"unreadable_ids": [u["id"] for u in rendered["entries"]["unreadable"]]}
+    return {k: rendered[k] for k in ("mode", "read", "set_merged", "set_closed", "unchanged", "unreadable", "refused",
+        "stale_blocked")} | {"unreadable_ids": [u["id"] for u in rendered["entries"]["unreadable"]]}
 
 
 def ledger_items(parts: list[dict], repos: dict[str, str]) -> list[Tracked]:

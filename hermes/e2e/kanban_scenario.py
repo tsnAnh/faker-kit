@@ -121,6 +121,8 @@ def kanban_main():
         run_id = len(st["runs"]) + 1
         st["runs"].append({"id": run_id, "task_id": found["id"], "profile": profile, "started_at": 1, "ended_at": None})
         found["status"] = "running"
+        open_now = len([r for r in st["runs"] if r["task_id"] == found["id"] and r["ended_at"] is None])
+        st.setdefault("peak", {})[found["id"]] = max(st.get("peak", {}).get(found["id"], 0), open_now)
         print(json.dumps({"task_id": found["id"], "run_id": run_id, "profile": profile, "claim_expires": 2}))
     elif verb == "reclaim":
         found = task(rest[0])
@@ -129,7 +131,8 @@ def kanban_main():
             die(f"cannot reclaim {rest[0]} (not running or unknown id)")
         live["ended_at"], live["status"], found["status"] = 2, "reclaimed", "ready"
         st.setdefault("failures", {})[found["id"]] = 0
-        st.setdefault("events", []).append({"task_id": found["id"], "kind": "reclaimed", "run_id": live["id"], "created_at": 2, "payload": {"manual": True, "reason": rest[rest.index("--reason") + 1]}})
+        st.setdefault("events", []).append({"task_id": found["id"], "kind": "reclaimed", "run_id": live["id"], "created_at": 2, "payload": {"manual": True,
+            "reason": rest[rest.index("--reason") + 1]}})
     elif verb == "evidence" and rest[0] == "add":
         found, positional = opts(rest[1:])
         run_id = int(found["--run-id"])
@@ -220,6 +223,18 @@ class Board:
             card["status"] = "blocked"
             data["events"].append({"task_id": card["id"], "kind": "gave_up", "run_id": live["id"], "created_at": 2, "payload": {}})
         self.path.write_text(json.dumps(data))
+
+    def leave_claim(self, key: str, *kinds: str, url: str, head: str, commit: str) -> int:
+        data = self.state()
+        card = next(t for t in data["tasks"] if f"Key: {key}" in t["body"].splitlines())
+        run_id = len(data["runs"]) + 1
+        data["runs"].append({"id": run_id, "task_id": card["id"], "profile": card["assignee"], "started_at": 1, "ended_at": None})
+        card["status"] = "running"
+        payloads = {"pr_published": {"pr_url": url, "head_sha": head}, "pr_merged": {"pr_url": url, "head_sha": head, "merge_commit": commit}}
+        for kind in kinds:
+            data["evidence"].append({"id": len(data["evidence"]) + 1, "task_id": card["id"], "run_id": run_id, "kind": kind, "payload": payloads[kind]})
+        self.path.write_text(json.dumps(data))
+        return run_id
 
     def open_claims(self, key: str) -> list[int]:
         data = self.state()
@@ -722,7 +737,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     runs_per = {u: len([r for r in state["runs"] if r["task_id"] == board.by_key()[card_key(u)]["id"]]) for u in pal_units}
     evidence_per = {u: len([e for e in state["evidence"] if e["task_id"] == board.by_key()[card_key(u)]["id"]]) for u in pal_units}
     dead = board.by_key()[card_key("dead-u")]
-    run.step("kanban reconcile: after the cutover a merged pull request completes its unit card only on Pal's accepted receipt; a refusal releases the claim, leaves the card ready, and writes evidence for its own run",
+    run.step("kanban reconcile: after the cutover a merged pull request completes its unit card only on Pal accepting; a refusal releases the claim and leaves it ready",
              all(refused_ids[u]["classification"] == "pending" for u in pal_units) and all(v == 2 for v in runs_per.values()) and all(v == 4 for v in evidence_per.values())
              and all(board.by_key()[card_key(u)]["status"] == "ready" and board.open_claims(card_key(u)) == [] for u in pal_units)
              and len(state["completions"]) > len(before["completions"]), json.dumps(stuck["entries"]["refused"])[:300])
@@ -736,7 +751,8 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              all(u in done["entries"]["merged"] for u in pal_units)
              and all(board.by_key()[card_key(u)]["status"] == "done" and "State: merged" in lines(board.by_key()[card_key(u)]) for u in pal_units)
              and all(len([e for e in state["evidence"] if e["task_id"] == board.by_key()[card_key(u)]["id"]]) == 6 for u in pal_units)
-             and all(len([r for r in state["runs"] if r["task_id"] == board.by_key()[card_key(u)]["id"]]) == 3 and board.open_claims(card_key(u)) == [] for u in pal_units), json.dumps(done["entries"]["merged"]))
+             and all(len([r for r in state["runs"] if r["task_id"] == board.by_key()[card_key(u)]["id"]]) == 3
+             and board.open_claims(card_key(u)) == [] for u in pal_units), json.dumps(done["entries"]["merged"]))
     mutations = board.mutations()
     quiet = json_of(project("loop", "reconcile"))
     run.step("kanban reconcile: a second run after completion changes nothing", quiet["set_merged"] == 0 and quiet["set_closed"] == 0 and board.mutations() == mutations, json.dumps(quiet)[:200])
@@ -760,7 +776,8 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     finished = json_of(chief("loop", "reconcile"))
     cards = board.by_key()
     part_rows = {p["id"]: p for p in json_of(chief("loop", "show", "--all"))["open"]}
-    kinds = [e["kind"] for e in board.state()["evidence"] if e["task_id"] == cards["faker-kit:chief:13"]["id"] and e["run_id"] == max(r["id"] for r in board.state()["runs"] if r["task_id"] == cards["faker-kit:chief:13"]["id"])]
+    kinds = [e["kind"] for e in board.state()["evidence"] if e["task_id"] == cards["faker-kit:chief:13"]["id"]
+        and e["run_id"] == max(r["id"] for r in board.state()["runs"] if r["task_id"] == cards["faker-kit:chief:13"]["id"])]
     mutations = board.mutations()
     final = json_of(chief("loop", "reconcile"))
     run.step("kanban reconcile: with an accepted receipt the chief's part card completes with its pull request evidence, shows merged, and a further run changes nothing",
