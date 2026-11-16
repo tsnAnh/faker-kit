@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 import gate_scenario
 import guard_scenario
 import import_scenario
+import kanban_claims_scenario
 import kanban_scenario
 import kanban_text_scenario
 import refresh_scenario
@@ -4049,6 +4050,9 @@ def main(argv: list[str] | None = None) -> int:
         kanban_merge_run = Run(root / "kanban-merge", run.steps, run.verdicts)
         kanban_merge_run.build()
         kanban_scenario.kanban_merge_scenario(kanban_merge_run, open_gates)
+        kanban_claims_run = Run(root / "kanban-claims", run.steps, run.verdicts)
+        kanban_claims_run.build()
+        kanban_claims_scenario.claims_scenario(kanban_claims_run)
         session_run = Run(root / "session-summary", run.steps, run.verdicts)
         session_run.build()
         session_summary_scenario.session_scenario(session_run)

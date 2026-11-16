@@ -16,7 +16,7 @@ BOARD = "default"
 MARKER = "kanban-cutover.json"
 TIMEOUT_SECONDS = 60
 EXTERNAL = "external"
-MUTATING = frozenset({"create", "link", "edit", "claim", "evidence", "complete", "archive"})
+MUTATING = frozenset({"create", "link", "edit", "claim", "reclaim", "evidence", "complete", "archive"})
 ACCEPTANCE_CLASSIFICATIONS = ("pending", "failure", "missing", "stale", "provenance", "auth", "infra", "mismatch")
 EVIDENCE_KINDS = ("execution_ref", "pr_published", "pr_merged", "artifact_built", "app_installed", "other_result")
 SINGLE = ("Key", "Kind", "Project", "Bot", "Outcome", "State", "Waits-on", "PRs", "Reported", "Part", "Added", "Updated", "Decisions")
@@ -304,6 +304,10 @@ class Kanban:
             raise KanbanError("Kanban did not accept the change (the claim has no run id); the card was not changed")
         return run_id
 
+    def release(self, card: str, reason: str) -> None:
+        self.require_external()
+        self.call(["reclaim", card_id(card), "--reason", reason])
+
     def evidence_add(self, card: str, run_id: int, kind: str, payload: dict[str, object]) -> None:
         self.require_external()
         if kind not in EVIDENCE_KINDS:
@@ -362,3 +366,15 @@ class Kanban:
             if classification in ACCEPTANCE_CLASSIFICATIONS or classification == "success":
                 found = (str(classification), str(payload.get("detail") or ""))
         return found
+
+    def given_up_on_stale_claim(self, card: Card) -> bool:
+        if card.status != "blocked":
+            return False
+        events = self.shown(card.id).get("events")
+        if not isinstance(events, list):
+            raise KanbanError("could not read Kanban (the events are not a list); nothing was changed")
+        kinds = [(e.get("kind"), e.get("payload")) if isinstance(e, dict) else (None, None) for e in events]
+        gave_up = max((i for i, (kind, _) in enumerate(kinds) if kind == "gave_up"), default=-1)
+        unblocked = max((i for i, (kind, _) in enumerate(kinds) if kind == "unblocked"), default=-1)
+        lock = f"{EXTERNAL}:{card.assignee}:"
+        return gave_up > unblocked and any(kind == "reclaimed" and isinstance(payload, dict) and str(payload.get("stale_lock") or "").startswith(lock) for kind, payload in kinds[:gave_up])

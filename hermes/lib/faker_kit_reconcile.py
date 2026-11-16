@@ -54,6 +54,7 @@ class Findings:
     awaiting: list[dict[str, str]] = field(default_factory=list)
     waiting: list[dict[str, object]] = field(default_factory=list)
     refused: list[dict[str, object]] = field(default_factory=list)
+    stale_blocked: list[dict[str, object]] = field(default_factory=list)
 
 
 class Settler:
@@ -130,16 +131,20 @@ def land(found: Findings, item: Tracked, last: Seen, settle: Settler | None) -> 
         found.merged.append(item.ident)
     elif status == "waiting":
         found.waiting.append({"id": item.ident, **detail})
+    elif status == "stale_blocked":
+        found.stale_blocked.append({"id": item.ident, **detail})
     else:
         found.refused.append({"id": item.ident, **detail})
 
 
 def entries(found: Findings) -> dict[str, object]:
-    return {"unchanged": found.unchanged, "unreadable": found.unreadable, "awaiting_stage_evidence": found.awaiting, "waiting_on_units": found.waiting, "refused": found.refused}
+    return {"unchanged": found.unchanged, "unreadable": found.unreadable, "awaiting_stage_evidence": found.awaiting, "waiting_on_units": found.waiting,
+            "refused": found.refused, "stale_blocked": found.stale_blocked}
 
 
 def render(found: Findings, mode: str) -> dict:
-    rest = {"unchanged": len(found.unchanged), "unreadable": len(found.unreadable), "refused": len(found.refused)}
+    rest = {"unchanged": len(found.unchanged), "unreadable": len(found.unreadable), "refused": len(found.refused),
+            "stale_blocked": len(found.stale_blocked)}
     if mode == "dry-run":
         return {"read": found.read, "would_set_merged": len(found.merged), "would_set_closed": len(found.closed), **rest,
                 "entries": {"merged": found.merged, "closed": found.closed, **entries(found)}}
@@ -151,7 +156,8 @@ def render(found: Findings, mode: str) -> dict:
 
 
 def counts(rendered: dict) -> dict[str, object]:
-    return {k: rendered[k] for k in ("mode", "read", "set_merged", "set_closed", "unchanged", "unreadable", "refused")} | {"unreadable_ids": [u["id"] for u in rendered["entries"]["unreadable"]]}
+    return {k: rendered[k] for k in ("mode", "read", "set_merged", "set_closed", "unchanged", "unreadable", "refused",
+        "stale_blocked")} | {"unreadable_ids": [u["id"] for u in rendered["entries"]["unreadable"]]}
 
 
 def ledger_items(parts: list[dict], repos: dict[str, str]) -> list[Tracked]:
@@ -212,6 +218,9 @@ class CardSettler(Settler):
         if card is None:
             return "refused", {"completion": "refused", "classification": "unknown", "detail": "the entry has no card"}
         if card.status != "done":
+            if self.kanban.given_up_on_stale_claim(card):
+                return "stale_blocked", {"card": card.id, "completion": "stale_blocked", "unblock": f"hermes kanban unblock {card.id}",
+                                         "detail": "Kanban gave this card up after a stale kit claim; the owner or chief can run the unblock line, then loop reconcile completes it"}
             if not SHA.match(last.merge_commit) or not SHA.match(last.head):
                 return "refused", {"card": card.id, "completion": "refused", "classification": "unknown", "detail": f"GitHub reports no merge commit for #{last.number} yet; run loop reconcile again"}
             open_units = [p for p in self.kanban.parents(card.id) if self.status.get(p) != "done"] if item.kind == "part" else []

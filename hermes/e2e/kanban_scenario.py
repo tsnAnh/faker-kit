@@ -50,7 +50,7 @@ def kanban_main():
     def parents_of(ident):
         return [p for p, c in st["links"] if c == ident]
 
-    allowed = {"boards", "list", "show", "create", "link", "edit", "claim", "evidence", "complete", "archive"}
+    allowed = {"boards", "list", "show", "create", "link", "edit", "claim", "reclaim", "evidence", "complete", "archive"}
     if verb not in allowed or (verb == "boards" and rest[:1] != ["list"]):
         die(f"kanban: refused verb {verb}", 2)
     if verb == "boards":
@@ -121,7 +121,18 @@ def kanban_main():
         run_id = len(st["runs"]) + 1
         st["runs"].append({"id": run_id, "task_id": found["id"], "profile": profile, "started_at": 1, "ended_at": None})
         found["status"] = "running"
+        open_now = len([r for r in st["runs"] if r["task_id"] == found["id"] and r["ended_at"] is None])
+        st.setdefault("peak", {})[found["id"]] = max(st.get("peak", {}).get(found["id"], 0), open_now)
         print(json.dumps({"task_id": found["id"], "run_id": run_id, "profile": profile, "claim_expires": 2}))
+    elif verb == "reclaim":
+        found = task(rest[0])
+        live = next((r for r in st["runs"] if found and r["task_id"] == found["id"] and r["ended_at"] is None), None)
+        if found is None or found["status"] != "running" or live is None:
+            die(f"cannot reclaim {rest[0]} (not running or unknown id)")
+        live["ended_at"], live["status"], found["status"] = 2, "reclaimed", "ready"
+        st.setdefault("failures", {})[found["id"]] = 0
+        st.setdefault("events", []).append({"task_id": found["id"], "kind": "reclaimed", "run_id": live["id"], "created_at": 2, "payload": {"manual": True,
+            "reason": rest[rest.index("--reason") + 1]}})
     elif verb == "evidence" and rest[0] == "add":
         found, positional = opts(rest[1:])
         run_id = int(found["--run-id"])
@@ -152,6 +163,7 @@ def kanban_main():
         if refuse:
             die(f"cannot complete {card['id']}: PR acceptance {refuse[5:]}: no proof yet" if refuse.startswith("text-") else f"cannot complete {card['id']} (unknown id or terminal state)")
         card["status"], live["ended_at"] = "done", 2
+        st.setdefault("failures", {})[card["id"]] = 0
     save()
 '''
 
@@ -160,7 +172,7 @@ BOT = "meo-beo"
 PROJECT = "shop"
 REPO = "acme/shop"
 DECISIONS = "none: bug fix, expected behaviour obvious from the report"
-ALLOWED_VERBS = {"boards", "list", "show", "create", "link", "edit", "claim", "evidence", "archive"}
+ALLOWED_VERBS = {"boards", "list", "show", "create", "link", "edit", "claim", "reclaim", "evidence", "archive"}
 FORBIDDEN_TOKENS = {"dispatch", "daemon", "swarm", "specify", "decompose", "promote", "unblock", "--force", "set-dispatch-mode", "switch", "rm"}
 HEADER_KEYS = {"id", "project", "bot", "part", "decisions", "outcome", "stages", "reached", "state", "prs", "waits_on", "added", "updated", "reported"}
 
@@ -191,11 +203,43 @@ class Board:
                 task.update(changes)
         self.path.write_text(json.dumps(data))
 
-    def add_evidence(self, key: str, kind: str, payload: dict) -> None:
+    def add_evidence(self, key: str, kind: str, payload: dict, run_id: int = 1) -> None:
         data = self.state()
         card = next(t for t in data["tasks"] if f"Key: {key}" in t["body"].splitlines())
-        data["evidence"].append({"id": len(data["evidence"]) + 1, "task_id": card["id"], "run_id": 1, "kind": kind, "payload": payload})
+        data["evidence"].append({"id": len(data["evidence"]) + 1, "task_id": card["id"], "run_id": run_id, "kind": kind, "payload": payload})
         self.path.write_text(json.dumps(data))
+
+    def stale_claim(self, key: str) -> None:
+        data = self.state()
+        card = next(t for t in data["tasks"] if f"Key: {key}" in t["body"].splitlines())
+        live = next((r for r in data["runs"] if r["task_id"] == card["id"] and r["ended_at"] is None), None)
+        if card["status"] != "running" or live is None:
+            return
+        live["ended_at"], live["status"], card["status"] = 2, "reclaimed", "ready"
+        count = data.setdefault("failures", {}).get(card["id"], 0) + 1
+        data["failures"][card["id"]] = count
+        data["events"].append({"task_id": card["id"], "kind": "reclaimed", "run_id": live["id"], "created_at": 2, "payload": {"stale_lock": f"external:{card['assignee']}:{live['id']:032x}"}})
+        if count >= 2:
+            card["status"] = "blocked"
+            data["events"].append({"task_id": card["id"], "kind": "gave_up", "run_id": live["id"], "created_at": 2, "payload": {}})
+        self.path.write_text(json.dumps(data))
+
+    def leave_claim(self, key: str, *kinds: str, url: str, head: str, commit: str) -> int:
+        data = self.state()
+        card = next(t for t in data["tasks"] if f"Key: {key}" in t["body"].splitlines())
+        run_id = len(data["runs"]) + 1
+        data["runs"].append({"id": run_id, "task_id": card["id"], "profile": card["assignee"], "started_at": 1, "ended_at": None})
+        card["status"] = "running"
+        payloads = {"pr_published": {"pr_url": url, "head_sha": head}, "pr_merged": {"pr_url": url, "head_sha": head, "merge_commit": commit}}
+        for kind in kinds:
+            data["evidence"].append({"id": len(data["evidence"]) + 1, "task_id": card["id"], "run_id": run_id, "kind": kind, "payload": payloads[kind]})
+        self.path.write_text(json.dumps(data))
+        return run_id
+
+    def open_claims(self, key: str) -> list[int]:
+        data = self.state()
+        card = self.by_key()[key]
+        return [r["id"] for r in data["runs"] if r["task_id"] == card["id"] and r["ended_at"] is None]
 
     def add_card(self, key: str, title: str, body: str, assignee: str = BOT, status: str = "ready") -> str:
         data = self.state()
@@ -217,7 +261,7 @@ class Board:
         return str(self.by_key()[key]["body"])
 
     def mutating(self) -> list[str]:
-        return [verb[0] for verb in self.verbs() if verb[0] in ("create", "link", "edit", "claim", "evidence", "complete", "archive")]
+        return [verb[0] for verb in self.verbs() if verb[0] in ("create", "link", "edit", "claim", "reclaim", "evidence", "complete", "archive")]
 
     def mutations(self) -> int:
         return int(self.state()["mutations"])
@@ -468,7 +512,7 @@ def kanban_scenario(run: Run, loop_store: type, loop_error: type[Exception]) -> 
     run.step("kanban: the Kanban calls are only list, show, create, link, edit, claim, evidence and archive; no worker, dispatch, forced completion, or board change appears",
              flat <= ALLOWED_VERBS and not tokens & forbidden and ("boards", "create") not in verbs, ",".join(sorted(flat)))
     claims = [profile for profile, rest in board.calls() if "claim" in rest[:3]]
-    run.step("kanban: a claim is made only by the card's own assignee, to record evidence", claims == [CHIEF], json.dumps(claims))
+    run.step("kanban: a claim is made only by the card's own assignee, to record evidence", claims and set(claims) == {CHIEF}, json.dumps(claims))
 
 
 def head_of(n: int) -> str:
@@ -643,7 +687,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
         state = board.state()
         run.step(f"kanban merge: Pal refusing completion ({wanted}) leaves the pull request merged and the card open, and the merge reports the card once with its classification",
                  result[0] == 0 and out["merged"] is True and n in merged_prs() and out["card"]["completion"] == "refused" and out["card"]["classification"] == wanted
-                 and out["card"]["id"] == card["id"] and out["card"]["detail"] and card["status"] == "running"
+                 and out["card"]["id"] == card["id"] and out["card"]["detail"] and card["status"] == "ready" and board.open_claims(card_key(unit)) == []
                  and len([c for c in state["completions"] if c["task"] == card["id"]]) == 1 and len([r for r in state["runs"] if r["task_id"] == card["id"]]) == 1,
                  json.dumps(out.get("card")))
     board.set(complete_refuse=None)
@@ -693,9 +737,9 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     runs_per = {u: len([r for r in state["runs"] if r["task_id"] == board.by_key()[card_key(u)]["id"]]) for u in pal_units}
     evidence_per = {u: len([e for e in state["evidence"] if e["task_id"] == board.by_key()[card_key(u)]["id"]]) for u in pal_units}
     dead = board.by_key()[card_key("dead-u")]
-    run.step("kanban reconcile: after the cutover a merged pull request completes its unit card only on Pal's accepted receipt; a refusal leaves it open, reuses its run, adds no evidence twice",
-             all(refused_ids[u]["classification"] == "pending" for u in pal_units) and all(v == 1 for v in runs_per.values()) and all(v == 2 for v in evidence_per.values())
-             and all(board.by_key()[card_key(u)]["status"] == "running" for u in pal_units)
+    run.step("kanban reconcile: after the cutover a merged pull request completes its unit card only on Pal accepting; a refusal releases the claim and leaves it ready",
+             all(refused_ids[u]["classification"] == "pending" for u in pal_units) and all(v == 2 for v in runs_per.values()) and all(v == 4 for v in evidence_per.values())
+             and all(board.by_key()[card_key(u)]["status"] == "ready" and board.open_claims(card_key(u)) == [] for u in pal_units)
              and len(state["completions"]) > len(before["completions"]), json.dumps(stuck["entries"]["refused"])[:300])
     run.step("kanban reconcile: a closed unmerged pull request abandons its unit card and archives it, and a GitHub read error on another unit changes nothing",
              "dead-u" in stuck["entries"]["closed"] and dead["status"] == "archived" and "State: abandoned" in lines(dead) and "csv-export" in [u["id"] for u in stuck["entries"]["unreadable"]]
@@ -703,11 +747,12 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     board.set(complete_refuse=None)
     done = json_of(project("loop", "reconcile"))
     state = board.state()
-    run.step("kanban reconcile: once Pal accepts, the open units complete without a second claim or duplicate evidence, and their header says merged",
+    run.step("kanban reconcile: once Pal accepts, the open units complete on one fresh claim with evidence of their own run, and their header says merged",
              all(u in done["entries"]["merged"] for u in pal_units)
              and all(board.by_key()[card_key(u)]["status"] == "done" and "State: merged" in lines(board.by_key()[card_key(u)]) for u in pal_units)
-             and all(len([e for e in state["evidence"] if e["task_id"] == board.by_key()[card_key(u)]["id"]]) == 2 for u in pal_units)
-             and all(len([r for r in state["runs"] if r["task_id"] == board.by_key()[card_key(u)]["id"]]) == 1 for u in pal_units), json.dumps(done["entries"]["merged"]))
+             and all(len([e for e in state["evidence"] if e["task_id"] == board.by_key()[card_key(u)]["id"]]) == 6 for u in pal_units)
+             and all(len([r for r in state["runs"] if r["task_id"] == board.by_key()[card_key(u)]["id"]]) == 3
+             and board.open_claims(card_key(u)) == [] for u in pal_units), json.dumps(done["entries"]["merged"]))
     mutations = board.mutations()
     quiet = json_of(project("loop", "reconcile"))
     run.step("kanban reconcile: a second run after completion changes nothing", quiet["set_merged"] == 0 and quiet["set_closed"] == 0 and board.mutations() == mutations, json.dumps(quiet)[:200])
@@ -725,13 +770,14 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              {r["id"]: r["classification"] for r in stuck["entries"]["refused"]} == {"13": "pending"}
              and stuck["entries"]["waiting_on_units"] == [{"id": "14", "card": cards["faker-kit:chief:14"]["id"], "units": [unit_card["id"]]}]
              and stuck["entries"]["awaiting_stage_evidence"] == [{"id": "10", "outcome": "built"}] and stuck["entries"]["closed"] == ["15"] and cards["faker-kit:chief:15"]["status"] == "archived"
-             and cards["faker-kit:chief:13"]["status"] == "running" and cards["faker-kit:chief:14"]["status"] != "done" and cards["faker-kit:chief:10"]["status"] != "done",
+             and cards["faker-kit:chief:13"]["status"] == "ready" and cards["faker-kit:chief:14"]["status"] != "done" and cards["faker-kit:chief:10"]["status"] != "done",
              json.dumps(stuck["entries"])[:300])
     board.set(complete_refuse=None)
     finished = json_of(chief("loop", "reconcile"))
     cards = board.by_key()
     part_rows = {p["id"]: p for p in json_of(chief("loop", "show", "--all"))["open"]}
-    kinds = [e["kind"] for e in board.state()["evidence"] if e["task_id"] == cards["faker-kit:chief:13"]["id"]]
+    kinds = [e["kind"] for e in board.state()["evidence"] if e["task_id"] == cards["faker-kit:chief:13"]["id"]
+        and e["run_id"] == max(r["id"] for r in board.state()["runs"] if r["task_id"] == cards["faker-kit:chief:13"]["id"])]
     mutations = board.mutations()
     final = json_of(chief("loop", "reconcile"))
     run.step("kanban reconcile: with an accepted receipt the chief's part card completes with its pull request evidence, shows merged, and a further run changes nothing",
