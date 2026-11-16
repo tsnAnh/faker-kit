@@ -86,6 +86,29 @@ def status_lines() -> list[str]:
     return lines
 
 
+def pull_fields(line: str) -> list[str] | None:
+    fields = line.split(" | ")
+    return fields if len(fields) > 3 and fields[0].startswith("#") and fields[0][1:].isdecimal() else None
+
+
+def pull_label(line: str) -> str | None:
+    fields = pull_fields(line)
+    if fields is None:
+        return None
+    for index, field in enumerate(fields[1:-1], 1):
+        if field in ("draft", "ready"):
+            return fields[index + 1] if fields[index + 1] in ("labeled", "unlabeled") else None
+    return None
+
+
+def labeled_lines(lines: list[str]) -> list[str]:
+    dropped = [line for line in lines if pull_label(line) == "unlabeled"]
+    kept = [line for line in lines if line not in dropped]
+    if dropped and not any(pull_fields(line) for line in kept) and NO_PULLS not in kept:
+        kept.append(NO_PULLS)
+    return kept
+
+
 def profile_name() -> str:
     home = Path(os.environ.get("HERMES_HOME") or HERMES_HOME)
     return home.name if home.parent.name == "profiles" else "default"

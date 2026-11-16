@@ -57,7 +57,7 @@ from faker_kit_issues import LABELS, IssueStore, Reports
 from faker_kit_launch import DISPATCH_FILE, ClaudeLauncher, Dispatch, Factory, pick_factory, read_dispatch
 from faker_kit_loop import Loop, LoopError
 from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, Project, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
-from faker_kit_merge import MERGE_METHOD, Evidence, MergeLock, decide, from_fork, token
+from faker_kit_merge import MERGE_METHOD, PR_LABEL, PR_LABEL_COLOR, PR_LABEL_DESCRIPTION, Evidence, MergeLock, decide, from_fork, label_refusal, label_state, token, unlabeled_text
 from faker_kit_profiles import Profiles
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
@@ -84,6 +84,9 @@ ANDON_FOOTER = (
     "\n\nStop rule: before every push, run `gh api 'repos/{repo}/issues?labels=agent:andon&state=open' --jq length`. "
     "If it prints anything but 0, do not push or update a pull request; say so and end the session.\n"
     "\nEffort rule: you and any subagent run Sonnet at medium effort by default, never at effort xhigh or max, whatever a playbook says; high is the highest allowed. Never use Opus for coding.\n"
+    "\nLabel rule: when you open the pull request, add the label faker-kit to it in the same step (create the label first if the repository lacks it), "
+    "check the label is on the pull request before the session ends, and add the line `Label: faker-kit` to the pull request body. "
+    "Never add the label to a pull request you did not open. If you cannot use gh, use the GitHub integration you have.\n"
 )
 FAKER_FOOTER = (
     "\nFaker-mode rule: Work as faker-mode says: load the faker-mode skill first and follow it. Spawn every subagent you start inside a playbook step "
@@ -551,6 +554,9 @@ class Kit:
                     clear = ("; this project bot clears it only when the owner says so, with `faker-kit andon clear`, and never by itself; tell the owner and wait"
                              if owner_approved else "")
                     raise Refused(f"{cord.describe()}; nothing merges until the owner clears it{clear}")
+                refusal = label_refusal(data, owner_approved)
+                if refusal:
+                    raise Refused(f"#{pr} is {refusal}")
                 evidence = self.evidence(gh, pr, head, default, data)
                 probe = decide(pr, head, evidence, repo, default, False) if wait else None
                 elapsed = int(self.now() - started)
@@ -644,10 +650,14 @@ class Kit:
         who = re.sub(r"[^A-Za-z0-9_\[\]-]", "?", str((pull.get("user") or {}).get("login") or "ghost"))[:40]
         verdict = decide(number, head, self.evidence(gh, number, head, default, detail), gh.repo, default)
         gate = {"merge": "ready to merge", "refuse": f"blocked: {verdict.message}"}[verdict.action]
+        labels = label_state(detail)
+        if labels != "labeled":
+            gate = f"blocked: {unlabeled_text(labels)}"
         mergeable = {True: "mergeable", False: "conflicts", None: "mergeable unknown"}[detail.get("mergeable")]
         unit = UNIT_LINE.match(str(detail.get("body") or ""))
         updated = str(pull.get("updated_at") or "")
-        return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready", mergeable,
+        return " | ".join([f"#{number}", *([f"unit {unit.group(1)}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready",
+                           "labeled" if labels == "labeled" else "unlabeled", mergeable,
                            f"updated {updated if UPDATED_AT.match(updated) else 'unknown'}", f"head {head if SHA.match(head) else 'unknown'}", gate])
 
     def handoff(self, caller: Bot, project: str, part: str, decisions: str) -> dict:
@@ -743,6 +753,18 @@ class Kit:
             entry["slack_channel"] = channel
         data["bots"][bot] = entry
 
+    def ensure_labels(self, repo: str) -> None:
+        definitions = {LABEL: (ANDON_COLOR, ANDON_DESCRIPTION), PR_LABEL: (PR_LABEL_COLOR, PR_LABEL_DESCRIPTION), **LABELS}
+        for label, (color, description) in definitions.items():
+            self.run(["label", "create", label, "-R", repo, "--color", color, "--description", description, "--force"])
+
+    def sync_labels(self, bot: Bot) -> str:
+        try:
+            self.ensure_labels(str(bot.repo))
+        except Refused as err:
+            return f"unavailable: {' '.join(str(err).split())[:200]}"
+        return "ready"
+
     def add_project(self, repo: str, bot: str | None = None, project: str | None = None, model: str | None = None,
                     intervals: dict[str, str | None] | None = None, subscription: bool | None = None, slack_channel: str | None = None,
                     refresh_webhooks: bool = True, provider: str | None = None, check: bool = False, reload_gateway: bool = False) -> dict:
@@ -775,11 +797,10 @@ class Kit:
         self.register_project(data, repo, name, slug, {key: wanted.get(key) for key in SCHEDULE_DEFAULTS}, slack_channel)
         policy = self.policy_from(data)
         project_bot = policy.bot(name)
-        self.run(["label", "create", LABEL, "-R", repo, "--color", ANDON_COLOR, "--description", ANDON_DESCRIPTION, "--force"])
-        for label, (color, description) in LABELS.items():
-            self.run(["label", "create", label, "-R", repo, "--color", color, "--description", description, "--force"])
+        self.ensure_labels(repo)
         self.write_bots(data)
         out = self.sync_bot(project_bot, policy.ask_owner, model, config_dir, provider)
+        out["labels"] = "ready"
         owner, repo_name = repo.split("/")
         try:
             checkout = self.cloud.checkout(repo, self.home / "checkouts" / f"{owner}__{repo_name}" / CHECKOUT)
@@ -1169,7 +1190,10 @@ class Kit:
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
             if bot.name not in done:
                 bot_model, bot_provider = chosen.get(bot.name, (None, None))
-                refreshed.append(self.sync_bot(bot, policy.ask_owner, bot_model, config_dir, bot_provider))
+                synced = self.sync_bot(bot, policy.ask_owner, bot_model, config_dir, bot_provider)
+                if bot.role == "project":
+                    synced["labels"] = self.sync_labels(bot)
+                refreshed.append(synced)
         skills = self.profiles.kit_skills(["default", *policy.bots], self.kit / "plugins", wanted) if machine else []
         hooks = self.webhooks(machine.webhook_url, [(p.bot, p.repo) for p in machine.projects]) if machine and machine.webhook_url else []
         if config:

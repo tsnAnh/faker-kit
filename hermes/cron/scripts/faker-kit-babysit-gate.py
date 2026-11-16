@@ -18,7 +18,7 @@ def listed_issues() -> list[object]:
 
 def main() -> None:
     issues = listed_issues()
-    lines = gate.status_lines()
+    lines = gate.labeled_lines(gate.status_lines())
     news = f"faker-kit issues lists {len(issues)} issue(s) to handle" if issues else None
     reason = gate.tick(JOB, lines, time.time(), news)
     if reason is None:
