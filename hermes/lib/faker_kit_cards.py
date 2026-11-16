@@ -213,8 +213,11 @@ class CardLoop:
             run_id = self.kanban.open_run(card.id)
             if run_id is None:
                 run_id = self.kanban.claim(card.id)
-            for stage, payload in payloads.items():
-                self.kanban.evidence_add(card.id, run_id, STAGE_KIND[stage], payload)
+            try:
+                for stage, payload in payloads.items():
+                    self.kanban.evidence_add(card.id, run_id, STAGE_KIND[stage], payload)
+            finally:
+                self.kanban.release(card.id, "faker-kit: stage evidence recorded, claim released; completion adds it again on its own run")
         except KanbanError as err:
             raise LoopError(f"Kanban did not accept the evidence ({err}); the part was not changed") from None
 
@@ -300,20 +303,43 @@ class Merged:
     merge_commit: str
 
 
+def canonical(payload: dict[str, object]) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def completion_evidence(card: Card, outcome: str, merged: Merged) -> list[tuple[str, dict[str, object]]]:
+    wanted: list[tuple[str, dict[str, object]]] = [("pr_published", {"pr_url": merged.url, "head_sha": merged.head})]
+    if outcome == DEFAULT_OUTCOME:
+        wanted.append(("pr_merged", {"pr_url": merged.url, "head_sha": merged.head, "merge_commit": merged.merge_commit}))
+    for stage, ref in (line.partition("=")[::2] for line in (card.header.lines("Stage") if card.header else [])):
+        if stage in STAGE_KIND:
+            with contextlib.suppress(LoopError):
+                wanted.append((STAGE_KIND[stage], stage_payload(stage, ref)))
+    return wanted
+
+
+def release_claim(kanban: Kanban, card_id: str) -> dict:
+    try:
+        kanban.release(card_id, "faker-kit: completion refused, claim released so the next pass starts clean")
+    except KanbanError as err:
+        return {"claim_left_open": scrub(str(err))[:120]}
+    return {}
+
+
 def complete_card(kanban: Kanban, card: Card, outcome: str, merged: Merged) -> dict:
     run_id: int | None = None
     try:
         run_id = kanban.open_run(card.id)
         if run_id is None:
             run_id = kanban.claim(card.id)
-        have = {(row.kind, row.payload.get("pr_url")) for row in kanban.evidence_list(card.id)}
-        if ("pr_published", merged.url) not in have:
-            kanban.evidence_add(card.id, run_id, "pr_published", {"pr_url": merged.url, "head_sha": merged.head})
-        if outcome == DEFAULT_OUTCOME and ("pr_merged", merged.url) not in have:
-            kanban.evidence_add(card.id, run_id, "pr_merged", {"pr_url": merged.url, "head_sha": merged.head, "merge_commit": merged.merge_commit})
+        have = {(row.kind, canonical(row.payload)) for row in kanban.evidence_list(card.id) if row.run_id == run_id}
+        for kind, payload in completion_evidence(card, outcome, merged):
+            if (kind, canonical(payload)) not in have:
+                kanban.evidence_add(card.id, run_id, kind, payload)
         kanban.complete(card.id, run_id, merged.url, f"Merged pull request #{merged.pr}")
     except KanbanError as err:
-        return {"id": card.id, "completion": "refused", **refusal_detail(kanban, card.id, run_id, str(err))}
+        refused = {"id": card.id, "completion": "refused", **refusal_detail(kanban, card.id, run_id, str(err))}
+        return {**refused, **release_claim(kanban, card.id)} if run_id is not None else refused
     return {"id": card.id, "completion": "done"}
 
 
