@@ -7,7 +7,7 @@ from pathlib import Path
 
 from faker_kit_gh import Refused
 from faker_kit_guard.t3code import LAUNCH_TOOL, RECORD_KEEP_SECONDS, RECORD_VERSION, launches_dir, locked, message_digest, record_path, write_private
-from faker_kit_launch import LaunchResult
+from faker_kit_launch import DISPATCH_FILE, Dispatch, LaunchResult
 
 SECTION = ".agents/dispatch.json t3code"
 SETTINGS = ("project", "base_ref", "provider", "model", "max_in_flight")
@@ -62,6 +62,14 @@ def parse_settings(section: object, default_branch: str) -> T3Settings:
         raise Refused(f"{SECTION}.max_in_flight must be a whole number from 1 to {MAX_IN_FLIGHT_LIMIT}")
     base = text_setting(section, "base_ref", REF) or f"{ORIGIN_PREFIX}{default_branch}"
     return T3Settings(project, base, provider, model, limit)
+
+
+def check_t3code_backend(dispatch: Dispatch, brief_name: str) -> None:
+    try:
+        parse_settings(dispatch.t3code, dispatch.default_branch)
+        unit_id(brief_name)
+    except Refused as err:
+        raise Refused(f"launch is blocked: the t3code project does not resolve ({err}); fix the t3code settings in {DISPATCH_FILE}") from None
 
 
 def unit_id(brief_name: str) -> str:

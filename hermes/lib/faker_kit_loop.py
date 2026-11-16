@@ -8,9 +8,18 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 
+from faker_kit_guard.t3code import SECRET_SHAPES
+from faker_kit_kanban import cutover
+
 STATES = ("handed-out", "in-progress", "waiting", "blocked", "ready-to-merge", "merged", "abandoned", "taken-back")
 CLOSED = ("merged", "abandoned", "taken-back")
 OWNER_NEWS = ("blocked", "ready-to-merge", *CLOSED)
+OUTCOMES = ("merged-pr", "built", "installed", "verified")
+DEFAULT_OUTCOME = OUTCOMES[0]
+STAGES = OUTCOMES[1:]
+PAL_OUTCOME = {"merged-pr": "merged_pr", "built": "built_artifact", "installed": "installed_app", "verified": "other"}
+REACHED_ORDER = ("none", *OUTCOMES)
+MAX_EVIDENCE = 200
 MAX_PART = 300
 MAX_DECISIONS = 600
 REQUIRED = frozenset({"id", "project", "bot", "part", "state", "prs", "waits_on", "updated", "reported"})
@@ -47,12 +56,108 @@ def clean_decisions(text: str) -> str:
     return decisions
 
 
+def parse_evidence(items: list[str], limit: int = MAX_EVIDENCE) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for item in items:
+        stage, sep, ref = item.partition("=")
+        if not sep or stage not in STAGES:
+            raise LoopError(f"--evidence takes STAGE=REF with STAGE one of {', '.join(STAGES)}")
+        ref = ref.strip()
+        if not ref or not ref.isprintable() or any(ch in LINE_BREAKS for ch in ref) or len(ref) > limit:
+            raise LoopError(f"the {stage} evidence must be a plain one-line reference of at most {limit} characters")
+        if SECRET_SHAPES.search(ref):
+            raise LoopError(f"the {stage} evidence looks like it holds a token or key; record a reference to the proof, never a secret")
+        found[stage] = ref
+    return found
+
+
+def reached(part: dict) -> str:
+    stages = part.get("stages") or {}
+    best = max((REACHED_ORDER.index(stage) for stage in stages if stage in STAGES), default=0)
+    if part["state"] == "merged":
+        best = max(best, REACHED_ORDER.index(DEFAULT_OUTCOME))
+    return REACHED_ORDER[best]
+
+
+def part_row(part: dict) -> dict:
+    return {**part, "outcome": part.get("outcome", DEFAULT_OUTCOME), "stages": part.get("stages") or {}, "reached": reached(part)}
+
+
 def same_part(a: str, b: str) -> bool:
     return " ".join(a.casefold().split()) == " ".join(b.casefold().split())
 
 
+def check_new(text: str, decisions: str, outcome: str) -> tuple[str, str]:
+    if outcome not in OUTCOMES:
+        raise LoopError(f"--outcome must be one of {', '.join(OUTCOMES)}")
+    return clean_part(text), clean_decisions(decisions)
+
+
+def held_part(parts: list[dict], project: str, part: str) -> None:
+    held = next((p for p in parts if p["project"] == project and p["state"] not in CLOSED and same_part(p["part"], part)), None)
+    if held:
+        raise LoopError(f"part {held['id']} already holds this for {project} ({held['state']}); follow up with {held['bot']} about it instead of handing it out again")
+
+
+def new_entry(part_id: int, project: str, bot: str, part: str, decisions: str, outcome: str, now: float) -> dict:
+    return {"id": part_id, "project": project, "bot": bot, "part": part, "decisions": decisions,
+            "outcome": outcome, "stages": {}, "state": "handed-out", "prs": [], "waits_on": None, "added": now, "updated": now, "reported": None}
+
+
+def check_update(state: str | None, prs: list[int], waits_on: str | None) -> None:
+    if state is not None and state not in STATES:
+        raise LoopError(f"state must be one of {', '.join(STATES)}")
+    if any(not 0 < pr < 10**9 for pr in prs):
+        raise LoopError("a pull request number must be a positive integer")
+    if waits_on is not None and not WAITS_ON.match(waits_on):
+        raise LoopError("--waits-on takes <project>#<pull request number>")
+
+
+def apply_update(entry: dict, part_id: int, state: str | None, prs: list[int], waits_on: str | None, reported: bool, now: float, proof: dict[str, str]) -> dict:
+    entry = dict(entry)
+    next_state = state or entry["state"]
+    outcome = entry.get("outcome", DEFAULT_OUTCOME)
+    stages = {**(entry.get("stages") or {}), **proof}
+    if next_state == "merged" and outcome != DEFAULT_OUTCOME and outcome not in stages:
+        raise LoopError(f"part {part_id} asks for the outcome {outcome}, and a merged pull request does not complete it; "
+                        f"record the {outcome} evidence first: loop set {part_id} --evidence {outcome}=<reference>")
+    if proof:
+        entry["stages"], entry["updated"] = stages, now
+    if waits_on is not None and next_state != "waiting":
+        raise LoopError("only a waiting part waits on a pull request; add --state waiting")
+    if next_state == "waiting" and waits_on is None and not entry.get("waits_on"):
+        raise LoopError("a waiting part names what it waits on: --waits-on <project>#<pull request number>")
+    if state is not None and state != entry["state"]:
+        entry["state"], entry["updated"], entry["reported"] = state, now, None
+    if waits_on is not None:
+        entry["waits_on"] = waits_on
+    elif entry["state"] != "waiting":
+        entry["waits_on"] = None
+    merged = sorted({*entry["prs"], *prs})
+    if len(merged) > MAX_PRS:
+        raise LoopError(f"a part holds at most {MAX_PRS} pull requests")
+    if merged != entry["prs"]:
+        entry["prs"], entry["updated"] = merged, now
+    if reported:
+        entry["reported"] = entry["state"]
+    return entry
+
+
+def show_view(parts: list[dict], everything: bool) -> dict:
+    return {"open": [part_row(p) for p in parts if everything or p["state"] not in CLOSED],
+            "to_report": [part_row(p) for p in parts if p["state"] in OWNER_NEWS and p.get("reported") != p["state"]]}
+
+
+def digest_view(parts: list[dict], since: float | None) -> dict:
+    return {"since": since,
+            "closed": [part_row(p) for p in parts if p["state"] in CLOSED and (since is None or p["updated"] > since)],
+            "in_flight": [part_row(p) for p in parts if p["state"] not in CLOSED],
+            "waiting_on_owner": [part_row(p) for p in parts if p["state"] in ("blocked", "ready-to-merge")]}
+
+
 class Loop:
     def __init__(self, home: Path, bot: str) -> None:
+        self.home = home
         self.path = home / "loop" / f"{bot}.json"
 
     @contextlib.contextmanager
@@ -75,72 +180,43 @@ class Loop:
         return data
 
     def write(self, data: dict) -> None:
+        if cutover(self.home):
+            raise LoopError(f"the loop JSON {self.path.name} is read-only history since the Kanban cutover; Kanban cards are the only writer")
         tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}")
         tmp.touch(mode=0o600)
         tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False))
         tmp.replace(self.path)
 
-    def add(self, project: str, bot: str, text: str, decisions: str, now: float) -> dict:
-        part = clean_part(text)
-        owner_decisions = clean_decisions(decisions)
+    def add(self, project: str, bot: str, text: str, decisions: str, now: float, outcome: str = DEFAULT_OUTCOME) -> dict:
+        part, owner_decisions = check_new(text, decisions, outcome)
         with self.locked():
             data = self.read()
-            held = next((p for p in data["parts"] if p["project"] == project and p["state"] not in CLOSED and same_part(p["part"], part)), None)
-            if held:
-                raise LoopError(f"part {held['id']} already holds this for {project} ({held['state']}); follow up with {held['bot']} about it instead of handing it out again")
-            entry = {"id": max((int(p["id"]) for p in data["parts"]), default=0) + 1, "project": project, "bot": bot, "part": part, "decisions": owner_decisions,
-                     "state": "handed-out", "prs": [], "waits_on": None, "added": now, "updated": now, "reported": None}
+            held_part(data["parts"], project, part)
+            entry = new_entry(max((int(p["id"]) for p in data["parts"]), default=0) + 1, project, bot, part, owner_decisions, outcome, now)
             data["parts"].append(entry)
             self.write(data)
         return entry
 
-    def update(self, part_id: int, state: str | None, prs: list[int], waits_on: str | None, reported: bool, now: float) -> dict:
-        if state is not None and state not in STATES:
-            raise LoopError(f"state must be one of {', '.join(STATES)}")
-        if any(not 0 < pr < 10**9 for pr in prs):
-            raise LoopError("a pull request number must be a positive integer")
-        if waits_on is not None and not WAITS_ON.match(waits_on):
-            raise LoopError("--waits-on takes <project>#<pull request number>")
+    def update(self, part_id: int, state: str | None, prs: list[int], waits_on: str | None, reported: bool, now: float, evidence: list[str] | None = None) -> dict:
+        check_update(state, prs, waits_on)
+        proof = parse_evidence(evidence or [])
         with self.locked():
             data = self.read()
-            entry = next((p for p in data["parts"] if p["id"] == part_id), None)
-            if entry is None:
+            index = next((i for i, p in enumerate(data["parts"]) if p["id"] == part_id), None)
+            if index is None:
                 raise LoopError(f"no part {part_id}; faker-kit loop lists them")
-            next_state = state or entry["state"]
-            if waits_on is not None and next_state != "waiting":
-                raise LoopError("only a waiting part waits on a pull request; add --state waiting")
-            if next_state == "waiting" and waits_on is None and not entry.get("waits_on"):
-                raise LoopError("a waiting part names what it waits on: --waits-on <project>#<pull request number>")
-            if state is not None and state != entry["state"]:
-                entry["state"], entry["updated"], entry["reported"] = state, now, None
-            if waits_on is not None:
-                entry["waits_on"] = waits_on
-            elif entry["state"] != "waiting":
-                entry["waits_on"] = None
-            merged = sorted({*entry["prs"], *prs})
-            if len(merged) > MAX_PRS:
-                raise LoopError(f"a part holds at most {MAX_PRS} pull requests")
-            if merged != entry["prs"]:
-                entry["prs"], entry["updated"] = merged, now
-            if reported:
-                entry["reported"] = entry["state"]
+            entry = apply_update(data["parts"][index], part_id, state, prs, waits_on, reported, now, proof)
+            data["parts"][index] = entry
             self.write(data)
         return entry
 
     def show(self, everything: bool) -> dict:
-        parts = self.read()["parts"]
-        return {"open": [p for p in parts if p["state"] not in CLOSED] if not everything else parts,
-                "to_report": [p for p in parts if p["state"] in OWNER_NEWS and p.get("reported") != p["state"]]}
+        return show_view(self.read()["parts"], everything)
 
     def digest(self, now: float) -> dict:
         with self.locked():
             data = self.read()
-            since = data.get("digest_at")
-            parts = data["parts"]
-            out = {"since": since,
-                   "closed": [p for p in parts if p["state"] in CLOSED and (since is None or p["updated"] > since)],
-                   "in_flight": [p for p in parts if p["state"] not in CLOSED],
-                   "waiting_on_owner": [p for p in parts if p["state"] in ("blocked", "ready-to-merge")]}
+            out = digest_view(data["parts"], data.get("digest_at"))
             data["digest_at"] = now
             self.write(data)
         return out

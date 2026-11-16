@@ -19,20 +19,20 @@ def listed_issues() -> list[object]:
 
 def main() -> None:
     issues = listed_issues()
-    lines = gate.labeled_lines(gate.status_lines())
+    lines = gate.labeled_lines(gate.collapse(gate.status_lines()))
     news = f"faker-kit issues lists {len(issues)} issue(s) to handle" if issues else None
     undelivered = chief_news.deliver(lines, time.time())
     news = news or undelivered
-    reason = gate.tick(JOB, lines, time.time(), news)
-    if reason is None:
+    wake = gate.tick(JOB, lines, time.time(), news)
+    if wake is None:
         gate.quiet()
         return
     gate.say(
-        f"The babysit gate woke this tick because {reason}.",
+        f"The babysit gate woke this tick because {wake.reason}.",
         "faker-kit issues:",
         json.dumps({"issues": issues}, sort_keys=True),
         "faker-kit status:",
-        *lines,
+        *wake.lines,
         *([undelivered] if undelivered else []),
     )
 
