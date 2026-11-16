@@ -16,7 +16,6 @@ import stat
 import sys
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import IO, NoReturn
@@ -955,7 +954,7 @@ class Kit:
         return kanban, card
 
     def stamp(self) -> str:
-        return datetime.fromtimestamp(self.now(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.now()))
 
     def session_summary(self, caller: Bot, ref: str, dry_run: bool) -> dict:
         gh = Gh(self.home, caller.name, str(caller.repo), self.run)
