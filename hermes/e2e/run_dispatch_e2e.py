@@ -1674,6 +1674,68 @@ def action_of(verdict: dict | None) -> str:
     return "allow" if verdict is None else verdict["action"]
 
 
+def outcome_steps(run: Run, chief: Callable[..., tuple[int, dict | None, str]]) -> None:
+    run.clock += 60
+    code, plain, err = chief("handoff", "--project", "shop", "--part", "Ship the changelog page", "--decisions", NONE_DECISIONS)
+    run.step("handoff without --outcome asks for a merged pull request, with no stages recorded and nothing reached",
+             code == 0 and plain is not None and plain["outcome"] == "merged-pr" and plain["stages"] == {} and plain["reached"] == "none", err or json.dumps(plain))
+    code, built, err = chief("handoff", "--project", "shop", "--part", "Build the release archive", "--decisions", NONE_DECISIONS, "--outcome", "built")
+    run.step("handoff --outcome built records the requested outcome", code == 0 and built is not None and built["outcome"] == "built", err or json.dumps(built))
+    try:
+        invalid = chief("handoff", "--project", "shop", "--part", "Install it", "--decisions", NONE_DECISIONS, "--outcome", "shipped")
+    except SystemExit as stop:
+        invalid = (int(stop.code or 0), None, "--outcome is not one of the outcomes")
+    run.step("handoff refuses an outcome that is not merged-pr, built, installed, or verified and records nothing",
+             invalid[0] != 0 and "--outcome" in invalid[2] and len((chief("loop")[1] or {})["open"]) == 2, invalid[2])
+    assert built is not None and plain is not None
+    refused = chief("loop", "set", str(built["id"]), "--state", "merged", "--pr", "30")
+    still = next(p for p in (chief("loop", "--all")[1] or {})["open"] if p["id"] == built["id"])
+    run.step("a merged pull request does not complete a built part: set merged is refused, naming the missing built evidence, and the state stays",
+             refused[0] == 1 and "built evidence" in refused[2] and "--evidence built=" in refused[2] and still["state"] == "handed-out" and still["reached"] == "none", refused[2])
+    wrong_stage = chief("loop", "set", str(built["id"]), "--state", "merged", "--evidence", "installed=app-1.2.dmg")
+    run.step("evidence for another stage does not complete a built part", wrong_stage[0] == 1 and "built evidence" in wrong_stage[2], wrong_stage[2])
+    bad_evidence = [chief("loop", "set", str(built["id"]), "--evidence", value) for value in ("built", "shipped=x", "built=", "built=a\nb", "built=" + "x" * 201, "built=ghp_" + "A" * 36)]
+    run.step("loop set refuses evidence with no stage, an unknown stage, an empty or multi-line or oversized reference, or a token, and records nothing",
+             all(code == 1 for code, _, _ in bad_evidence) and chief("loop", "set", str(built["id"]))[1]["stages"] == {}, " | ".join(e.strip()[:60] for _, _, e in bad_evidence))
+    accepted = chief("loop", "set", str(built["id"]), "--state", "merged", "--evidence", "built=artifacts/release-1.2.tgz sha256:abc123")
+    run.step("set merged is accepted for a built part once its built evidence is recorded, in the same call",
+             accepted[0] == 0 and accepted[1] is not None and accepted[1]["state"] == "merged" and accepted[1]["stages"] == {"built": "artifacts/release-1.2.tgz sha256:abc123"}
+             and accepted[1]["reached"] == "built", accepted[2] or json.dumps(accepted[1]))
+    ready = chief("loop", "set", str(plain["id"]), "--state", "merged", "--pr", "31")
+    verified = chief("handoff", "--project", "shop", "--part", "Verify the installer on a clean Mac", "--decisions", NONE_DECISIONS, "--outcome", "verified")[1]
+    assert verified is not None
+    chief("loop", "set", str(verified["id"]), "--evidence", "built=run-17")
+    early = chief("loop", "set", str(verified["id"]), "--state", "merged")
+    chief("loop", "set", str(verified["id"]), "--evidence", "installed=mac-mini-2", "--evidence", "verified=transcript-17")
+    done = chief("loop", "set", str(verified["id"]), "--state", "merged")
+    run.step("a merged-pr part is done when merged as before, and a verified part is refused with only earlier stages and accepted once verified is recorded",
+             ready[0] == 0 and ready[1] is not None and ready[1]["reached"] == "merged-pr" and early[0] == 1 and "verified evidence" in early[2]
+             and done[0] == 0 and done[1] is not None and done[1]["reached"] == "verified", early[2])
+    abandoned = chief("handoff", "--project", "shop", "--part", "Install the beta everywhere", "--decisions", NONE_DECISIONS, "--outcome", "installed")[1]
+    assert abandoned is not None
+    gone = chief("loop", "set", str(abandoned["id"]), "--state", "abandoned")
+    taken = chief("handoff", "--project", "shop", "--part", "Verify the beta on a device", "--decisions", NONE_DECISIONS, "--outcome", "verified")[1]
+    assert taken is not None
+    back = chief("loop", "set", str(taken["id"]), "--state", "taken-back")
+    run.step("abandoned and taken-back are always allowed, without evidence", gone[0] == 0 and back[0] == 0 and back[1] is not None and back[1]["reached"] == "none", gone[2] + back[2])
+    run.clock += 60
+    digest = chief("loop", "digest")[1] or {}
+    rows = {p["id"]: p for p in digest["closed"]}
+    run.step("loop digest rows carry the requested outcome and the highest stage reached",
+             rows[built["id"]]["outcome"] == "built" and rows[built["id"]]["reached"] == "built" and rows[verified["id"]]["outcome"] == "verified"
+             and rows[verified["id"]]["reached"] == "verified" and rows[plain["id"]]["outcome"] == "merged-pr" and rows[plain["id"]]["reached"] == "merged-pr"
+             and rows[abandoned["id"]]["reached"] == "none", json.dumps({i: (p["outcome"], p["reached"]) for i, p in rows.items()}))
+    store = run.team / "loop" / f"{CHIEF}.json"
+    data = json.loads(store.read_text())
+    for old in data["parts"]:
+        if old["id"] == plain["id"]:
+            old.pop("outcome"), old.pop("stages")
+    store.write_text(json.dumps(data))
+    legacy = next(p for p in (chief("loop", "--all")[1] or {})["open"] if p["id"] == plain["id"])
+    run.step("a loop entry written before outcomes existed still loads, reads as merged-pr, and shows what it reached",
+             legacy["outcome"] == "merged-pr" and legacy["stages"] == {} and legacy["reached"] == "merged-pr" and chief("loop", "set", str(plain["id"]), "--reported")[0] == 0, json.dumps(legacy))
+
+
 def loop_scenario(run: Run) -> None:
     bots = run.team / "bots.yaml"
     before = bots.read_text()
@@ -1737,6 +1799,7 @@ def loop_scenario(run: Run) -> None:
     run.step("the digest names a merged part once, then starts the next window",
              first is not None and first["waiting_on_owner"] and second is not None and [p["id"] for p in second["closed"]] == [1] and second["in_flight"] == []
              and third is not None and third["closed"] == [], json.dumps(second))
+    outcome_steps(run, chief)
     store = run.team / "loop" / f"{CHIEF}.json"
     run.step("the loop store is written by faker-kit only, readable by its owner only", store.exists() and oct(store.stat().st_mode & 0o777) == "0o600", oct(store.stat().st_mode & 0o777))
     kept = store.read_text()

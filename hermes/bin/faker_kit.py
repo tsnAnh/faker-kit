@@ -55,7 +55,7 @@ from faker_kit_incident_sources import FetchJson, fetch_json
 from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
 from faker_kit_launch import DISPATCH_FILE, BackendCheck, ClaudeLauncher, ClaudeState, Dispatch, Factory, check_claude_backend, claude_cli_state, pick_factory, preflight, read_dispatch
-from faker_kit_loop import Loop, LoopError
+from faker_kit_loop import DEFAULT_OUTCOME, OUTCOMES, Loop, LoopError, part_row
 from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, Project, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
 from faker_kit_merge import MERGE_METHOD, PR_LABEL, PR_LABEL_COLOR, PR_LABEL_DESCRIPTION, Evidence, MergeLock, decide, from_fork, label_refusal, label_state, token, unlabeled_text
 from faker_kit_profiles import Profiles
@@ -669,20 +669,20 @@ class Kit:
                            "labeled" if labels == "labeled" else "unlabeled", mergeable,
                            f"updated {updated if UPDATED_AT.match(updated) else 'unknown'}", f"head {head if SHA.match(head) else 'unknown'}", gate])
 
-    def handoff(self, caller: Bot, project: str, part: str, decisions: str) -> dict:
+    def handoff(self, caller: Bot, project: str, part: str, decisions: str, outcome: str = DEFAULT_OUTCOME) -> dict:
         owner = self.policy().projects().get(project)
         if owner is None:
             raise Refused(f"no project {project} on this machine; faker-kit status --all lists them")
-        return Loop(self.home, caller.name).add(project, owner.name, part, decisions, self.now())
+        return part_row(Loop(self.home, caller.name).add(project, owner.name, part, decisions, self.now(), outcome))
 
     def loop(self, caller: Bot, action: str, part_id: int | None, state: str | None, prs: list[int], waits_on: str | None, reported: bool,
-             everything: bool) -> dict:
+             everything: bool, evidence: list[str] | None = None) -> dict:
         loop = Loop(self.home, caller.name)
         if action == "set":
             if part_id is None:
                 raise Refused("loop set takes the part's id: faker-kit loop set <id> --state <state>")
-            return loop.update(part_id, state, prs, waits_on, reported, self.now())
-        if part_id is not None or state or prs or waits_on or reported:
+            return part_row(loop.update(part_id, state, prs, waits_on, reported, self.now(), evidence))
+        if part_id is not None or state or prs or waits_on or reported or evidence:
             raise Refused(f"loop {action} takes no part id or changes; use loop set <id>")
         return loop.digest(self.now()) if action == "digest" else loop.show(everything)
 
@@ -1317,6 +1317,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--project", required=True)
     cmd.add_argument("--part", required=True)
     cmd.add_argument("--decisions", required=True, help='the requirements the owner decided, in their words; "none: <why>" for a bug fix whose expected behaviour is obvious')
+    cmd.add_argument("--outcome", choices=OUTCOMES, default=DEFAULT_OUTCOME, help="what done means: a merged pull request (default), or a built, installed, or verified result with evidence")
     cmd = sub.add_parser("loop")
     cmd.add_argument("action", nargs="?", choices=["show", "set", "digest"], default="show")
     cmd.add_argument("id", nargs="?", type=int)
@@ -1324,6 +1325,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--pr", type=int, action="append", default=[])
     cmd.add_argument("--waits-on")
     cmd.add_argument("--reported", action="store_true")
+    cmd.add_argument("--evidence", action="append", default=[], metavar="STAGE=REF", help="loop set: a one-line reference proving STAGE (built, installed, or verified); repeatable")
     cmd.add_argument("--all", action="store_true")
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
@@ -1395,8 +1397,8 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
         if caller is None or caller.role != "chief":
             raise Refused(f"{args.command} runs in the chief of staff's chat or job")
         if args.command == "handoff":
-            return kit.handoff(caller, args.project, args.part, args.decisions)
-        return kit.loop(caller, args.action, args.id, args.state, args.pr, args.waits_on, args.reported, args.all)
+            return kit.handoff(caller, args.project, args.part, args.decisions, args.outcome)
+        return kit.loop(caller, args.action, args.id, args.state, args.pr, args.waits_on, args.reported, args.all, args.evidence)
     if args.command == "andon":
         return kit.andon_command(caller, args.action, args.reason)
     return run_runner(args)
