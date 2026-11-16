@@ -301,6 +301,18 @@ def tool_cases(run: Run, host: Host) -> None:
              f"{len(got)} wrapped")
 
 
+def summary_rule_cases(run: Run, bot: str, printed: dict) -> None:
+    message = printed["call"]["args"]["message"]
+    rule_text = next((line for line in message.splitlines() if line.startswith("Closing summary rule: ")), "")
+    again_code, again_printed, again_err = prepare(run, "csv-export-summary.md", "/faker-mode\n\nGOAL: add a CSV export.\n" + rule_text.removeprefix("Closing summary rule: ") + "\n", bot)
+    again_message = again_printed.get("call", {}).get("args", {}).get("message", "")
+    run.step("t3code: the message carries the closing summary rule once, and a brief that already holds the rule is not given it twice",
+             message.count("Closing summary rule:") == 1 and "first line is exactly `Closing summary:`" in message and "Done, Skipped, Open questions, Blockers" in message
+             and "open a draft pull request whose body begins with `Unit: <unit-id>`" in message and "no pull request or issue text from others" in message
+             and again_code == 0 and again_message.count("Closing summary rule:") == 0
+             and again_message.count("Done, Skipped, Open questions, Blockers") == 1, again_err or message[-900:].replace("\n", " "))
+
+
 def t3code_scenario(run: Run, bot: str) -> None:
     real = time.time()
     run.clock = real
@@ -315,3 +327,4 @@ def t3code_scenario(run: Run, bot: str) -> None:
     guard_cases(run, host, bot, real)
     path_cases(run, host, bot, real)
     tool_cases(run, host)
+    summary_rule_cases(run, bot, printed)

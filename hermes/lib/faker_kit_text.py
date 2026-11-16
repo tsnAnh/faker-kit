@@ -4,6 +4,7 @@ import time
 
 from faker_kit_guard.t3code import SECRET_SHAPES
 from faker_kit_kanban import Header
+from faker_kit_session_card import carry_sections
 
 MAX_SUMMARY = 300
 MAX_TEXT = 1800
@@ -85,5 +86,5 @@ def card_text(header: Header, summary: str, repo: str | None, decisions: str | N
 def refresh(header: Header, title: str, repo: str | None, summary: str | None = None, decisions: str | None = None) -> Header:
     part = header.fields.get("Kind") == "part"
     chosen = title if part else (summary if summary is not None else summary_of(header, title))
-    text = card_text(header, chosen, repo, decisions or kept_decisions(header))
+    text = carry_sections(header.text, card_text(header, chosen, repo, decisions or kept_decisions(header)))
     return Header(header.fields, header.repeated, text, False)

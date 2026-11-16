@@ -63,6 +63,14 @@ def iso(moment: float) -> str:
     return datetime.fromtimestamp(moment).astimezone().isoformat()
 
 
+def summary_lines(done: subprocess.CompletedProcess[str]) -> list[str]:
+    return [line for line in done.stdout.splitlines() if line.startswith("Closing summaries to read:")]
+
+
+def shown(done: subprocess.CompletedProcess[str]) -> list[str]:
+    return [line for line in done.stdout.splitlines() if not line.startswith("Closing summaries to read:")]
+
+
 def part(number: int, state: str, **fields: object) -> dict:
     return {"id": number, "project": "shop", "bot": "meo-beo", "part": f"part {number}", "state": state, "prs": [], "waits_on": None,
             "added": 1.0, "updated": 1.0, "reported": None, **fields}
@@ -227,6 +235,41 @@ class Gates:
         update(lambda state: state.update(held))
         self.reset()
 
+    def summaries(self) -> None:
+        step = self.run.step
+
+        def pull(number: int, unit: str, head: str, kind: str = "ready", gate: str = "ready to merge") -> str:
+            return f"#{number} | unit {unit} | by alice | {kind} | labeled | mergeable | updated 2026-11-09T01:00:00Z | head {head * 40} | {gate}"
+
+        self.reset()
+        self.set_last_run(None)
+        self.serve([pull(1, "alpha", "a")])
+        opened = self.tick(BABYSIT)
+        lines = summary_lines(opened)
+        step("summary gate: a wake for an opened pull request carries one line naming the unit and head, telling the agent to run session summary first, and calling it a claim",
+             self.woke(opened, NOT_RECORDED) and len(lines) == 1 and "unit alpha (#1, head aaaaaaa, ready)" in lines[0] and "faker-kit session summary <unit>" in lines[0]
+             and "before you update its card, decide the next step, or report to the chief" in lines[0] and "never proof" in lines[0]
+             and "verify the pull request, head, checks, and artifact on GitHub" in lines[0],
+             self.say(opened))
+        quiet = self.tick(BABYSIT)
+        step("summary gate: a quiet tick stays silent with the exact skip line, so the unseen-summary line never starts a model turn on its own", self.silent(quiet), self.say(quiet))
+        self.set_woke_at(BABYSIT, time.time() - HEARTBEAT - 60)
+        heartbeat = self.tick(BABYSIT)
+        step("summary gate: the same unit at the same head in a later wake (a heartbeat) adds no line", self.woke(heartbeat, HEARTBEAT_REASON) and not summary_lines(heartbeat), self.say(heartbeat))
+        self.serve([pull(1, "alpha", "b", "draft", "blocked: draft")])
+        drafted = self.tick(BABYSIT)
+        step("summary gate: the pull request going to draft at a new head adds one line again, marked draft", self.woke(drafted, CHANGED) and len(summary_lines(drafted)) == 1
+        and "(#1, head bbbbbbb, draft)" in summary_lines(drafted)[0], self.say(drafted))
+        self.serve([pull(2, "beta", "c")])
+        gone = self.tick(BABYSIT)
+        wanted = summary_lines(gone)[0] if summary_lines(gone) else ""
+        step("summary gate: a pull request that merged or closed is named once as ended with the head it last had, next to the unit whose pull request just opened, and the line stays one line",
+             self.woke(gone, CHANGED) and len(summary_lines(gone)) == 1 and "unit alpha (#1, head bbbbbbb, ended)" in wanted and "unit beta (#2, head ccccccc, ready)" in wanted, self.say(gone))
+        self.serve([pull(2, "beta", "c")])
+        again = self.tick(BABYSIT)
+        step("summary gate: that event again is quiet and adds nothing", self.silent(again) and not summary_lines(again), self.say(again))
+        self.reset()
+
     def babysit(self) -> None:
         step = self.run.step
         self.reset()
@@ -236,10 +279,12 @@ class Gates:
         stored = self.state(BABYSIT) if self.states[BABYSIT].is_file() else {}
         folder = self.states[BABYSIT].parent
         step("the babysit gate's first tick with a pull request open wakes the agent with the issues JSON and the status lines as its Script Output, after one faker-kit issues and one status",
-             self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
+             self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:6] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
+             and first.stdout.splitlines()[6].startswith("Closing summaries to read: unit csv (#1, head aaaaaaa, ready)") and len(first.stdout.splitlines()) == 7
              and self.calls() == ["issues", "status", "news"], self.say(first))
         step("it stores the status fingerprint and the wake time as an owner-only file, with no temp file left beside it",
-             set(stored) == {"fingerprint", "woke_at", "retries", "pulls"} and stored["retries"] == 0 and set(stored["pulls"]) == {"#1", "#2"} and stored["fingerprint"] == fingerprint_of(STATUS)
+             set(stored) == {"fingerprint", "woke_at", "retries", "pulls", "asked", "units"} and stored["asked"] == [f"csv|{'a' * 40}|ready"] and stored["retries"] == 0
+             and set(stored["pulls"]) == {"#1", "#2"} and stored["fingerprint"] == fingerprint_of(STATUS)
              and bool(FINGERPRINT.match(stored["fingerprint"]))
              and abs(stored["woke_at"] - time.time()) < MARGIN and stat.S_IMODE(self.states[BABYSIT].stat().st_mode) == 0o600
              and stat.S_IMODE(folder.stat().st_mode) == 0o700 and [p.name for p in folder.iterdir()] == [self.states[BABYSIT].name], json.dumps(stored))
@@ -264,7 +309,7 @@ class Gates:
         self.serve(changed)
         woken = self.tick(BABYSIT)
         step("a changed status wakes the agent with only the changed pull request's line and stores the new fingerprint",
-             self.woke(woken, CHANGED) and woken.stdout.splitlines()[4:] == [changed[1]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of(changed), self.say(woken))
+             self.woke(woken, CHANGED) and shown(woken)[4:] == [changed[1]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of(changed), self.say(woken))
         self.news_steps(changed)
 
         self.serve([*changed, NOTICE])
@@ -299,25 +344,26 @@ class Gates:
         self.serve([STATUS[0], STATUS[1], STATUS[0], newer])
         first = self.tick(BABYSIT)
         step("status lines for one pull request collapse to the last one and exact duplicates to one, so the agent sees one line per pull request and the fingerprint covers the collapsed lines",
-             self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[4:] == [newer, STATUS[1]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of([newer, STATUS[1]]), self.say(first))
+             self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[4:6] == [newer, STATUS[1]]
+             and first.stdout.splitlines()[6].startswith("Closing summaries to read: unit csv") and self.state(BABYSIT)["fingerprint"] == fingerprint_of([newer, STATUS[1]]), self.say(first))
         blocker = f"#3 | by dana | ready | labeled | mergeable | updated 2026-11-10T06:00:00Z | head {'d' * 40} | blocked: a person requested changes"
         self.serve([newer, STATUS[1], blocker])
         opened = self.tick(BABYSIT)
         step("a new blocker wakes the agent with its one line and not the lines of the pull requests that did not change",
-             self.woke(opened, CHANGED) and opened.stdout.splitlines()[4:] == [blocker], self.say(opened))
+             self.woke(opened, CHANGED) and shown(opened)[4:] == [blocker], self.say(opened))
         touched_blocker = blocker.replace("2026-11-10T06:00:00Z", "2026-11-10T07:00:00Z")
         self.serve([newer, STATUS[1], touched_blocker])
         retouched = self.tick(BABYSIT)
         step("a blocked pull request whose updated time moved is a changed blocker and wakes the agent",
-             self.woke(retouched, CHANGED) and retouched.stdout.splitlines()[4:] == [touched_blocker], self.say(retouched))
+             self.woke(retouched, CHANGED) and shown(retouched)[4:] == [touched_blocker], self.say(retouched))
         self.serve([newer, STATUS[1], touched_blocker.replace("2026-11-10T07:00:00Z", "2026-11-10T08:00:00Z").replace("blocked: a person requested changes", "ready to merge")])
         unblocked = self.tick(BABYSIT)
         step("a blocker that clears is a changed pull request and wakes the agent with its new line",
-             self.woke(unblocked, CHANGED) and unblocked.stdout.splitlines()[4:] == [self.served_last()], self.say(unblocked))
+             self.woke(unblocked, CHANGED) and shown(unblocked)[4:] == [self.served_last()], self.say(unblocked))
         self.serve([newer, STATUS[1]])
         completed = self.tick(BABYSIT)
         step("a pull request that was in the stored status and is gone wakes the agent with one completion line and nothing else",
-             self.woke(completed, CHANGED) and completed.stdout.splitlines()[4:] == ["#3 merged or closed"], self.say(completed))
+             self.woke(completed, CHANGED) and shown(completed)[4:] == ["#3 merged or closed"], self.say(completed))
         kept = self.snapshot(BABYSIT)
         again = self.tick(BABYSIT)
         step("an unchanged tick after that is quiet and writes nothing", self.silent(again) and self.snapshot(BABYSIT) == kept, self.say(again))
@@ -325,7 +371,8 @@ class Gates:
         self.states[BABYSIT].write_text(json.dumps({"fingerprint": fingerprint_of(["#9 | old"]), "woke_at": stored["woke_at"], "retries": 0}))
         legacy = self.tick(BABYSIT)
         step("a state file with no per-pull-request fingerprints reads as changed once: the agent wakes with every line, and the file gains them",
-             self.woke(legacy, CHANGED) and legacy.stdout.splitlines()[4:] == [newer, STATUS[1]] and set(self.state(BABYSIT)["pulls"]) == {"#1", "#2"}, self.say(legacy))
+             self.woke(legacy, CHANGED) and legacy.stdout.splitlines()[4:6] == [newer, STATUS[1]] and len(summary_lines(legacy)) == 1
+             and set(self.state(BABYSIT)["pulls"]) == {"#1", "#2"}, self.say(legacy))
         self.serve(settled)
 
     def served_last(self) -> str:
@@ -346,7 +393,7 @@ class Gates:
         self.serve([STRANGER, STATUS[0]])
         appeared = self.tick(BABYSIT)
         step("a labeled pull request that opens beside the unlabeled one wakes the gate, and the agent is shown only the labeled line",
-             self.woke(appeared, CHANGED) and appeared.stdout.splitlines()[4:] == [STATUS[0]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of([STATUS[0]]), self.say(appeared))
+             self.woke(appeared, CHANGED) and shown(appeared)[4:] == [STATUS[0]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of([STATUS[0]]), self.say(appeared))
         self.serve([STRANGER.replace("2026-11-09T03:00:00Z", "2026-11-10T04:00:00Z"), STATUS[0]])
         stranger_moved = self.tick(BABYSIT)
         step("a change to an unlabeled pull request's line wakes nobody", self.silent(stranger_moved), self.say(stranger_moved))
@@ -815,5 +862,6 @@ def wake_scenario(run: Run, hermes: Path, bot: str, chief: str, env: dict[str, s
     gates.real_loop(chief, env)
     with gates.fake_wrapper():
         gates.babysit()
+        gates.summaries()
         gates.chief_news()
         gates.loop()

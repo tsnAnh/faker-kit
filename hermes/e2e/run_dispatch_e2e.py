@@ -32,6 +32,7 @@ import import_scenario
 import kanban_scenario
 import kanban_text_scenario
 import refresh_scenario
+import session_summary_scenario
 import t3code_scenario
 import tooling_scenario
 import wake_gate_scenario
@@ -191,6 +192,8 @@ if args[0] == "api":
     elif route == prefix + "/issues" and method == "GET":
         wanted = urllib.parse.parse_qs(split.query).get("labels", [""])[0]
         answer([bug for bug in state["bugs"] if bug["state"] == "open" and wanted in bug["labels"]])
+    elif route.startswith(prefix + "/issues/") and route.endswith("/comments") and method == "GET":
+        answer(state.get("pr_comments", {}).get(route.split("/")[-2], []))
     elif route.startswith(prefix + "/issues/") and route.endswith("/events"):
         answer(state["events"].get(route.split("/")[-2], []))
     elif route.startswith(prefix + "/issues/") and method == "GET" and route.rsplit("/", 1)[-1].isdigit():
@@ -332,6 +335,10 @@ if len(args) == 2 and args[0] == "--cloud":
         out.write(json.dumps({"argv": args, "cwd": os.getcwd(), **chosen}) + "\n")
     print("Created cloud session: Task", flush=True)
     print("View: https://claude.ai/code/session_01E2Eabc?from=cli&m=0", flush=True)
+elif args[:2] == ["-p", "--cloud"] and len(args) == 4:
+    with open(os.environ["E2E_CLAUDE_LOG"], "a") as out:
+        out.write(json.dumps({"argv": args, "cwd": os.getcwd(), "steer": True}) + "\n")
+    print(json.dumps({"ok": True, "session_id": args[2], "url": "https://claude.ai/code/" + args[2]}))
 elif args == ["--version"]:
     print("2.1.300 (Claude Code)")
 elif args == ["auth", "status"]:
@@ -937,6 +944,14 @@ def launch_scenario(run: Run) -> None:
     seen_repeat = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
     run.step("a brief that already holds the faker-mode sentence still gets it once, and the andon footer stays",
              code == 0 and seen_repeat.count(faker_kit.FAKER_RULE) == 1 and "agent:andon" in seen_repeat and len(run.claude_log.read_text().splitlines()) == sessions_before + 1, err.strip())
+    summary_rule = first.count("Closing summary rule:")
+    held = run.brief("holds-summary.md", "/faker-mode\n\nGOAL: x.\n" + faker_kit.SUMMARY_RULE + "\n")
+    code, _, err = run.kit("launch", "--brief-file", str(held))
+    seen_held = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
+    run.step("the closing summary rule is appended once after the andon footer and before the faker-mode footer, and a brief that already holds it gets it once on a second launch",
+             summary_rule == 1 and first.index("Stop rule:") < first.index("Closing summary rule:") < first.index("Faker-mode rule:") and first.count("Closing summary:") == 1
+             and "a draft is a hold and no bot merges it" in first and code == 0 and seen_held.count(faker_kit.SUMMARY_RULE) == 1 and "Closing summary rule:" not in seen_held
+             and not faker_kit.SECRET_SHAPES.search(faker_kit.SUMMARY_FOOTER), err.strip() or first[-900:].replace("\n", " "))
     code, out, err = run.kit("launch", "--project", "shop", "--brief-file", str(run.brief_for(BOOTSTRAP, "setup.md", "/faker-mode\n\nGOAL: set up the repository.\n")), bot=BOOTSTRAP)
     seen_boot = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
     run.step("a launch from the bootstrap bot carries both footers once", code == 0 and seen_boot.count(faker_kit.FAKER_FOOTER) == 1 and seen_boot.count("Stop rule:") == 1, out.strip() or err.strip())
@@ -4034,6 +4049,9 @@ def main(argv: list[str] | None = None) -> int:
         kanban_merge_run = Run(root / "kanban-merge", run.steps, run.verdicts)
         kanban_merge_run.build()
         kanban_scenario.kanban_merge_scenario(kanban_merge_run, open_gates)
+        session_run = Run(root / "session-summary", run.steps, run.verdicts)
+        session_run.build()
+        session_summary_scenario.session_scenario(session_run)
         kanban_text_run = Run(root / "kanban-text", run.steps, run.verdicts)
         kanban_text_run.build()
         kanban_text_scenario.kanban_text_scenario(kanban_text_run)

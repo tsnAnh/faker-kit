@@ -23,7 +23,7 @@ def main() -> None:
     news = f"faker-kit issues lists {len(issues)} issue(s) to handle" if issues else None
     undelivered = chief_news.deliver(lines, time.time())
     news = news or undelivered
-    wake = gate.tick(JOB, lines, time.time(), news)
+    wake = gate.tick(JOB, lines, time.time(), news, summaries=True)
     if wake is None:
         gate.quiet()
         return
@@ -34,6 +34,7 @@ def main() -> None:
         "faker-kit status:",
         *wake.lines,
         *([undelivered] if undelivered else []),
+        *([wake.summary] if wake.summary else []),
     )
 
 
