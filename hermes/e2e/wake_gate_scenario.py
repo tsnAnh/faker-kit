@@ -18,6 +18,7 @@ from gate_scenario import QUIET, wakes
 
 BABYSIT = "faker-kit-babysit"
 LOOP = "faker-kit-loop"
+NEWS_JOB = "faker-kit-chief-news"
 HEARTBEAT = 6 * 60 * 60
 MARGIN = 120
 NOT_RECORDED = "no earlier tick of this gate is recorded"
@@ -75,6 +76,8 @@ class Gates:
     def __init__(self, run: Run, hermes: Path, bot: str, chief: str, env: dict[str, str], work: Path) -> None:
         self.run, self.bot, self.profile, self.hermes = run, bot, hermes / "profiles" / bot, hermes
         self.chief_profile = hermes / "profiles" / chief
+        self.chief_name = chief
+        self.runs_before = 0
         self.wrapper = hermes / "bin" / "faker-kit"
         self.gates = Path(env["FAKER_KIT_HOME"]) / "gates"
         self.scripts = {BABYSIT: self.profile / "scripts" / "faker-kit-babysit-gate.py", LOOP: self.chief_profile / "scripts" / "faker-kit-loop-gate.py"}
@@ -142,6 +145,7 @@ class Gates:
     def serve(self, status: list[str] | str, issues: str | None = None) -> None:
         self.program("status", status if isinstance(status, str) else "\n".join(status) + "\n")
         self.program("issues", issues if issues is not None else issues_json([]))
+        self.program("news", json.dumps({"tracked": []}))
 
     def calls(self) -> list[str]:
         log = self.fake / "calls.log"
@@ -232,7 +236,7 @@ class Gates:
         folder = self.states[BABYSIT].parent
         step("the babysit gate's first tick with a pull request open wakes the agent with the issues JSON and the status lines as its Script Output, after one faker-kit issues and one status",
              self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
-             and self.calls() == ["issues", "status"], self.say(first))
+             and self.calls() == ["issues", "status", "news"], self.say(first))
         step("it stores the status fingerprint and the wake time as an owner-only file, with no temp file left beside it",
              set(stored) == {"fingerprint", "woke_at", "retries"} and stored["retries"] == 0 and stored["fingerprint"] == fingerprint_of(STATUS) and bool(FINGERPRINT.match(stored["fingerprint"]))
              and abs(stored["woke_at"] - time.time()) < MARGIN and stat.S_IMODE(self.states[BABYSIT].stat().st_mode) == 0o600
@@ -332,7 +336,7 @@ class Gates:
         lists = self.hermes_lists()
         opening = self.tick(BABYSIT)
         step("with no pull request open, no issue, and no notice the first tick is quiet, with no first-run wake, and records the empty status so the next pull request counts as a change",
-             self.silent(opening) and self.state(BABYSIT)["fingerprint"] == fingerprint_of([NO_PULLS]) and self.calls()[-2:] == ["issues", "status"]
+             self.silent(opening) and self.state(BABYSIT)["fingerprint"] == fingerprint_of([NO_PULLS]) and self.calls()[-3:] == ["issues", "status", "news"]
              and self.hermes_lists() == lists, self.say(opening))
         self.set_woke_at(BABYSIT, time.time() - 7 * 60 * 60)
         kept = self.snapshot(BABYSIT)
@@ -656,11 +660,113 @@ class Gates:
         step("a loop store the command cannot read fails the tick with a short message instead of staying quiet", self.failed(broken, "faker-kit loop --all exited 1"), self.say(broken))
 
 
+    def news_state(self) -> dict:
+        path = self.gates.parent / "chief-news" / f"{self.bot}.json"
+        return json.loads(path.read_text()) if path.is_file() else {}
+
+    def deliveries(self) -> list[dict]:
+        log = self.hermes / "deliveries.log"
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.is_file() else []
+
+    def news_runs(self) -> int:
+        log = self.hermes / "hermes-calls.log"
+        calls = [json.loads(line) for line in log.read_text().splitlines()] if log.is_file() else []
+        return sum(1 for call in calls if call == ["-p", self.bot, "cron", "run", NEWS_JOB]) - self.runs_before
+
+    def reset_news(self) -> None:
+        shutil.rmtree(self.gates.parent / "chief-news", ignore_errors=True)
+        (self.hermes / "deliveries.log").unlink(missing_ok=True)
+        (self.hermes / "delivery-unsettled").unlink(missing_ok=True)
+
+    def real_news(self) -> None:
+        step, now = self.run.step, self.run.gh_now
+        self.reset()
+        self.reset_news()
+        shown = next(pull for pull in now()["pulls"] if pull["state"] == "open")
+        units = self.gates.parent / "briefs" / self.bot / "units.tsv"
+        units.parent.mkdir(parents=True, exist_ok=True)
+        held = units.read_text() if units.is_file() else None
+        cells = ["csv-export", "running", "b", str(shown["number"]), "", "", "csv.md", "sonnet", "medium", "chief", "", "claude"]
+        units.write_text("unit\tstate\tbranch\tpr\thead\tsession\tbrief\tmodel\teffort\torigin\ttold_chief\tbackend\n" + "\t".join(cells) + "\n")
+        done = self.tick(BABYSIT)
+        sent = self.deliveries()
+        lines = [line for d in sent for line in d["output"].splitlines()]
+        step("the real faker-kit news reads a units.tsv row whose origin is chief, and the real babysit gate delivers its opened note to the chief's Bot Chat with no model turn",
+             done.returncode == 0 and len(sent) == 1 and sent[0]["deliver"] == f"bot-chat:{self.chief_name}" and sent[0]["job"] == NEWS_JOB
+             and lines[0] == f"Chief news: unit csv-export pull request #{shown['number']} https://github.com/acme/shop/pull/{shown['number']} opened.", json.dumps(sent)[:300])
+        if held is None:
+            units.unlink()
+        else:
+            units.write_text(held)
+        self.reset_news()
+        self.reset()
+
+    def chief_news(self) -> None:
+        step = self.run.step
+        self.reset()
+        self.reset_news()
+        self.set_last_run(None)
+        self.runs_before += self.news_runs()
+        pull_url = "https://github.com/acme/shop/pull/1"
+        row = {"unit": "csv", "number": 1, "url": pull_url, "state": "open", "draft": False, "head": "a" * 40}
+        old = {"unit": "old", "number": 5, "url": "https://github.com/acme/shop/pull/5", "state": "merged", "draft": False, "head": "e" * 40}
+        self.serve(STATUS)
+        self.program("news", json.dumps({"tracked": [old]}))
+        self.tick(BABYSIT)
+        step("a first chief-news run records pull requests that already merged as sent and delivers nothing",
+             self.deliveries() == [] and self.news_runs() == 0 and self.news_state().get("sent") == ["5|merged|"], json.dumps(self.news_state()))
+        self.program("news", json.dumps({"tracked": [old, row]}))
+        self.tick(BABYSIT)
+        sent = self.deliveries()
+        step("a tracked ready pull request whose status reads ready to merge gives one opened and one needs-the-owner note, in one delivery to the chief's Bot Chat",
+             len(sent) == 1 and sent[0]["deliver"] == f"bot-chat:{self.chief_name}" and sent[0]["output"].splitlines()
+             == [f"Chief news: unit csv pull request #1 {pull_url} opened.", f"Chief news: unit csv pull request #1 {pull_url} needs the owner."]
+             and self.news_state()["pending"] == [], json.dumps(sent)[:400])
+        self.tick(BABYSIT)
+        step("the same event again delivers nothing and runs no delivery job", len(self.deliveries()) == 1 and self.news_runs() == 1, str(self.news_runs()))
+        pushed = [STATUS[0].replace("a" * 40, "d" * 40).replace("ready to merge", "blocked: checks have not all passed (0 failed, 1 pending)"), STATUS[1]]
+        self.serve(pushed)
+        self.program("news", json.dumps({"tracked": [old, {**row, "head": "d" * 40}]}))
+        self.tick(BABYSIT)
+        step("a push to the open pull request delivers nothing", len(self.deliveries()) == 1, str(len(self.deliveries())))
+        self.serve([STATUS[1]])
+        self.program("news", json.dumps({"tracked": [old, {**row, "head": "d" * 40, "state": "merged"}]}))
+        self.tick(BABYSIT)
+        self.tick(BABYSIT)
+        sent = self.deliveries()
+        step("a merge event delivers exactly one merged note with the unit, number, and link, once, to the chief bot",
+             len(sent) == 2 and sent[1]["output"] == f"Chief news: unit csv pull request #1 {pull_url} merged.\n" and sent[1]["deliver"] == f"bot-chat:{self.chief_name}"
+             and self.news_runs() == 2, json.dumps(sent[1:])[:300])
+        runs = self.news_runs()
+        self.program("news", json.dumps({"tracked": [old, {**row, "head": "d" * 40, "state": "merged"}]}))
+        self.serve([STATUS[1]])
+        self.tick(BABYSIT)
+        step("a pull request not tracked in the store, and no news at all, runs no delivery job", self.news_runs() == runs, str(self.news_runs()))
+        (self.hermes / "delivery-unsettled").write_text("")
+        third = {**row, "number": 3, "url": "https://github.com/acme/shop/pull/3", "unit": "csv-two"}
+        self.program("news", json.dumps({"tracked": [third]}))
+        failed = self.tick(BABYSIT)
+        again = self.tick(BABYSIT)
+        step("an unsettled delivery receipt keeps the note pending, the babysit wake still completes and says so in one line once, and the next event retries it",
+             failed.returncode == 0 and "1 chief news note(s) not delivered yet: the delivery receipt has not settled; the next event wake retries them" in failed.stdout.splitlines()
+             and "faker-kit notice:" not in failed.stdout and again.returncode == 0 and "not delivered yet" not in again.stdout
+             and len(self.news_state()["pending"]) == 1 and self.news_runs() == runs + 2, self.say(failed))
+        (self.hermes / "delivery-unsettled").unlink()
+        self.tick(BABYSIT)
+        settled = self.deliveries()
+        step("a settled receipt on the next event wake marks the note sent and nothing stays pending",
+             settled[-1]["settled"] is True and settled[-1]["output"] == "Chief news: unit csv-two pull request #3 https://github.com/acme/shop/pull/3 opened.\n"
+             and self.news_state()["pending"] == [] and "3|opened|" in self.news_state()["sent"], json.dumps(self.news_state()))
+        self.reset_news()
+        self.reset()
+
 
 def wake_scenario(run: Run, hermes: Path, bot: str, chief: str, env: dict[str, str], work: Path) -> None:
     gates = Gates(run, hermes, bot, chief, env, work)
     gates.real_command()
+    gates.real_news()
     gates.real_loop(chief, env)
     with gates.fake_wrapper():
         gates.babysit()
+        gates.chief_news()
         gates.loop()

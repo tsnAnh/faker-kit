@@ -69,6 +69,7 @@ OWNER_DECISIONS_LINE = re.compile(r"^OWNER DECISIONS:[ \t]*\S", re.M)
 MAX_BRIEF_CHARS = 60_000
 SESSION_MODEL = re.compile(r"\A(?:opus|sonnet|haiku|fable|claude-[a-z0-9]+(?:-[a-z0-9]+){1,6})\Z")
 UNIT_LINE = re.compile(r"\AUnit: ([a-z0-9][a-z0-9-]{0,63})[ \t]*\r?(?:\n|\Z)")
+UNIT_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,63}\Z")
 STATUS_PRS = 30
 MERGEABLE_READS = 5
 MERGEABLE_PAUSE_SECONDS = 5.0
@@ -101,7 +102,7 @@ FAKER_FOOTER = (
 )
 FAKER_RULE = FAKER_FOOTER.strip().removeprefix("Faker-mode rule: ")
 ROLE_COMMANDS = {
-    "project": {"launch", "merge", "status", "andon", "incidents", "issues"},
+    "project": {"launch", "merge", "status", "andon", "incidents", "issues", "news"},
     "bootstrap": {"add-project", "launch", "status", "andon", "refresh", "import"},
     "chief": {"status", "handoff", "loop", "add-project", "merge", "refresh"},
 }
@@ -629,6 +630,33 @@ class Kit:
         own = [pull for pull in gh.open_pulls() if not from_fork(pull, gh.repo)]
         return [self.pr_line(gh, pull, default) for pull in own[:STATUS_PRS]] or ["no open pull requests"]
 
+    def news(self, bot: Bot) -> dict:
+        try:
+            rows = (self.home / "briefs" / bot.name / "units.tsv").read_text().splitlines()
+        except OSError:
+            rows = []
+        chief: dict[str, int | None] = {}
+        for row in rows:
+            cells = [cell.strip() for cell in row.split("\t")]
+            if len(cells) > 9 and cells[9] == "chief" and UNIT_ID.match(cells[0]):
+                pr = cells[3].lstrip("#")
+                chief[cells[0]] = int(pr) if pr.isdecimal() else None
+        gh = Gh(self.home, bot.name, str(bot.repo), self.run)
+        numbers = {number: unit for unit, number in chief.items() if number}
+        if chief:
+            for pull in gh.open_pulls():
+                named = UNIT_LINE.match(str(pull.get("body") or ""))
+                if named and named.group(1) in chief and not from_fork(pull, gh.repo):
+                    numbers.setdefault(int(pull["number"]), named.group(1))
+        tracked = []
+        for number, unit in sorted(numbers.items()):
+            detail = gh.pull(number)
+            head = str((detail.get("head") or {}).get("sha") or "")
+            state = "merged" if detail.get("merged_at") else "closed" if detail.get("state") == "closed" else "open"
+            tracked.append({"unit": unit, "number": number, "url": f"https://github.com/{gh.repo}/pull/{number}", "state": state,
+                            "draft": bool(detail.get("draft")), "head": head if SHA.match(head) else ""})
+        return {"tracked": tracked}
+
     def project_line(self, bot: Bot) -> str:
         cord = self.andon.read(bot.name)
         head = f"{bot.project} ({bot.name}, {bot.repo})" + (f" ANDON: {cord.reason}" if cord else "")
@@ -728,8 +756,11 @@ class Kit:
                 self.profiles.record_config_dir(home, os.environ.get("CLAUDE_CONFIG_DIR", ""))
             intervals = {key: getattr(bot, key) for key in SCHEDULE_DEFAULTS}
             active = self.profiles.github_login(home, self.machine_login())
-            changes = self.profiles.ensure_jobs(bot.name, "project-jobs.md", intervals, bot.slack_channel, active)
+            chief = next((b.name for b in self.policy().bots.values() if b.role == "chief"), None)
+            changes = self.profiles.ensure_jobs(bot.name, "project-jobs.md", intervals, bot.slack_channel, active, chief)
             out["jobs_created"], out["jobs_removed"] = changes.created, changes.removed
+            if chief is None:
+                out["chief_news"] = "no chief bot on this machine, so faker-kit-chief-news is not set up"
             out["jobs_active"] = active
         if bot.role == "chief":
             active = self.profiles.github_login(home, self.machine_login())
@@ -1303,6 +1334,7 @@ def parser() -> argparse.ArgumentParser:
     step.add_argument("--receipt", required=True)
     cmd = sub.add_parser("issues")
     cmd.add_argument("--claim", type=int)
+    sub.add_parser("news")
     cmd = sub.add_parser("incidents")
     cmd.add_argument("--ack")
     cmd = sub.add_parser("handoff")
@@ -1375,6 +1407,10 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
         return kit.merge_command(caller, args.pr, args.project, args.owner_approved, args.wait, args.everything, args.all_projects, args.match)
     if args.command == "import":
         return kit.source_import(caller, args.step, args.project, getattr(args, "source", ""), getattr(args, "repo_id", 0), getattr(args, "receipt", ""))
+    if args.command == "news":
+        if caller is None or caller.role != "project":
+            raise Refused("news runs in a project bot's chat or job")
+        return kit.news(caller)
     if args.command == "issues":
         if caller is None or caller.role != "project":
             raise Refused("issues runs in a project bot's chat or job")

@@ -95,6 +95,10 @@ The `faker-kit-loop` job runs a pass every weekday hour from 10:00 to 18:00; the
 3. Message no other bot: they report changes to you themselves.
 4. Tell this chat only the `to_report` parts (see When to speak), then mark each with `faker-kit loop set <id> --reported`. With nothing in `to_report`, answer `[SILENT]`.
 
+### Chief news notes
+
+A turn that starts with lines such as `Chief news: unit <id> pull request #<n> <link> merged.` comes from a project bot's `faker-kit-chief-news` job, not a person, and carries no pull request text. For each line, find the part whose pull request or unit it names and set its state as When a bot replies step 1 maps it (`opened` is `pull request open`, `needs the owner` is `waits on the owner`, `closed` is `abandoned`). A `merged` note is not owner news by itself: report it only when `faker-kit loop` lists the part under `to_report`. Do not message the project bot about the note.
+
 ### When a bot replies
 
 1. Set the part's state from the reply with `faker-kit loop set <id> --state <state>`, adding any new `--pr`. A project bot's own news maps directly: `pull request open` is `in-progress` with `--pr`, `blocked` is `blocked`, `waits on the owner` is `ready-to-merge`, `unblocked` is `in-progress`, `merged` is `merged`, and `abandoned` is `abandoned`. A pull request the bot says waits on the owner (a gate only the owner can open) is `ready-to-merge`; questions the bot needs the owner to answer before it launches, a refusal, a failed check, or a stuck session the bot cannot fix is `blocked` (questions go to the owner as Hand each part to its bot says); a merged pull request that finishes the part is `merged`.

@@ -446,7 +446,19 @@ elif args[:1] == ["cron"]:
         jobs = [j for j in jobs if j["id"] != args[2]]
     elif args[1] == "create":
         jobs.append({"id": f"job-{len(jobs)}", "name": option("--name"), "schedule": args[2], "prompt": args[3], "skill": option("--skill"),
-                     "deliver": option("--deliver"), "script": option("--script"), "enabled": "--paused" not in args})
+                     "deliver": option("--deliver"), "script": option("--script"), "enabled": "--paused" not in args,
+                     **({"no_agent": True} if "--no-agent" in args else {})})
+    elif args[1] == "run":
+        import subprocess
+        from datetime import datetime
+        job = next(j for j in jobs if args[2] in (j["id"], j["name"]))
+        out = subprocess.run([sys.executable, str(base / "scripts" / job["script"])], env={**os.environ, "HERMES_HOME": str(base)},
+                             capture_output=True, text=True, check=False).stdout if job.get("no_agent") and job.get("script") else ""
+        settled = not (root / "delivery-unsettled").exists()
+        if out.strip():
+            with (root / "deliveries.log").open("a") as log:
+                log.write(json.dumps({"profile": base.name, "job": job["name"], "deliver": job["deliver"], "output": out, "settled": settled}) + "\n")
+        job["last_run"] = f"{datetime.now().astimezone().isoformat(timespec='seconds')}  {'ok' if settled else 'finished; delivery is still in progress'}"
     elif args[1] in ("edit", "pause", "resume"):
         job = next(j for j in jobs if j["id"] == args[2])
         if args[1] == "edit":
@@ -454,6 +466,8 @@ elif args[:1] == ["cron"]:
             job["prompt"] = option("--prompt") or job["prompt"]
             if "--script" in args:
                 job["script"] = option("--script") or None
+            if "--deliver" in args:
+                job["deliver"] = option("--deliver")
         else:
             job["enabled"] = args[1] == "resume"
     jobs_path.write_text(json.dumps(jobs, sort_keys=True))
@@ -2157,9 +2171,14 @@ def install_scenario(run: Run, work: Path) -> None:
     listed = json.loads((hermes / "profiles" / BOT / "jobs.json").read_text())
     by_name = {j["name"]: j for j in listed}
     run.step("install.sh creates the project bot's faker-kit jobs",
-             by_name["faker-kit-babysit"]["enabled"] and len(listed) == 1
+             by_name["faker-kit-babysit"]["enabled"] and len(listed) == 2
              and all(n.startswith("faker-kit-") for n in by_name),
              ", ".join(f"{j['name']}={'on' if j['enabled'] else 'off'}" for j in listed))
+    news_job = by_name.get("faker-kit-chief-news", {})
+    run.step("install.sh gives the project bot a no-agent faker-kit-chief-news job that delivers its script's output to the chief's Bot Chat only, with a 2099 one-shot and no interval schedule",
+             news_job.get("deliver") == f"bot-chat:{CHIEF}" and news_job.get("no_agent") is True and news_job.get("script") == "faker-kit-chief-news-gate.py"
+             and news_job.get("schedule") == "2099-12-31T00:00:00" and not any(j["schedule"].startswith("every") and j["name"] != "faker-kit-babysit" for j in listed),
+             json.dumps(news_job, sort_keys=True)[:300])
     chief_jobs_file = hermes / "profiles" / CHIEF / "jobs.json"
     chief_jobs = {j["name"]: j for j in json.loads(chief_jobs_file.read_text())} if chief_jobs_file.exists() else {}
     chief_soul = (hermes / "profiles" / CHIEF / "SOUL.md").read_text()
@@ -2173,7 +2192,7 @@ def install_scenario(run: Run, work: Path) -> None:
     chief_scripts = hermes / "profiles" / CHIEF / "scripts"
     run.step("install.sh writes the chief's loop gate and the two modules it shares into the chief's scripts folder, attaches the gate to the loop job only, and leaves the digest ungated",
              chief_jobs.get("faker-kit-loop", {}).get("script") == "faker-kit-loop-gate.py" and not chief_jobs.get("faker-kit-digest", {}).get("script")
-             and sorted(p.name for p in chief_scripts.iterdir()) == ["faker-kit-loop-gate.py", "faker_kit_cron_list.py", "faker_kit_gate.py"]
+             and sorted(p.name for p in chief_scripts.iterdir()) == ["faker-kit-loop-gate.py", "faker_kit_cron_list.py", "faker_kit_gate.py", "faker_kit_gate_news.py"]
              and all("\nKIT_OWNED = True\n" in p.read_text() and '"@' not in p.read_text() for p in chief_scripts.iterdir()), ", ".join(sorted(p.name for p in chief_scripts.iterdir())))
     project_jobs = {j["name"]: j for j in json.loads((hermes / "profiles" / BOT / "jobs.json").read_text())}
     run.step("install.sh gives every bot the chat voice: a lone greeting such as \"ê\" is a conversation in the owner's language, and a bot never recites its own instructions",
@@ -2643,6 +2662,10 @@ def profile_approval_scenario(run: Run, work: Path) -> None:
              created.returncode == 0 and code == 0 and bots["crm-bot"] == {"role": "project", "project": "crm", "repo": "acme/crm"}
              and {"agent:andon", "faker:fix"} <= {label["name"] for label in other.gh_now()["labels"]} and added["jobs_active"] is True
              and Path(added["launch_checkout"]).is_dir(), err.strip() or out[:200])
+    crm_jobs = [job["name"] for job in json.loads((other.hermes / "profiles" / "crm-bot" / "jobs.json").read_text())]
+    run.step("on a machine with no chief bot add-project creates no faker-kit-chief-news job and says so in one line",
+             added.get("jobs_created") == ["faker-kit-babysit"] and crm_jobs == ["faker-kit-babysit"]
+             and added.get("chief_news") == "no chief bot on this machine, so faker-kit-chief-news is not set up", json.dumps(crm_jobs) + str(added.get("chief_news")))
 
     crm_home = other.hermes / "profiles" / "crm-bot"
     exposed = crm_home / "kit-skills"
@@ -2987,7 +3010,7 @@ def hermes_writes(calls: list[list[str]]) -> dict[str, int]:
     return {" ".join(write): verbs.count(write) for write in HERMES_WRITES}
 
 
-KIT_JOBS = {"faker-kit-babysit"}
+KIT_JOBS = {"faker-kit-babysit", "faker-kit-chief-news"}
 
 
 def install_labels_scenario(run: Run, work: Path) -> None:
@@ -3122,8 +3145,8 @@ def install_skip_scenario(run: Run, work: Path) -> None:
     removals = sorted(call[call.index("remove") + 1] for call in retired if verb_of(call) == ("cron", "remove"))
     run.step("install removes the retired faker-kit-issues, faker-kit-security, and faker-kit-incidents jobs by id, and no other job of the project bot",
              removals == ["legacy-faker-kit-incidents", "legacy-faker-kit-issues", "legacy-faker-kit-security"]
-             and sorted(job_rows()) == ["faker-kit-babysit", "faker-kit-custom", "my-own-job"]
-             and {n: j for n, j in job_rows().items() if n in foreign_before} == foreign_before and set(json.loads(record.read_text())) == {"faker-kit-babysit"},
+             and sorted(job_rows()) == ["faker-kit-babysit", "faker-kit-chief-news", "faker-kit-custom", "my-own-job"]
+             and {n: j for n, j in job_rows().items() if n in foreign_before} == foreign_before and set(json.loads(record.read_text())) == KIT_JOBS,
              json.dumps(removals))
     run.step("install removes each retired job's kit-owned gate script and gate state, and keeps a script the kit did not write, a job the kit does not name, and the babysit gate's state",
              not (scripts / "faker-kit-issues-gate.py").exists() and not (scripts / "faker-kit-incidents-gate.py").exists()
