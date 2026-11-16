@@ -32,7 +32,7 @@ if (HERE.parent / "vendor").is_dir() and str(HERE.parent / "vendor") not in sys.
 import yaml
 from faker_kit_andon import LABEL, MACHINE, Andon, AndonError, Cord, clean_reason, issue_body
 from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, create_unit, unit_key, unit_rows
-from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, Cloud, CloudError, trust_checkout
+from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, SESSION_ID, Cloud, CloudError, trust_checkout
 from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
 from faker_kit_gh import NAME, Coded, Gh, Refused, Runner, credential_problem, credential_state, fix_git_protocol, run_gh, scrub
 from faker_kit_guard.policy import (
@@ -952,6 +952,8 @@ class Kit:
     def session_steer(self, caller: Bot, unit: str, session: str) -> dict:
         if not UNIT_ID.match(unit):
             raise Refused("session steer takes a unit id: faker-kit session steer <unit-id> --session <id>")
+        if not SESSION_ID.fullmatch(session):
+            raise Refused("--session takes the session_ id or the claude.ai/code link that launch printed")
         if not cutover(self.home):
             raise Refused("the Kanban cutover is not done: the steer is recorded in the unit card, and there is none yet")
         gh = Gh(self.home, caller.name, str(caller.repo), self.run)

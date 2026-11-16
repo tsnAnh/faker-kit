@@ -22,7 +22,7 @@ def head(letter: str) -> str:
 
 def writes(run: Run) -> list[str]:
     found = []
-    for line in run.gh_log.read_text().splitlines():
+    for line in run.gh_log.read_text().splitlines() if run.gh_log.exists() else []:
         call = json.loads(line)
         method = call[call.index("-X") + 1] if "-X" in call else "GET"
         if (call[:1] == ["api"] and method != "GET") or call[:1] in (["issue"], ["pr"], ["label"]):
