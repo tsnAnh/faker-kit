@@ -830,6 +830,7 @@ def git_push_problem(args: list[str]) -> str | None:
     return None
 
 
+DEVICE_SHELL = re.compile(r"(?:\A|__)device_(?:shell|exec|run|terminal)\Z")
 PROTECTED_BRANCHES = ("main", "master", "trunk", "HEAD")
 REVIEW_DISMISSAL = re.compile(r"\Apulls/[0-9]+/reviews/[0-9]+/dismissals\Z")
 CURL_BODY_OPTIONS = ("-d", "--data", "--data-raw", "--data-binary", "--data-ascii", "--json", "-F", "--form", "--data-urlencode", "-T", "--upload-file")
@@ -1063,6 +1064,8 @@ def hard_block(tool_name: str, args: dict) -> str | None:
         return t3_reason
     if tool_name in ("terminal", "process_manage"):
         return terminal_problem(str(args.get("command", "")))
+    if DEVICE_SHELL.search(tool_name):
+        return next((why for text in strings(args) if (why := terminal_problem(text))), None)
     if tool_name == "execute_code":
         return code_problem(strings(args)) or code_push_problem(strings(args))
     if fnmatch.fnmatchcase(tool_name, "cronjob*"):
