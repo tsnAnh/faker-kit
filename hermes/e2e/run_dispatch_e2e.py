@@ -136,6 +136,7 @@ def pull_row(pull):
         "created_at": pull.get("created_at", "2026-10-01T00:00:00Z"), "updated_at": pull.get("updated_at", "2026-10-01T00:00:00Z"),
         "head": {"sha": pull["head"], "ref": pull["branch"], "repo": {"full_name": pull.get("head_repo", state["repo"]), "owner": {"login": pull.get("head_repo", state["repo"]).split("/")[0]}}},
         "base": {"ref": pull.get("base", "main"), "repo": {"full_name": state["repo"]}},
+        **({} if pull.get("omit_labels") else {"labels": pull.get("labels", [{"name": "faker-kit"}])}),
     }
 
 
@@ -278,7 +279,10 @@ elif args[:2] == ["config", "set"]:
     state["git_protocol"] = args[-1]
     save()
 elif args[:2] == ["label", "create"]:
-    state["labels"].append({"name": args[2], "description": args[args.index("--description") + 1], "force": "--force" in args})
+    labeled_repo = args[args.index("-R") + 1]
+    if labeled_repo in state.get("label_denied", []):
+        fail("gh: Resource not accessible by personal access token (HTTP 403)")
+    state["labels"].append({"name": args[2], "repo": labeled_repo, "description": args[args.index("--description") + 1], "force": "--force" in args})
     save()
 elif args[:2] == ["issue", "create"]:
     number = len(state["issues"]) + 1
@@ -894,6 +898,11 @@ def launch_scenario(run: Run) -> None:
     code, out, err = run.kit("launch", "--project", "shop", "--brief-file", str(run.brief_for(BOOTSTRAP, "setup.md", "/faker-mode\n\nGOAL: set up the repository.\n")), bot=BOOTSTRAP)
     seen_boot = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
     run.step("a launch from the bootstrap bot carries both footers once", code == 0 and seen_boot.count(faker_kit.FAKER_FOOTER) == 1 and seen_boot.count("Stop rule:") == 1, out.strip() or err.strip())
+    run.step("a launch prompt carries the pull request label rule once, in the andon footer both backends share, and neither footer trips the secret check",
+             seen_boot.count("Label rule:") == 1 and "add the label faker-kit to it in the same step" in seen_boot and "check the label is on the pull request before the session ends" in seen_boot
+             and "add the line `Label: faker-kit` to the pull request body" in seen_boot and "Never add the label to a pull request you did not open" in seen_boot
+             and "If you cannot use gh, use the GitHub integration you have" in seen_boot and not faker_kit.SECRET_SHAPES.search(faker_kit.ANDON_FOOTER + faker_kit.FAKER_FOOTER),
+             seen_boot[-700:].replace("\n", " "))
     edge_head = f"/faker-mode\n{DECISIONS_LINE}\n"
     code, _, err = run.kit("launch", "--brief-file", str(run.brief("long.md", edge_head + "x" * faker_kit.MAX_BRIEF_CHARS)))
     run.step("the length limit applies to the brief before the footers and is unchanged", code == 1 and "longer than 60000" in err
@@ -1755,6 +1764,66 @@ def tree(root: Path) -> dict[str, str]:
     return found
 
 
+def pr_label_scenario(run: Run) -> None:
+    saved = run.gh_now()
+    head = sha("a")
+
+    def refused(result: tuple[int, str, str], needle: str) -> bool:
+        return result[0] == 1 and needle in result[2] and not run.merged()
+
+    def only_pull(**fields: object) -> None:
+        run.update_gh(lambda state: (state["merges"].clear(), state.__setitem__("pulls", [{**Run.pull(1, head), **fields}])))
+        open_gates(run, 1, head)
+
+    only_pull()
+    result = run.kit("merge", "--pr", "1")
+    run.step("merge --pr N merges a pull request that carries the faker-kit label on the exact head when every gate passes",
+             result[0] == 0 and run.merged() == [{"pr": 1, "sha": head, "method": "squash"}], result[1].strip() or result[2].strip())
+    for name, fields in (("with no labels", {"labels": []}), ("with only another label", {"labels": [{"name": "faker:fix"}]})):
+        only_pull(**fields)
+        result = run.kit("merge", "--pr", "1")
+        run.step(f"the identical pull request {name} is refused with the label reason and exits 1, and GitHub saw no merge request",
+                 refused(result, "not labeled faker-kit") and "not a bot session's pull request" in result[2] and "only the owner merges it" in result[2]
+                 and "--owner-approved" in result[2], result[2].strip())
+    for name, fields in (("an absent labels field", {"omit_labels": True}), ("labels that are a string", {"labels": "faker-kit"}), ("labels that are null", {"labels": None}),
+                         ("a label that is not an object", {"labels": [7]}), ("a label with no name", {"labels": [{"color": "0e8a16"}]})):
+        only_pull(**fields)
+        result = run.kit("merge", "--pr", "1")
+        run.step(f"merge fails closed on {name}", refused(result, "not labeled faker-kit") and "labels were unreadable" in result[2], result[2].strip())
+    only_pull(labels=[])
+    result = run.kit("merge", "--pr", "1", "--owner-approved")
+    run.step("merge --pr N --owner-approved merges the unlabeled pull request: the label check is skipped entirely",
+             result[0] == 0 and run.merged() == [{"pr": 1, "sha": head, "method": "squash"}] and json.loads(result[1]).get("owner_approved") is True, result[1].strip() or result[2].strip())
+
+    only_pull()
+    run.update_gh(lambda state: state["check_runs"].__setitem__(head, [{"name": "check", "status": "in_progress", "conclusion": ""}]))
+    run.sleeps.clear()
+    run.on_sleep = [lambda: run.update_gh(lambda state: state["pulls"][0].update(labels=[]))]
+    result = run.kit("merge", "--pr", "1", "--wait", "300")
+    run.on_sleep = []
+    run.step("a label removed while --wait polls refuses on the next poll and merges nothing",
+             refused(result, "not labeled faker-kit") and run.sleeps == [30.0], f"{result[2].strip()} {run.sleeps}")
+
+    only_pull()
+    raised = run.kit("andon", "raise", "label", "gate", "probe")
+    result = run.kit("merge", "--pr", "1")
+    cleared = run.kit("andon", "clear")
+    run.step("a labeled pull request is still refused with the andon cord's reason while the cord is pulled",
+             raised[0] == 0 and refused(result, "andon") and "not labeled" not in result[2] and cleared[0] == 0, result[2].strip())
+
+    run.update_gh(lambda state: (state["merges"].clear(), state.__setitem__("pulls", [Run.pull(1, head), {**Run.pull(2, sha("b")), "labels": []}, {**Run.pull(3, sha("c")), "omit_labels": True}])))
+    open_gates(run, 1, head)
+    code, out, err = run.kit("status")
+    rows = {row.split(" | ")[0]: row for row in out.strip().splitlines()}
+    unlabeled_gate = "blocked: not labeled faker-kit; autonomous bots leave it alone, only the owner merges it"
+    run.step("status lists every open pull request with a labeled or unlabeled token after draft or ready, and an unlabeled one never reads ready to merge",
+             code == 0 and set(rows) == {"#1", "#2", "#3"} and " | ready | labeled | mergeable | " in rows["#1"] and rows["#1"].endswith(" | ready to merge")
+             and " | ready | unlabeled | mergeable | " in rows["#2"] and rows["#2"].endswith(f" | {unlabeled_gate}")
+             and " | ready | unlabeled | mergeable | " in rows["#3"] and rows["#3"].endswith(f" | {unlabeled_gate}; its labels were unreadable")
+             and "ready to merge" not in rows["#2"] + rows["#3"], " || ".join(rows.values()) or err)
+    run.set_gh(saved)
+
+
 def incident_scenario(run: Run) -> None:
     head = sha("e")
     seen: list[tuple[str, dict[str, str]]] = []
@@ -1924,6 +1993,10 @@ def issues_scenario(run: Run) -> None:
     run.step("add-project creates the three bug-report labels, each with a description under 100 characters",
              code == 0 and {"faker:fix", "faker:not-reproduced", "faker:expected"} <= set(labels)
              and all(0 < len(label["description"]) < 100 and label["force"] for label in labels.values()), err.strip() or ", ".join(sorted(labels)))
+    run.step("add-project creates the faker-kit pull request label with --force, and a second add-project of the same repository is idempotent",
+             labels.get("faker-kit", {}).get("force") is True and 0 < len(labels["faker-kit"]["description"]) < 100
+             and run.kit("add-project", REPO, "--bot", BOT, "--project", "shop", bot=BOOTSTRAP)[0] == 0
+             and {label["name"] for label in run.gh_now()["labels"]} >= {"faker-kit", "agent:andon"}, ", ".join(sorted(labels)))
 
 
 def trust_scenario(run: Run) -> None:
@@ -2916,6 +2989,47 @@ def hermes_writes(calls: list[list[str]]) -> dict[str, int]:
 KIT_JOBS = {"faker-kit-babysit"}
 
 
+def install_labels_scenario(run: Run, work: Path) -> None:
+    other = Run(work)
+    other.steps, other.verdicts = run.steps, run.verdicts
+    other.build()
+    machine = other.team / "machine.yaml"
+    machine.write_text(SKIP_MACHINE_YAML)
+    crm = "acme/crm"
+    shop_and_crm(other, [])
+    code, _, err = other.kit("install", "--config", str(machine), bot=None)
+    added = other.kit("add-project", crm, "--bot", "crm-bot", "--project", "crm", bot=BOOTSTRAP)
+    if code != 0 or added[0] != 0:
+        raise Failure(f"install labels setup failed: {err.strip()[-200:]} {added[2].strip()[-200:]}")
+
+    def faker_kit_labels(repo: str) -> list[dict]:
+        return [label for label in other.gh_now()["labels"] if label["name"] == "faker-kit" and label["repo"] == repo]
+
+    def refreshed(output: str) -> dict[str, dict]:
+        return {row["bot"]: row for row in json.loads(output)["refreshed"]}
+
+    other.update_gh(lambda state: state.update(labels=[]))
+    code, out, err = other.kit("install", "--config", str(machine), bot=None)
+    shop_labels, crm_labels = faker_kit_labels(REPO), faker_kit_labels(crm)
+    other.step("install --config creates the faker-kit label with --force for a registered project that is not in the machine config, and for the configured one",
+               code == 0 and len(crm_labels) == 1 and crm_labels[0]["force"] is True and len(shop_labels) == 1
+               and refreshed(out)["crm-bot"]["labels"] == "ready" and refreshed(out).get(BOT) is None, err.strip() or out.strip()[:300])
+    other.update_gh(lambda state: state.update(labels=[]))
+    code, out, err = other.kit("install", bot=None)
+    other.step("install with no machine config creates the label in every registered project's repository",
+               code == 0 and len(faker_kit_labels(crm)) == 1 and len(faker_kit_labels(REPO)) == 1 and {r["labels"] for r in refreshed(out).values() if "labels" in r} == {"ready"},
+               err.strip() or out.strip()[:300])
+    other.update_gh(lambda state: state.update(labels=[], label_denied=[crm]))
+    code, out, err = other.kit("install", bot=None)
+    rows = refreshed(out) if code == 0 else {}
+    other.step("a repository the login cannot label does not fail the install, shows that project's label state in the JSON output, and the others still get the label",
+               code == 0 and rows["crm-bot"]["labels"].startswith("unavailable: ") and "HTTP 403" in rows["crm-bot"]["labels"] and not faker_kit_labels(crm)
+               and len(faker_kit_labels(REPO)) == 1, err.strip() or out.strip()[:300])
+    other.update_gh(lambda state: state.update(labels=[], label_denied=[]))
+    other.kit("install", bot=None)
+    other.step("the next install after the access is fixed creates the label", len(faker_kit_labels(crm)) == 1, json.dumps(other.gh_now()["labels"])[:200])
+
+
 def install_skip_scenario(run: Run, work: Path) -> None:
     other = Run(work)
     other.steps, other.verdicts = run.steps, run.verdicts
@@ -3060,7 +3174,8 @@ def open_state(state: dict, specs: list[tuple]) -> None:
     for number, title, branch, flavor, *who in specs:
         head = ready_head(number)
         state["pulls"].append({**Run.pull(number, head, mergeable=flavor != "conflict"), "title": title, "branch": branch, **({"author": who[0]} if who else {}),
-                               "draft": flavor == "draft", "state": "closed" if flavor == "closed" else "open"})
+                               "draft": flavor == "draft", "state": "closed" if flavor == "closed" else "open",
+                               "labels": [] if flavor == "unlabeled" else [{"name": "faker-kit"}]})
         run_id = 200 + number
         state["check_runs"][head] = [check_run("check", run_id * 100, *(("failure",) if flavor == "failed" else ("", "in_progress") if flavor == "pending" else ()))]
         state["statuses"][head] = []
@@ -3231,6 +3346,28 @@ def merge_open_scenario(run: Run) -> None:
         wrong = [name for name, result, needle in refusals if not (result[0] == 1 and needle in result[2] and result[1] == "")]
         run.step("merge refuses --open, --all-projects and --match without the owner's approval, combined with --pr, from the wrong bot, or with no target, and merges nothing",
                  not wrong and landed() == [72] and landed("crm") == [], wrong[0] if wrong else f"{len(refusals)} refusals")
+
+        shop_and_crm(run, [(171, "Mine one", "feat/a", "unlabeled"), (172, "Theirs", "feat/b", "unlabeled", "mcscoder"), (173, "Mine two", "feat/c", "unlabeled")],
+                      [(174, "Crm theirs", "feat/d", "unlabeled", "someone")])
+        result = run.kit("merge", "--open", "--owner-approved")
+        listing, final = batch(result)
+        run.step("merge --open --owner-approved merges the machine login's unlabeled pull requests, needs no label, and still lists another author's under skipped_not_owner",
+                 result[0] == 0 and landed() == [171, 173] and [r["number"] for r in listing["skipped_not_owner"]] == [172], result[1].strip() or result[2].strip())
+        shop_and_crm(run, [(181, "Mine unlabeled", "feat/a", "unlabeled"), (182, "Theirs unlabeled", "feat/b", "unlabeled", "mcscoder")],
+                      [(183, "Crm mine", "feat/c", "unlabeled"), (184, "Crm theirs", "feat/d", "unlabeled", "someone")])
+        result = run.kit("merge", "--all-projects", "--owner-approved", bot=CHIEF_BOT)
+        listing, final = batch(result)
+        run.step("the chief's merge --all-projects merges unlabeled own pull requests of every project and skips other authors' with skipped_not_owner",
+                 result[0] == 0 and landed() == [181] and landed("crm") == [183]
+                 and sorted(r["number"] for r in listing["skipped_not_owner"]) == [182, 184], result[1].strip() or result[2].strip())
+        shop_and_crm(run, [(191, "Unlabeled own change", "feat/a", "unlabeled")])
+        result = run.kit("merge", "--match", "unlabeled own", "--owner-approved")
+        run.step("merge --match --owner-approved merges an unlabeled own-author pull request", result[0] == 0 and landed() == [191], result[1].strip() or result[2].strip())
+        shop_and_crm(run, [(201, "Theirs unlabeled", "feat/a", "unlabeled", "mcscoder")])
+        result = run.kit("merge", "--pr", "201", "--owner-approved")
+        run.step("merge --pr N --owner-approved merges another author's unlabeled pull request and says whose it was",
+                 result[0] == 0 and landed() == [201] and json.loads(result[1]).get("author") == "mcscoder", result[1].strip() or result[2].strip())
+
     run.set_gh(saved)
 
 
@@ -3749,6 +3886,7 @@ def main(argv: list[str] | None = None) -> int:
         credential_scenario(run)
         webhook_scenario(run)
         merge_scenario(run)
+        pr_label_scenario(run)
         incident_scenario(run)
         issues_scenario(run)
         trust_scenario(run)
@@ -3761,6 +3899,7 @@ def main(argv: list[str] | None = None) -> int:
         host_scenario(run, root / "host")
         host_secret_scenario(run, root / "host-secret")
         install_skip_scenario(run, root / "install-skip")
+        install_labels_scenario(run, root / "install-labels")
         tooling_scenario.environment_scenario(root / "environment-setup", run.step)
         tooling_scenario.ratchet_scenario(root / "ratchet", run.step)
         guard_scenario.guard_scenario(root / "guard", run.step, run.verdicts.append)

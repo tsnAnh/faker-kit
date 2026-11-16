@@ -33,9 +33,11 @@ ISSUES_REASON = "faker-kit issues lists 1 issue(s) to handle"
 NO_PULLS = "no open pull requests"
 NOTICE = "faker-kit notice: something the kit's own code reports"
 STATUS = [
-    f"#1 | unit csv | by alice | ready | mergeable | updated 2026-11-09T01:00:00Z | head {'a' * 40} | ready to merge",
-    f"#2 | by bob | draft | conflicts | updated 2026-11-09T02:00:00Z | head {'b' * 40} | blocked: checks have not all passed (0 failed, 1 pending)",
+    f"#1 | unit csv | by alice | ready | labeled | mergeable | updated 2026-11-09T01:00:00Z | head {'a' * 40} | ready to merge",
+    f"#2 | by bob | draft | labeled | conflicts | updated 2026-11-09T02:00:00Z | head {'b' * 40} | blocked: checks have not all passed (0 failed, 1 pending)",
 ]
+UNLABELED_GATE = "blocked: not labeled faker-kit; autonomous bots leave it alone, only the owner merges it"
+STRANGER = f"#7 | by carol | ready | unlabeled | mergeable | updated 2026-11-09T03:00:00Z | head {'c' * 40} | {UNLABELED_GATE}"
 LABELED = {"number": 11, "labeler": "alice", "url": "https://github.com/acme/shop/issues/11", "event": 101}
 REAL_LABELED = {"number": 21, "labeler": "alice", "url": "https://github.com/acme/shop/issues/21", "event": 301}
 FINGERPRINT = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -277,9 +279,51 @@ class Gates:
         step("a wake time in the future, as after a clock change, wakes the agent instead of keeping it quiet for good",
              self.woke(skewed, HEARTBEAT_REASON) and self.state(BABYSIT)["woke_at"] < time.time() + MARGIN, self.say(skewed))
         self.quiet_without_pulls()
+        self.unlabeled_pulls()
         self.failed_runs(changed)
         self.damaged_state()
         self.failing_commands()
+
+    def unlabeled_pulls(self) -> None:
+        step = self.run.step
+        self.reset()
+        self.serve([STRANGER])
+        opening = self.tick(BABYSIT)
+        step("with only an unlabeled pull request open the gate stays quiet and records the status as no open pull requests",
+             self.silent(opening) and self.state(BABYSIT)["fingerprint"] == fingerprint_of([NO_PULLS]), self.say(opening))
+        self.set_woke_at(BABYSIT, time.time() - 7 * 60 * 60)
+        kept = self.snapshot(BABYSIT)
+        late = self.tick(BABYSIT)
+        step("seven hours later with only an unlabeled pull request open the gate still stays quiet: no heartbeat, nothing written",
+             self.silent(late) and self.snapshot(BABYSIT) == kept, self.say(late))
+        self.serve([STRANGER, STATUS[0]])
+        appeared = self.tick(BABYSIT)
+        step("a labeled pull request that opens beside the unlabeled one wakes the gate, and the agent is shown only the labeled line",
+             self.woke(appeared, CHANGED) and appeared.stdout.splitlines()[4:] == [STATUS[0]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of([STATUS[0]]), self.say(appeared))
+        self.serve([STRANGER.replace("2026-11-09T03:00:00Z", "2026-11-10T04:00:00Z"), STATUS[0]])
+        stranger_moved = self.tick(BABYSIT)
+        step("a change to an unlabeled pull request's line wakes nobody", self.silent(stranger_moved), self.say(stranger_moved))
+        self.serve([STRANGER, STATUS[0]])
+        self.tick(BABYSIT)
+        self.serve([STATUS[0]])
+        gone = self.tick(BABYSIT)
+        step("when the only unlabeled pull request goes away the labeled set is unchanged and the gate stays quiet", self.silent(gone), self.say(gone))
+        self.serve([STRANGER])
+        last = self.tick(BABYSIT)
+        again = self.tick(BABYSIT)
+        step("when the last labeled pull request goes away while an unlabeled one remains, the gate wakes once with the last-pull-request reason and is then quiet",
+             self.woke(last, LAST_GONE) and self.silent(again) and self.state(BABYSIT)["fingerprint"] == fingerprint_of([NO_PULLS]), self.say(last))
+        self.serve([STRANGER.replace(" | unlabeled | ", " | labeled | ")])
+        labeled_later = self.tick(BABYSIT)
+        step("when the label is added to that pull request it counts, and the gate wakes", self.woke(labeled_later, CHANGED), self.say(labeled_later))
+        self.serve([STRANGER, NOTICE])
+        noticed = self.tick(BABYSIT)
+        step("a notice line wakes the gate even when only unlabeled pull requests are open, and the unlabeled line is not shown",
+             self.woke(noticed, NOTICE_REASON) and STRANGER not in noticed.stdout and NOTICE in noticed.stdout.splitlines(), self.say(noticed))
+        unreadable = "faker-kit: refused: GitHub says Bad credentials"
+        self.serve([unreadable])
+        problem = self.tick(BABYSIT)
+        step("a status line the gate cannot classify is kept and counts", self.woke(problem, CHANGED) and unreadable in problem.stdout.splitlines(), self.say(problem))
 
     def quiet_without_pulls(self) -> None:
         step = self.run.step

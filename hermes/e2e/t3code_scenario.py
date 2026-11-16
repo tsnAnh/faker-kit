@@ -144,6 +144,9 @@ def launch_output(run: Run, bot: str, real: float) -> dict:
              args.get("projectId") == SHOP_PROJECT and args.get("title") == "Unit: csv-export"
              and args.get("workspaceStrategy") == {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True}
              and args.get("modelSelection") == {"instanceId": PROVIDER, "model": MODEL}, json.dumps({k: v for k, v in args.items() if k != "message"}))
+    run.step("t3code: the message carries the pull request label rule once, from the same footer the claude backend gets",
+             message.count("Label rule: when you open the pull request, add the label faker-kit to it in the same step") == 1
+             and "add the line `Label: faker-kit` to the pull request body" in message and "Never add the label to a pull request you did not open" in message, message[-600:].replace("\n", " "))
     run.step("t3code: the message is the brief with the andon stop rule and the faker-mode rule, and its first 8 hash characters are the printed brief id",
              message.startswith("/faker-mode") and "agent:andon" in message and "Faker-mode rule:" in message and "SCOPE: reports only." in message
              and hashlib.sha256(message.encode()).hexdigest()[:8] == printed.get("brief"), message[-120:].replace("\n", " "))

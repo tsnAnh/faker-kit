@@ -155,10 +155,16 @@ def refresh_scenario(work: Path, step: Step, base_env: dict[str, str], fake_herm
          all(refused_for_every_bot(*command) for command in (("install",), ("runner", "build"), ("projects",))) and owner_projects.returncode == 0 and installed() == newer,
          (owner_projects.stdout + owner_projects.stderr).strip())
 
+    gh_log = Path(base_env["E2E_GH_LOG"])
+    seen_gh = len(gh_log.read_text().splitlines())
     last = commit(source, "hermes/templates/refresh-marker", "fifth\n", "fifth kit commit")
     final = refresh()
+    labels = [json.loads(line) for line in gh_log.read_text().splitlines()[seen_gh:] if line.startswith('["label", "create", "faker-kit"')]
     step("with the source reachable and the lock free, the owner's refresh takes the newest main",
          final.returncode == 0 and final.stdout.strip() == f"kit moved {newer[:12]} -> {last[:12]}" and installed() == last, (final.stdout + final.stderr).strip())
+
+    step("refresh on a machine with no machine config and one registered project creates that project's faker-kit label with --force through the installer's config-less install",
+         len(labels) == 1 and "acme/shop" in labels[0] and "--force" in labels[0] and "--color" in labels[0] and labels[0][labels[0].index("--color") + 1] == "0e8a16", json.dumps(labels))
 
     machine = state / "machine.yaml"
     machine.write_text("version: 1\nbootstrap_bot: ong-xay\nguard:\n  trusted_authors:\n    - Codertocat\nprojects:\n  - bot: meo-beo\n    project: shop\n    repo: acme/shop\n")

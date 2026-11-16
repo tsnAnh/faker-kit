@@ -18,6 +18,9 @@ PASSING_CONCLUSIONS = ("success", "neutral", "skipped")
 FORMAL_REVIEWS = ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
 IGNORED_STATUS = "security-review"
 TOKEN_CHARS = 40
+PR_LABEL = "faker-kit"
+PR_LABEL_COLOR = "0e8a16"
+PR_LABEL_DESCRIPTION = "Opened by a faker-kit bot session; autonomous bots act only on pull requests with this label"
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,25 @@ class Verdict:
 
 def from_fork(pull: dict, repo: str) -> bool:
     return str(((pull.get("head") or {}).get("repo") or {}).get("full_name") or "").lower() != repo.lower()
+
+
+def label_state(pull: dict) -> str:
+    labels = pull.get("labels")
+    if not isinstance(labels, list) or not all(isinstance(label, dict) and isinstance(label.get("name"), str) for label in labels):
+        return "unreadable"
+    return "labeled" if any(label["name"].lower() == PR_LABEL for label in labels) else "unlabeled"
+
+
+def unlabeled_text(state: str) -> str:
+    base = f"not labeled {PR_LABEL}; autonomous bots leave it alone, only the owner merges it"
+    return base + ("; its labels were unreadable" if state == "unreadable" else "")
+
+
+def label_refusal(pull: dict, owner_approved: bool) -> str | None:
+    state = label_state(pull)
+    if owner_approved or state == "labeled":
+        return None
+    return f"{unlabeled_text(state)}; it is not a bot session's pull request (an owner-requested merge uses --owner-approved)"
 
 
 def token(text: str) -> str:
