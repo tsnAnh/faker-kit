@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from faker_kit_cards import CHIEF_KEY
+from faker_kit_kanban import Card, Header, Kanban, KanbanError
+from faker_kit_loop import Loop
+from faker_kit_stray import stray_cards
+from faker_kit_text import refresh, summary_of
+from faker_kit_units import SESSION_URL, brief_source, brief_text, is_header_row, read_units, unit_index
+
+
+def ledger_decisions(home: Path, chief: str) -> dict[str, str]:
+    return {str(p["id"]): str(p.get("decisions") or "") for p in Loop(home, chief).read()["parts"]}
+
+
+def part_plan(card: Card, header: Header, repos: dict[str, str], decisions: dict[str, str]) -> tuple[Header | None, str | None]:
+    ident = str(card.key).rsplit(":", 1)[1]
+    return refresh(header, card.title, repos.get(header.fields.get("Project", "")), None, None if header.fields.get("Decisions") else decisions.get(ident) or None), None
+
+
+def unit_plan(card: Card, header: Header, home: Path, bot: str, repo: str, rows: list[list[str]] | None) -> tuple[Header | None, str | None]:
+    unit = str(card.key).rsplit(":", 1)[1]
+    found, twice = unit_index(rows)
+    if unit in twice:
+        return None, "the unit id is listed twice in units.tsv"
+    row = found.get(unit)
+    if unit == "unit" or (row is not None and is_header_row(row)) or (row is None and brief_text(home, bot, unit, None) is None):
+        return None, "no units.tsv row and no brief file holds this unit"
+    summary, decisions = brief_source(home, bot, unit, row)
+    changes: dict[str, str | None] = {}
+    if decisions and not header.fields.get("Decisions"):
+        changes["Decisions"] = decisions
+    repeated = header.repeated
+    session = row[5].strip() if row is not None and len(row) > 5 else ""
+    if SESSION_URL.match(session) and ("Session", session) not in repeated:
+        repeated = (*repeated, ("Session", session))
+    base = header.with_fields(changes, repeated)
+    return refresh(base, card.title, repo, summary if summary != unit else summary_of(header, card.title)), None
+
+
+def backfill(kanban: Kanban, home: Path, role: str, bot: str, project: str | None, repos: dict[str, str], apply: bool) -> dict:
+    cards = kanban.cards(True)
+    rows = read_units(home / "briefs" / bot / "orchestrate" / str(project) / "units.tsv") if role == "project" else None
+    decisions = ledger_decisions(home, bot) if role == "chief" else {}
+    plan: list[dict[str, str]] = []
+    no_source: list[dict[str, str]] = []
+    refused: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+    changed = 0
+    if apply:
+        kanban.require_external()
+    for card in cards:
+        header, key = card.header, card.key or ""
+        if header is None or not key.startswith("faker-kit:"):
+            continue
+        kind = header.fields.get("Kind", "")
+        mine = (role == "chief" and kind == "part" and key.startswith(f"faker-kit:{CHIEF_KEY}:")) or (role == "project" and kind == "unit" and header.fields.get("Project") == project)
+        if not mine:
+            refused.append({"card": card.id, "key": key, "reason": f"a {role} bot does not rewrite {kind or 'unknown'} cards of {header.fields.get('Project', 'another project')}"})
+            continue
+        fresh, why = part_plan(card, header, repos, decisions) if role == "chief" else unit_plan(card, header, home, bot, repos.get(str(project), ""), rows)
+        if fresh is None:
+            no_source.append({"card": card.id, "key": key, "reason": str(why)})
+            continue
+        change = fresh != header
+        item = {"card": card.id, "key": key, "layout": "old" if header.legacy else "new", "change": "rewrite" if change else "none", "text": fresh.text.split("\n", 1)[0]}
+        if change and apply:
+            try:
+                kanban.edit_body_if_changed(card.id, fresh, header)
+                changed += 1
+            except KanbanError as err:
+                failed.append({"card": card.id, "reason": str(err)[:160]})
+                item["change"] = "failed"
+        plan.append(item)
+    out: dict = {"mode": "apply" if apply else "dry-run", "cards": plan, "no_source": no_source, "refused": refused, "failed": failed,
+                 "to_rewrite": sum(1 for p in plan if p["change"] != "none"), "changed": changed}
+    if not apply:
+        out["stray_cards"] = stray_cards(cards, role, bot, project, home)
+    return out

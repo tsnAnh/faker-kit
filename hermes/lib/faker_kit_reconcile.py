@@ -9,6 +9,7 @@ from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, part_
 from faker_kit_gh import Refused, scrub
 from faker_kit_kanban import Card, Kanban
 from faker_kit_loop import CLOSED, DEFAULT_OUTCOME, Loop
+from faker_kit_text import refresh
 
 PullReader = Callable[[str, int], dict]
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
@@ -233,7 +234,8 @@ class CardSettler(Settler):
         header = card.header
         if header is not None:
             prs = sorted({*(int(p) for p in header.fields.get("PRs", "").split(",") if p), *([pr] if pr else [])})
-            self.kanban.edit_body(card.id, header.with_fields({"State": state, "PRs": ",".join(str(p) for p in prs) or None, "Updated": str(float(self.now))}))
+            changed = header.with_fields({"State": state, "PRs": ",".join(str(p) for p in prs) or None, "Updated": str(float(self.now))})
+            self.kanban.edit_body_if_changed(card.id, refresh(changed, card.title, item.repo), header)
         if state == "abandoned":
             self.kanban.archive(card.id)
 
