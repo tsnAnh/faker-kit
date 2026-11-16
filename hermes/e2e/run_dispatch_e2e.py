@@ -138,6 +138,7 @@ def pull_row(pull):
         "head": {"sha": pull["head"], "ref": pull["branch"], "repo": {"full_name": pull.get("head_repo", state["repo"]), "owner": {"login": pull.get("head_repo", state["repo"]).split("/")[0]}}},
         "base": {"ref": pull.get("base", "main"), "repo": {"full_name": state["repo"]}},
         **({} if pull.get("omit_labels") else {"labels": pull.get("labels", [{"name": "faker-kit"}])}),
+        **({"merge_commit_sha": pull["merge_commit_sha"]} if pull.get("merge_commit_sha") else {}),
     }
 
 
@@ -158,7 +159,7 @@ if args[0] == "api":
         if state.get("put_mode") == "reject":
             save()
             fail("gh: Pull Request is not mergeable (HTTP 405)")
-        pull["state"], pull["merged_at"] = "closed", "2026-10-20T00:00:00Z"
+        pull["state"], pull["merged_at"], pull["merge_commit_sha"] = "closed", "2026-10-20T00:00:00Z", f"{number:040x}"
         state["merges"].append({"pr": number, "sha": fields["sha"], "method": fields["merge_method"]})
         save()
         if state.get("on_put_write"):
@@ -4006,6 +4007,9 @@ def main(argv: list[str] | None = None) -> int:
         kanban_run = Run(root / "kanban", run.steps, run.verdicts)
         kanban_run.build()
         kanban_scenario.kanban_scenario(kanban_run, faker_kit.Loop, faker_kit.LoopError)
+        kanban_merge_run = Run(root / "kanban-merge", run.steps, run.verdicts)
+        kanban_merge_run.build()
+        kanban_scenario.kanban_merge_scenario(kanban_merge_run, open_gates)
     except Failure as err:
         print(f"e2e stopped at: {err}", file=sys.stderr)
         code = 1

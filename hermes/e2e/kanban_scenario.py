@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -53,6 +54,8 @@ def kanban_main():
     if verb not in allowed or (verb == "boards" and rest[:1] != ["list"]):
         die(f"kanban: refused verb {verb}", 2)
     if verb == "boards":
+        if st.get("boards_fail"):
+            die("database is locked")
         print(json.dumps([{"slug": "default", "dispatch_mode": st["dispatch_mode"], "archived": False}]))
         return
     reading = verb in ("list", "show") or (verb == "evidence" and rest[:1] == ["list"])
@@ -68,7 +71,8 @@ def kanban_main():
         found = task(rest[0])
         if found is None:
             die("no such task")
-        print(json.dumps({"task": found, "parents": parents_of(found["id"]), "children": [c for p, c in st["links"] if p == found["id"]], "comments": [], "events": [],
+        print(json.dumps({"task": found, "parents": parents_of(found["id"]), "children": [c for p, c in st["links"] if p == found["id"]], "comments": [],
+                          "events": [e for e in st.get("events", []) if e["task_id"] == found["id"]],
                           "runs": [r for r in st["runs"] if r["task_id"] == found["id"]], "latest_summary": None}))
     elif verb == "create":
         found, positional = opts(rest)
@@ -128,7 +132,26 @@ def kanban_main():
     elif verb == "evidence":
         print(json.dumps([e for e in st["evidence"] if e["task_id"] == rest[1]]))
     else:
-        die("kanban: complete is not part of this scenario", 2)
+        found, positional = opts(rest)
+        if "--force" in found or "--metadata" not in found:
+            die("complete takes no --force and needs --metadata", 2)
+        card = task(positional[0])
+        run_id = int(found["--run-id"])
+        live = next((r for r in st["runs"] if r["id"] == run_id and card and r["task_id"] == card["id"] and r["ended_at"] is None), None)
+        if card is None or live is None or card["status"] != "running":
+            die("cannot complete: no live run")
+        kinds = sorted(e["kind"] for e in st["evidence"] if e["task_id"] == card["id"] and e["run_id"] == run_id)
+        if json.loads(card["outcome_contract"])["kind"] == "merged_pr" and not {"pr_published", "pr_merged"} <= set(kinds):
+            die("cannot complete: the outcome contract needs verified pull request evidence")
+        refuse = st.get("complete_refuse")
+        published = json.loads(found["--metadata"])["published_pr"]
+        if not refuse or not (refuse.startswith("text-") or refuse == "bare"):
+            st.setdefault("events", []).append({"task_id": card["id"], "kind": "pr_acceptance", "run_id": run_id, "created_at": 1,
+                                                "payload": {"ok": not refuse, "classification": refuse or "success", "detail": f"CI acceptance {refuse or 'success'} on the exact head"}})
+        st.setdefault("completions", []).append({"task": card["id"], "run_id": run_id, "published": published, "kinds": kinds, "profile": profile})
+        if refuse:
+            die(f"cannot complete {card['id']}: PR acceptance {refuse[5:]}: no proof yet" if refuse.startswith("text-") else f"cannot complete {card['id']} (unknown id or terminal state)")
+        card["status"], live["ended_at"] = "done", 2
     save()
 '''
 
@@ -138,6 +161,7 @@ PROJECT = "shop"
 REPO = "acme/shop"
 DECISIONS = "none: bug fix, expected behaviour obvious from the report"
 ALLOWED_VERBS = {"boards", "list", "show", "create", "link", "edit", "claim", "evidence", "archive"}
+FORBIDDEN_TOKENS = {"dispatch", "daemon", "swarm", "specify", "decompose", "promote", "unblock", "--force", "set-dispatch-mode", "switch", "rm"}
 HEADER_KEYS = {"id", "project", "bot", "part", "decisions", "outcome", "stages", "reached", "state", "prs", "waits_on", "added", "updated", "reported"}
 
 
@@ -149,7 +173,8 @@ class Board:
     def __init__(self, run: Run) -> None:
         self.run = run
         self.path = run.hermes / "kanban-state.json"
-        self.path.write_text(json.dumps({"dispatch_mode": "external", "tasks": [], "links": [], "evidence": [], "runs": [], "mutations": 0, "fail_at": None, "next": 1, "creates": []}))
+        self.path.write_text(json.dumps({"dispatch_mode": "external", "tasks": [], "links": [], "evidence": [], "runs": [], "mutations": 0, "fail_at": None, "next": 1, "creates": [],
+                                                "events": [], "completions": []}))
 
     def state(self) -> dict:
         return json.loads(self.path.read_text())
@@ -157,6 +182,19 @@ class Board:
     def set(self, **changes: object) -> None:
         data = self.state()
         data.update(changes)
+        self.path.write_text(json.dumps(data))
+
+    def edit_card(self, key: str, **changes: object) -> None:
+        data = self.state()
+        for task in data["tasks"]:
+            if f"Key: {key}" in task["body"].splitlines():
+                task.update(changes)
+        self.path.write_text(json.dumps(data))
+
+    def add_evidence(self, key: str, kind: str, payload: dict) -> None:
+        data = self.state()
+        card = next(t for t in data["tasks"] if f"Key: {key}" in t["body"].splitlines())
+        data["evidence"].append({"id": len(data["evidence"]) + 1, "task_id": card["id"], "run_id": 1, "kind": kind, "payload": payload})
         self.path.write_text(json.dumps(data))
 
     def mutations(self) -> int:
@@ -167,7 +205,8 @@ class Board:
 
     def calls(self) -> list[tuple[str, list[str]]]:
         found = []
-        for line in (self.run.hermes / "hermes-calls.log").read_text().splitlines():
+        log = self.run.hermes / "hermes-calls.log"
+        for line in log.read_text().splitlines() if log.exists() else []:
             call = json.loads(line)
             if call[:1] == ["-p"]:
                 profile, call = call[1], call[2:]
@@ -394,8 +433,274 @@ def kanban_scenario(run: Run, loop_store: type, loop_error: type[Exception]) -> 
     verbs = set(board.verbs())
     flat = {v[0] for v in verbs}
     tokens = {token for _, rest in board.calls() for token in rest}
-    forbidden = {"dispatch", "daemon", "swarm", "specify", "decompose", "promote", "unblock", "--force", "set-dispatch-mode", "switch", "complete", "rm"}
+    forbidden = {*FORBIDDEN_TOKENS, "complete"}
     run.step("kanban: the Kanban calls are only list, show, create, link, edit, claim, evidence and archive; no worker, dispatch, forced completion, or board change appears",
              flat <= ALLOWED_VERBS and not tokens & forbidden and ("boards", "create") not in verbs, ",".join(sorted(flat)))
     claims = [profile for profile, rest in board.calls() if "claim" in rest[:3]]
     run.step("kanban: a claim is made only by the card's own assignee, to record evidence", claims == [CHIEF], json.dumps(claims))
+
+
+def head_of(n: int) -> str:
+    return f"{n + 1000:040x}"
+
+
+def commit_of(n: int) -> str:
+    return f"{n:040x}"
+
+
+def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None]) -> None:
+    bots = run.team / "bots.yaml"
+    bots.write_text(bots.read_text().replace("bots:\n", f"bots:\n  {CHIEF}:\n    role: chief\n", 1))
+    board = Board(run)
+    ledger(run)
+    ledger_file = run.team / "loop" / f"{CHIEF}.json"
+    tsv = run.team / "briefs" / BOT / "orchestrate" / PROJECT / "units.tsv"
+    tsv.write_text(tsv.read_text() + "pay-fix\trunning\tb\t47\t" + "c" * 40 + "\n")
+    marker = run.team / "kanban-cutover.json"
+
+    def chief(*argv: str) -> tuple[int, str, str]:
+        return run.kit(*argv, bot=CHIEF)
+
+    def project(*argv: str) -> tuple[int, str, str]:
+        return run.kit(*argv, bot=BOT)
+
+    def add_pr(n: int, unit: str | None = None, **fields: object) -> None:
+        body = f"Unit: {unit}\n\nChange for {unit}" if unit else "A change with no unit line"
+        run.update_gh(lambda state: state["pulls"].append({**run.pull(n, head_of(n)), "body": body, **fields}))
+
+    def settled(n: int, merged: bool, **fields: object) -> None:
+        extra = {"state": "closed", "merged_at": "2026-10-10T00:00:00Z", "merge_commit_sha": commit_of(n)} if merged else {"state": "closed", "merged_at": None}
+        add_pr(n, None, **extra, **fields)
+
+    def merged_prs() -> list[int]:
+        return [m["pr"] for m in run.merged()]
+
+    def part(ident: int) -> dict:
+        return next(p for p in json.loads(ledger_file.read_text())["parts"] if p["id"] == ident)
+
+    def ready(n: int) -> None:
+        open_gates(run, n, head_of(n))
+
+    add_pr(10, "pre-unit")
+    ready(10)
+    pre = project("merge", "--pr", "10")
+    run.step("kanban merge: before the cutover marker a merge makes no Kanban call at all and prints no card",
+             pre[0] == 0 and merged_prs() == [10] and board.calls() == [] and "card" not in json_of(pre), pre[2].strip())
+
+    for ident, prs in ((1, "41"), (3, "42"), (4, "43")):
+        chief("loop", "set", str(ident), "--pr", prs)
+    for text, pr in (("Build the nightly archive", "44"), ("Fix the cart total", "45"), ("Add dark mode", "46")):
+        made = json_of(chief("handoff", "--project", PROJECT, "--part", text, "--decisions", DECISIONS, *(["--outcome", "built"] if "archive" in text else [])))
+        chief("loop", "set", str(made["id"]), "--state", "in-progress", "--pr", pr)
+    settled(41, True)
+    settled(42, False)
+    add_pr(43)
+    add_pr(44, None, state="closed", merged_at="2026-10-10T00:00:00Z", merge_commit_sha=commit_of(44))
+    add_pr(45, None, state="unknown")
+    add_pr(46)
+    settled(47, True)
+    ledger_hash, tsv_hash = sha(ledger_file.read_text()), sha(tsv.read_text())
+
+    dry = json_of(chief("loop", "migrate", "--dry-run"))
+    pdry = json_of(project("loop", "migrate", "--dry-run"))
+    section, psection = dry.get("reconcile", {}), pdry.get("reconcile", {})
+    baseline = len(board.calls())
+    run.step("kanban reconcile: the dry run reports what a reconcile would do from GitHub (merged, closed, unchanged, unreadable) and writes nothing",
+             section.get("read") == 8 and section["would_set_merged"] == 1 and section["would_set_closed"] == 1 and section["unchanged"] == 2 and section["unreadable"] == 3
+             and section["entries"]["merged"] == ["1"] and section["entries"]["closed"] == ["3"] and sorted(section["entries"]["unchanged"]) == ["12", "4"]
+             and sorted(u["id"] for u in section["entries"]["unreadable"]) == ["11", "2", "5"] and psection["would_set_merged"] == 1 and psection["entries"]["merged"] == ["pay-fix"]
+             and [u["id"] for u in psection["entries"]["unreadable"]] == ["csv-export"] and sha(ledger_file.read_text()) == ledger_hash and sha(tsv.read_text()) == tsv_hash
+             and board.mutations() == 0 and not marker.exists(), json.dumps(section)[:300])
+
+    first = json_of(chief("loop", "reconcile"))
+    rows = {p["id"]: p for p in json_of(chief("loop", "show", "--all"))["open"]}
+    run.step("kanban reconcile: a part whose pull request merged on GitHub with no message is set merged, a closed unmerged one abandoned, an open one left, and a built part awaits its evidence",
+             first["set_merged"] == 1 and first["entries"]["merged"] == ["1"] and first["entries"]["closed"] == ["3"] and first["entries"]["unchanged"] == ["4", "12"]
+             and first["entries"]["awaiting_stage_evidence"] == [{"id": "10", "outcome": "built"}] and rows[1]["state"] == "merged" and rows[3]["state"] == "abandoned"
+             and rows[4]["state"] == "blocked" and rows[10]["state"] == "in-progress" and rows[10]["reached"] == "none", json.dumps(first["entries"])[:300])
+    run.step("kanban reconcile: a GitHub read that fails or answers in a shape faker-kit does not trust changes nothing and is reported unreadable with its reason",
+             sorted(u["id"] for u in first["entries"]["unreadable"]) == ["11", "2", "5"] and all(u["reason"] for u in first["entries"]["unreadable"])
+             and rows[11]["state"] == "in-progress" and rows[5]["state"] == "ready-to-merge" and rows[2]["state"] == "in-progress"
+             and any("usable state" in u["reason"] for u in first["entries"]["unreadable"] if u["id"] == "11"), json.dumps(first["entries"]["unreadable"])[:300])
+    settled_hash = sha(ledger_file.read_text())
+    again = json_of(chief("loop", "reconcile"))
+    run.step("kanban reconcile: a second run changes nothing and says unchanged",
+             again["set_merged"] == 0 and again["set_closed"] == 0 and again["entries"]["unchanged"] == ["4", "12"] and sha(ledger_file.read_text()) == settled_hash, json.dumps(again)[:200])
+
+    run.update_gh(lambda state: next(p for p in state["pulls"] if p["number"] == 46).update(state="closed", merged_at="2026-10-11T00:00:00Z", merge_commit_sha=commit_of(46)))
+    digest = json_of(chief("loop", "digest"))
+    run.step("kanban reconcile: the digest reconciles first, so a part merged on GitHub with no message is in the digest as merged, and an unreadable read is named and leaves its part",
+             digest["reconcile"]["set_merged"] == 1 and 12 in [p["id"] for p in digest["closed"]] and "11" in digest["reconcile"]["unreadable_ids"] and part(11)["state"] == "in-progress"
+             and part(12)["state"] == "merged", json.dumps(digest["reconcile"]))
+
+    reported = json_of(project("loop", "reconcile"))
+    run.step("kanban reconcile: a project bot before the cutover only reports what it would set; units.tsv, the ledger, and Kanban are untouched",
+             reported["mode"] == "report" and reported["set_merged"] == 0 and reported["would_set"]["merged"] == ["pay-fix"] and sha(tsv.read_text()) == tsv_hash
+             and [u["id"] for u in reported["entries"]["unreadable"]] == ["csv-export"] and len(board.calls()) == baseline and board.mutations() == 0,
+             json.dumps(reported)[:300])
+
+    assert chief("loop", "migrate", "--apply")[0] == 0
+    assert project("loop", "migrate", "--apply")[0] == 0
+    cards = board.by_key()
+    run.step("kanban merge: the cutover is applied for the merge gate matrix (part cards for open parts, unit cards for the project's open units)",
+             marker.exists() and "faker-kit:shop:csv-export" in cards and "faker-kit:shop:pay-fix" in cards and "faker-kit:chief:10" in cards
+             and "faker-kit:chief:12" not in cards, ",".join(sorted(cards)))
+
+    def card_key(unit: str) -> str:
+        return f"faker-kit:{PROJECT}:{unit}"
+
+    def case(label: str, n: int, unit: str | None, needle: str, create: bool = True, prepare: Callable[[], None] | None = None, undo: Callable[[], None] | None = None) -> None:
+        add_pr(n, unit)
+        if unit and create:
+            assert project("loop", "unit", unit, "--pr", str(n))[0] == 0
+        if prepare:
+            prepare()
+        ready(n)
+        refused = project("merge", "--pr", str(n))
+        not_merged = n not in merged_prs()
+        base = len(board.calls())
+        approved = project("merge", "--pr", str(n), "--owner-approved")
+        run.step(f"kanban merge gate {label}: a labeled pull request with CI green on its exact head is refused, and --owner-approved merges it with no Kanban call",
+                 refused[0] == 1 and needle in refused[2] and not_merged and approved[0] == 0 and n in merged_prs() and len(board.calls()) == base and "card" not in json_of(approved),
+                 refused[2].strip())
+        if undo:
+            undo()
+
+    case("(a) no unit card", 21, "ghost-a", "has no unit card for ghost-a", create=False)
+    case("(a) no Unit line", 22, None, "no `Unit: <id>` first line")
+    case("(b) card of another bot", 23, "other-b", "belongs to rival-bot, not meo-beo", prepare=lambda: board.edit_card(card_key("other-b"), assignee="rival-bot"))
+    case("(c) card done", 24, "done-c", "already done", prepare=lambda: board.edit_card(card_key("done-c"), status="done"))
+    case("(c) card archived", 25, "arch-c", "already archived", prepare=lambda: board.edit_card(card_key("arch-c"), status="archived"))
+    case("(d) board unreadable", 26, "open-d", "could not read Kanban", prepare=lambda: board.set(boards_fail=True), undo=lambda: board.set(boards_fail=False))
+    case("(e) board not external", 27, "open-e", "not an external board", prepare=lambda: board.set(dispatch_mode="workers"), undo=lambda: board.set(dispatch_mode="external"))
+    case("(f) card bound to another pull request", 28, "bound-f", "bound to another pull request",
+         prepare=lambda: board.add_evidence(card_key("bound-f"), "pr_published", {"pr_url": f"https://github.com/{REPO}/pull/99", "head_sha": "d" * 40}))
+
+    add_pr(30, "ship-ok")
+    assert project("loop", "unit", "ship-ok", "--pr", "30")[0] == 0
+    ready(30)
+    shipped = project("merge", "--pr", "30")
+    ship = json_of(shipped)
+    card = board.by_key()[card_key("ship-ok")]
+    state = board.state()
+    rows_for = [e for e in state["evidence"] if e["task_id"] == card["id"]]
+    run.step("kanban merge: an open card owned by the caller lets the merge land and the card complete through Pal's rule: claim, pr_published, pr_merged with the merge commit, complete",
+             shipped[0] == 0 and ship["card"] == {"id": card["id"], "completion": "done"} and card["status"] == "done" and [e["kind"] for e in rows_for] == ["pr_published", "pr_merged"]
+             and rows_for[1]["payload"] == {"pr_url": f"https://github.com/{REPO}/pull/30", "head_sha": head_of(30), "merge_commit": commit_of(30)}
+             and [c["published"] for c in state["completions"] if c["task"] == card["id"]] == [f"https://github.com/{REPO}/pull/30"]
+             and [c["profile"] for c in state["completions"]] == [BOT], shipped[1].strip() or shipped[2].strip())
+
+    pal_cases = [("pending", "pending"), ("failure", "failure"), ("stale", "stale"), ("provenance", "provenance"), ("mismatch", "mismatch"), ("text-infra", "infra"), ("bare", "unknown")]
+    for index, (mode, wanted) in enumerate(pal_cases):
+        n, unit = 31 + index, f"pal-{mode}"
+        add_pr(n, unit)
+        assert project("loop", "unit", unit, "--pr", str(n))[0] == 0
+        ready(n)
+        board.set(complete_refuse=mode)
+        result = project("merge", "--pr", str(n))
+        out = json_of(result)
+        card = board.by_key()[card_key(unit)]
+        state = board.state()
+        run.step(f"kanban merge: Pal refusing completion ({wanted}) leaves the pull request merged and the card open, and the merge reports the card once with its classification",
+                 result[0] == 0 and out["merged"] is True and n in merged_prs() and out["card"]["completion"] == "refused" and out["card"]["classification"] == wanted
+                 and out["card"]["id"] == card["id"] and out["card"]["detail"] and card["status"] == "running"
+                 and len([c for c in state["completions"] if c["task"] == card["id"]]) == 1 and len([r for r in state["runs"] if r["task_id"] == card["id"]]) == 1,
+                 json.dumps(out.get("card")))
+    board.set(complete_refuse=None)
+
+    add_pr(60, "wait-u")
+    add_pr(61, "wait-v")
+    assert project("loop", "unit", "wait-u", "--pr", "60")[0] == 0
+    assert project("loop", "unit", "wait-v", "--pr", "61")[0] == 0
+    def hold(n: int) -> None:
+        run.update_gh(lambda state: state["check_runs"].__setitem__(head_of(n), [{"name": "check", "status": "in_progress", "conclusion": ""}]))
+
+    for n, unit, change, needle in ((60, "wait-u", {"assignee": "rival-bot"}, "belongs to rival-bot"), (61, "wait-v", {"status": "done"}, "already done")):
+        ready(n)
+        hold(n)
+        run.sleeps.clear()
+        run.on_sleep = [lambda unit=unit, change=change: board.edit_card(card_key(unit), **change)]
+        waiting = project("merge", "--pr", str(n), "--wait", "300")
+        run.on_sleep = []
+        run.step(f"kanban merge: a card changed while --wait polls ({needle}) refuses on the next poll and merges nothing",
+                 waiting[0] == 1 and needle in waiting[2] and n not in merged_prs() and run.sleeps == [30.0], f"{waiting[2].strip()} {run.sleeps}")
+
+    add_pr(62, "ci-u")
+    assert project("loop", "unit", "ci-u", "--pr", "62")[0] == 0
+    ready(62)
+    run.update_gh(lambda state: state["check_runs"].__setitem__(head_of(62), [{"name": "check", "status": "completed", "conclusion": "failure"}]))
+    red = project("merge", "--pr", "62")
+    add_pr(63, "cord-u")
+    assert project("loop", "unit", "cord-u", "--pr", "63")[0] == 0
+    ready(63)
+    raised = project("andon", "raise", "card", "gate", "probe")
+    cord = project("merge", "--pr", "63")
+    project("andon", "clear")
+    run.step("kanban merge: after the cutover a failed CI check and a pulled andon cord refuse an owned card's pull request exactly as before",
+             red[0] == 1 and "checks have not all passed" in red[2] and cord[0] == 1 and "andon" in cord[2].lower() and raised[0] == 0 and 62 not in merged_prs() and 63 not in merged_prs(),
+             red[2].strip() + cord[2].strip())
+
+    add_pr(51)
+    run.update_gh(lambda state: next(p for p in state["pulls"] if p["number"] == 51).update(state="closed", merged_at=None, body="Unit: dead-u"))
+    assert project("loop", "unit", "dead-u", "--pr", "51")[0] == 0
+
+    board.set(complete_refuse="pending")
+    before = board.state()
+    stuck = json_of(project("loop", "reconcile"))
+    state = board.state()
+    pal_units = [f"pal-{mode}" for mode, _ in pal_cases]
+    refused_ids = {r["id"]: r for r in stuck["entries"]["refused"]}
+    runs_per = {u: len([r for r in state["runs"] if r["task_id"] == board.by_key()[card_key(u)]["id"]]) for u in pal_units}
+    evidence_per = {u: len([e for e in state["evidence"] if e["task_id"] == board.by_key()[card_key(u)]["id"]]) for u in pal_units}
+    dead = board.by_key()[card_key("dead-u")]
+    run.step("kanban reconcile: after the cutover a merged pull request completes its unit card only on Pal's accepted receipt; a refusal leaves it open, reuses its run, adds no evidence twice",
+             all(refused_ids[u]["classification"] == "pending" for u in pal_units) and all(v == 1 for v in runs_per.values()) and all(v == 2 for v in evidence_per.values())
+             and all(board.by_key()[card_key(u)]["status"] == "running" for u in pal_units)
+             and len(state["completions"]) > len(before["completions"]), json.dumps(stuck["entries"]["refused"])[:300])
+    run.step("kanban reconcile: a closed unmerged pull request abandons its unit card and archives it, and a GitHub read error on another unit changes nothing",
+             "dead-u" in stuck["entries"]["closed"] and dead["status"] == "archived" and "State: abandoned" in lines(dead) and "csv-export" in [u["id"] for u in stuck["entries"]["unreadable"]]
+             and "State: in-progress" in lines(board.by_key()[card_key("csv-export")]), json.dumps(stuck["entries"]["closed"]))
+    board.set(complete_refuse=None)
+    done = json_of(project("loop", "reconcile"))
+    state = board.state()
+    run.step("kanban reconcile: once Pal accepts, the open units complete without a second claim or duplicate evidence, and their header says merged",
+             all(u in done["entries"]["merged"] for u in pal_units)
+             and all(board.by_key()[card_key(u)]["status"] == "done" and "State: merged" in lines(board.by_key()[card_key(u)]) for u in pal_units)
+             and all(len([e for e in state["evidence"] if e["task_id"] == board.by_key()[card_key(u)]["id"]]) == 2 for u in pal_units)
+             and all(len([r for r in state["runs"] if r["task_id"] == board.by_key()[card_key(u)]["id"]]) == 1 for u in pal_units), json.dumps(done["entries"]["merged"]))
+    mutations = board.mutations()
+    quiet = json_of(project("loop", "reconcile"))
+    run.step("kanban reconcile: a second run after completion changes nothing", quiet["set_merged"] == 0 and quiet["set_closed"] == 0 and board.mutations() == mutations, json.dumps(quiet)[:200])
+
+    for text, pr, merged in (("Add the wishlist", 48, True), ("Add reviews", 49, True), ("Add gift cards", 50, False)):
+        made = json_of(chief("handoff", "--project", PROJECT, "--part", text, "--decisions", DECISIONS))
+        assert chief("loop", "set", str(made["id"]), "--state", "in-progress", "--pr", str(pr))[0] == 0
+        settled(pr, merged)
+    assert project("loop", "unit", "u14", "--part", "14")[0] == 0
+    board.set(complete_refuse="pending")
+    stuck = json_of(chief("loop", "reconcile"))
+    cards = board.by_key()
+    unit_card = cards[card_key("u14")]
+    run.step("kanban reconcile: the chief completes a part only through Pal, waits for the part's unit cards, leaves a built part awaiting its evidence, and abandons a closed part",
+             {r["id"]: r["classification"] for r in stuck["entries"]["refused"]} == {"13": "pending"}
+             and stuck["entries"]["waiting_on_units"] == [{"id": "14", "card": cards["faker-kit:chief:14"]["id"], "units": [unit_card["id"]]}]
+             and stuck["entries"]["awaiting_stage_evidence"] == [{"id": "10", "outcome": "built"}] and stuck["entries"]["closed"] == ["15"] and cards["faker-kit:chief:15"]["status"] == "archived"
+             and cards["faker-kit:chief:13"]["status"] == "running" and cards["faker-kit:chief:14"]["status"] != "done" and cards["faker-kit:chief:10"]["status"] != "done",
+             json.dumps(stuck["entries"])[:300])
+    board.set(complete_refuse=None)
+    finished = json_of(chief("loop", "reconcile"))
+    cards = board.by_key()
+    part_rows = {p["id"]: p for p in json_of(chief("loop", "show", "--all"))["open"]}
+    kinds = [e["kind"] for e in board.state()["evidence"] if e["task_id"] == cards["faker-kit:chief:13"]["id"]]
+    mutations = board.mutations()
+    final = json_of(chief("loop", "reconcile"))
+    run.step("kanban reconcile: with an accepted receipt the chief's part card completes with its pull request evidence, shows merged, and a further run changes nothing",
+             finished["entries"]["merged"] == ["13"] and cards["faker-kit:chief:13"]["status"] == "done" and kinds == ["pr_published", "pr_merged"] and part_rows[13]["state"] == "merged"
+             and final["set_merged"] == 0 and board.mutations() == mutations, json.dumps(finished["entries"]["merged"]))
+
+    calls = board.calls()
+    flat = {v[0] for v in set(board.verbs())}
+    tokens = {token for _, rest in calls for token in rest}
+    completes = [rest for _, rest in calls if "complete" in rest[:3]]
+    run.step("kanban merge and reconcile: Kanban calls are only the allowed verbs and complete, each complete names its run, and no forced completion, dispatch, worker, or board change appears",
+             flat <= ALLOWED_VERBS | {"complete"} and not tokens & FORBIDDEN_TOKENS and completes and all("--run-id" in c and "--metadata" in c for c in completes), ",".join(sorted(flat)))
