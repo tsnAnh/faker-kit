@@ -11,6 +11,7 @@ The maintained source for verifying what faker-kit's users meet. Read this index
 
 ## Baseline preconditions
 
+- Kanban proof is against a fake `hermes` kanban shim on `PATH` in the e2e run; no real Pi board is available here, so say so when reporting a Kanban feature as verified.
 - For the e2e features: `hermes/e2e/run_dispatch_e2e.py` is the entry point and needs only `python3` with PyYAML and `git`.
 - `python3` (3.10 or newer), `node` (22), `git`, and `bash` are on `PATH`; `bun` and `jq` for `scripts/e2e/kit-e2e.mjs` (the continual-learning and advisor hooks).
 - Never drive your own `~/.hermes`: the e2e runs in a throwaway home.
