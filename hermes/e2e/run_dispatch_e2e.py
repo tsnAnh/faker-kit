@@ -30,6 +30,7 @@ import gate_scenario
 import guard_scenario
 import import_scenario
 import kanban_scenario
+import kanban_text_scenario
 import refresh_scenario
 import t3code_scenario
 import tooling_scenario
@@ -4033,6 +4034,15 @@ def main(argv: list[str] | None = None) -> int:
         kanban_merge_run = Run(root / "kanban-merge", run.steps, run.verdicts)
         kanban_merge_run.build()
         kanban_scenario.kanban_merge_scenario(kanban_merge_run, open_gates)
+        kanban_text_run = Run(root / "kanban-text", run.steps, run.verdicts)
+        kanban_text_run.build()
+        kanban_text_scenario.kanban_text_scenario(kanban_text_run)
+        kanban_backfill_run = Run(root / "kanban-backfill", run.steps, run.verdicts)
+        kanban_backfill_run.build()
+        kanban_text_scenario.kanban_backfill_scenario(kanban_backfill_run)
+        kanban_close_run = Run(root / "kanban-close", run.steps, run.verdicts)
+        kanban_close_run.build()
+        kanban_text_scenario.kanban_close_scenario(kanban_close_run)
     except Failure as err:
         print(f"e2e stopped at: {err}", file=sys.stderr)
         code = 1

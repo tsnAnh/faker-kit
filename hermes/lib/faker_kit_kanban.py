@@ -24,6 +24,7 @@ REPEATED = ("Stage", "History", "PR", "Session")
 HEADER_LINE = re.compile(r"\A([A-Za-z][A-Za-z-]*): (.*)\Z")
 CARD_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 MAX_VALUE = 700
+FOOTER = "---- faker-kit machine fields (read by the kit, do not edit) ----"
 
 KanbanRunner = Callable[[list[str], str | None], str]
 
@@ -90,11 +91,15 @@ class Header:
     fields: dict[str, str]
     repeated: tuple[tuple[str, str], ...] = ()
     text: str = ""
+    legacy: bool = False
 
     def render(self) -> str:
         lines = [f"{name}: {check_value(name, self.fields[name])}" for name in SINGLE if name in self.fields]
         lines += [f"{name}: {check_value(name, value)}" for name, value in self.repeated]
-        return "\n".join(lines) + "\n\n" + self.text
+        text = self.text.strip("\n")
+        if FOOTER in text.split("\n"):
+            raise KanbanError("the card text cannot hold the machine footer line")
+        return "\n".join([*([text, ""] if text else []), FOOTER, *lines])
 
     def with_fields(self, changes: dict[str, str | None], repeated: tuple[tuple[str, str], ...] | None = None) -> Header:
         fields = {name: value for name, value in {**self.fields, **changes}.items() if value is not None}
@@ -109,7 +114,14 @@ class Header:
 
 
 def parse_header(body: str) -> Header | None:
-    head, _, text = body.replace("\r\n", "\n").partition("\n\n")
+    whole = body.replace("\r\n", "\n")
+    rows = whole.split("\n")
+    legacy = FOOTER not in rows
+    if legacy:
+        head, _, text = whole.partition("\n\n")
+    else:
+        at = rows.index(FOOTER)
+        text, head = "\n".join(rows[:at]).rstrip("\n"), "\n".join(rows[at + 1:])
     fields: dict[str, str] = {}
     repeated: list[tuple[str, str]] = []
     for line in head.split("\n"):
@@ -123,7 +135,7 @@ def parse_header(body: str) -> Header | None:
             fields[name] = value
         else:
             return None
-    return Header(fields, tuple(repeated), text) if "Key" in fields else None
+    return Header(fields, tuple(repeated), text, legacy) if "Key" in fields else None
 
 
 @dataclass(frozen=True)
@@ -274,6 +286,12 @@ class Kanban:
     def edit_body(self, card: str, header: Header) -> None:
         self.require_external()
         self.call(["edit", card_id(card), "--body", header.render()])
+
+    def edit_body_if_changed(self, card: str, header: Header, current: Header | None) -> bool:
+        if current == header:
+            return False
+        self.edit_body(card, header)
+        return True
 
     def claim(self, card: str) -> int:
         self.require_external()
