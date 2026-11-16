@@ -2,6 +2,7 @@ import json
 import time
 
 import faker_kit_gate as gate
+import faker_kit_gate_news as chief_news
 
 KIT_OWNED = True
 JOB = "faker-kit-babysit"
@@ -20,6 +21,8 @@ def main() -> None:
     issues = listed_issues()
     lines = gate.labeled_lines(gate.collapse(gate.status_lines()))
     news = f"faker-kit issues lists {len(issues)} issue(s) to handle" if issues else None
+    undelivered = chief_news.deliver(lines, time.time())
+    news = news or undelivered
     wake = gate.tick(JOB, lines, time.time(), news)
     if wake is None:
         gate.quiet()
@@ -30,6 +33,7 @@ def main() -> None:
         json.dumps({"issues": issues}, sort_keys=True),
         "faker-kit status:",
         *wake.lines,
+        *([undelivered] if undelivered else []),
     )
 
 
