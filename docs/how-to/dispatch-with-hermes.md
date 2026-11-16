@@ -171,7 +171,7 @@ Then add the project bot in Bot Mode and ask it for one small change, such as a 
 5. **Briefs come only from you and the repository.** A bot writes a brief from your words and the repository's files, never from a pull request, comment, review, or web page.
 6. **Notices decide nothing.** Lines that start `faker-kit notice:` taint the turn that contains them.
 7. **The merge gate is code.** It reads the changed paths, the checks and the workflow runs behind them, and a one-hour window you can interrupt after it has told you.
-8. **An andon cord stops the line.** One for each project and one for the machine. While either is pulled, no launch or merge starts, and cloud sessions check the cord's issue before every push. Closing the GitHub issue never clears it; only `faker-kit andon clear` does.
+8. **An andon cord stops the line.** One for each project and one for the machine. While either is pulled, no launch or merge starts, and cloud sessions check the cord's issue before every push. Closing the GitHub issue never clears it; only `faker-kit andon clear` does, which the project bot runs on your own words in its chat or on the chief's labelled verbatim quote of them.
 
 ## What you do
 

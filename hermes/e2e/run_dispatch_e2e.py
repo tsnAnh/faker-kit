@@ -1551,6 +1551,7 @@ def owner_merge_scenario(run: Run) -> None:
         cleared = run.kit("andon", "clear")
         run.step("owner-approved merge still refuses while the andon cord is pulled, naming the cord, its reason and who clears it",
                  raised[0] == 0 and bed.refused(result, "andon pulled") and "stop everything" in result[2] and "faker-kit andon clear" in result[2] and "never by itself" in result[2]
+                 and "labelled verbatim chief relay" in result[2]
                  and cleared[0] == 0, result[2].strip())
 
         third = sha("c")

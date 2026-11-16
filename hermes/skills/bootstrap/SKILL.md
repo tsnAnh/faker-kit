@@ -136,7 +136,7 @@ When the owner says to stop everything (a cloud bill spike, a broken default bra
 - Every launch and every merge refuses until it is cleared. Sessions already running keep running until their next push.
 - Each project's repository gets an open issue labelled `agent:andon`. Cloud agents check for it before every push and stop.
 
-Closing those issues on GitHub does not clear the cord. When the owner says to start again, run `faker-kit andon clear`. It closes the issues it opened. A project bot's own cord is cleared by that project bot.
+Closing those issues on GitHub does not clear the cord. When the owner says to start again, run `faker-kit andon clear`. It closes the issues it opened. A project bot's own cord is cleared by that project bot, on the owner's words in its own chat or in a labelled verbatim relay from the chief.
 
 ## Report
 
