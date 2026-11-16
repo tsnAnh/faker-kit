@@ -2,19 +2,15 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from faker_kit_gh import TOKEN_SHAPES, Gh
 from faker_kit_guard.policy import wrap_untrusted
 from faker_kit_guard.t3code import SECRET_SHAPES
 from faker_kit_incidents import fence, redact
-from faker_kit_kanban import Header
 from faker_kit_merge import PASSING_CONCLUSIONS, unit_of
 
 MARKER = "Closing summary:"
-SECTION_TITLE = "Session summary (a claim, not proof):"
-SECTION_END = "End of session summary."
-STEER_TITLE = "Session steer:"
 MAX_SUMMARY_CHARS = 2000
 NO_PULL_REASON = "no pull request"
 NO_SUMMARY_REASON = "no Closing summary comment by the pull request's author or this machine's login, and the body holds none"
@@ -25,8 +21,6 @@ STEER_MESSAGE = (
     "open a draft pull request whose body begins with `Unit: <unit-id>` and carries the same summary. Do not start new work."
 )
 BODY_SUMMARY = re.compile(r"(?m)^" + re.escape(MARKER))
-STORED = re.compile(re.escape(SECTION_TITLE) + r"\nRead at (\S+) at head (\S+)\n(.*?)\n" + re.escape(SECTION_END), re.S)
-STEERED = re.compile(re.escape(STEER_TITLE) + r" asked session (\S+) at (\S+) for a closing summary\.")
 
 
 @dataclass(frozen=True)
@@ -78,22 +72,3 @@ def read_summary(gh: Gh, unit: str | None, number: int | None, machine_login: Ca
     report = {"unit": unit or unit_of(pull), "pr": number, "head": head, "state": state, "draft": bool(pull.get("draft")), "checks": check_result(gh.check_runs(head)) if head else None,
               "summary": wrap_untrusted(f"github:{gh.repo}#{number}:{found.source}", text) if text else None, "source": found.source, "readable": bool(text), "text": text}
     return report if text else {**report, "reason": found.reason, "result": UNREADABLE}
-
-
-def with_summary(header: Header, text: str, head: str, read_at: str) -> Header | None:
-    held = STORED.search(header.text)
-    if held and held.group(2) == head and held.group(3) == text:
-        return None
-    section = f"{SECTION_TITLE}\nRead at {read_at} at head {head}\n{text}\n{SECTION_END}"
-    if held:
-        return replace(header, text=header.text[:held.start()] + section + header.text[held.end():])
-    return replace(header, text=(header.text.rstrip("\n") + "\n\n" if header.text.strip() else "") + section)
-
-
-def steered(header: Header) -> bool:
-    return STEERED.search(header.text) is not None
-
-
-def with_steer(header: Header, session: str, at: str) -> Header:
-    line = f"{STEER_TITLE} asked session {session} at {at} for a closing summary."
-    return replace(header, text=(header.text.rstrip("\n") + "\n\n" if header.text.strip() else "") + line)

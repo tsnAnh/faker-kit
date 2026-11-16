@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,10 +19,9 @@ from faker_kit_kanban import (
     write_marker,
 )
 from faker_kit_loop import CLOSED, DEFAULT_OUTCOME, OUTCOMES, STATES, Loop, LoopError, clean_part
-
-CLOSED_UNIT_STATES = ("merged", "abandoned", "closed", "done")
-SESSION_URL = re.compile(r"\Ahttps://[^\s]{1,300}\Z")
-MAX_TSV_BYTES = 2_000_000
+from faker_kit_stray import stray_cards
+from faker_kit_text import refresh
+from faker_kit_units import SESSION_URL, brief_source, is_header_row, read_units, row_closure, unit_index
 
 
 @dataclass(frozen=True)
@@ -60,21 +58,9 @@ def plan_parts(entries: list[dict], chief: str, repos: dict[str, str]) -> tuple[
             unmapped.append({"id": ident, "reason": "the entry has an outcome or state faker-kit does not know"})
             continue
         shaped = {**entry, "outcome": outcome, "stages": entry.get("stages") or {}, "decisions": ""}
-        header = entry_header(shaped, None, (("History", f"loop/{chief}.json#{ident}"),))
+        header = refresh(entry_header(shaped, None, (("History", f"loop/{chief}.json#{ident}"),)), title, repo)
         planned.append(Planned(NewCard(header.key, title, header, chief, chief, outcome_contract(outcome, repo), completion_contract(repo))))
     return planned, closed, unmapped
-
-
-def read_units(path: Path) -> list[list[str]] | None:
-    try:
-        if path.stat().st_size > MAX_TSV_BYTES:
-            raise LoopError(f"{path.name} is too large to migrate; nothing was changed")
-        text = path.read_text()
-    except FileNotFoundError:
-        return None
-    except (OSError, UnicodeDecodeError):
-        raise LoopError(f"{path.name} cannot be read; nothing was changed") from None
-    return [line.split("\t") for line in text.splitlines() if line.strip()]
 
 
 def chief_parts(home: Path) -> list[dict]:
@@ -93,24 +79,28 @@ def serving_part(parts: list[dict], project: str, pr: str) -> dict | None:
     return min(matches, key=lambda p: int(p["id"])) if matches else None
 
 
-def plan_units(rows: list[list[str]] | None, home: Path, bot: str, project: str, repo: str, now: float) -> tuple[list[Planned], int, list[dict[str, str]]]:
+def plan_units(rows: list[list[str]] | None, home: Path, bot: str, project: str, repo: str, now: float) -> tuple[list[Planned], int, list[dict[str, str]], list[dict[str, str]]]:
     planned: list[Planned] = []
     unmapped: list[dict[str, str]] = []
+    skipped: list[dict[str, str]] = []
     closed = 0
-    seen: set[str] = set()
     parts = chief_parts(home)
+    _, twice = unit_index(rows)
     for number, row in enumerate(rows or [], 1):
         ident = unmapped_id(row[0], f"row {number}")
+        if is_header_row(row):
+            skipped.append({"id": ident, "reason": "the units.tsv header row"})
+            continue
         if len(row) < 2 or not UNIT_ID.match(row[0]):
             unmapped.append({"id": ident, "reason": "the row does not start with a unit id and a state"})
             continue
-        if row[0] in seen:
+        if row[0] in twice:
             unmapped.append({"id": ident, "reason": "the unit id is listed twice"})
             continue
-        seen.add(row[0])
         state = row[1].strip()
-        if state in CLOSED_UNIT_STATES:
+        if row_closure(state) is not None:
             closed += 1
+            skipped.append({"id": ident, "reason": f"the unit is {state}, so no card is made"})
             continue
         pr = row[3].strip() if len(row) > 3 else ""
         session = row[5].strip() if len(row) > 5 else ""
@@ -123,14 +113,17 @@ def plan_units(rows: list[list[str]] | None, home: Path, bot: str, project: str,
             fields["PRs"] = pr
         if serves:
             fields["Part"] = str(serves["id"])
+        summary, decisions = brief_source(home, bot, row[0], row)
+        if decisions:
+            fields["Decisions"] = decisions
         links = [("History", f"briefs/{bot}/orchestrate/{project}/units.tsv#{row[0]}")]
         if pr.isdigit():
             links.append(("PR", pr))
         if SESSION_URL.match(session):
             links.append(("Session", session))
-        header = Header(fields, tuple(links))
+        header = refresh(Header(fields, tuple(links)), row[0], repo, summary)
         planned.append(Planned(NewCard(header.key, row[0], header, bot, bot, outcome_contract(outcome, repo), completion_contract(repo)), part_key(int(serves["id"])) if serves else None))
-    return planned, closed, unmapped
+    return planned, closed, unmapped, skipped
 
 
 def by_key(cards: list[Card]) -> dict[str, Card]:
@@ -167,12 +160,13 @@ def migrate_chief(kanban: Kanban, home: Path, chief: str, repos: dict[str, str],
                 marker_written = True
     return report("apply" if apply else "dry-run", kanban, ledger_entries=len(entries), parts_open=len(planned), parts_closed_skipped=closed, units_open=0, units_closed=0,
                   cards_to_create=0 if apply else len(missing), cards_existing=len(planned) - len(missing), cards_created=created, links_to_make=0, links_made=0,
-                  unmapped=unmapped, cutover=cutover(home), marker_written=marker_written)
+                  unmapped=unmapped, skipped_rows=[], cutover=cutover(home), marker_written=marker_written,
+                  **({"stray_cards": stray_cards(kanban.cards(True), "chief", chief, None, home)} if not apply else {}))
 
 
 def migrate_project(kanban: Kanban, home: Path, bot: str, project: str, repo: str, apply: bool, now: float) -> dict:
     rows = read_units(home / "briefs" / bot / "orchestrate" / project / "units.tsv")
-    planned, closed, unmapped = plan_units(rows, home, bot, project, repo, now)
+    planned, closed, unmapped, skipped = plan_units(rows, home, bot, project, repo, now)
     kanban.board()
     marker = read_marker(home)
     if apply:
@@ -211,4 +205,5 @@ def migrate_project(kanban: Kanban, home: Path, bot: str, project: str, repo: st
     unlinked = [{"id": p.spec.title, "reason": f"part card {p.part} is not on the board"} for p in planned if p.part and p.part not in cards]
     return report("apply" if apply else "dry-run", kanban, ledger_entries=0, parts_open=0, parts_closed_skipped=dict.fromkeys(CLOSED, 0), units_open=len(planned), units_closed=closed,
                   cards_to_create=0 if apply else len(missing), cards_existing=len(planned) - len(missing), cards_created=created, links_to_make=0 if apply else len(pending),
-                  links_made=links_made, unmapped=unmapped, unlinked=unlinked, cutover=marker is not None)
+                  links_made=links_made, unmapped=unmapped, skipped_rows=skipped, unlinked=unlinked, cutover=marker is not None,
+                  **({"stray_cards": stray_cards(kanban.cards(True), "project", bot, project, home)} if not apply else {}))

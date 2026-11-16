@@ -103,6 +103,11 @@ def session_scenario(run: Run) -> None:
              moved["card"]["action"] == "edited" and moved["head"] == head("5") and board.mutations() == mutations + 2 and newer.count(TITLE) == 1 and f"at head {head('5')}" in newer
              and f"at head {head('1')}" not in newer and "the pdf export too" in newer, newer[-260:].replace("\n", " "))
 
+    refreshed = project("loop", "unit", "csv-export")
+    run.step("session summary: a later refresh of the unit's card text (loop unit on an existing card) keeps the stored section and its head",
+             refreshed[0] == 0 and card("csv-export").count(TITLE) == 1 and f"at head {head('5')}" in card("csv-export") and "the pdf export too" in card("csv-export"),
+             card("csv-export")[:200].replace("\n", " "))
+
     drafted = json_of(project("session", "summary", "13"))
     run.step("session summary: a draft pull request with no comment gives its body as the summary, source body, and stores it on the unit's card",
              drafted["readable"] is True and drafted["source"] == "body" and drafted["draft"] is True and drafted["unit"] == "login-fix" and "Blockers: the API is down." in (drafted["summary"] or "")

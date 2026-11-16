@@ -197,6 +197,28 @@ class Board:
         data["evidence"].append({"id": len(data["evidence"]) + 1, "task_id": card["id"], "run_id": 1, "kind": kind, "payload": payload})
         self.path.write_text(json.dumps(data))
 
+    def add_card(self, key: str, title: str, body: str, assignee: str = BOT, status: str = "ready") -> str:
+        data = self.state()
+        ident = f"t_{data['next']}"
+        data["next"] += 1
+        data["tasks"].append({"id": ident, "title": title, "body": body, "assignee": assignee, "status": status, "created_by": assignee, "completion_contract": f"fleet-ci:{REPO}",
+                              "outcome_contract": json.dumps({"kind": "merged_pr", "repo": REPO}), "result": None, "idempotency": key})
+        self.path.write_text(json.dumps(data))
+        return ident
+
+    def legacy(self, key: str) -> None:
+        data = self.state()
+        for task in data["tasks"]:
+            if f"Key: {key}" in task["body"].splitlines():
+                task["body"] = "\n".join(lines(task)) + "\n\n"
+        self.path.write_text(json.dumps(data))
+
+    def body(self, key: str) -> str:
+        return str(self.by_key()[key]["body"])
+
+    def mutating(self) -> list[str]:
+        return [verb[0] for verb in self.verbs() if verb[0] in ("create", "link", "edit", "claim", "evidence", "complete", "archive")]
+
     def mutations(self) -> int:
         return int(self.state()["mutations"])
 
@@ -222,8 +244,17 @@ class Board:
         return found
 
 
+FOOTER = "---- faker-kit machine fields (read by the kit, do not edit) ----"
+
+
 def lines(task: dict) -> list[str]:
-    return task["body"].partition("\n\n")[0].splitlines()
+    rows = task["body"].splitlines()
+    return rows[rows.index(FOOTER) + 1:] if FOOTER in rows else task["body"].partition("\n\n")[0].splitlines()
+
+
+def readable(task: dict) -> str:
+    rows = task["body"].splitlines()
+    return "\n".join(rows[:rows.index(FOOTER)]).rstrip("\n") if FOOTER in rows else ""
 
 
 def ledger(run: Run) -> None:
@@ -589,6 +620,15 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              and rows_for[1]["payload"] == {"pr_url": f"https://github.com/{REPO}/pull/30", "head_sha": head_of(30), "merge_commit": commit_of(30)}
              and [c["published"] for c in state["completions"] if c["task"] == card["id"]] == [f"https://github.com/{REPO}/pull/30"]
              and [c["profile"] for c in state["completions"]] == [BOT], shipped[1].strip() or shipped[2].strip())
+
+    add_pr(29, "legacy-u")
+    assert project("loop", "unit", "legacy-u", "--pr", "29")[0] == 0
+    board.legacy(card_key("legacy-u"))
+    ready(29)
+    legacy_ship = json_of(project("merge", "--pr", "29"))
+    legacy_card = board.by_key()[card_key("legacy-u")]
+    run.step("kanban merge: an old-layout card (fields on top, no footer) passes the card gate and completes through Pal's rule like a new one",
+             legacy_ship["card"] == {"id": legacy_card["id"], "completion": "done"} and legacy_card["status"] == "done" and FOOTER not in legacy_card["body"], json.dumps(legacy_ship.get("card")))
 
     pal_cases = [("pending", "pending"), ("failure", "failure"), ("stale", "stale"), ("provenance", "provenance"), ("mismatch", "mismatch"), ("text-infra", "infra"), ("bare", "unknown")]
     for index, (mode, wanted) in enumerate(pal_cases):

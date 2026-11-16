@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from faker_kit_gh import scrub
+from faker_kit_guard.t3code import SECRET_SHAPES
 from faker_kit_kanban import ACCEPTANCE_CLASSIFICATIONS, Card, EvidenceRow, Header, Kanban, KanbanError, NewCard
 from faker_kit_loop import (
     CLOSED,
@@ -28,6 +29,8 @@ from faker_kit_loop import (
     part_row,
     show_view,
 )
+from faker_kit_text import refresh
+from faker_kit_units import brief_source, read_units, unit_index
 
 CHIEF_KEY = "chief"
 STAGE_KIND = {"built": "artifact_built", "installed": "app_installed", "verified": "other_result"}
@@ -37,6 +40,9 @@ MAX_CARD_REF = 600
 UNIT_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,63}\Z")
 DIGEST_FILE = "kanban-digest.json"
 PR_EVIDENCE = ("pr_published", "pr_merged")
+CLOSE_KINDS = ("abandoned", "folded", "superseded", "duplicate", "junk")
+MAX_REASON = 300
+LINE_BREAKS = frozenset("\u0085\u2028\u2029")
 REFUSAL_CLASS = re.compile(r"PR acceptance (" + "|".join(ACCEPTANCE_CLASSIFICATIONS) + r")\b")
 
 
@@ -160,8 +166,8 @@ def write_digest_at(home: Path, at: float) -> None:
 
 
 class CardLoop:
-    def __init__(self, kanban: Kanban, home: Path, bot: str) -> None:
-        self.kanban, self.home, self.bot = kanban, home, bot
+    def __init__(self, kanban: Kanban, home: Path, bot: str, repos: dict[str, str] | None = None) -> None:
+        self.kanban, self.home, self.bot, self.repos = kanban, home, bot, repos or {}
 
     def locked(self) -> contextlib.AbstractContextManager[None]:
         return Loop(self.home, self.bot).locked()
@@ -177,7 +183,8 @@ class CardLoop:
             next_id = max(max((e["id"] for e in self.entries()), default=0), ledger_max(self.home, self.bot)) + 1
             for _ in range(5):
                 entry = new_entry(next_id, project, owner_bot, part, owner_decisions, outcome, now)
-                made = self.kanban.create(NewCard(part_key(next_id), part, entry_header(entry), self.bot, self.bot, outcome_contract(outcome, repo), completion_contract(repo)))
+                header = refresh(entry_header(entry), part, repo)
+                made = self.kanban.create(NewCard(part_key(next_id), part, header, self.bot, self.bot, outcome_contract(outcome, repo), completion_contract(repo)))
                 if made.title == part and made.header is not None and made.header.fields.get("Project") == project:
                     return {**part_row(entry), "card": made.id}
                 next_id += 1
@@ -195,7 +202,8 @@ class CardLoop:
             changed = apply_update(entry, part_id, state, prs, waits_on, reported, now, {s: stage_ref(p) for s, p in payloads.items()})
             if payloads:
                 self.record(card, payloads)
-            self.kanban.edit_body(card.id, entry_header(changed, card.header))
+            fresh = refresh(entry_header(changed, card.header), card.title, self.repos.get(entry["project"]))
+            self.kanban.edit_body_if_changed(card.id, fresh, card.header)
             if changed["state"] != entry["state"] and changed["state"] in ("abandoned", "taken-back"):
                 self.kanban.archive(card.id)
         return part_row(changed)
@@ -226,7 +234,13 @@ def unit_header(project: str, bot: str, unit_id: str, outcome: str, part: int | 
     return Header({k: v for k, v in fields.items() if v is not None})
 
 
-def create_unit(kanban: Kanban, bot: str, project: str, repo: str, unit_id: str, part: int | None, prs: list[int], now: float) -> dict:
+def unit_source(home: Path, bot: str, project: str, unit_id: str) -> tuple[str, str | None]:
+    rows = read_units(home / "briefs" / bot / "orchestrate" / project / "units.tsv")
+    found, twice = unit_index(rows)
+    return brief_source(home, bot, unit_id, None if unit_id in twice else found.get(unit_id))
+
+
+def create_unit(kanban: Kanban, bot: str, project: str, repo: str, unit_id: str, part: int | None, prs: list[int], now: float, home: Path) -> dict:
     if not UNIT_ID.match(unit_id):
         raise LoopError("a unit id is lowercase letters, digits, and hyphens, at most 64 characters")
     if any(not 0 < pr < 10**9 for pr in prs):
@@ -240,8 +254,22 @@ def create_unit(kanban: Kanban, bot: str, project: str, repo: str, unit_id: str,
         outcome = part_entry(parent)["outcome"]
     key = unit_key(project, unit_id)
     existing = kanban.find_card(key)
-    header = unit_header(project, bot, unit_id, outcome, part, sorted(set(prs)), now)
-    card = existing or kanban.create(NewCard(key, unit_id, header, bot, bot, outcome_contract(outcome, repo), completion_contract(repo)))
+    if existing is not None:
+        have = existing.header
+        if have is None:
+            raise LoopError(f"card {existing.id} is not in the expected shape; nothing was changed")
+        bound = sorted({*(int(p) for p in have.fields.get("PRs", "").split(",") if p.isdigit()), *prs})
+        changes: dict[str, str | None] = {}
+        if ",".join(str(p) for p in bound) != have.fields.get("PRs", ""):
+            changes = {"PRs": ",".join(str(p) for p in bound) or None, "Updated": str(float(now))}
+        summary = None if have.text else unit_source(home, bot, project, unit_id)[0]
+        kanban.edit_body_if_changed(existing.id, refresh(have.with_fields(changes), existing.title, repo, summary), have)
+        card = existing
+    else:
+        summary, decisions = unit_source(home, bot, project, unit_id)
+        header = unit_header(project, bot, unit_id, outcome, part, sorted(set(prs)), now)
+        header = header.with_fields({"Decisions": decisions}) if decisions else header
+        card = kanban.create(NewCard(key, unit_id, refresh(header, unit_id, repo, summary), bot, bot, outcome_contract(outcome, repo), completion_contract(repo)))
     linked = False
     if parent is not None and card.id not in kanban.parents(parent.id):
         kanban.link(card.id, parent.id)
@@ -299,3 +327,65 @@ def refusal_detail(kanban: Kanban, card_id: str, run_id: int | None, text: str) 
     named = REFUSAL_CLASS.search(text)
     classification = receipt[0] if receipt else (named.group(1) if named else "unknown")
     return {"classification": classification, "detail": scrub(receipt[1] if receipt and receipt[1] else text)[:160]}
+
+
+def clean_reason(text: str | None) -> str:
+    raw = (text or "").strip()
+    if not raw or not raw.isprintable() or any(ch in LINE_BREAKS for ch in raw) or len(raw) > MAX_REASON:
+        raise LoopError(f"say why in plain text on one line of at most {MAX_REASON} characters: --reason <why>")
+    if SECRET_SHAPES.search(raw):
+        raise LoopError("the reason looks like it holds a token or key; say why in plain words")
+    return raw
+
+
+def close_target(kanban: Kanban, role: str, project: str | None, target: int | str) -> Card:
+    text = str(target)
+    cards = kanban.cards(True)
+    if text.startswith("faker-kit:") or text.startswith("t_"):
+        found = [c for c in cards if (c.key == text if text.startswith("faker-kit:") else c.id == text)]
+    elif role == "chief":
+        found = [c for c in cards if c.key == part_key(int(text))] if text.isdecimal() else []
+    else:
+        found = [c for c in cards if c.key == unit_key(str(project), text)]
+    live = [c for c in found if not c.archived]
+    if len(live) > 1:
+        raise LoopError(f"two cards hold {text}; nothing was changed")
+    card = live[0] if live else (found[0] if found else None)
+    if card is None:
+        raise LoopError(f"no card for {text}; nothing was changed")
+    return card
+
+
+def close_card(kanban: Kanban, home: Path, role: str, bot: str, project: str | None, repos: dict[str, str], target: int | str, reason: str | None, kind: str, now: float, dry_run: bool) -> dict:
+    why = clean_reason(reason)
+    if kind not in CLOSE_KINDS:
+        raise LoopError(f"--as must be one of {', '.join(CLOSE_KINDS)}")
+    with Loop(home, bot).locked():
+        if not dry_run:
+            kanban.require_external()
+        card = close_target(kanban, role, project, target)
+        header = card.header
+        fields = header.fields if header else {}
+        named = isinstance(target, str) and (target.startswith("faker-kit:") or target.startswith("t_"))
+        if role == "chief":
+            allowed = (fields.get("Kind") == "part" and (card.key or "").startswith(f"faker-kit:{CHIEF_KEY}:")) or (named and fields.get("Kind") in ("part", "unit"))
+        else:
+            allowed = fields.get("Kind") == "unit" and fields.get("Project") == project
+        if header is None or not allowed:
+            raise LoopError(f"card {card.id} is not one {bot} may close; nothing was changed")
+        if any(SECRET_SHAPES.search(v) for v in (*fields.values(), *(v for _, v in header.repeated))):
+            raise LoopError(f"card {card.id} holds text that looks like a token or key; nothing was changed")
+        if card.archived or fields.get("State") in CLOSED:
+            raise LoopError(f"card {card.id} is already closed; nothing was changed")
+        if (fields.get("PRs") or header.lines("PR")) and kind not in ("superseded", "folded"):
+            raise LoopError(f"card {card.id} records a pull request; close it with --as superseded or --as folded, or let loop reconcile settle it; nothing was changed")
+        changed = header.with_fields({"State": "abandoned", "Waits-on": None, "Updated": str(float(now))}, (*header.repeated, ("History", f"closed {kind}: {why}")))
+        repo = repos.get(fields.get("Project", ""))
+        fresh = refresh(changed, card.title, repo)
+        out = {"card": card.id, "key": card.key, "kind": kind, "reason": why}
+        if dry_run:
+            return {**out, "closed": False, "dry_run": True, "would_record": {"state": "abandoned", "text": fresh.text.split("\n", 1)[0], "closed": f"Closed ({kind}): {why}"}}
+        fresh.render()
+        kanban.edit_body_if_changed(card.id, fresh, header)
+        kanban.archive(card.id)
+        return {**out, "closed": True, "archived": True}
