@@ -730,19 +730,28 @@ def guard_cases(h: Harness) -> None:
     host.policy(ask=False)
     host.skills(False)
     host.load()
-    shapes = (("mcp__hermes__device_shell", {"command": command}), ("device_exec", {"device": "mac", "command": command}), ("mcp__mac__device_run", {"script": command, "timeout": 600}))
+
+    def envelope(text: str, tool: str = "device") -> tuple[str, dict]:
+        return tool, {"device": "Mac", "action": "shell.run", "args": {"command": text, "cwd": "/Users/owner/Projects/Smile", "timeout_seconds": 600}}
+
+    shapes = tuple(envelope(command, name) for name in ("device", "functions.device", "mcp__hermes__device"))
     allowed = [host.tool(tool, args, BOOTSTRAP, host.sid()) for tool, args in shapes]
     appended = [
-        host.tool(tool, {key: value + suffix for key, value in args.items() if isinstance(value, str)}, BOOTSTRAP, host.sid())
-        for (tool, args), suffix in zip(shapes, ("; git push origin main", " && git push -f origin HEAD:main", "\ngh api -X PUT repos/o/r/contents/x -f branch=main"), strict=True)
+        host.tool(*envelope(command + suffix, name), BOOTSTRAP, host.sid())
+        for name, suffix in (("device", "; git push origin main"), ("functions.device", " && git push -f origin HEAD:main"), ("device", "\ngh api -X PUT repos/o/r/contents/x -f branch=main"))
     ]
+    readonly = [host.tool("device", {"device": "Mac", "action": action, "args": {}}, BOOTSTRAP, host.sid()) for action in ("screen.capture", "files.list", "status")]
     ordinary = [
         host.terminal(c, BOOTSTRAP, host.sid()) for c in ("git push origin main", "git push --force origin x", f"gh api -X PUT repos/{REPO}/contents/a.txt -f branch=main -f message=m -f content=YQ==")
     ]
     direct = host.terminal(f"faker-kit import prepare --project {PROJECT} --source '{case.source}' --repo-id {REPO_ID}", BOOTSTRAP, host.sid())
     run.step(
-        "import: the guard lets the exact printed Mac command through any device shell tool shape, blocks it with a raw main push, force-push, or contents write added",
-        all(v is None for v in allowed) and all(blocked(v, "blocked for every bot") for v in appended) and all(blocked(v, "blocked for every bot") for v in ordinary) and direct is None,
+        "import: the guard lets the printed Mac command through the native device tool, blocks it with a raw main push, force-push, or ref write added, and leaves other device actions alone",
+        all(v is None for v in allowed)
+        and all(blocked(v, "blocked for every bot") for v in appended)
+        and all(blocked(v, "blocked for every bot") for v in ordinary)
+        and direct is None
+        and all(v is None for v in readonly),
         "",
     )
-    run.step("import: the guard has no empty-repository exception, so a raw main push stays blocked in the shell tool and the device shell tool alike", all(blocked(v) for v in ordinary), "")
+    run.step("import: the guard has no empty-repository exception, so a raw main push stays blocked in the terminal and in the device tool's shell.run alike", all(blocked(v) for v in ordinary), "")
