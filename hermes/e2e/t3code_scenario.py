@@ -88,6 +88,17 @@ def refusal_cases(run: Run, bot: str) -> None:
     run.step("t3code: a dispatch.json the launch cannot read as one known backend, or a t3code section that is not valid, refuses with the reason", not wrong,
              f"{len(bad)} configs" if not wrong else wrong[0])
     run.step("t3code: those refusals started no cloud session and left no prepared launch", claude_calls(run) == before and not records(run, bot), "")
+    leaks = []
+    for name, (config, _) in bad.items():
+        if not isinstance(config, dict) or config.get("backend") != "t3code":
+            continue
+        dispatch(run, config)
+        _, _, err = run.kit("launch", "--brief-file", str(run.brief("bad-config.md", "/faker-mode\n\nGOAL: x.\n")))
+        text = err.lower()
+        if "launch is blocked" not in text or "dispatch.json" not in text or "claude" in text or "cloud" in text:
+            leaks.append(f"{name}: {err.strip()[:120]}")
+    run.step("t3code: every refusal for a t3code repository names the t3code settings in dispatch.json and never mentions Claude or cloud recovery", not leaks,
+             "t3code configs" if not leaks else leaks[0])
 
 
 def brief_refusals(run: Run, bot: str) -> None:

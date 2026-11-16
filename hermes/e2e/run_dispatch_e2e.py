@@ -829,6 +829,25 @@ def credential_scenario(run: Run) -> None:
              spawns == {"faker_kit_gh.py", "faker_kit_runner.py"}, ", ".join(sorted(spawns)))
 
 
+def claude_preflight_steps(run: Run, brief: Path) -> None:
+    before = len(run.claude_log.read_text().splitlines())
+    only_gh = run.root / "only-gh"
+    only_gh.mkdir()
+    (only_gh / "gh").symlink_to(run.bin / "gh")
+    code, _, err = run.kit("launch", "--brief-file", str(brief), env={"PATH": str(only_gh)})
+    run.step("launch preflight: a claude repository on a machine with no claude CLI is refused naming the CLI, with install and sign-in recovery only",
+             code == 1 and "claude CLI is not installed" in err and "claude auth login" in err and "t3" not in err.lower() and "dispatch.json" not in err, err.strip())
+    signed_out = run.root / "signed-out"
+    signed_out.mkdir()
+    (signed_out / "gh").symlink_to(run.bin / "gh")
+    (signed_out / "claude").write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps({{'loggedIn': False}}) if sys.argv[1:] == ['auth', 'status'] else '')\n")
+    (signed_out / "claude").chmod(0o755)
+    code, _, err = run.kit("launch", "--brief-file", str(brief), env={"PATH": str(signed_out)})
+    run.step("launch preflight: a claude CLI that is not signed in is refused naming sign-in, with no T3 recovery",
+             code == 1 and "not signed in" in err and "claude auth login" in err and "t3" not in err.lower(), err.strip())
+    run.step("launch preflight: those refusals started no session", len(run.claude_log.read_text().splitlines()) == before, "")
+
+
 def launch_scenario(run: Run) -> None:
     good = run.brief("typo.md", "/faker-mode\n\nGOAL: fix the README typo.\nSCOPE: README.md only.\n")
     code, out, err = run.kit("launch", "--brief-file", str(good))
@@ -868,6 +887,7 @@ def launch_scenario(run: Run) -> None:
     run.step("launch starts the session on the model and effort the bot chose for the task", code == 0 and chosen.get("model") == "sonnet"
              and chosen.get("effort") == "low" and chosen["argv"][-1].startswith("/faker-mode") and json.loads(out)["model"] == "sonnet", out.strip() or err.strip())
     effort_scenario(run, good)
+    claude_preflight_steps(run, good)
     sessions = len(run.claude_log.read_text().splitlines())
 
     code, _, err = run.kit("merge", "--pr", "1", bot=BOOTSTRAP)

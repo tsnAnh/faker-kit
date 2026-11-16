@@ -54,14 +54,14 @@ from faker_kit_import import verify as verify_import
 from faker_kit_incident_sources import FetchJson, fetch_json
 from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
-from faker_kit_launch import DISPATCH_FILE, ClaudeLauncher, Dispatch, Factory, pick_factory, read_dispatch
+from faker_kit_launch import DISPATCH_FILE, BackendCheck, ClaudeLauncher, ClaudeState, Dispatch, Factory, check_claude_backend, claude_cli_state, pick_factory, preflight, read_dispatch
 from faker_kit_loop import Loop, LoopError
 from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, Project, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
 from faker_kit_merge import MERGE_METHOD, PR_LABEL, PR_LABEL_COLOR, PR_LABEL_DESCRIPTION, Evidence, MergeLock, decide, from_fork, label_refusal, label_state, token, unlabeled_text
 from faker_kit_profiles import Profiles
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
-from faker_kit_t3code import T3CodeLauncher, parse_settings, unit_id
+from faker_kit_t3code import T3CodeLauncher, check_t3code_backend, parse_settings, unit_id
 from install_config import InstallError, config_set, hermes, mapping, value_at
 
 BRIEF_START = "/faker-mode"
@@ -199,7 +199,8 @@ class PutFailed(Refused):
 class Kit:
     def __init__(self, run: Runner = run_gh, cloud: Cloud | None = None, home: Path | None = None, now: Callable[[], float] = time.time,
                  fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status, sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping,
-                 tool: Tool = run_tool, refresher: Refresher = refresh) -> None:
+                 tool: Tool = run_tool, refresher: Refresher = refresh, claude_state: ClaudeState = claude_cli_state) -> None:
+        self.claude_state = claude_state
         self.run, self.now, self.fetch_api, self.fetch_url, self.sleep, self.post = run, now, fetch_api, fetch_url, sleep, post
         self.tool, self.refresher = tool, refresher
         self.home = home or faker_kit_home()
@@ -302,6 +303,7 @@ class Kit:
             raise Refused(str(err)) from None
         self.require_credential()
         dispatch = self.dispatch(target.name, repo)
+        preflight(dispatch, self.backend_checks(brief_file))
         launcher = pick_factory(dispatch, self.backends(caller.name if caller else "default", brief_file))(dispatch)
         prompt = text + ANDON_FOOTER.format(repo=repo)
         if FAKER_RULE not in text:
@@ -342,6 +344,12 @@ class Kit:
         if not default:
             raise Refused(f"cannot read the default branch of {repo}")
         return read_dispatch(gh.file_text(DISPATCH_FILE, default), default)
+
+    def backend_checks(self, brief_file: str) -> dict[str, BackendCheck]:
+        return {
+            "claude": check_claude_backend(self.claude_state),
+            "t3code": lambda dispatch: check_t3code_backend(dispatch, Path(brief_file).name),
+        }
 
     def backends(self, owner: str, brief_file: str) -> dict[str, Factory]:
         return {
@@ -1407,7 +1415,7 @@ def failure_envelope(err: BaseException, secrets: tuple[str, ...]) -> dict:
 def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | None = None, bot: str | None = None,
          now: Callable[[], float] = time.time, fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status,
          sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping, tool: Tool = run_tool, refresher: Refresher = refresh,
-         stdin: IO[bytes] | None = None) -> int:
+         stdin: IO[bytes] | None = None, claude_state: ClaudeState = claude_cli_state) -> int:
     given = sys.argv[1:] if argv is None else argv
     try:
         args = parser().parse_args(argv)
@@ -1423,7 +1431,7 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
     wants_json = bool(getattr(args, "json", False))
     kit: Kit | None = None
     try:
-        kit = Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep, post=post, tool=tool, refresher=refresher)
+        kit = Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep, post=post, tool=tool, refresher=refresher, claude_state=claude_state)
         out = run_command(args, kit, bot or current_bot(), stdin or sys.stdin.buffer)
     except Exception as err:
         known = (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError)
