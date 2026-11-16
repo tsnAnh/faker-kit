@@ -6,8 +6,8 @@
       "files": [
         "harness/pstack/claude-code/skills/arena/SKILL.md"
       ],
-      "from": "Families go by prefix: `claude-*`, and `grok-*` with `cursor-grok-*` and `composer-*`. A refused `composer-*` entry runs on `grok-4.7-xhigh-fast`.",
-      "to": "Families go by prefix: `claude-*` and `gpt-*`.",
+      "from": "Families go by prefix, and the longest matching prefix wins: `claude-fable-*`, `claude-*`, and `gemini-*`. Drop a leading `cursor-` before you compare.",
+      "to": "Families go by prefix, and the longest matching prefix wins: `claude-*` and `gpt-*`.",
       "count": 1
     },
     {
@@ -15,7 +15,7 @@
       "files": [
         "harness/pstack/claude-code/docs/harness/claude-code.md"
       ],
-      "from": "Map each default slug with the rows above: `claude-opus-5-5-xhigh` is `opus xhigh`, and `grok-4.7-xhigh-fast` is `inherit-parent`.",
+      "from": "Map each default slug with the rows above: `claude-opus-5-5-xhigh` is `opus xhigh`, `claude-opus-5-5-high-fast` is `opus high`, `claude-fable-5-2-max` is `fable max`, and `gemini-4-carbon-high` is `inherit-parent`.",
       "to": "Map each default slug with the rows above. A default of `inherit-parent` stays `inherit-parent`.",
       "count": 1
     },
@@ -24,7 +24,7 @@
       "files": [
         "harness/pstack/claude-code/skills/arena/SKILL.md"
       ],
-      "from": "choose from `claude-opus-5-5-xhigh` and `grok-4.7-xhigh-fast`.",
+      "from": "choose from `claude-fable-5-2-high`, `claude-opus-5-5-high-fast`, and `gemini-4-carbon-high`.",
       "to": "choose from `claude-opus-5-5-max` and `gpt-6-sol-high`.",
       "count": 1
     },
@@ -33,8 +33,35 @@
       "files": [
         "harness/pstack/claude-code/skills/arena/SKILL.md"
       ],
-      "from": "With the default pool, a Claude parent gets `grok-4.7-xhigh-fast`. A parent from any other family gets `claude-opus-5-5-xhigh` first.",
-      "to": "With the default pool, a Claude parent gets `gpt-6-sol-high`. A parent from any other family gets `claude-opus-5-5-max` first.",
+      "from": "With the default pool, a Claude parent gets `gemini-4-carbon-high`. A parent from any other vendor gets `claude-fable-5-2-high` first, then `claude-opus-5-5-high-fast`.",
+      "to": "With the default pool, a Claude parent gets `gpt-6-sol-high`. A parent from any other vendor gets `claude-opus-5-5-max` first.",
+      "count": 1
+    },
+    {
+      "id": "pstack-arena-vendor-fable-clause",
+      "files": [
+        "harness/pstack/claude-code/skills/arena/SKILL.md"
+      ],
+      "from": ", except that `claude-fable-*` and `claude-*` are one vendor",
+      "to": "",
+      "count": 1
+    },
+    {
+      "id": "pstack-setup-vendor-fable-sentence",
+      "files": [
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
+      ],
+      "from": " Fable and the other Claude models are one vendor.",
+      "to": "",
+      "count": 1
+    },
+    {
+      "id": "pstack-setup-fable-family-clause",
+      "files": [
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
+      ],
+      "from": ", so Fable is its own family",
+      "to": "",
       "count": 1
     },
     {
@@ -43,8 +70,8 @@
         "harness/pstack/claude-code/skills/architect/SKILL.md",
         "harness/pstack/claude-code/skills/arena/SKILL.md"
       ],
-      "from": "`claude-opus-5-5-xhigh` and `grok-4.7-xhigh-fast`",
-      "to": "`inherit-parent` and `inherit-parent`",
+      "from": "`claude-fable-5-2-high`, `claude-opus-5-5-high-fast`, and `gemini-4-carbon-high`",
+      "to": "`inherit-parent`, `inherit-parent`, and `inherit-parent`",
       "count": 2
     },
     {
@@ -52,7 +79,7 @@
       "files": [
         "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
-      "from": "claude-opus-5-5-xhigh, grok-4.7-xhigh-fast",
+      "from": "claude-fable-5-2-high, claude-opus-5-5-high-fast, gemini-4-carbon-high",
       "to": "inherit-parent, inherit-parent, inherit-parent",
       "count": 4
     },
@@ -61,7 +88,7 @@
       "files": [
         "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
-      "from": "So `unlimited` turns `claude-opus-5-5-xhigh` into `claude-opus-5-5-max`. Grok slugs top out at `xhigh`, so under `unlimited` the fallback puts Grok at `xhigh` and keeps `grok-4.7-xhigh-fast` as it is. `large` keeps both defaults. `small` turns them into `claude-opus-5-5-medium` and `grok-4.7-medium-fast`.",
+      "from": "So `unlimited` turns `claude-opus-5-5-xhigh` into `claude-opus-5-5-max` and `claude-opus-5-5-high-fast` into `claude-opus-5-5-xhigh-fast`, and it keeps `claude-fable-5-2-max`. Gemini tops out at `high`, so under `unlimited` the fallback keeps `gemini-4-carbon-high` as it is. `small` turns the first two into `claude-opus-5-5-medium` and `claude-opus-5-5-low-fast`. Fable 5.2 and Gemini have no fast slug, so never write one.",
       "to": "So `small` turns `gpt-6-sol-high` into `gpt-6-sol-medium`.",
       "count": 1
     },
@@ -70,8 +97,8 @@
       "files": [
         "harness/pstack/claude-code/skills/poteto-mode/SKILL.md"
       ],
-      "from": "Defaults `grok-4.7-xhigh-fast` for code",
-      "to": "Defaults `sonnet` for code",
+      "from": "Defaults `claude-opus-5-5-xhigh` for code, prose, and judgment)",
+      "to": "Defaults `sonnet` for code, `inherit-parent` for prose and judgment)",
       "count": 1
     },
     {
@@ -79,7 +106,7 @@
       "files": [
         "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
-      "from": "feature, refactoring: grok-4.7-xhigh-fast\nbug-fix: grok-4.7-xhigh-fast\nperf-issue: grok-4.7-xhigh-fast\nhillclimb: grok-4.7-xhigh-fast\n",
+      "from": "feature, refactoring: claude-opus-5-5-xhigh\nbug-fix: claude-opus-5-5-xhigh\nperf-issue: claude-opus-5-5-xhigh\nhillclimb: claude-opus-5-5-xhigh\n",
       "to": "feature, refactoring: sonnet\nbug-fix: sonnet\nperf-issue: sonnet\nhillclimb: sonnet\ntrivial edits: haiku\n",
       "count": 1
     },
@@ -92,18 +119,9 @@
         "harness/pstack/claude-code/skills/poteto-mode/playbooks/perf-issue.md",
         "harness/pstack/claude-code/skills/poteto-mode/playbooks/refactoring.md"
       ],
-      "from": "model (default `grok-4.7-xhigh-fast`)",
+      "from": "model (default `claude-opus-5-5-xhigh`)",
       "to": "model (default `sonnet`, or `haiku` for a trivial mechanical edit)",
       "count": 5
-    },
-    {
-      "id": "pstack-code-roles-current-agent",
-      "files": [
-        "harness/pstack/claude-code/**"
-      ],
-      "from": "grok-4.7-xhigh-fast",
-      "to": "inherit-parent",
-      "count": 10
     },
     {
       "id": "pstack-how-explainer-current-agent",
@@ -112,7 +130,7 @@
       ],
       "from": "the `how explainer` line (default `claude-opus-5-5-xhigh`)",
       "to": "the `how explainer` line (default `inherit-parent`)",
-      "count": 1
+      "count": 0
     },
     {
       "id": "pstack-why-synthesizer-current-agent",
@@ -121,7 +139,7 @@
       ],
       "from": "the `why synthesizer` line, default `claude-opus-5-5-xhigh`",
       "to": "the `why synthesizer` line, default `inherit-parent`",
-      "count": 1
+      "count": 0
     },
     {
       "id": "pstack-reflect-judgment-table-current-agent",
@@ -148,15 +166,33 @@
       ],
       "from": "`claude-opus-5-5-xhigh` for prose and judgment",
       "to": "`inherit-parent` for prose and judgment",
-      "count": 1
+      "count": 0
     },
     {
       "id": "pstack-poteto-mode-hardest-current-agent",
       "files": [
         "harness/pstack/claude-code/skills/poteto-mode/SKILL.md"
       ],
-      "from": "The hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) go to your strongest judgment model (`claude-opus-5-5-xhigh`), whether the task needs judgment on vague intent or is a precisely specified sequence of steps to execute to the letter. Trivial mechanical edits go to your fast code model.",
-      "to": "A feature, refactor, bug fix, perf fix, hillclimb step, or one of the hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) goes to `sonnet` (Claude Sonnet 5.5). A trivial mechanical edit (a rename, a move, a formatting or one-line fix, or steps specified to the letter with nothing to decide) goes to `haiku` (Claude Haiku 5.5), the `trivial edits` line. The Task tool takes these aliases, not version slugs.",
+      "from": "The hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) go to your `hardest tasks` model (default `claude-fable-5-2-max`), whether the task needs judgment on vague intent or is a precisely specified sequence of steps to execute to the letter. Trivial mechanical edits go to your `swarm workers` model (default `claude-opus-5-5-high-fast`). Review and design panels default to one runner each on `claude-fable-5-2-high`, `claude-opus-5-5-high-fast`, and `gemini-4-carbon-high`.",
+      "to": "A feature, refactor, bug fix, perf fix, hillclimb step, or one of the hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) goes to `sonnet` (Claude Sonnet 5.5). A trivial mechanical edit (a rename, a move, a formatting or one-line fix, or steps specified to the letter with nothing to decide) goes to `haiku` (Claude Haiku 5.5), the `trivial edits` line. The Task tool takes these aliases, not version slugs. Review and design panels default to one runner each on `inherit-parent`, `inherit-parent`, and `inherit-parent`.",
+      "count": 1
+    },
+    {
+      "id": "pstack-poteto-mode-fable-family-sentence",
+      "files": [
+        "harness/pstack/claude-code/skills/poteto-mode/SKILL.md"
+      ],
+      "from": " Fable (`claude-fable-*`) is its own family, apart from the other Claude models.",
+      "to": "",
+      "count": 1
+    },
+    {
+      "id": "pstack-poteto-mode-gemini-fable-speed-sentences",
+      "files": [
+        "harness/pstack/claude-code/skills/poteto-mode/SKILL.md"
+      ],
+      "from": " Gemini has no xhigh, max, or fast slug, so a Gemini subagent runs at high, such as `gemini-4-carbon-high`, whenever the job calls for high or above. Fable 5.2 has no fast slug, so an urgent Fable 5.2 subagent runs at standard speed and keeps its level.",
+      "to": "",
       "count": 1
     },
     {
@@ -173,7 +209,7 @@
       "files": [
         "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
-      "from": "hardest tasks: claude-opus-5-5-xhigh",
+      "from": "hardest tasks: claude-fable-5-2-max",
       "to": "hardest tasks: sonnet",
       "count": 1
     },
@@ -184,7 +220,7 @@
       ],
       "from": "how explainer: claude-opus-5-5-xhigh",
       "to": "how explainer: inherit-parent",
-      "count": 1
+      "count": 0
     },
     {
       "id": "pstack-setup-why-synthesizer",
@@ -193,7 +229,7 @@
       ],
       "from": "why synthesizer: claude-opus-5-5-xhigh",
       "to": "why synthesizer: inherit-parent",
-      "count": 1
+      "count": 0
     },
     {
       "id": "pstack-setup-reflect-judgment",
@@ -205,11 +241,20 @@
       "count": 1
     },
     {
+      "id": "pstack-code-roles-current-agent",
+      "files": [
+        "harness/pstack/claude-code/**"
+      ],
+      "from": "claude-opus-5-5-high-fast",
+      "to": "inherit-parent",
+      "count": 7
+    },
+    {
       "id": "pstack-readme-model-split",
       "files": [
         "harness/pstack/claude-code/README.md"
       ],
-      "from": "code delegates (feature, refactoring, bug fix, perf, hillclimb) go to grok, while the hardest changes, prose, and judgment go to opus 5.5. the default panel is opus 5.5 / grok.",
+      "from": "code delegates (feature, refactoring, bug fix, perf, hillclimb), prose, and judgment go to opus 5.5, while the hardest changes go to fable 5.2. the default panel is fable 5.2 / opus 5.5 / gemini 4 carbon.",
       "to": "code delegates (feature, refactoring, bug fix, perf, hillclimb) and the hardest changes run on `sonnet` (Claude Sonnet 5.5), and trivial mechanical edits on `haiku` (Claude Haiku 5.5). prose, judgment, and every seat of the default panel run on your current coding agent's model.",
       "count": 1
     },
@@ -409,8 +454,18 @@
     },
     {
       "file": "harness/pstack/claude-code/docs/harness/claude-code.md",
-      "token": "grok",
+      "token": "gemini",
       "reason": "family prefix in the adapter's model mapping table"
+    },
+    {
+      "file": "harness/pstack/claude-code/skills/setup-pstack/SKILL.md",
+      "token": "grok",
+      "reason": "names the retired default family that the setup migration replaces"
+    },
+    {
+      "file": "harness/pstack/claude-code/skills/setup-pstack/SKILL.md",
+      "token": "claude-opus",
+      "reason": "names the retired default family that the setup migration replaces"
     }
   ]
 }

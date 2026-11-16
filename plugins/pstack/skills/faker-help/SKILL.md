@@ -47,7 +47,7 @@ If cost is the worry, say where the tokens go and how to spend fewer. pstack spe
 
 pstack installs in Claude Code with `/plugin marketplace add tsnAnh/faker-kit`, then `/plugin install pstack@faker-kit`. There, each command takes a `pstack:` prefix, such as `/pstack:faker-mode`. The [Claude Code adapter](../../docs/harness/claude-code.md) maps the names pstack skills use to Claude Code, and a step that needs an editor-only feature, such as Bugbot or Automations, is skipped with a one-line note.
 
-Other tools can read the skills, because they use the Agent Skills format. But most workflow skills, including `/faker-mode`, `/how`, `/why`, and `/teach`, spawn subagents with per-role models, and Custom Modes and `/loop` depend on the agent, so those parts may not work in every one.
+Other tools can read the skills, because they use the Agent Skills format. But most workflow skills, including `/faker-mode`, `/how`, and `/teach`, spawn subagents, some with per-role models, and Custom Modes and `/loop` depend on the agent, so those parts may not work in every one.
 
 ## Start a task with `/faker-mode`
 
