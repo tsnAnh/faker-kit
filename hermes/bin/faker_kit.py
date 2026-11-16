@@ -48,6 +48,9 @@ from faker_kit_guard.policy import (
 )
 from faker_kit_guard.t3code import SECRET_SHAPES
 from faker_kit_host import GITHUB_CODES, Tool, clean, envelope, reconcile_tunnel, run_tool
+from faker_kit_import import GITHUB_REPO, ImportRefused
+from faker_kit_import import prepare as prepare_import
+from faker_kit_import import verify as verify_import
 from faker_kit_incident_sources import FetchJson, fetch_json
 from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
@@ -96,7 +99,7 @@ FAKER_FOOTER = (
 FAKER_RULE = FAKER_FOOTER.strip().removeprefix("Faker-mode rule: ")
 ROLE_COMMANDS = {
     "project": {"launch", "merge", "status", "andon", "incidents", "issues"},
-    "bootstrap": {"add-project", "launch", "status", "andon", "refresh"},
+    "bootstrap": {"add-project", "launch", "status", "andon", "refresh", "import"},
     "chief": {"status", "handoff", "loop", "add-project", "merge", "refresh"},
 }
 OWNER_ONLY = {"install", "runner", "projects", "host"}
@@ -305,6 +308,30 @@ class Kit:
         workdir = self.home / "checkouts" / f"{owner}__{name}" / f"launch-{int(self.now())}-{digest}"
         result = launcher.start(repo, prompt, workdir, model, effort)
         return {"repo": repo, "backend": dispatch.backend, "brief": digest, **result.fields}
+
+    def source_import(self, caller: Bot | None, step: str, project: str, source: str, repo_id: int, receipt: str) -> dict:
+        bot = self.project_bot(self.policy(), project)
+        try:
+            use_bot_env(self.root / "profiles" / bot.name)
+        except EnvFileError as err:
+            raise Refused(str(err)) from None
+        self.require_credential()
+
+        def gh(args: list[str]) -> str:
+            try:
+                return self.run(args)
+            except Refused as err:
+                raise ImportRefused("github_error", str(err)) from None
+
+        try:
+            if step == "verify":
+                return verify_import(gh, self.home, caller.name if caller else "default", project, receipt)
+            found = GITHUB_REPO.search(recorded_source(self.home))
+            if found is None:
+                raise Refused("the recorded kit source is not a GitHub repository, so the Mac cannot fetch the pinned helper from it")
+            return prepare_import(gh, self.home, caller.name if caller else "default", project, str(bot.repo), repo_id, source, installed_commit(self.home), found.group(1), self.now())
+        except ImportRefused as err:
+            raise Refused(f"{err.code}: {err}") from None
 
     def dispatch(self, bot: str, repo: str) -> Dispatch:
         gh = Gh(self.home, bot, repo, self.run)
@@ -1240,6 +1267,15 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--open", dest="everything", action="store_true", help="every open pull request of the project that is not a draft")
     cmd.add_argument("--all-projects", action="store_true", help="chief only: --open for every project on this machine")
     cmd.add_argument("--match", help="the one open pull request whose title or branch has this text; several matches print ambiguous and exit 3")
+    cmd = sub.add_parser("import")
+    steps = cmd.add_subparsers(dest="step", required=True)
+    step = steps.add_parser("prepare")
+    step.add_argument("--project", required=True)
+    step.add_argument("--source", required=True)
+    step.add_argument("--repo-id", required=True, type=int)
+    step = steps.add_parser("verify")
+    step.add_argument("--project", required=True)
+    step.add_argument("--receipt", required=True)
     cmd = sub.add_parser("issues")
     cmd.add_argument("--claim", type=int)
     cmd = sub.add_parser("incidents")
@@ -1312,6 +1348,8 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
         return kit.launch(caller, args.project, args.brief_file, args.model, args.effort)
     if args.command == "merge":
         return kit.merge_command(caller, args.pr, args.project, args.owner_approved, args.wait, args.everything, args.all_projects, args.match)
+    if args.command == "import":
+        return kit.source_import(caller, args.step, args.project, getattr(args, "source", ""), getattr(args, "repo_id", 0), getattr(args, "receipt", ""))
     if args.command == "issues":
         if caller is None or caller.role != "project":
             raise Refused("issues runs in a project bot's chat or job")

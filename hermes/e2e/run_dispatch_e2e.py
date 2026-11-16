@@ -28,6 +28,7 @@ from urllib.parse import urlsplit
 
 import gate_scenario
 import guard_scenario
+import import_scenario
 import refresh_scenario
 import t3code_scenario
 import tooling_scenario
@@ -3766,6 +3767,9 @@ def main(argv: list[str] | None = None) -> int:
         t3code_run = Run(root / "t3code", run.steps, run.verdicts)
         t3code_run.build()
         t3code_scenario.t3code_scenario(t3code_run, BOT)
+        import_run = Run(root / "import", run.steps, run.verdicts)
+        import_run.build()
+        import_scenario.import_scenario(import_run)
         owner_merge_scenario(run)
         owner_landing_scenario(run)
         owner_reviews_scenario(run)

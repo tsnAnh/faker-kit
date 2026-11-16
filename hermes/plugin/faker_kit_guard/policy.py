@@ -830,6 +830,8 @@ def git_push_problem(args: list[str]) -> str | None:
     return None
 
 
+DEVICE_TOOL = re.compile(r"(?:\A|[._:]|__)device\Z")
+DEVICE_SHELL_ACTION = re.compile(r"\Ashell\.[a-z_]+\Z")
 PROTECTED_BRANCHES = ("main", "master", "trunk", "HEAD")
 REVIEW_DISMISSAL = re.compile(r"\Apulls/[0-9]+/reviews/[0-9]+/dismissals\Z")
 CURL_BODY_OPTIONS = ("-d", "--data", "--data-raw", "--data-binary", "--data-ascii", "--json", "-F", "--form", "--data-urlencode", "-T", "--upload-file")
@@ -1063,6 +1065,8 @@ def hard_block(tool_name: str, args: dict) -> str | None:
         return t3_reason
     if tool_name in ("terminal", "process_manage"):
         return terminal_problem(str(args.get("command", "")))
+    if DEVICE_TOOL.search(tool_name):
+        return device_problem(args)
     if tool_name == "execute_code":
         return code_problem(strings(args)) or code_push_problem(strings(args))
     if fnmatch.fnmatchcase(tool_name, "cronjob*"):
@@ -1071,6 +1075,13 @@ def hard_block(tool_name: str, args: dict) -> str | None:
     if tool_name == "delegate_task":
         return code_problem(strings(args))
     return None
+
+
+def device_problem(args: dict) -> str | None:
+    action = args.get("action")
+    if not isinstance(action, str) or not DEVICE_SHELL_ACTION.match(action):
+        return None
+    return next((why for text in strings(args.get("args")) if (why := terminal_problem(text))), None)
 
 
 def terminal_problem(command: str, depth: int = 0) -> str | None:
