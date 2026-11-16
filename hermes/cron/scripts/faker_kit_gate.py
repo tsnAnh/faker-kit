@@ -23,10 +23,12 @@ TIMEOUT_SECONDS = 240
 HERMES_TIMEOUT_SECONDS = 60
 STDERR_TAIL = 400
 HEARTBEAT_SECONDS = 6 * 60 * 60
+MAX_ASKED = 200
 MAX_RUN_RETRIES = 3
 NOTICE = "faker-kit notice:"
 NO_PULLS = "no open pull requests"
 BLOCKED = "blocked:"
+SHA_LENGTH = 40
 NOT_RECORDED = "no earlier tick of this gate is recorded"
 NOTICE_REASON = "a faker-kit notice printed"
 CHANGED = "the status changed"
@@ -48,6 +50,8 @@ class GateState:
     woke_at: float
     retries: int = 0
     marks: dict[str, Mark] | None = None
+    asked: tuple[str, ...] = ()
+    units: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,7 @@ class Changes:
 class Wake:
     reason: str
     lines: list[str]
+    summary: str | None = None
 
 
 def fail(message: str, stderr: str = "") -> NoReturn:
@@ -217,7 +222,10 @@ def read_state(path: Path) -> GateState | None:
     if not isinstance(fingerprint, str) or isinstance(woke_at, bool) or not isinstance(woke_at, (int, float)) or not math.isfinite(woke_at):
         return None
     retries = data.get("retries", 0)
-    return GateState(fingerprint, float(woke_at), retries if isinstance(retries, int) and not isinstance(retries, bool) and retries > 0 else 0, read_marks(data.get("pulls")))
+    asked, units = data.get("asked"), data.get("units")
+    return GateState(fingerprint, float(woke_at), retries if isinstance(retries, int) and not isinstance(retries, bool) and retries > 0 else 0, read_marks(data.get("pulls")),
+                     tuple(a for a in asked if isinstance(a, str)) if isinstance(asked, list) else (),
+                     {k: v for k, v in units.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(units, dict) else None)
 
 
 def write_state(path: Path, state: GateState) -> None:
@@ -226,7 +234,8 @@ def write_state(path: Path, state: GateState) -> None:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as out:
             pulls = {key: {"line": mark.line, "stable": mark.stable, "blocked": mark.blocked} for key, mark in (state.marks or {}).items()}
-            out.write(json.dumps({"fingerprint": state.fingerprint, "woke_at": state.woke_at, "retries": state.retries, "pulls": pulls}))
+            out.write(json.dumps({"fingerprint": state.fingerprint, "woke_at": state.woke_at, "retries": state.retries, "pulls": pulls,
+                                "asked": list(state.asked[-MAX_ASKED:]), "units": state.units or {}}))
         temp.replace(path)
     except OSError as err:
         with suppress(OSError):
@@ -274,7 +283,38 @@ def wake_reason(job: str, stored: GateState | None, lines: list[str], now: float
     return failed_run_reason(job, stored.woke_at)
 
 
-def tick(job: str, lines: list[str], now: float, news: str | None = None) -> Wake | None:
+def unit_heads(lines: list[str]) -> dict[str, str]:
+    found = {}
+    for line in lines:
+        fields = pull_fields(line)
+        unit = next((f[5:] for f in fields[1:] if f.startswith("unit ")), None) if fields else None
+        head = next((f[5:] for f in fields[1:] if f.startswith("head ")), None) if fields else None
+        if fields and unit and head and len(head) == SHA_LENGTH:
+            found[fields[0]] = f"{unit}|{head}|{'draft' if 'draft' in fields else 'ready'}"
+    return found
+
+
+def summaries_due(stored: GateState | None, shown: list[str], gone: list[str]) -> dict[str, str]:
+    asked = set(stored.asked) if stored is not None else set()
+    previous = stored.units if stored is not None and stored.units else {}
+    due = {}
+    for number, entry in unit_heads(shown).items():
+        due[entry] = number
+    for line in gone:
+        number = line.split(" ", 1)[0]
+        if number in previous:
+            unit, head, _ = previous[number].split("|")
+            due[f"{unit}|{head}|ended"] = number
+    return {entry: number for entry, number in due.items() if entry not in asked}
+
+
+def summary_line(due: dict[str, str]) -> str:
+    named = ", ".join(f"unit {entry.split('|')[0]} ({number}, head {entry.split('|')[1][:7]}, {entry.split('|')[2]})" for entry, number in sorted(due.items()))
+    return (f"Closing summaries to read: {named}. Run faker-kit session summary <unit> for each before you update its card, decide the next step, or report to the chief. "
+            "The summary is the session's claim, never proof: verify the pull request, head, checks, and artifact on GitHub before acting on it.")
+
+
+def tick(job: str, lines: list[str], now: float, news: str | None = None, summaries: bool = False) -> Wake | None:
     path = state_path(job)
     stored = read_state(path)
     change = changes_since(stored, lines)
@@ -283,18 +323,20 @@ def tick(job: str, lines: list[str], now: float, news: str | None = None) -> Wak
     kept = [line for line in lines if NOTICE not in line] if empty else lines
     current = fingerprint(kept)
     marks = marks_of(lines)
+    wake = None
     if reason is not None:
+        wake = Wake(reason, [*change.shown, *change.gone] if reason == CHANGED else [*change.gone, *lines] if reason == LAST_GONE else lines)
+    due = summaries_due(stored, [line for line in wake.lines if pull_fields(line)], [line for line in wake.lines if line.endswith(" merged or closed")]) if summaries and wake else {}
+    asked = (*(stored.asked if stored else ()), *due)
+    units = unit_heads(lines) if summaries else (stored.units if stored else None)
+    if wake is not None:
         retries = stored.retries + 1 if stored is not None and reason == RUN_FAILED else 0
-        write_state(path, GateState(current, now, retries, marks))
+        write_state(path, GateState(current, now, retries, marks, asked, units))
     elif lines == [NO_PULLS] and (stored is None or stored.fingerprint != current):
-        write_state(path, GateState(current, stored.woke_at if stored else now, 0, marks))
-    if reason is None:
+        write_state(path, GateState(current, stored.woke_at if stored else now, 0, marks, stored.asked if stored else (), units))
+    if wake is None:
         return None
-    if reason == CHANGED:
-        return Wake(reason, [*change.shown, *change.gone])
-    if reason == LAST_GONE:
-        return Wake(reason, [*change.gone, *lines])
-    return Wake(reason, lines)
+    return Wake(wake.reason, wake.lines, summary_line(due) if due else None)
 
 
 def quiet() -> None:

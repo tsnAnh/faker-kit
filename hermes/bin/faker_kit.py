@@ -16,6 +16,7 @@ import stat
 import sys
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import IO, NoReturn
@@ -81,6 +82,7 @@ from faker_kit_profiles import Profiles
 from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, reconcile, render, seen_pull, tsv_items
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
+from faker_kit_session_summary import STEER_MESSAGE, read_summary, steered, with_steer, with_summary
 from faker_kit_t3code import T3CodeLauncher, check_t3code_backend, parse_settings, unit_id
 from install_config import InstallError, config_set, hermes, mapping, value_at
 
@@ -120,9 +122,16 @@ FAKER_FOOTER = (
     "and list the question under \"Open questions\" in the pull request body.\n"
 )
 FAKER_RULE = FAKER_FOOTER.strip().removeprefix("Faker-mode rule: ")
+SUMMARY_FOOTER = (
+    "\nClosing summary rule: before the session ends, post a pull request comment whose first line is exactly `Closing summary:` followed by four short labelled parts: "
+    "Done, Skipped, Open questions, Blockers. Plain text only: no secrets, no tokens, and no pull request or issue text from others. "
+    "If you could not finish a pull request, open a draft pull request whose body begins with `Unit: <unit-id>` and carries the same summary, instead of ending with nothing; "
+    "a draft is a hold and no bot merges it.\n"
+)
+SUMMARY_RULE = SUMMARY_FOOTER.strip().removeprefix("Closing summary rule: ")
 LOOP_ACTIONS = {"chief": ("show", "set", "digest", "migrate", "reconcile"), "project": ("show", "migrate", "unit", "reconcile")}
 ROLE_COMMANDS = {
-    "project": {"launch", "merge", "status", "andon", "incidents", "issues", "loop", "news"},
+    "project": {"launch", "merge", "status", "andon", "incidents", "issues", "loop", "news", "session"},
     "bootstrap": {"add-project", "launch", "status", "andon", "refresh", "import"},
     "chief": {"status", "handoff", "loop", "add-project", "merge", "refresh"},
 }
@@ -329,6 +338,8 @@ class Kit:
         preflight(dispatch, self.backend_checks(brief_file))
         launcher = pick_factory(dispatch, self.backends(caller.name if caller else "default", brief_file))(dispatch)
         prompt = text + ANDON_FOOTER.format(repo=repo)
+        if SUMMARY_RULE not in text:
+            prompt += SUMMARY_FOOTER
         if FAKER_RULE not in text:
             prompt += FAKER_FOOTER
         digest = hashlib.sha256(prompt.encode()).hexdigest()[:8]
@@ -884,6 +895,86 @@ class Kit:
         if not cutover(self.home):
             raise Refused("the Kanban cutover is not done: units still live in units.tsv, so no unit card was created")
         return create_unit(self.kanban(caller), caller.name, str(caller.project), str(caller.repo), unit, part, prs, self.now())
+
+    def session_pr(self, caller: Bot, gh: Gh, ref: str) -> tuple[str | None, int | None]:
+        if ref.isdecimal():
+            number = int(ref)
+            return unit_of(gh.pull(number)), number
+        if not UNIT_ID.match(ref):
+            raise Refused("session takes a unit id or a pull request number: faker-kit session summary <unit-id|pr-number>")
+        prs: list[int] = []
+        if cutover(self.home):
+            prs = next((row["prs"] for row in unit_rows(self.kanban(caller), str(caller.project))["units"] if row["unit"] == ref), [])
+        else:
+            rows = read_units(self.home / "briefs" / caller.name / "orchestrate" / str(caller.project) / "units.tsv") or []
+            prs = [int(row[3].lstrip("#")) for row in rows if len(row) > 3 and row[0] == ref and row[3].lstrip("#").isdecimal()]
+        if not prs:
+            prs = [int(p["number"]) for p in gh.open_pulls() if not from_fork(p, gh.repo) and unit_of(p) == ref]
+        return ref, max(prs) if prs else None
+
+    def unit_card(self, caller: Bot, unit: str) -> tuple[Kanban, Card | None]:
+        kanban = self.kanban(caller)
+        card = kanban.find_card(unit_key(str(caller.project), unit))
+        fields = card.header.fields if card and card.header else {}
+        if card is not None and (fields.get("Kind") != "unit" or fields.get("Project") != caller.project):
+            return kanban, None
+        return kanban, card
+
+    def stamp(self) -> str:
+        return datetime.fromtimestamp(self.now(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def session_summary(self, caller: Bot, ref: str, dry_run: bool) -> dict:
+        gh = Gh(self.home, caller.name, str(caller.repo), self.run)
+        unit, number = self.session_pr(caller, gh, ref)
+        report = read_summary(gh, unit, number, lambda: self.acting_login(caller))
+        text, head = report.pop("text"), str(report["head"] or "")
+        card: dict[str, object] = {"action": "none", "reason": "no readable summary" if not text else "not stored"}
+        if text and unit and cutover(self.home):
+            kanban, found = self.unit_card(caller, unit)
+            if found is None or found.header is None:
+                card = {"action": "none", "reason": f"no unit card for {unit} in {caller.project}"}
+            elif with_summary(found.header, text, head, self.stamp()) is None:
+                card = {"action": "unchanged", "card": found.id}
+            elif dry_run:
+                card = {"action": "would edit", "card": found.id}
+            else:
+                with Loop(self.home, caller.name).locked():
+                    kanban.require_external()
+                    fresh = kanban.find_card(found.key or "")
+                    changed = with_summary(fresh.header, text, head, self.stamp()) if fresh and fresh.header else None
+                    if changed is not None and fresh is not None:
+                        kanban.edit_body(fresh.id, changed)
+                card = {"action": "edited" if changed else "unchanged", "card": found.id}
+        elif text and unit:
+            card = {"action": "none", "reason": "the Kanban cutover is not done, so there is no unit card"}
+        return {**report, "dry_run": dry_run, "card": card}
+
+    def session_steer(self, caller: Bot, unit: str, session: str) -> dict:
+        if not UNIT_ID.match(unit):
+            raise Refused("session steer takes a unit id: faker-kit session steer <unit-id> --session <id>")
+        if not cutover(self.home):
+            raise Refused("the Kanban cutover is not done: the steer is recorded in the unit card, and there is none yet")
+        gh = Gh(self.home, caller.name, str(caller.repo), self.run)
+        _, number = self.session_pr(caller, gh, unit)
+        if number is not None:
+            raise Refused(f"unit {unit} has pull request #{number}; read its summary with faker-kit session summary {unit}, never steer it")
+        kanban, found = self.unit_card(caller, unit)
+        if found is None or found.header is None:
+            raise Refused(f"no unit card for {unit} in {caller.project}; faker-kit loop unit {unit} creates it")
+        with Loop(self.home, caller.name).locked():
+            kanban.require_external()
+            fresh = kanban.find_card(found.key or "")
+            if fresh is None or fresh.header is None:
+                raise Refused(f"unit card for {unit} could not be read; nothing was sent")
+            if steered(fresh.header):
+                return {"unit": unit, "steered": False, "reason": "this unit's session was already asked once; it is never asked again", "card": fresh.id}
+            kanban.edit_body(fresh.id, with_steer(fresh.header, session, self.stamp()))
+            try:
+                self.cloud.steer(session, STEER_MESSAGE)
+            except CloudError as err:
+                kanban.edit_body(fresh.id, fresh.header)
+                raise Refused(f"the session was not asked and the card is unchanged: {err}") from None
+        return {"unit": unit, "steered": True, "session": session, "card": fresh.id}
 
     def andon_command(self, caller: Bot | None, action: str, words: list[str]) -> dict:
         project = caller is not None and caller.role == "project"
@@ -1537,6 +1628,11 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--reported", action="store_true")
     cmd.add_argument("--evidence", action="append", default=[], metavar="STAGE=REF", help="loop set: a one-line reference proving STAGE (built, installed, or verified); repeatable")
     cmd.add_argument("--all", action="store_true")
+    cmd = sub.add_parser("session")
+    cmd.add_argument("action", choices=["summary", "steer"])
+    cmd.add_argument("ref", metavar="UNIT-OR-PR")
+    cmd.add_argument("--dry-run", action="store_true", help="summary: show what would be read and stored; writes nothing")
+    cmd.add_argument("--session", help="steer: the session id or link to ask once for its closing summary")
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
     cmd.add_argument("reason", nargs="*")
@@ -1607,6 +1703,16 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
         if caller is None or caller.role != "project":
             raise Refused("incidents runs in a project bot's chat or job")
         return kit.incidents(caller, args.ack)
+    if args.command == "session":
+        if caller is None or caller.role != "project":
+            raise Refused("session runs in a project bot's chat or job")
+        if args.action == "steer":
+            if not args.session or args.dry_run:
+                raise Refused("session steer takes --session <id> and no --dry-run")
+            return kit.session_steer(caller, args.ref, args.session)
+        if args.session:
+            raise Refused("session summary takes no --session")
+        return kit.session_summary(caller, args.ref, args.dry_run)
     if args.command == "loop":
         if caller is None or caller.role not in LOOP_ACTIONS:
             raise Refused("loop runs in the chief of staff's or a project bot's chat or job")

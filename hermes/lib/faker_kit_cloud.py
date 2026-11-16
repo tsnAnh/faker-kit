@@ -20,6 +20,8 @@ from faker_kit_env import CLAUDE_CONFIG_DIR
 
 SESSION = re.compile(r"https://claude\.ai/code/[A-Za-z0-9_-]+|\b(?:session|cse)_[A-Za-z0-9]{6,}\b")
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[PX^_][^\x1b]*\x1b\\|\x1b[ -/]*[0-~]")
+SESSION_ID = re.compile(r"https://claude\.ai/code/[A-Za-z0-9_-]+|(?:session|cse)_[A-Za-z0-9]{6,}")
+STEER_SECONDS = 120
 TRUST_QUESTION = re.compile(r"trust\s*this\s*folder", re.I)
 KEEP_SECONDS = 3 * 24 * 3600
 CHECKOUT = "repo"
@@ -169,6 +171,20 @@ class Cloud:
         trusted_in = trust_checkout(checkout, os.environ.get(CLAUDE_CONFIG_DIR, ""))
         chosen = ["--model", session_model(model)[0], "--effort", session_effort(effort)[0], "--permission-mode", PERMISSION_MODE]
         return self.launch(["claude", *chosen, "--cloud", prompt], checkout, workdir.with_name(workdir.name + ".log"), prompt, trusted_in)
+
+    def steer(self, session: str, message: str) -> None:
+        if not SESSION_ID.fullmatch(session):
+            raise CloudError("a session to steer is named by its session_ id or its claude.ai/code link")
+        try:
+            done = subprocess.run(["claude", "-p", "--cloud", session, message], capture_output=True, text=True, env=child_env(), stdin=subprocess.DEVNULL, timeout=STEER_SECONDS)
+        except (OSError, subprocess.TimeoutExpired):
+            raise CloudError("claude did not send the message") from None
+        try:
+            sent = done.returncode == 0 and json.loads(done.stdout).get("ok") is True
+        except (ValueError, AttributeError):
+            sent = False
+        if not sent:
+            raise CloudError(f"claude did not accept the message (exit {done.returncode})")
 
     def checkout(self, repo: str, path: Path) -> Path:
         if not (path / ".git").exists():

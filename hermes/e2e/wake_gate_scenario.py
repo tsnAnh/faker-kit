@@ -227,6 +227,44 @@ class Gates:
         update(lambda state: state.update(held))
         self.reset()
 
+    def summaries(self) -> None:
+        step = self.run.step
+
+        def pull(number: int, unit: str, head: str, kind: str = "ready", gate: str = "ready to merge") -> str:
+            return f"#{number} | unit {unit} | by alice | {kind} | labeled | mergeable | updated 2026-11-09T01:00:00Z | head {head * 40} | {gate}"
+
+        def summary_lines(done: subprocess.CompletedProcess[str]) -> list[str]:
+            return [line for line in done.stdout.splitlines() if line.startswith("Closing summaries to read:")]
+
+        self.reset()
+        self.set_last_run(None)
+        self.serve([pull(1, "alpha", "a")])
+        opened = self.tick(BABYSIT)
+        lines = summary_lines(opened)
+        step("summary gate: a wake for an opened pull request carries one line naming the unit and head, telling the agent to run session summary first, and calling it a claim",
+             self.woke(opened, NOT_RECORDED) and len(lines) == 1 and "unit alpha (#1, head aaaaaaa, ready)" in lines[0] and "faker-kit session summary <unit>" in lines[0]
+             and "before you update its card, decide the next step, or report to the chief" in lines[0] and "never proof" in lines[0]
+             and "verify the pull request, head, checks, and artifact on GitHub" in lines[0],
+             self.say(opened))
+        quiet = self.tick(BABYSIT)
+        step("summary gate: a quiet tick stays silent with the exact skip line, so the unseen-summary line never starts a model turn on its own", self.silent(quiet), self.say(quiet))
+        self.set_woke_at(BABYSIT, time.time() - HEARTBEAT - 60)
+        heartbeat = self.tick(BABYSIT)
+        step("summary gate: the same unit at the same head in a later wake (a heartbeat) adds no line", self.woke(heartbeat, HEARTBEAT_REASON) and not summary_lines(heartbeat), self.say(heartbeat))
+        self.serve([pull(1, "alpha", "b", "draft", "blocked: draft")])
+        drafted = self.tick(BABYSIT)
+        step("summary gate: the pull request going to draft at a new head adds one line again, marked draft", self.woke(drafted, CHANGED) and len(summary_lines(drafted)) == 1
+        and "(#1, head bbbbbbb, draft)" in summary_lines(drafted)[0], self.say(drafted))
+        self.serve([pull(2, "beta", "c")])
+        gone = self.tick(BABYSIT)
+        wanted = summary_lines(gone)[0] if summary_lines(gone) else ""
+        step("summary gate: a pull request that merged or closed is named once as ended with the head it last had, next to the unit whose pull request just opened, and the line stays one line",
+             self.woke(gone, CHANGED) and len(summary_lines(gone)) == 1 and "unit alpha (#1, head bbbbbbb, ended)" in wanted and "unit beta (#2, head ccccccc, ready)" in wanted, self.say(gone))
+        self.serve([pull(2, "beta", "c")])
+        again = self.tick(BABYSIT)
+        step("summary gate: that event again is quiet and adds nothing", self.silent(again) and not summary_lines(again), self.say(again))
+        self.reset()
+
     def babysit(self) -> None:
         step = self.run.step
         self.reset()
@@ -236,10 +274,12 @@ class Gates:
         stored = self.state(BABYSIT) if self.states[BABYSIT].is_file() else {}
         folder = self.states[BABYSIT].parent
         step("the babysit gate's first tick with a pull request open wakes the agent with the issues JSON and the status lines as its Script Output, after one faker-kit issues and one status",
-             self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
+             self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:6] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
+             and first.stdout.splitlines()[6].startswith("Closing summaries to read: unit csv (#1, head aaaaaaa, ready)") and len(first.stdout.splitlines()) == 7
              and self.calls() == ["issues", "status", "news"], self.say(first))
         step("it stores the status fingerprint and the wake time as an owner-only file, with no temp file left beside it",
-             set(stored) == {"fingerprint", "woke_at", "retries", "pulls"} and stored["retries"] == 0 and set(stored["pulls"]) == {"#1", "#2"} and stored["fingerprint"] == fingerprint_of(STATUS)
+             set(stored) == {"fingerprint", "woke_at", "retries", "pulls", "asked", "units"} and stored["asked"] == [f"csv|{'a' * 40}|ready"] and stored["retries"] == 0
+             and set(stored["pulls"]) == {"#1", "#2"} and stored["fingerprint"] == fingerprint_of(STATUS)
              and bool(FINGERPRINT.match(stored["fingerprint"]))
              and abs(stored["woke_at"] - time.time()) < MARGIN and stat.S_IMODE(self.states[BABYSIT].stat().st_mode) == 0o600
              and stat.S_IMODE(folder.stat().st_mode) == 0o700 and [p.name for p in folder.iterdir()] == [self.states[BABYSIT].name], json.dumps(stored))
@@ -299,7 +339,8 @@ class Gates:
         self.serve([STATUS[0], STATUS[1], STATUS[0], newer])
         first = self.tick(BABYSIT)
         step("status lines for one pull request collapse to the last one and exact duplicates to one, so the agent sees one line per pull request and the fingerprint covers the collapsed lines",
-             self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[4:] == [newer, STATUS[1]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of([newer, STATUS[1]]), self.say(first))
+             self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[4:6] == [newer, STATUS[1]]
+             and first.stdout.splitlines()[6].startswith("Closing summaries to read: unit csv") and self.state(BABYSIT)["fingerprint"] == fingerprint_of([newer, STATUS[1]]), self.say(first))
         blocker = f"#3 | by dana | ready | labeled | mergeable | updated 2026-11-10T06:00:00Z | head {'d' * 40} | blocked: a person requested changes"
         self.serve([newer, STATUS[1], blocker])
         opened = self.tick(BABYSIT)
@@ -815,5 +856,6 @@ def wake_scenario(run: Run, hermes: Path, bot: str, chief: str, env: dict[str, s
     gates.real_loop(chief, env)
     with gates.fake_wrapper():
         gates.babysit()
+        gates.summaries()
         gates.chief_news()
         gates.loop()

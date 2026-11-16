@@ -158,6 +158,14 @@ def launch_output(run: Run, bot: str, real: float) -> dict:
     run.step("t3code: the message carries the pull request label rule once, from the same footer the claude backend gets",
              message.count("Label rule: when you open the pull request, add the label faker-kit to it in the same step") == 1
              and "add the line `Label: faker-kit` to the pull request body" in message and "Never add the label to a pull request you did not open" in message, message[-600:].replace("\n", " "))
+    rule_text = next((line for line in message.splitlines() if line.startswith("Closing summary rule: ")), "")
+    again_code, again_printed, again_err = prepare(run, "csv-export-summary.md", "/faker-mode\n\nGOAL: add a CSV export.\n" + rule_text.removeprefix("Closing summary rule: ") + "\n", bot)
+    again_message = again_printed.get("call", {}).get("args", {}).get("message", "")
+    run.step("t3code: the message carries the closing summary rule once, and a brief that already holds the rule is not given it twice",
+             message.count("Closing summary rule:") == 1 and "first line is exactly `Closing summary:`" in message and "Done, Skipped, Open questions, Blockers" in message
+             and "open a draft pull request whose body begins with `Unit: <unit-id>`" in message and "no pull request or issue text from others" in message
+             and again_code == 0 and again_message.count("Closing summary rule:") == 0
+             and again_message.count("Done, Skipped, Open questions, Blockers") == 1, again_err or message[-900:].replace("\n", " "))
     run.step("t3code: the message is the brief with the andon stop rule and the faker-mode rule, and its first 8 hash characters are the printed brief id",
              message.startswith("/faker-mode") and "agent:andon" in message and "Faker-mode rule:" in message and "SCOPE: reports only." in message
              and hashlib.sha256(message.encode()).hexdigest()[:8] == printed.get("brief"), message[-120:].replace("\n", " "))

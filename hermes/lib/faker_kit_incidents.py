@@ -208,8 +208,8 @@ def redact(text: str, secrets: Collection[str], shapes: re.Pattern[str]) -> str:
     return shapes.sub(REDACTED, text)
 
 
-def fence(text: str) -> str:
-    return " ".join(text.replace("`", "'").replace("<", "(").replace(">", ")").split())[:200]
+def fence(text: str, limit: int = 200) -> str:
+    return " ".join(text.replace("`", "'").replace("<", "(").replace(">", ")").split())[:limit]
 
 
 class Watch:
