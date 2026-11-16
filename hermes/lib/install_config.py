@@ -109,7 +109,7 @@ JOB_NAME = re.compile(r"\Afaker-kit-[a-z][a-z0-9-]*\Z")
 KIT_GATE_SCRIPT = re.compile(r"\Afaker-kit-[a-z0-9-]+-gate\.py\Z")
 
 
-def cron_spec(source: Path, bot: str) -> list[dict]:
+def cron_spec(source: Path, bot: str, chief: str | None = None) -> list[dict]:
     out = []
     for block in re.split(r"^## ", source.read_text(), flags=re.M)[1:]:
         name = block.split("\n", 1)[0].strip()
@@ -122,10 +122,14 @@ def cron_spec(source: Path, bot: str) -> list[dict]:
                 if optional:
                     return None
                 raise InstallError(f"missing cron {key} field for {name}")
-            return match.group(1).replace("{bot}", bot)
+            return match.group(1).replace("{bot}", bot).replace("{chief}", chief or "")
 
         script = field("Script", optional=True)
         if script is not None and not KIT_GATE_SCRIPT.match(script):
             raise InstallError(f"cron Script {script!r} for {name} must be a bare file name like faker-kit-<word>-gate.py")
-        out.append({"name": name, "schedule": field("Schedule"), "deliver": field("Deliver"), "prompt": field("Prompt"), "skill": field("Skill", optional=True), "script": script})
+        to_chief = "{chief}" in block
+        if to_chief and chief is None:
+            continue
+        out.append({"name": name, "schedule": field("Schedule"), "deliver": field("Deliver"), "prompt": field("Prompt"), "skill": field("Skill", optional=True), "script": script,
+                    "no_agent": field("Mode", optional=True) == "no-agent", "chief": to_chief})
     return out

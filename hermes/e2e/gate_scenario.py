@@ -14,9 +14,9 @@ from typing import Protocol
 import guard_scenario
 
 GATE = "faker-kit-babysit-gate.py"
-GATES = {"faker-kit-babysit": GATE}
+GATES = {"faker-kit-babysit": GATE, "faker-kit-chief-news": "faker-kit-chief-news-gate.py"}
 LIBRARY = "faker_kit_gate.py"
-LIBRARIES = (LIBRARY, "faker_kit_cron_list.py")
+LIBRARIES = (LIBRARY, "faker_kit_gate_news.py", "faker_kit_cron_list.py")
 QUIET = '{"wakeAgent": false}'
 RETIRED = "faker-kit-incidents"
 KIT_SCRIPT = "\nKIT_OWNED = True\nprint('gate')\n"
@@ -164,7 +164,7 @@ def gate_scenario(run: Run, hermes: Path, bot: str, bootstrap: str, install: Cal
     removed = add_project()
     names = sorted(jobs())
     run.step("add-project removes the retired faker-kit-incidents job, its kit-owned gate script, and its gate state, and keeps the babysit job, a job the kit does not name, and a foreign script",
-             removed.returncode == 0 and names == ["faker-kit-babysit", "my-own-job"] and jobs()["my-own-job"] == foreign_job
+             removed.returncode == 0 and names == ["faker-kit-babysit", "faker-kit-chief-news", "my-own-job"] and jobs()["my-own-job"] == foreign_job
              and not (scripts / f"{RETIRED}-gate.py").exists() and not (state_dir / f"{RETIRED}.json").exists() and foreign_script.is_file()
              and (scripts / GATE).is_file(), json.dumps(names) + text_of(removed)[-80:])
     kept = (jobs_file.read_bytes(), sorted(path.name for path in scripts.iterdir()))

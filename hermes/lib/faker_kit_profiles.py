@@ -32,7 +32,7 @@ SUBSCRIPTION_MIN_CLI = (2, 1, 284)
 SUBSCRIPTION_DEFAULT_MODEL = "sonnet"
 PLUGIN_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
 KIT_OWNED_MARK = "\nKIT_OWNED = True\n"
-GATE_LIBRARIES = (("cron/scripts", "faker_kit_gate.py"), ("lib", "faker_kit_cron_list.py"))
+GATE_LIBRARIES = (("cron/scripts", "faker_kit_gate.py"), ("cron/scripts", "faker_kit_gate_news.py"), ("lib", "faker_kit_cron_list.py"))
 RETIRED_JOBS = {"project-jobs.md": ("faker-kit-issues", "faker-kit-security", "faker-kit-incidents")}
 JOBS_PAUSED_REASON = "Awaiting the bot's GitHub login"
 SCHEDULE_FIELDS = {"faker-kit-babysit": "heartbeat_every"}
@@ -214,9 +214,9 @@ class Profiles:
     def github_login(self, home: Path, machine_login: bool) -> bool:
         return bool(parse_env_file(home / ".env").get("GH_TOKEN")) or machine_login
 
-    def ensure_jobs(self, bot: str, spec: str, intervals: dict[str, str], slack_channel: str | None, enabled: bool) -> JobChanges:
+    def ensure_jobs(self, bot: str, spec: str, intervals: dict[str, str], slack_channel: str | None, enabled: bool, chief: str | None = None) -> JobChanges:
         existing = cron_jobs(hermes("-p", bot, "cron", "list", "--all"))
-        jobs = cron_spec(self.pkg / "cron" / spec, bot)
+        jobs = cron_spec(self.pkg / "cron" / spec, bot, chief)
         scripts = {job["name"]: self.job_script(bot, self.pkg / "cron" / "scripts" / job["script"]) for job in jobs if job["script"]}
         libraries = [self.job_script(bot, self.pkg / folder / name) for folder, name in GATE_LIBRARIES] if scripts else []
         records = self.job_records(bot)
@@ -226,16 +226,16 @@ class Profiles:
         for library in libraries:
             self.write_job_script(*library)
         for job in jobs:
-            schedule = f"every {intervals[SCHEDULE_FIELDS[job['name']]]}" if intervals else job["schedule"]
-            deliver = f"{job['deliver']},slack:{slack_channel}" if slack_channel else job["deliver"]
+            schedule = f"every {intervals[SCHEDULE_FIELDS[job['name']]]}" if intervals and job["name"] in SCHEDULE_FIELDS else job["schedule"]
+            deliver = f"{job['deliver']},slack:{slack_channel}" if slack_channel and not job["chief"] else job["deliver"]
             current = existing.get(job["name"])
             script_args = ["--script", self.write_job_script(*scripts[job["name"]])] if job["script"] else []
-            digests[job["name"]] = job_digest(schedule, job["prompt"], job["script"])
+            digests[job["name"]] = job_digest(schedule, job["prompt"], job["script"]) if not job["chief"] else job_digest(schedule, job["prompt"], job["script"], deliver)
             if current is None:
                 args = ["-p", bot, "cron", "create", schedule, job["prompt"], "--name", job["name"], "--deliver", deliver, "--continuity"]
                 if job["skill"]:
                     args += ["--skill", job["skill"]]
-                args += script_args
+                args += script_args + (["--no-agent"] if job["no_agent"] else [])
                 if not enabled:
                     args += ["--paused", "--paused-reason", JOBS_PAUSED_REASON]
                 hermes(*args)
@@ -244,7 +244,8 @@ class Profiles:
             if not job["script"] and KIT_GATE_SCRIPT.match(Path(str(current.get("script") or "")).name):
                 script_args = ["--script", ""]
             if not applied(records.get(job["name"]), current, digests[job["name"]]):
-                hermes("-p", bot, "cron", "edit", current["id"], "--schedule", schedule, "--prompt", job["prompt"], *script_args)
+                hermes("-p", bot, "cron", "edit", current["id"], "--schedule", schedule, "--prompt", job["prompt"], *script_args,
+                       *(["--deliver", deliver] if job["chief"] else []))
                 edited = True
             if enabled and not current["enabled"]:
                 hermes("-p", bot, "cron", "resume", current["id"])
@@ -334,8 +335,8 @@ class Profiles:
         return covered
 
 
-def job_digest(schedule: str, prompt: str, script: str | None) -> str:
-    return hashlib.sha256(json.dumps([schedule, prompt, script]).encode()).hexdigest()
+def job_digest(schedule: str, prompt: str, script: str | None, *deliver: str) -> str:
+    return hashlib.sha256(json.dumps([schedule, prompt, script, *deliver]).encode()).hexdigest()
 
 
 def applied(record: dict | None, current: dict, digest: str) -> bool:
