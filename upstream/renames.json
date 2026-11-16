@@ -44,7 +44,7 @@
       ],
       "from": "poteto-mode",
       "to": "faker-mode",
-      "count": 252
+      "count": 250
     },
     {
       "id": "rename-poteto-agent",
@@ -62,7 +62,7 @@
       ],
       "from": "It maps the Cursor names in pstack skills to Claude Code.",
       "to": "It maps the names in pstack skills to Claude Code.",
-      "count": 22
+      "count": 21
     },
     {
       "id": "neutral-claude-marketplace",
@@ -170,7 +170,7 @@
       ],
       "from": "pstack-models.mdc",
       "to": "pstack-models.md",
-      "count": 5
+      "count": 3
     },
     {
       "id": "neutral-home-dir-shell",
@@ -341,7 +341,7 @@
       ],
       "from": "from the Cursor environment",
       "to": "from the agent environment",
-      "count": 1
+      "count": 0
     },
     {
       "id": "neutral-mcp-directory",
@@ -350,7 +350,7 @@
       ],
       "from": "directory Cursor exposes",
       "to": "directory the agent exposes",
-      "count": 1
+      "count": 0
     },
     {
       "id": "neutral-editor-support-dir",
@@ -502,8 +502,8 @@
       "files": [
         "harness/pstack/claude-code/skills/poteto-help/SKILL.md"
       ],
-      "from": "Other tools can read the skills, because they use the Agent Skills format. But most workflow skills, including `/faker-mode`, `/how`, `/why`, and `/teach`, spawn Cursor subagents with per-role models, and Custom Modes and `/loop` are Cursor features, so those parts may not work there.",
-      "to": "Other tools can read the skills, because they use the Agent Skills format. But most workflow skills, including `/faker-mode`, `/how`, `/why`, and `/teach`, spawn subagents with per-role models, and Custom Modes and `/loop` depend on the agent, so those parts may not work in every one.",
+      "from": "including `/faker-mode`, `/how`, and `/teach`, spawn Cursor subagents, some with per-role models, and Custom Modes and `/loop` are Cursor features, so those parts may not work there.",
+      "to": "including `/faker-mode`, `/how`, and `/teach`, spawn subagents, some with per-role models, and Custom Modes and `/loop` depend on the agent, so those parts may not work in every one.",
       "count": 1
     },
     {
@@ -574,7 +574,7 @@
       "files": [
         "harness/pstack/claude-code/docs/guide/01-setup.md"
       ],
-      "from": " Opus goes to `max`. Grok tops out at `xhigh`, so it stays there.",
+      "from": " Gemini tops out at `high`, so it stays there.",
       "to": "",
       "count": 1
     },
