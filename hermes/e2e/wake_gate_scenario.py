@@ -67,6 +67,10 @@ def summary_lines(done: subprocess.CompletedProcess[str]) -> list[str]:
     return [line for line in done.stdout.splitlines() if line.startswith("Closing summaries to read:")]
 
 
+def shown(done: subprocess.CompletedProcess[str]) -> list[str]:
+    return [line for line in done.stdout.splitlines() if not line.startswith("Closing summaries to read:")]
+
+
 def part(number: int, state: str, **fields: object) -> dict:
     return {"id": number, "project": "shop", "bot": "meo-beo", "part": f"part {number}", "state": state, "prs": [], "waits_on": None,
             "added": 1.0, "updated": 1.0, "reported": None, **fields}
@@ -305,7 +309,7 @@ class Gates:
         self.serve(changed)
         woken = self.tick(BABYSIT)
         step("a changed status wakes the agent with only the changed pull request's line and stores the new fingerprint",
-             self.woke(woken, CHANGED) and woken.stdout.splitlines()[4:] == [changed[1]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of(changed), self.say(woken))
+             self.woke(woken, CHANGED) and shown(woken)[4:] == [changed[1]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of(changed), self.say(woken))
         self.news_steps(changed)
 
         self.serve([*changed, NOTICE])
@@ -346,20 +350,20 @@ class Gates:
         self.serve([newer, STATUS[1], blocker])
         opened = self.tick(BABYSIT)
         step("a new blocker wakes the agent with its one line and not the lines of the pull requests that did not change",
-             self.woke(opened, CHANGED) and opened.stdout.splitlines()[4:] == [blocker], self.say(opened))
+             self.woke(opened, CHANGED) and shown(opened)[4:] == [blocker], self.say(opened))
         touched_blocker = blocker.replace("2026-11-10T06:00:00Z", "2026-11-10T07:00:00Z")
         self.serve([newer, STATUS[1], touched_blocker])
         retouched = self.tick(BABYSIT)
         step("a blocked pull request whose updated time moved is a changed blocker and wakes the agent",
-             self.woke(retouched, CHANGED) and retouched.stdout.splitlines()[4:] == [touched_blocker], self.say(retouched))
+             self.woke(retouched, CHANGED) and shown(retouched)[4:] == [touched_blocker], self.say(retouched))
         self.serve([newer, STATUS[1], touched_blocker.replace("2026-11-10T07:00:00Z", "2026-11-10T08:00:00Z").replace("blocked: a person requested changes", "ready to merge")])
         unblocked = self.tick(BABYSIT)
         step("a blocker that clears is a changed pull request and wakes the agent with its new line",
-             self.woke(unblocked, CHANGED) and unblocked.stdout.splitlines()[4:] == [self.served_last()], self.say(unblocked))
+             self.woke(unblocked, CHANGED) and shown(unblocked)[4:] == [self.served_last()], self.say(unblocked))
         self.serve([newer, STATUS[1]])
         completed = self.tick(BABYSIT)
         step("a pull request that was in the stored status and is gone wakes the agent with one completion line and nothing else",
-             self.woke(completed, CHANGED) and completed.stdout.splitlines()[4:] == ["#3 merged or closed"], self.say(completed))
+             self.woke(completed, CHANGED) and shown(completed)[4:] == ["#3 merged or closed"], self.say(completed))
         kept = self.snapshot(BABYSIT)
         again = self.tick(BABYSIT)
         step("an unchanged tick after that is quiet and writes nothing", self.silent(again) and self.snapshot(BABYSIT) == kept, self.say(again))
@@ -389,7 +393,7 @@ class Gates:
         self.serve([STRANGER, STATUS[0]])
         appeared = self.tick(BABYSIT)
         step("a labeled pull request that opens beside the unlabeled one wakes the gate, and the agent is shown only the labeled line",
-             self.woke(appeared, CHANGED) and appeared.stdout.splitlines()[4:] == [STATUS[0]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of([STATUS[0]]), self.say(appeared))
+             self.woke(appeared, CHANGED) and shown(appeared)[4:] == [STATUS[0]] and self.state(BABYSIT)["fingerprint"] == fingerprint_of([STATUS[0]]), self.say(appeared))
         self.serve([STRANGER.replace("2026-11-09T03:00:00Z", "2026-11-10T04:00:00Z"), STATUS[0]])
         stranger_moved = self.tick(BABYSIT)
         step("a change to an unlabeled pull request's line wakes nobody", self.silent(stranger_moved), self.say(stranger_moved))
