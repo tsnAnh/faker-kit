@@ -753,22 +753,6 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              and "nothex" not in shown and "pull request #" not in hostile_card["detail"], shown)
     run.step("kanban refusal detail: a Kanban refusal with no receipt for the run keeps its text and says so",
              "unknown id or terminal state" in bare_card["detail"] and bare_card["detail"].endswith(" (receipt: none for this run)") and "checks" not in bare_card, json.dumps(bare_card))
-    board.set(complete_refuse="failure", receipt_extra=real)
-    first = json_of(project("loop", "reconcile"))
-    m1 = board.mutations()
-    second = json_of(project("loop", "reconcile"))
-    m2 = board.mutations()
-    third = json_of(project("loop", "reconcile"))
-    m3 = board.mutations()
-    board.set(complete_refuse=None, receipt_extra={})
-
-    def lines_of(out: dict) -> list[str]:
-        return sorted(r["detail"] for r in out["entries"]["refused"] if "build" in r["detail"])
-
-    run.step("kanban refusal detail: loop reconcile prints the same named line on a repeat pass, and the repeat adds only the retry the kit already made",
-             lines_of(first) and lines_of(first) == lines_of(second) == lines_of(third) and all(r.get("checks") for r in third["entries"]["refused"] if "build" in r["detail"])
-             and m3 - m2 == m2 - m1, json.dumps(third["entries"]["refused"])[:300])
-
     add_pr(60, "wait-u")
     add_pr(61, "wait-v")
     assert project("loop", "unit", "wait-u", "--pr", "60")[0] == 0
@@ -833,6 +817,27 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     mutations = board.mutations()
     quiet = json_of(project("loop", "reconcile"))
     run.step("kanban reconcile: a second run after completion changes nothing", quiet["set_merged"] == 0 and quiet["set_closed"] == 0 and board.mutations() == mutations, json.dumps(quiet)[:200])
+    add_pr(90, "repeat-u")
+    assert project("loop", "unit", "repeat-u", "--pr", "90")[0] == 0
+    ready(90)
+    board.set(complete_refuse="failure", receipt_extra=real)
+    assert project("merge", "--pr", "90")[0] == 0
+    first = json_of(project("loop", "reconcile"))
+    m1 = board.mutations()
+    second = json_of(project("loop", "reconcile"))
+    m2 = board.mutations()
+    third = json_of(project("loop", "reconcile"))
+    m3 = board.mutations()
+    board.set(complete_refuse=None, receipt_extra={})
+
+    def lines_of(out: dict) -> list[str]:
+        return sorted(r["detail"] for r in out["entries"]["refused"] if "build" in r["detail"])
+
+    run.step("kanban refusal detail: loop reconcile prints the same named line on a repeat pass, and the repeat adds only the retry the kit already made",
+             lines_of(first) and lines_of(first) == lines_of(second) == lines_of(third) and all(r.get("checks") for r in third["entries"]["refused"] if "build" in r["detail"])
+             and m3 - m2 == m2 - m1, json.dumps(third["entries"]["refused"])[:300])
+    assert project("loop", "reconcile")[0] == 0
+
 
     events_scenario(run, board, project, add_pr, card_key)
 
