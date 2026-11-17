@@ -91,7 +91,7 @@ def settle_cards() -> dict[str, str]:
 
 def pickup_lines() -> dict[str, str]:
     try:
-        done = subprocess.run([gate.WRAPPER, "pickup", "status"], env=gate.child_env(), capture_output=True, text=True, timeout=gate.TIMEOUT_SECONDS, check=False)
+        done = subprocess.run([gate.WRAPPER, "pickup", "status", "--no-job"], env=gate.child_env(), capture_output=True, text=True, timeout=gate.TIMEOUT_SECONDS, check=False)
         report = json.loads(done.stdout) if done.returncode == 0 else None
     except (OSError, subprocess.SubprocessError, ValueError):
         report = None

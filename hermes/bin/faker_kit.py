@@ -1006,12 +1006,12 @@ class Kit:
                 blocked.append({"unit": card.title, "card": card.id, "blocked": False, "detail": scrub(str(err))[:160]})
         return blocked
 
-    def pickup_command(self, caller: Bot | None, action: str) -> dict:
+    def pickup_command(self, caller: Bot | None, action: str, with_job: bool = True) -> dict:
         if action != "status":
             if caller is not None and caller.role != "chief":
                 raise Refused(f"{caller.name} is a {caller.role} bot; pickup {action} is for the owner and the chief of staff, and faker-kit pickup status reads it")
             write_pickup(self.home, action == "on", caller.name if caller else "owner", self.now())
-        return self.pickup_status(caller)
+        return self.pickup_status(caller, with_job)
 
     def pickup_limits(self, bot: Bot) -> tuple[int | None, int]:
         try:
@@ -1027,11 +1027,12 @@ class Kit:
             return {"id": None, "next_run": "unreadable"}
         return {"id": job.get("id"), "enabled": job.get("enabled"), "next_run": job.get("next_run") or job.get("overdue") or "unknown"}
 
-    def pickup_status(self, caller: Bot | None) -> dict:
+    def pickup_status(self, caller: Bot | None, with_job: bool = True) -> dict:
         state = read_pickup(self.home)
         out: dict = {"enabled": state.enabled, "since": self.stamp_of(state.since), "by": state.by}
         bots = [caller] if caller is not None and caller.role == "project" else sorted(self.policy().projects().values(), key=lambda b: b.project or "")
-        out["jobs"] = {str(b.project): self.babysit_job(b) for b in bots}
+        if with_job:
+            out["jobs"] = {str(b.project): self.babysit_job(b) for b in bots}
         if not cutover(self.home) or not bots:
             return {**out, "candidates": {}, "pickup": []}
         cards = self.kanban(caller or bots[0]).cards(False)
@@ -1853,6 +1854,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--session", help="steer: the session id or link to ask once for its closing summary")
     cmd = sub.add_parser("pickup")
     cmd.add_argument("action", nargs="?", choices=["status", "on", "off"], default="status")
+    cmd.add_argument("--no-job", action="store_true", help="status: skip reading the babysit job's next run (the wake gate uses this)")
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
     cmd.add_argument("reason", nargs="*")
@@ -1942,7 +1944,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
             raise Refused("handoff runs in the chief of staff's chat or job")
         return kit.handoff(caller, args.project, args.part, args.decisions, args.outcome)
     if args.command == "pickup":
-        return kit.pickup_command(caller, args.action)
+        return kit.pickup_command(caller, args.action, not args.no_job)
     if args.command == "andon":
         return kit.andon_command(caller, args.action, args.reason)
     return run_runner(args)
