@@ -74,6 +74,10 @@ def card_text(header: Header, summary: str, repo: str | None, decisions: str | N
     session_lines = [f"Sessions: {sessions[0]}", *(f"  {s}" for s in sessions[1:])] if sessions else ["Sessions: none yet"]
     waits = fields.get("Waits-on")
     status = f"Status: {one_line(fields.get('State', 'unknown'))}; " + (f"waits on {one_line(waits)}" if waits else "not waiting") + f"; updated {stamp(fields.get('Updated'))}"
+    if fields.get("Work"):
+        status += f"; {one_line(fields['Work'])}"
+    if fields.get("Run"):
+        status += f"; Kanban run {one_line(fields['Run'])}"
     if part:
         status += f"; reported to the owner: {'yes' if fields.get('Reported') and fields.get('Reported') == fields.get('State') else 'no'}"
     lines = [cut(one_line(summary), MAX_SUMMARY), second, "", f"{DECISIONS_PREFIX}{owner}", f"Pull requests: {pulls}", *session_lines, status]

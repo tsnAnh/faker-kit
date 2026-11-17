@@ -21,16 +21,16 @@ def listed_issues() -> list[object]:
 def card_check_line() -> str | None:
     try:
         done = subprocess.run([gate.WRAPPER, "loop", "check"], env=gate.child_env(), capture_output=True, text=True, timeout=gate.TIMEOUT_SECONDS, check=False)
-        report = json.loads(done.stdout) if done.returncode == 0 else None
+        report = json.loads(done.stdout) if done.returncode in (0, 4) else None
     except (OSError, subprocess.SubprocessError, ValueError):
         report = None
-    problems = report.get("problems") if isinstance(report, dict) else None
-    if not isinstance(problems, list):
+    findings = report.get("findings") if isinstance(report, dict) else None
+    if not isinstance(findings, list):
         return "faker-kit loop check could not read the board this tick; run faker-kit loop check"
-    if not problems:
+    wrong = [f for f in findings if isinstance(f, dict) and f.get("needs_action")]
+    if not wrong:
         return None
-    first = problems[0].get("line") if isinstance(problems[0], dict) else None
-    return f"faker-kit loop check: {len(problems)} card(s) do not show the work, first: {first}; run faker-kit loop check for every fix line"
+    return f"faker-kit loop check: {len(wrong)} card(s) need action, first: {wrong[0].get('line')}; run faker-kit loop check for every fix line"
 
 
 def main() -> None:

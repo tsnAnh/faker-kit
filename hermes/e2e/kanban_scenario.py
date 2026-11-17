@@ -142,7 +142,9 @@ def kanban_main():
         live = next((r for r in st["runs"] if r["id"] == int(found["--run-id"]) and r["task_id"] == positional[0] and r["ended_at"] is None), None)
         if live is None:
             die("cannot heartbeat: no live run")
-        live["last_heartbeat_at"], live["claim_expires"] = clock, clock + live.get("ttl", 900)
+        if "--ttl" in found:
+            die("heartbeat: unknown option --ttl", 2)
+        live["last_heartbeat_at"], live["claim_expires"] = clock, clock + int(os.environ.get("HERMES_KANBAN_CLAIM_TTL_SECONDS", "900"))
         st.setdefault("heartbeats", []).append({"task": positional[0], "run_id": live["id"], "at": clock, "note": found.get("--note")})
     elif verb == "reclaim":
         found = task(rest[0])

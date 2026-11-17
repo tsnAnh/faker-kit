@@ -154,7 +154,7 @@ class Gates:
         self.program("status", status if isinstance(status, str) else "\n".join(status) + "\n")
         self.program("issues", issues if issues is not None else issues_json([]))
         self.program("news", json.dumps({"tracked": []}))
-        self.program("loop-check", json.dumps({"problems": [], "ok": True}))
+        self.program("loop-check", json.dumps({"findings": [], "lines": [], "ok": True, "needs_action": False}))
 
     def calls(self) -> list[str]:
         log = self.fake / "calls.log"
@@ -426,12 +426,12 @@ class Gates:
         self.serve([NO_PULLS])
         quiet = self.tick(BABYSIT)
         line = "t_1abb3883 unit kanban-visual-mockup: PR #153 draft open, card ready, no run; fix: faker-kit loop reconcile"
-        self.program("loop-check", json.dumps({"problems": [{"line": line}], "ok": False}))
+        self.program("loop-check", json.dumps({"findings": [{"line": line, "needs_action": True}], "lines": [line], "ok": False, "needs_action": True}))
         loud = self.tick(BABYSIT)
         added = [row for row in loud.stdout.splitlines() if row.startswith("faker-kit loop check:")]
         step("card check gate: with nothing wrong loop check adds nothing and the tick stays quiet; a card that does not show the work wakes it with exactly one line naming the card and its fix",
              self.silent(quiet) and wakes(loud.stdout) and len(added) == 1 and line in added[0], self.say(loud))
-        self.program("loop-check", json.dumps({"problems": [], "ok": True}))
+        self.program("loop-check", json.dumps({"findings": [], "lines": [], "ok": True, "needs_action": False}))
         self.reset()
 
     def quiet_without_pulls(self) -> None:

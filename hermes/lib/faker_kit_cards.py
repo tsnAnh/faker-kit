@@ -10,7 +10,7 @@ from pathlib import Path
 
 from faker_kit_gh import scrub
 from faker_kit_guard.t3code import SECRET_SHAPES
-from faker_kit_kanban import ACCEPTANCE_CLASSIFICATIONS, Card, EvidenceRow, Header, Kanban, KanbanError, NewCard
+from faker_kit_kanban import ACCEPTANCE_CLASSIFICATIONS, CLAIM_TTL, Card, EvidenceRow, Header, Kanban, KanbanError, NewCard
 from faker_kit_loop import (
     CLOSED,
     DEFAULT_OUTCOME,
@@ -44,8 +44,6 @@ PR_EVIDENCE = ("pr_published", "pr_merged")
 CLOSE_KINDS = ("abandoned", "folded", "superseded", "duplicate", "junk")
 MAX_REASON = 300
 LINE_BREAKS = frozenset("\u0085\u2028\u2029")
-CLAIM_TTL = 6 * 3600
-LIVE_STATES = ("in-progress", "ready-to-merge")
 SHA256 = re.compile(r"\b[0-9a-f]{64}\b")
 VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.]+)?)(?![\w.])")
 DEVICE = re.compile(r"\b(emulator-\d+)\b|\bdevice[ =:]+([A-Za-z0-9_.:-]+)")
@@ -128,17 +126,38 @@ def hold(kanban: Kanban, card: Card, session: str) -> dict:
     return {"card": card.id, "claim": "claimed", "run_id": run_id}
 
 
+def work_line(kanban: Kanban, part: Card, cards: dict[str, Card]) -> str:
+    units = [cards[p] for p in kanban.parents(part.id) if p in cards]
+    running = [u for u in units if u.status == "running"]
+    if running:
+        shown = []
+        for unit in running:
+            prs = unit.header.fields.get("PRs", "") if unit.header else ""
+            shown.append(f"unit {unit.title} running (card {unit.id}" + (f", PR #{prs.split(',')[-1]}" if prs else "") + ")")
+        return "in progress: " + "; ".join(shown)
+    if units and all(u.status == "done" for u in units):
+        return "every unit done"
+    if units:
+        return "no unit running: " + ", ".join(f"unit {u.title} {u.status} (card {u.id})" for u in units)
+    return "no unit card yet"
+
+
+def refresh_work(kanban: Kanban, part: Card, cards: dict[str, Card], repo: str | None, apply: bool) -> dict | None:
+    if part.header is None:
+        return None
+    line = work_line(kanban, part, cards)
+    if part.header.fields.get("Work") == line:
+        return None
+    if apply:
+        kanban.edit_body_if_changed(part.id, refresh(part.header.with_fields({"Work": line}), part.title, repo), part.header)
+    return {"part": part.key, "card": part.id, "work": line}
+
+
 def let_go(kanban: Kanban, card: Card, reason: str) -> dict:
     if kanban.live_run(card.id) is None:
         return {}
     kanban.release(card.id, reason)
     return {"card": card.id, "claim": "released"}
-
-
-def follow_state(kanban: Kanban, card: Card, state: str, label: str) -> dict:
-    if state in LIVE_STATES:
-        return hold(kanban, card, label)
-    return let_go(kanban, card, f"faker-kit: {label} is {state}, so no one works it now")
 
 
 def stage_ref(payload: dict[str, object]) -> str:
@@ -255,20 +274,14 @@ class CardLoop:
             changed = apply_update(entry, part_id, state, prs, waits_on, reported, now, {s: stage_ref(p) for s, p in payloads.items()})
             if payloads:
                 self.record(card, payloads)
-            fresh = refresh(entry_header(changed, card.header), card.title, self.repos.get(entry["project"]))
+            work = work_line(self.kanban, card, {c.id: c for c in self.kanban.cards(False)})
+            fresh = refresh(entry_header(changed, card.header).with_fields({"Work": work}), card.title, self.repos.get(entry["project"]))
             self.kanban.edit_body_if_changed(card.id, fresh, card.header)
             if changed["state"] != entry["state"] and changed["state"] in ("abandoned", "taken-back"):
                 let_go(self.kanban, card, f"faker-kit: part {part_id} is {changed['state']}")
                 self.kanban.archive(card.id)
                 return part_row(changed)
-            claim = self.follow(card, changed["state"])
-        return {**part_row(changed), **({"kanban": claim} if claim else {})}
-
-    def follow(self, card: Card, state: str) -> dict:
-        try:
-            return follow_state(self.kanban, card, state, f"part {card.key}")
-        except KanbanError as err:
-            return {"card": card.id, "claim": "refused", "detail": scrub(str(err))[:160], "fix": "faker-kit loop check"}
+        return part_row(changed)
 
     def record(self, card: Card, payloads: dict[str, dict[str, object]]) -> None:
         try:

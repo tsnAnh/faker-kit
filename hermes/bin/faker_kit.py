@@ -34,7 +34,7 @@ from faker_kit_backfill import backfill
 from faker_kit_card_watch import align as align_parts
 from faker_kit_card_watch import check as check_cards
 from faker_kit_card_watch import hold_live_units
-from faker_kit_cards import CLOSE_KINDS, CardLoop, Merged, bound_pr_url, close_card, complete_card, create_unit, hold, let_go, unit_key, unit_rows
+from faker_kit_cards import CLOSE_KINDS, CardLoop, Merged, bound_pr_url, close_card, complete_card, create_unit, hold, refresh_work, unit_key, unit_rows
 from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, SESSION_ID, Cloud, CloudError, trust_checkout
 from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
 from faker_kit_gh import NAME, Coded, Gh, Refused, Runner, credential_problem, credential_state, fix_git_protocol, run_gh, scrub
@@ -88,6 +88,7 @@ from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slo
 from faker_kit_session_card import steered, with_steer, with_summary
 from faker_kit_session_summary import STEER_MESSAGE, read_summary
 from faker_kit_t3code import T3CodeLauncher, check_t3code_backend, parse_settings, unit_id
+from faker_kit_text import refresh as refresh_text
 from install_config import InstallError, config_set, hermes, mapping, value_at
 
 BRIEF_START = "/faker-mode"
@@ -103,6 +104,7 @@ MERGE_WAIT_MAX_SECONDS = 1800
 OPEN_WAIT_DEFAULT_SECONDS = 600
 EXIT_REFUSED = 1
 EXIT_AMBIGUOUS = 3
+EXIT_ACTION = 4
 MATCH_MAX_CHARS = 100
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 UPDATED_AT = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
@@ -350,17 +352,14 @@ class Kit:
         digest = hashlib.sha256(prompt.encode()).hexdigest()[:8]
         owner, name = repo.split("/")
         workdir = self.home / "checkouts" / f"{owner}__{name}" / f"launch-{int(self.now())}-{digest}"
-        claimed = self.launch_claim(caller, target, brief_file, digest)
-        try:
-            result = launcher.start(repo, prompt, workdir, model, effort)
-        except BaseException:
-            if claimed is not None and claimed[2]["claim"] == "claimed":
-                with contextlib.suppress(KanbanError):
-                    let_go(claimed[0], claimed[1], "faker-kit: the launch did not start, claim released")
-            raise
-        return {"repo": repo, "backend": dispatch.backend, "brief": digest, **result.fields, **({"card": claimed[2]} if claimed else {})}
+        unit_card_found = self.launch_card(caller, target, brief_file)
+        result = launcher.start(repo, prompt, workdir, model, effort)
+        out = {"repo": repo, "backend": dispatch.backend, "brief": digest, **result.fields}
+        if unit_card_found is not None:
+            out["card"] = self.launch_claim(target, *unit_card_found, str(result.fields.get("session") or f"{dispatch.backend} launch {digest}"))
+        return out
 
-    def launch_claim(self, caller: Bot | None, target: Bot, brief_file: str, digest: str) -> tuple[Kanban, Card, dict] | None:
+    def launch_card(self, caller: Bot | None, target: Bot, brief_file: str) -> tuple[Kanban, Card] | None:
         if caller is None or caller.role != "project" or not cutover(self.home):
             return None
         unit = unit_id(Path(brief_file).name)
@@ -369,13 +368,34 @@ class Kit:
         fields = card.header.fields if card and card.header else {}
         if card is None or fields.get("Kind") != "unit" or fields.get("Project") != target.project:
             raise Refused(f"no unit card for {unit} in {target.project}, so nothing was launched; create it first: faker-kit loop unit {unit} --part <id>")
-        if fields.get("State") in CLOSED or card.archived:
+        if fields.get("State") in CLOSED or card.archived or card.status == "done":
             raise Refused(f"the unit card {card.id} for {unit} is closed, so nothing was launched; a new unit needs a new id: faker-kit loop unit <new-id> --part <id>")
+        if card.status == "running":
+            raise Refused(f"the unit card {card.id} for {unit} is already running (Kanban run {fields.get('Run') or 'unknown'}), so no second session was launched; "
+                          "read the session with faker-kit session summary " + unit)
+        if card.status != "ready":
+            raise Refused(f"the unit card {card.id} for {unit} is {card.status}, not ready, so nothing was launched; faker-kit loop check names the fix")
+        return kanban, card
+
+    def launch_claim(self, target: Bot, kanban: Kanban, card: Card, session: str) -> dict:
         try:
             with Loop(self.home, target.name).locked():
-                return kanban, card, hold(kanban, card, f"unit {unit} launch {digest}")
+                claimed = hold(kanban, card, session)
+                fresh = kanban.find_card(card.key or "")
+                if fresh is not None and fresh.header is not None:
+                    kanban.edit_body_if_changed(fresh.id, refresh_text(fresh.header.with_fields({"Run": f"{claimed['run_id']} session {session}"}), fresh.title, str(target.repo)), fresh.header)
+                    with contextlib.suppress(KanbanError):
+                        self.refresh_parent_work(kanban, fresh, str(target.repo))
+                return claimed
         except KanbanError as err:
-            raise Refused(f"card {card.id} for unit {unit} could not be claimed ({scrub(str(err))[:160]}), so nothing was launched; read it with faker-kit loop check") from None
+            return {"card": card.id, "claim": "refused", "detail": scrub(str(err))[:160], "fix": "faker-kit loop check, then faker-kit loop reconcile"}
+
+    @staticmethod
+    def refresh_parent_work(kanban: Kanban, unit: Card, repo: str) -> None:
+        part = unit.header.fields.get("Part") if unit.header else None
+        parent = kanban.find_card(f"faker-kit:chief:{part}") if part and part.isdigit() else None
+        if parent is not None:
+            refresh_work(kanban, parent, {c.id: c for c in kanban.cards(False)}, repo, True)
 
     def source_import(self, caller: Bot | None, step: str, project: str, source: str, repo_id: int, receipt: str) -> dict:
         bot = self.project_bot(self.policy(), project)
@@ -846,7 +866,7 @@ class Kit:
             if not cutover(self.home):
                 raise Refused("the Kanban cutover is not done: there are no cards to align, so nothing was changed")
             kanban = self.kanban(caller)
-            return align_parts(kanban, self.home, caller.name, apply, lambda card, st: CardLoop(kanban, self.home, caller.name).follow(card, st))
+            return align_parts(kanban, self.home, caller.name, self.role_repos(caller), apply)
         if dry_run or apply:
             raise Refused("--dry-run and --apply belong to loop migrate, backfill, close and align")
         if action == "reconcile":
@@ -874,7 +894,7 @@ class Kit:
         if part_id is not None or state or prs or waits_on or reported or evidence:
             raise Refused(f"loop {action} takes no part id or changes; use loop set <id>")
         if action == "digest":
-            return {**cards.digest(self.now()), **reconciled, "check": self.loop_check(caller)["problems"]}
+            return {**cards.digest(self.now()), **reconciled, "check": self.loop_check(caller)["lines"]}
         return cards.show(everything)
 
     def head_reader(self, caller: Bot) -> Callable[[str, list[int]], str | None]:
@@ -901,7 +921,7 @@ class Kit:
 
     def loop_check(self, caller: Bot) -> dict:
         if not cutover(self.home):
-            return {"problems": [], "ok": True, "cutover": False}
+            return {"findings": [], "lines": [], "ok": True, "needs_action": False, "cutover": False}
         return check_cards(self.kanban(caller), caller.role, caller.project, self.open_units(caller), self.now())
 
     def reconcile_sources(self, caller: Bot) -> tuple[dict[str, str], list[dict], list[list[str]] | None]:
@@ -939,7 +959,12 @@ class Kit:
         out = render(reconcile(items, read, settler), "apply" if writes else "report")
         if writes and caller.role == "project":
             with Loop(self.home, caller.name).locked():
-                out["claims"] = hold_live_units(kanban, str(caller.project), caller.name, self.open_units(caller), self.now())
+                out["claims"] = hold_live_units(kanban, str(caller.project), caller.name, self.open_units(caller))
+                for held in out["claims"]:
+                    unit = kanban.find_card(unit_key(str(caller.project), str(held["unit"])))
+                    if unit is not None:
+                        with contextlib.suppress(KanbanError):
+                            self.refresh_parent_work(kanban, unit, str(caller.repo))
         return out
 
     @staticmethod
@@ -1885,6 +1910,9 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
     if isinstance(out, dict) and out.get("status") == "ambiguous":
         print("faker-kit: refused: more than one pull request matches; nothing was merged, ask the owner which one and run --pr <number>", file=sys.stderr)
         return EXIT_AMBIGUOUS
+    if isinstance(out, dict) and out.get("needs_action") is True and isinstance(out.get("lines"), list):
+        print("\n".join(f"faker-kit: needs action: {line}" for line in out["lines"]), file=sys.stderr)
+        return EXIT_ACTION
     if isinstance(out, dict) and out.get("complete") is False:
         print("faker-kit: refused: not every open pull request merged; the lines above say which and why", file=sys.stderr)
         return EXIT_REFUSED
