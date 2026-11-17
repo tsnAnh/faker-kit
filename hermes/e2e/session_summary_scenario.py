@@ -123,6 +123,13 @@ def session_scenario(run: Run) -> None:
     run.step("session summary: a unit with no pull request prints readable false, reason no pull request, and no readable summary",
              bare["readable"] is False and bare["reason"] == "no pull request" and bare["result"] == "no readable summary" and bare["pr"] is None and bare["summary"] is None, json.dumps(bare))
 
+    def lonely_row() -> dict:
+        return next(row for row in json_of(project("loop", "show"))["units"] if row["unit"] == "lonely-unit")
+
+    before = lonely_row()
+    run.step("loop show: a unit card lists when it was added, its sessions, and whether it was steered, for the gate's stuck-unit rule",
+             isinstance(before["added"], float) and before["sessions"] == [] and before["steered"] is False and before["prs"] == [] and before["closed"] is False
+             and before["state"] == "in-progress", json.dumps(before))
     steered_before, mutated = claude_calls(run), board.mutations()
     with_pr = project("session", "steer", "csv-export", "--session", SESSION)
     bad_id = project("session", "steer", "lonely-unit", "--session", "not a session")
@@ -136,6 +143,7 @@ def session_scenario(run: Run) -> None:
     run.step("session steer: a unit with no pull request after its timebox sends one claude -p --cloud message that asks for the closing summary or a draft pull request, and the card records it",
              steer["steered"] is True and claude_calls(run) == steered_before + 1 and sent.get("steer") is True and sent["argv"][:3] == ["-p", "--cloud", SESSION]
              and "Closing summary:" in sent["argv"][3] and "draft pull request" in sent["argv"][3] and f"Session steer: asked session {SESSION} at " in card("lonely-unit"), json.dumps(sent)[:240])
+    run.step("loop show: after the steer the same unit row reads steered true", lonely_row()["steered"] is True, json.dumps(lonely_row()))
     twice = json_of(project("session", "steer", "lonely-unit", "--session", SESSION))
     run.step("session steer: a second call sends nothing and says it already asked once", twice["steered"] is False and "already asked once" in twice["reason"]
     and claude_calls(run) == steered_before + 1, json.dumps(twice))
