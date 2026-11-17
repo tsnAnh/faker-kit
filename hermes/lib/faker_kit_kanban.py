@@ -26,7 +26,62 @@ CARD_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 MAX_VALUE = 700
 CLAIM_TTL = 8 * 3600
 CLAIM_TTL_ENV = "HERMES_KANBAN_CLAIM_TTL_SECONDS"
+MAX_RECEIPT_CHECKS = 10
+MAX_CHECK_FIELD = 100
+MAX_CHECK_URL = 300
+CHECK_URL = re.compile(r"\Ahttps://github\.com/[A-Za-z0-9._~/%?=&#-]+\Z")
+PULL_URL = re.compile(r"\Ahttps://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/([0-9]{1,9})\Z")
+HEAD_SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 FOOTER = "---- faker-kit machine fields (read by the kit, do not edit) ----"
+
+@dataclass(frozen=True)
+class FailedCheck:
+    name: str
+    workflow: str
+    classification: str
+    url: str
+
+
+@dataclass(frozen=True)
+class Receipt:
+    classification: str
+    detail: str
+    head: str
+    pr: int | None
+    checks: tuple[FailedCheck, ...]
+
+
+def check_text(value: object, required: bool) -> str | None:
+    if value is None and not required:
+        return ""
+    if not isinstance(value, str) or not value or len(value) > MAX_CHECK_FIELD or not value.isprintable():
+        return None
+    return scrub(value)
+
+
+def failed_check(raw: object) -> FailedCheck | None:
+    if not isinstance(raw, dict) or raw.get("classification") == "success":
+        return None
+    name = check_text(raw.get("name"), True)
+    classification = check_text(raw.get("classification"), True)
+    workflow = check_text(raw.get("workflow"), False)
+    url = raw.get("url")
+    if name is None or classification is None or workflow is None:
+        return None
+    if url is not None and not (isinstance(url, str) and len(url) <= MAX_CHECK_URL and CHECK_URL.match(url)):
+        return None
+    return FailedCheck(name, workflow, classification, url or "")
+
+
+def receipt_of(payload: dict[str, object], classification: str) -> Receipt:
+    checks = payload.get("checks")
+    failing = [c for c in map(failed_check, checks[:MAX_RECEIPT_CHECKS] if isinstance(checks, list) else []) if c is not None]
+    head = payload.get("head_sha")
+    pr_url = payload.get("pr_url")
+    pull = PULL_URL.match(pr_url) if isinstance(pr_url, str) else None
+    return Receipt(classification, str(payload.get("detail") or ""), head[:12] if isinstance(head, str) and HEAD_SHA.match(head) else "",
+                   int(pull.group(1)) if pull else None, tuple(failing))
+
 
 KanbanRunner = Callable[[list[str], str | None], str]
 
@@ -368,19 +423,23 @@ class Kanban:
         open_ids = [r["id"] for r in runs if isinstance(r, dict) and isinstance(r.get("id"), int) and r.get("ended_at") is None]
         return max(open_ids) if open_ids else None
 
-    def acceptance(self, card: str, run_id: int) -> tuple[str, str] | None:
+    def receipt(self, card: str, run_id: int) -> Receipt | None:
         events = self.shown(card).get("events")
         if not isinstance(events, list):
             raise KanbanError("could not read Kanban (the events are not a list); nothing was changed")
-        found: tuple[str, str] | None = None
+        found: Receipt | None = None
         for event in events:
             payload = event.get("payload") if isinstance(event, dict) else None
             if not isinstance(event, dict) or event.get("kind") != "pr_acceptance" or event.get("run_id") != run_id or not isinstance(payload, dict):
                 continue
             classification = payload.get("classification")
             if classification in ACCEPTANCE_CLASSIFICATIONS or classification == "success":
-                found = (str(classification), str(payload.get("detail") or ""))
+                found = receipt_of(payload, str(classification))
         return found
+
+    def acceptance(self, card: str, run_id: int) -> tuple[str, str] | None:
+        found = self.receipt(card, run_id)
+        return (found.classification, found.detail) if found else None
 
     def given_up_on_stale_claim(self, card: Card) -> bool:
         if card.status != "blocked":
