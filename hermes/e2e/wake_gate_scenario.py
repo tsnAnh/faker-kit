@@ -284,7 +284,8 @@ class Gates:
              and first.stdout.splitlines()[6].startswith("Closing summaries to read: unit csv (#1, head aaaaaaa, ready)") and len(first.stdout.splitlines()) == 7
              and self.calls() == ["issues", "status", "news", "loop show"], self.say(first))
         step("it stores the status fingerprint and the wake time as an owner-only file, with no temp file left beside it",
-             set(stored) == {"fingerprint", "woke_at", "retries", "pulls", "asked", "units", "stuck"} and stored["asked"] == [f"csv|{'a' * 40}|ready"] and stored["retries"] == 0 and stored["stuck"] == []
+             set(stored) == {"fingerprint", "woke_at", "retries", "pulls", "asked", "units", "stuck"} and stored["asked"] == [f"csv|{'a' * 40}|ready"]
+             and stored["retries"] == 0 and stored["stuck"] == []
              and set(stored["pulls"]) == {"#1", "#2"} and stored["fingerprint"] == fingerprint_of(STATUS)
              and bool(FINGERPRINT.match(stored["fingerprint"]))
              and abs(stored["woke_at"] - time.time()) < MARGIN and stat.S_IMODE(self.states[BABYSIT].stat().st_mode) == 0o600
