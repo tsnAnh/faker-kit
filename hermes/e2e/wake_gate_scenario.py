@@ -26,6 +26,7 @@ CHANGED = "the status changed"
 NOTICE_REASON = "a faker-kit notice printed"
 HEARTBEAT_REASON = "six hours passed since this gate last woke the agent while a pull request is open"
 LAST_GONE = "the last open pull request merged or closed"
+STUCK_REASON = "a unit has no pull request past its timebox"
 RUN_FAILED = "the job's previous run after the last wake did not finish ok"
 SHAPE = "faker-kit loop --all printed an unexpected report shape"
 NO_PRS_PART = {"id": 1, "project": "shop", "state": "waiting", "waits_on": None}
@@ -281,9 +282,10 @@ class Gates:
         step("the babysit gate's first tick with a pull request open wakes the agent with the issues JSON and the status lines as its Script Output, after one faker-kit issues and one status",
              self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:6] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
              and first.stdout.splitlines()[6].startswith("Closing summaries to read: unit csv (#1, head aaaaaaa, ready)") and len(first.stdout.splitlines()) == 7
-             and self.calls() == ["issues", "status", "news"], self.say(first))
+             and self.calls() == ["issues", "status", "news", "loop show"], self.say(first))
         step("it stores the status fingerprint and the wake time as an owner-only file, with no temp file left beside it",
-             set(stored) == {"fingerprint", "woke_at", "retries", "pulls", "asked", "units"} and stored["asked"] == [f"csv|{'a' * 40}|ready"] and stored["retries"] == 0
+             set(stored) == {"fingerprint", "woke_at", "retries", "pulls", "asked", "units", "stuck"} and stored["asked"] == [f"csv|{'a' * 40}|ready"]
+             and stored["retries"] == 0 and stored["stuck"] == []
              and set(stored["pulls"]) == {"#1", "#2"} and stored["fingerprint"] == fingerprint_of(STATUS)
              and bool(FINGERPRINT.match(stored["fingerprint"]))
              and abs(stored["woke_at"] - time.time()) < MARGIN and stat.S_IMODE(self.states[BABYSIT].stat().st_mode) == 0o600
@@ -426,7 +428,7 @@ class Gates:
         lists = self.hermes_lists()
         opening = self.tick(BABYSIT)
         step("with no pull request open, no issue, and no notice the first tick is quiet, with no first-run wake, and records the empty status so the next pull request counts as a change",
-             self.silent(opening) and self.state(BABYSIT)["fingerprint"] == fingerprint_of([NO_PULLS]) and self.calls()[-3:] == ["issues", "status", "news"]
+             self.silent(opening) and self.state(BABYSIT)["fingerprint"] == fingerprint_of([NO_PULLS]) and self.calls()[-3:] == ["status", "news", "loop show"]
              and self.hermes_lists() == lists, self.say(opening))
         self.set_woke_at(BABYSIT, time.time() - 7 * 60 * 60)
         kept = self.snapshot(BABYSIT)
@@ -476,6 +478,58 @@ class Gates:
         self.serve([NO_PULLS])
         settled = self.tick(BABYSIT)
         step("the tick after the notice is gone is quiet again", self.silent(settled), self.say(settled))
+
+    def stuck_units(self) -> None:
+        step = self.run.step
+        session = "https://claude.ai/code/session_01E2Eabc"
+        line = "Unit without a pull request past its timebox: csv-export"
+
+        def unit(name: str = "csv-export", **fields: object) -> dict:
+            return {"unit": name, "card": "9", "state": "in-progress", "prs": [], "part": None, "outcome": "merged", "closed": False,
+                    "added": time.time() - 4 * 60 * 60, "sessions": [session], "steered": False, **fields}
+
+        def tick_with(rows: list[dict], status: list[str]) -> subprocess.CompletedProcess[str]:
+            self.serve(status)
+            self.program("loop", json.dumps({"units": rows}))
+            return self.tick(BABYSIT)
+
+        self.reset()
+        self.set_last_run(None)
+        opening = tick_with([], [NO_PULLS])
+        step("a tick with no pull request open and no unit past its timebox stays quiet and stores an empty stuck list", self.silent(opening) and self.state(BABYSIT)["stuck"] == [], self.say(opening))
+        woke = tick_with([unit()], [NO_PULLS])
+        step("a unit card with a session, no pull request, added four hours ago wakes the agent once with one line naming the unit, and the gate records the unit and session",
+             self.woke(woke, STUCK_REASON) and woke.stdout.splitlines()[-1] == line and woke.stdout.count("Unit without a pull request") == 1
+             and self.state(BABYSIT)["stuck"] == [f"csv-export|{session}"] and self.calls()[-1] == "loop show", self.say(woke))
+        kept = self.snapshot(BABYSIT)
+        again = tick_with([unit()], [NO_PULLS])
+        step("the same tick again prints nothing and writes nothing", self.silent(again) and self.snapshot(BABYSIT) == kept, self.say(again))
+        for name, rows in (("a unit already steered", [unit(steered=True)]), ("a unit under three hours", [unit(added=time.time() - 2 * 60 * 60)]),
+                           ("a unit with a pull request", [unit(prs=[7])]), ("a closed unit", [unit(closed=True)]), ("a folded unit", [unit(state="folded", closed=True)]),
+                           ("a unit with no session", [unit(sessions=[])]), ("a unit with no recorded start", [unit(added=None)])):
+            self.reset()
+            quiet = tick_with(rows, [NO_PULLS])
+            step(f"{name} wakes nothing and prints no line", self.silent(quiet) and "stuck" in self.state(BABYSIT) and self.state(BABYSIT)["stuck"] == [], self.say(quiet))
+        for name, out, code in (("an unreadable board", "", 1), ("a board report that is not JSON", "not json", 0), ("a report with no unit list", json.dumps({"parts": []}), 0)):
+            self.reset()
+            self.serve([NO_PULLS])
+            self.program("loop", out, code)
+            broken = self.tick(BABYSIT)
+            step(f"{name} changes nothing and does not wake", self.silent(broken) and self.state(BABYSIT)["stuck"] == [], self.say(broken))
+        self.reset()
+        first = tick_with([unit()], STATUS)
+        step("with pull requests open the first tick keeps its ordinary reason and the line follows the usual lines once",
+             self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[-1] == line and first.stdout.count("Unit without a pull request") == 1, self.say(first))
+        self.set_woke_at(BABYSIT, time.time() - 7 * 60 * 60)
+        beat = tick_with([unit()], STATUS)
+        step("the heartbeat wake six hours later does not repeat the line", self.woke(beat, HEARTBEAT_REASON) and "Unit without a pull request" not in beat.stdout
+             and self.state(BABYSIT)["stuck"] == [f"csv-export|{session}"], self.say(beat))
+        later = tick_with([unit(), unit("login-fix", sessions=["https://claude.ai/code/session_01E2Edef"])], STATUS)
+        step("a second unit past its timebox on a quiet tick with pull requests open wakes with only its own line",
+             self.woke(later, STUCK_REASON) and later.stdout.splitlines()[-1] == "Unit without a pull request past its timebox: login-fix"
+             and later.stdout.count("Unit without a pull request") == 1, self.say(later))
+        retired = tick_with([], STATUS)
+        step("units that leave the board wake nothing and the recorded pairs stay, so a repeat never prints", self.silent(retired) and len(self.state(BABYSIT)["stuck"]) == 2, self.say(retired))
 
     def failed_runs(self, lines: list[str]) -> None:
         step = self.run.step
@@ -862,6 +916,7 @@ def wake_scenario(run: Run, hermes: Path, bot: str, chief: str, env: dict[str, s
     gates.real_loop(chief, env)
     with gates.fake_wrapper():
         gates.babysit()
+        gates.stuck_units()
         gates.summaries()
         gates.chief_news()
         gates.loop()

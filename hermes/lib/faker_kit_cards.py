@@ -29,6 +29,7 @@ from faker_kit_loop import (
     part_row,
     show_view,
 )
+from faker_kit_session_card import steered
 from faker_kit_text import refresh
 from faker_kit_units import brief_source, read_units, unit_index
 
@@ -280,13 +281,22 @@ def create_unit(kanban: Kanban, bot: str, project: str, repo: str, unit_id: str,
     return {"unit": unit_id, "card": card.id, "key": key, "part": part, "outcome": outcome, "created": existing is None, "linked": linked}
 
 
+def added_at(fields: dict[str, str]) -> float | None:
+    try:
+        return float(fields["Added"])
+    except (KeyError, ValueError):
+        return None
+
+
 def unit_rows(kanban: Kanban, project: str) -> dict:
     rows = []
     for card in kanban.cards(True):
         fields = card.header.fields if card.header else {}
         if fields.get("Kind") == "unit" and fields.get("Project") == project:
             rows.append({"unit": card.title, "card": card.id, "state": fields.get("State"), "prs": [int(p) for p in fields.get("PRs", "").split(",") if p.isdigit()],
-                         "part": int(fields["Part"]) if fields.get("Part", "").isdigit() else None, "outcome": fields.get("Outcome"), "closed": card.archived or fields.get("State") in CLOSED})
+                         "part": int(fields["Part"]) if fields.get("Part", "").isdigit() else None, "outcome": fields.get("Outcome"), "closed": card.archived or fields.get("State") in CLOSED,
+                         "added": added_at(fields),
+                         "sessions": card.header.lines("Session") if card.header else [], "steered": card.header is not None and steered(card.header)})
     return {"units": sorted(rows, key=lambda r: r["unit"])}
 
 
