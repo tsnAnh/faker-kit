@@ -16,14 +16,16 @@ BOARD = "default"
 MARKER = "kanban-cutover.json"
 TIMEOUT_SECONDS = 60
 EXTERNAL = "external"
-MUTATING = frozenset({"create", "link", "edit", "claim", "reclaim", "evidence", "complete", "archive"})
+MUTATING = frozenset({"create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "complete", "archive"})
 ACCEPTANCE_CLASSIFICATIONS = ("pending", "failure", "missing", "stale", "provenance", "auth", "infra", "mismatch")
 EVIDENCE_KINDS = ("execution_ref", "pr_published", "pr_merged", "artifact_built", "app_installed", "other_result")
-SINGLE = ("Key", "Kind", "Project", "Bot", "Outcome", "State", "Waits-on", "PRs", "Reported", "Part", "Added", "Updated", "Decisions")
+SINGLE = ("Key", "Kind", "Project", "Bot", "Outcome", "State", "Waits-on", "PRs", "Reported", "Part", "Added", "Updated", "Decisions", "Run", "Work")
 REPEATED = ("Stage", "History", "PR", "Session")
 HEADER_LINE = re.compile(r"\A([A-Za-z][A-Za-z-]*): (.*)\Z")
 CARD_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 MAX_VALUE = 700
+CLAIM_TTL = 8 * 3600
+CLAIM_TTL_ENV = "HERMES_KANBAN_CLAIM_TTL_SECONDS"
 FOOTER = "---- faker-kit machine fields (read by the kit, do not edit) ----"
 
 KanbanRunner = Callable[[list[str], str | None], str]
@@ -205,7 +207,8 @@ def card_id(value: str) -> str:
 def hermes_runner(bot: str) -> KanbanRunner:
     def run(args: list[str], stdin: str | None) -> str:
         try:
-            done = subprocess.run(["hermes", "-p", bot, "kanban", "--board", BOARD, *args], capture_output=True, text=True, input=stdin, timeout=TIMEOUT_SECONDS)
+            env = {**os.environ, CLAIM_TTL_ENV: str(CLAIM_TTL)} if args[:1] == ["heartbeat"] else None
+            done = subprocess.run(["hermes", "-p", bot, "kanban", "--board", BOARD, *args], capture_output=True, text=True, input=stdin, timeout=TIMEOUT_SECONDS, env=env)
         except FileNotFoundError:
             raise KanbanError("the hermes executable was not found") from None
         except subprocess.TimeoutExpired:
@@ -293,9 +296,10 @@ class Kanban:
         self.edit_body(card, header)
         return True
 
-    def claim(self, card: str) -> int:
+    def claim(self, card: str, ttl: int | None = None, session: str | None = None) -> int:
         self.require_external()
-        shown = self.call(["claim", card_id(card), "--json"])
+        extra = [*(["--ttl", str(int(ttl))] if ttl else []), *(["--session", session] if session else [])]
+        shown = self.call(["claim", card_id(card), *extra, "--json"])
         try:
             run_id = json.loads(shown).get("run_id")
         except (ValueError, AttributeError):
@@ -303,6 +307,17 @@ class Kanban:
         if not isinstance(run_id, int):
             raise KanbanError("Kanban did not accept the change (the claim has no run id); the card was not changed")
         return run_id
+
+    def heartbeat(self, card: str, run_id: int, note: str) -> None:
+        self.require_external()
+        self.call(["heartbeat", card_id(card), "--run-id", str(run_id), "--note", note])
+
+    def live_run(self, card: str) -> dict[str, object] | None:
+        runs = self.shown(card).get("runs")
+        if not isinstance(runs, list):
+            raise KanbanError("could not read Kanban (the runs are not a list); nothing was changed")
+        live = [r for r in runs if isinstance(r, dict) and isinstance(r.get("id"), int) and r.get("ended_at") is None]
+        return max(live, key=lambda r: int(r["id"])) if live else None
 
     def release(self, card: str, reason: str) -> None:
         self.require_external()

@@ -4,12 +4,13 @@ import contextlib
 import json
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from faker_kit_gh import scrub
 from faker_kit_guard.t3code import SECRET_SHAPES
-from faker_kit_kanban import ACCEPTANCE_CLASSIFICATIONS, Card, EvidenceRow, Header, Kanban, KanbanError, NewCard
+from faker_kit_kanban import ACCEPTANCE_CLASSIFICATIONS, CLAIM_TTL, Card, EvidenceRow, Header, Kanban, KanbanError, NewCard
 from faker_kit_loop import (
     CLOSED,
     DEFAULT_OUTCOME,
@@ -44,6 +45,10 @@ PR_EVIDENCE = ("pr_published", "pr_merged")
 CLOSE_KINDS = ("abandoned", "folded", "superseded", "duplicate", "junk")
 MAX_REASON = 300
 LINE_BREAKS = frozenset("\u0085\u2028\u2029")
+SHA256 = re.compile(r"\b[0-9a-f]{64}\b")
+VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.]+)?)(?![\w.])")
+DEVICE = re.compile(r"\b(emulator-\d+)\b|\bdevice[ =:]+([A-Za-z0-9_.:-]+)")
+ONE_LINE_KEYS = frozenset({"text", "head_sha", "sha256", "version", "device"})
 REFUSAL_CLASS = re.compile(r"PR acceptance (" + "|".join(ACCEPTANCE_CLASSIFICATIONS) + r")\b")
 
 
@@ -68,27 +73,92 @@ def completion_contract(repo: str) -> str:
     return f"fleet-ci:{repo}"
 
 
-def stage_payload(stage: str, ref: str) -> dict[str, object]:
-    hint = f"with a Kanban card the {stage} evidence is a JSON object for {STAGE_KIND[stage]}"
+def one_line_form(stage: str) -> str:
+    return f'--evidence {stage}="<what was {stage}, in one line of plain text>"'
+
+
+def one_line_payload(text: str, head: str | None) -> dict[str, object]:
+    facts: dict[str, object] = {"text": text}
+    if head:
+        facts["head_sha"] = head
+    if found := SHA256.search(text):
+        facts["sha256"] = found.group(0)
+    if found := VERSION.search(text):
+        facts["version"] = found.group(1)
+    if found := DEVICE.search(text):
+        facts["device"] = found.group(1) or found.group(2)
+    return facts
+
+
+def stage_payload(stage: str, ref: str, head: str | None = None) -> dict[str, object]:
+    hint = f"write it as {one_line_form(stage)}; the command builds the {STAGE_KIND[stage]} record itself"
+    if not ref.lstrip().startswith("{"):
+        facts = one_line_payload(ref, head)
+        return {"name": VERIFIED_NAME, "receipt": facts} if stage == "verified" else facts
     try:
         loaded = json.loads(ref)
     except ValueError:
-        raise LoopError(hint) from None
+        raise LoopError(f"the {stage} evidence is not valid JSON; {hint}") from None
     if not isinstance(loaded, dict):
         raise LoopError(hint)
     if stage == "verified":
         receipt = loaded.get("receipt")
         if set(loaded) - {"name", "receipt"} or loaded.get("name", VERIFIED_NAME) != VERIFIED_NAME or not isinstance(receipt, dict) or not receipt:
-            raise LoopError(f'the verified evidence is {{"receipt": {{...}}}}; {hint}')
+            raise LoopError(f"the verified evidence JSON is {{\"receipt\": {{...}}}}; or {hint}")
         return {"name": VERIFIED_NAME, "receipt": receipt}
+    if "text" in loaded and set(loaded) <= ONE_LINE_KEYS and all(isinstance(v, str) and v.strip() for v in loaded.values()):
+        return dict(loaded)
     fields = STAGE_FIELDS[stage]
     if sorted(loaded) != list(fields) or not all(isinstance(loaded[f], str) and loaded[f].strip() for f in fields):
-        raise LoopError(f"the {stage} evidence needs exactly these text fields: {', '.join(fields)}; {hint}")
+        raise LoopError(f"the {stage} evidence JSON needs exactly these text fields: {', '.join(fields)}; or {hint}")
     return {f: loaded[f] for f in fields}
 
 
-def parse_card_evidence(items: list[str]) -> dict[str, dict[str, object]]:
-    return {stage: stage_payload(stage, ref) for stage, ref in parse_evidence(items, MAX_CARD_REF).items()}
+def parse_card_evidence(items: list[str], head: str | None = None) -> dict[str, dict[str, object]]:
+    return {stage: stage_payload(stage, ref, head) for stage, ref in parse_evidence(items, MAX_CARD_REF).items()}
+
+
+def hold(kanban: Kanban, card: Card, session: str) -> dict:
+    run = kanban.live_run(card.id)
+    if run is not None:
+        kanban.heartbeat(card.id, int(str(run["id"])), f"faker-kit: {session} still open")
+        return {"card": card.id, "claim": "heartbeat", "run_id": run["id"]}
+    run_id = kanban.claim(card.id, CLAIM_TTL, session)
+    return {"card": card.id, "claim": "claimed", "run_id": run_id}
+
+
+def work_line(kanban: Kanban, part: Card, cards: dict[str, Card]) -> str:
+    units = [cards[p] for p in kanban.parents(part.id) if p in cards]
+    running = [u for u in units if u.status == "running"]
+    if running:
+        shown = []
+        for unit in running:
+            prs = unit.header.fields.get("PRs", "") if unit.header else ""
+            shown.append(f"unit {unit.title} running (card {unit.id}" + (f", PR #{prs.split(',')[-1]}" if prs else "") + ")")
+        return "in progress: " + "; ".join(shown)
+    if units and all(u.status == "done" for u in units):
+        return "every unit done"
+    if units:
+        return "no unit running: " + ", ".join(f"unit {u.title} {u.status} (card {u.id})" for u in units)
+    return "no unit card yet"
+
+
+def refresh_work(kanban: Kanban, part: Card, cards: dict[str, Card], repo: str | None, apply: bool) -> dict | None:
+    if part.header is None:
+        return None
+    line = work_line(kanban, part, cards)
+    if part.header.fields.get("Work") == line:
+        return None
+    if apply:
+        kanban.edit_body_if_changed(part.id, refresh(part.header.with_fields({"Work": line}), part.title, repo), part.header)
+    return {"part": part.key, "card": part.id, "work": line}
+
+
+def let_go(kanban: Kanban, card: Card, reason: str) -> dict:
+    if kanban.live_run(card.id) is None:
+        return {}
+    kanban.release(card.id, reason)
+    return {"card": card.id, "claim": "released"}
 
 
 def stage_ref(payload: dict[str, object]) -> str:
@@ -191,34 +261,41 @@ class CardLoop:
                 next_id += 1
         raise LoopError("could not reserve a part id; run the handoff again")
 
-    def update(self, part_id: int, state: str | None, prs: list[int], waits_on: str | None, reported: bool, now: float, evidence: list[str] | None = None) -> dict:
+    def update(self, part_id: int, state: str | None, prs: list[int], waits_on: str | None, reported: bool, now: float, evidence: list[str] | None = None,
+               head: Callable[[str, list[int]], str | None] | None = None) -> dict:
         check_update(state, prs, waits_on)
-        payloads = parse_card_evidence(evidence or [])
+        parse_card_evidence(evidence or [])
         with self.locked():
             self.kanban.require_external()
             card = self.kanban.find_card(part_key(part_id), archived=True)
             if card is None or card.header is None:
                 raise LoopError(f"no part {part_id}; faker-kit loop lists them")
             entry = part_entry(card)
+            payloads = parse_card_evidence(evidence or [], head(entry["project"], sorted({*entry["prs"], *prs})) if head and evidence else None)
             changed = apply_update(entry, part_id, state, prs, waits_on, reported, now, {s: stage_ref(p) for s, p in payloads.items()})
             if payloads:
                 self.record(card, payloads)
-            fresh = refresh(entry_header(changed, card.header), card.title, self.repos.get(entry["project"]))
+            work = work_line(self.kanban, card, {c.id: c for c in self.kanban.cards(False)})
+            fresh = refresh(entry_header(changed, card.header).with_fields({"Work": work}), card.title, self.repos.get(entry["project"]))
             self.kanban.edit_body_if_changed(card.id, fresh, card.header)
             if changed["state"] != entry["state"] and changed["state"] in ("abandoned", "taken-back"):
+                let_go(self.kanban, card, f"faker-kit: part {part_id} is {changed['state']}")
                 self.kanban.archive(card.id)
+                return part_row(changed)
         return part_row(changed)
 
     def record(self, card: Card, payloads: dict[str, dict[str, object]]) -> None:
         try:
             run_id = self.kanban.open_run(card.id)
+            borrowed = run_id is None
             if run_id is None:
                 run_id = self.kanban.claim(card.id)
             try:
                 for stage, payload in payloads.items():
                     self.kanban.evidence_add(card.id, run_id, STAGE_KIND[stage], payload)
             finally:
-                self.kanban.release(card.id, "faker-kit: stage evidence recorded, claim released; completion adds it again on its own run")
+                if borrowed:
+                    self.kanban.release(card.id, "faker-kit: stage evidence recorded, claim released; completion adds it again on its own run")
         except KanbanError as err:
             raise LoopError(f"Kanban did not accept the evidence ({err}); the part was not changed") from None
 
@@ -423,5 +500,6 @@ def close_card(kanban: Kanban, home: Path, role: str, bot: str, project: str | N
             return {**out, "closed": False, "dry_run": True, "would_record": {"state": "abandoned", "text": fresh.text.split("\n", 1)[0], "closed": f"Closed ({kind}): {why}"}}
         fresh.render()
         kanban.edit_body_if_changed(card.id, fresh, header)
+        let_go(kanban, card, f"faker-kit: closed {kind}")
         kanban.archive(card.id)
         return {**out, "closed": True, "archived": True}

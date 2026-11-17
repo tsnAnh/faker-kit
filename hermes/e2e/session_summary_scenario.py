@@ -157,13 +157,18 @@ def session_scenario(run: Run) -> None:
     mutated, started = board.mutations(), claude_calls(run)
     launched = project("launch", "--brief-file", str(run.brief("lonely-unit.md", brief_text)))
     seen = json.loads(launched[1]).get("session", "") if launched[0] == 0 else ""
-    run.step("launch: a brief named for an existing unit card adds the started session as one Session line on that card, with one edit call",
-             launched[0] == 0 and seen.startswith("https://claude.ai/code/session_") and sessions("lonely-unit") == [seen] and board.mutations() == mutated + 1 and claude_calls(run) == started + 1,
+    lonely = board.by_key()[f"faker-kit:{PROJECT}:lonely-unit"]
+    run.step("launch: a brief named for an existing unit card adds the started session as one Session line, claims the card, and records the run on it",
+             launched[0] == 0 and seen.startswith("https://claude.ai/code/session_") and sessions("lonely-unit") == [seen] and lonely["status"] == "running"
+             and f"session {seen}" in card("lonely-unit") and claude_calls(run) == started + 1,
              launched[2].strip() or json.dumps(sessions("lonely-unit")))
+    mutated = board.mutations()
     again = project("launch", "--brief-file", str(run.brief("lonely-unit.md", brief_text)))
-    run.step("launch: a second launch that reports the same session adds no second Session line and makes no edit",
-             again[0] == 0 and sessions("lonely-unit") == [seen] and board.mutations() == mutated + 1, again[2].strip() or json.dumps(sessions("lonely-unit")))
+    run.step("launch: a second launch of a unit whose card is running refuses, starts no session, and adds no Session line",
+             again[0] != 0 and "already running" in again[2] and sessions("lonely-unit") == [seen] and board.mutations() == mutated and claude_calls(run) == started + 1,
+             again[2].strip() or json.dumps(sessions("lonely-unit")))
     cards = len(board.by_key())
     nameless = project("launch", "--brief-file", str(run.brief("no-card-unit.md", brief_text)))
-    run.step("launch: a brief with no unit card starts the session, creates no card, makes no edit, and prints no card note",
-             nameless[0] == 0 and len(board.by_key()) == cards and board.mutations() == mutated + 1 and "card" not in json.loads(nameless[1]), nameless[2].strip() or nameless[1][:200])
+    run.step("launch: after the cutover a brief with no unit card refuses with the loop unit command, starts no session, and creates no card",
+             nameless[0] != 0 and "faker-kit loop unit no-card-unit --part <id>" in nameless[2] and len(board.by_key()) == cards and claude_calls(run) == started + 1,
+             nameless[2].strip() or nameless[1][:200])

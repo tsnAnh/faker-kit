@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, part_entry
+from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, let_go, part_entry
 from faker_kit_gh import Refused, scrub
 from faker_kit_kanban import Card, Kanban
 from faker_kit_loop import CLOSED, DEFAULT_OUTCOME, Loop
@@ -234,6 +234,7 @@ class CardSettler(Settler):
 
     def close(self, item: Tracked) -> None:
         if item.card is not None:
+            let_go(self.kanban, item.card, "faker-kit: the pull request closed unmerged, claim released")
             self.mark(item, item.card, "abandoned", None)
 
     def mark(self, item: Tracked, card: Card, state: str, pr: int | None) -> None:

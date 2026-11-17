@@ -50,7 +50,17 @@ def kanban_main():
     def parents_of(ident):
         return [p for p, c in st["links"] if c == ident]
 
-    allowed = {"boards", "list", "show", "create", "link", "edit", "claim", "reclaim", "evidence", "complete", "archive"}
+    allowed = {"boards", "list", "show", "create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "complete", "archive"}
+    clock = float(os.environ.get("E2E_CLOCK", "1"))
+    for run in st["runs"]:
+        expires = run.get("claim_expires")
+        if run["ended_at"] is None and isinstance(expires, (int, float)) and expires < clock:
+            stale = next((t for t in st["tasks"] if t["id"] == run["task_id"]), None)
+            run["ended_at"], run["status"] = clock, "reclaimed"
+            if stale is not None and stale["status"] == "running":
+                stale["status"] = "ready"
+            st.setdefault("events", []).append({"task_id": run["task_id"], "kind": "reclaimed", "run_id": run["id"], "created_at": clock,
+                                                "payload": {"stale_lock": f"external:{run['profile']}:{run['id']}"}})
     if verb not in allowed or (verb == "boards" and rest[:1] != ["list"]):
         die(f"kanban: refused verb {verb}", 2)
     if verb == "boards":
@@ -118,12 +128,24 @@ def kanban_main():
             die("cannot claim: not ready for this profile")
         if any((task(p) or {}).get("status") != "done" for p in parents_of(found["id"])):
             die("cannot claim: prerequisites are not done")
+        claim_opts, _ = opts(rest[1:])
+        ttl = int(claim_opts.get("--ttl", 900))
         run_id = len(st["runs"]) + 1
-        st["runs"].append({"id": run_id, "task_id": found["id"], "profile": profile, "started_at": 1, "ended_at": None})
+        st["runs"].append({"id": run_id, "task_id": found["id"], "profile": profile, "started_at": clock, "ended_at": None, "ttl": ttl,
+                           "claim_expires": clock + ttl, "last_heartbeat_at": None, "session": claim_opts.get("--session")})
         found["status"] = "running"
         open_now = len([r for r in st["runs"] if r["task_id"] == found["id"] and r["ended_at"] is None])
         st.setdefault("peak", {})[found["id"]] = max(st.get("peak", {}).get(found["id"], 0), open_now)
-        print(json.dumps({"task_id": found["id"], "run_id": run_id, "profile": profile, "claim_expires": 2}))
+        print(json.dumps({"task_id": found["id"], "run_id": run_id, "profile": profile, "claim_expires": clock + ttl}))
+    elif verb == "heartbeat":
+        found, positional = opts(rest)
+        live = next((r for r in st["runs"] if r["id"] == int(found["--run-id"]) and r["task_id"] == positional[0] and r["ended_at"] is None), None)
+        if live is None:
+            die("cannot heartbeat: no live run")
+        if "--ttl" in found:
+            die("heartbeat: unknown option --ttl", 2)
+        live["last_heartbeat_at"], live["claim_expires"] = clock, clock + int(os.environ.get("HERMES_KANBAN_CLAIM_TTL_SECONDS", "900"))
+        st.setdefault("heartbeats", []).append({"task": positional[0], "run_id": live["id"], "at": clock, "note": found.get("--note")})
     elif verb == "reclaim":
         found = task(rest[0])
         live = next((r for r in st["runs"] if found and r["task_id"] == found["id"] and r["ended_at"] is None), None)
@@ -172,7 +194,7 @@ BOT = "meo-beo"
 PROJECT = "shop"
 REPO = "acme/shop"
 DECISIONS = "none: bug fix, expected behaviour obvious from the report"
-ALLOWED_VERBS = {"boards", "list", "show", "create", "link", "edit", "claim", "reclaim", "evidence", "archive"}
+ALLOWED_VERBS = {"boards", "list", "show", "create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "archive"}
 FORBIDDEN_TOKENS = {"dispatch", "daemon", "swarm", "specify", "decompose", "promote", "unblock", "--force", "set-dispatch-mode", "switch", "rm"}
 HEADER_KEYS = {"id", "project", "bot", "part", "decisions", "outcome", "stages", "reached", "state", "prs", "waits_on", "added", "updated", "reported"}
 
@@ -443,9 +465,9 @@ def kanban_scenario(run: Run, loop_store: type, loop_error: type[Exception]) -> 
              setting.get("state") == "in-progress" and setting["prs"] == [30, 31] and "State: in-progress" in lines(card_ten) and "PRs: 30,31" in lines(card_ten)
              and f"Updated: {run.clock}" in lines(card_ten), json.dumps(lines(card_ten)))
     refuse_merge = chief("loop", "set", "10", "--state", "merged")
-    bad_ref = chief("loop", "set", "10", "--evidence", "built=release.tgz")
-    run.step("kanban: a built part cannot be merged without built evidence, and card evidence must be a JSON object for Kanban's schema; the card stays as it was",
-             refuse_merge[0] == 1 and "built evidence" in refuse_merge[2] and bad_ref[0] == 1 and "JSON object" in bad_ref[2]
+    bad_ref = chief("loop", "set", "10", "--evidence", 'built={"name": "release.tgz"}')
+    run.step("kanban: a built part cannot be merged without built evidence, and malformed card evidence JSON is refused naming the one-line form; the card stays as it was",
+             refuse_merge[0] == 1 and "built evidence" in refuse_merge[2] and bad_ref[0] == 1 and '--evidence built="<what was built' in bad_ref[2]
              and "State: in-progress" in lines(board.by_key()["faker-kit:chief:10"])
              and board.state()["evidence"] == [], refuse_merge[2].strip() + bad_ref[2].strip())
     board.set(evidence_refuse=True)
