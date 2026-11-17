@@ -149,3 +149,21 @@ def session_scenario(run: Run) -> None:
     and claude_calls(run) == steered_before + 1, json.dumps(twice))
     run.step("session summary: no run above changed GitHub or ran claude, other than the one steer",
              len(writes(run)) == written and claude_calls(run) == steered_before + 1, "\n".join(writes(run))[:200])
+
+    def sessions(unit: str) -> list[str]:
+        return next(row for row in json_of(project("loop", "show"))["units"] if row["unit"] == unit)["sessions"]
+
+    brief_text = "/faker-mode\n\nGOAL: finish the unit.\nSCOPE: one file.\n"
+    mutated, started = board.mutations(), claude_calls(run)
+    launched = project("launch", "--brief-file", str(run.brief("lonely-unit.md", brief_text)))
+    seen = json.loads(launched[1]).get("session", "") if launched[0] == 0 else ""
+    run.step("launch: a brief named for an existing unit card adds the started session as one Session line on that card, with one edit call",
+             launched[0] == 0 and seen.startswith("https://claude.ai/code/session_") and sessions("lonely-unit") == [seen] and board.mutations() == mutated + 1 and claude_calls(run) == started + 1,
+             launched[2].strip() or json.dumps(sessions("lonely-unit")))
+    again = project("launch", "--brief-file", str(run.brief("lonely-unit.md", brief_text)))
+    run.step("launch: a second launch that reports the same session adds no second Session line and makes no edit",
+             again[0] == 0 and sessions("lonely-unit") == [seen] and board.mutations() == mutated + 1, again[2].strip() or json.dumps(sessions("lonely-unit")))
+    cards = len(board.by_key())
+    nameless = project("launch", "--brief-file", str(run.brief("no-card-unit.md", brief_text)))
+    run.step("launch: a brief with no unit card starts the session, creates no card, makes no edit, and prints no card note",
+             nameless[0] == 0 and len(board.by_key()) == cards and board.mutations() == mutated + 1 and "card" not in json.loads(nameless[1]), nameless[2].strip() or nameless[1][:200])
