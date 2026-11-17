@@ -779,6 +779,8 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     quiet = json_of(project("loop", "reconcile"))
     run.step("kanban reconcile: a second run after completion changes nothing", quiet["set_merged"] == 0 and quiet["set_closed"] == 0 and board.mutations() == mutations, json.dumps(quiet)[:200])
 
+    events_scenario(run, board, project, add_pr, card_key)
+
     for text, pr, merged in (("Add the wishlist", 48, True), ("Add reviews", 49, True), ("Add gift cards", 50, False)):
         made = json_of(chief("handoff", "--project", PROJECT, "--part", text, "--decisions", DECISIONS))
         assert chief("loop", "set", str(made["id"]), "--state", "in-progress", "--pr", str(pr))[0] == 0
@@ -812,3 +814,75 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     completes = [rest for _, rest in calls if "complete" in rest[:3]]
     run.step("kanban merge and reconcile: Kanban calls are only the allowed verbs and complete, each complete names its run, and no forced completion, dispatch, worker, or board change appears",
              flat <= ALLOWED_VERBS | {"complete"} and not tokens & FORBIDDEN_TOKENS and completes and all("--run-id" in c and "--metadata" in c for c in completes), ",".join(sorted(flat)))
+
+
+def events_scenario(run: Run, board: Board, project: Callable[..., tuple[int, str, str]], add_pr: Callable[..., None], card_key: Callable[[str], str]) -> None:
+    def url(n: int) -> str:
+        return f"https://github.com/{REPO}/pull/{n}"
+
+    merged_at = {"state": "closed", "merged_at": "2026-10-10T00:00:00Z"}
+    plan = {147: ("open-run", True), 148: ("no-run", True), 149: ("stale-run", True), 150: ("open-run", True), 151: ("no-run", True), 152: ("stale-run", True),
+            154: ("open-run", True), 153: ("open-run", False)}
+    for n, (shape, merged) in plan.items():
+        unit = f"event-{n}"
+        add_pr(n, unit)
+        assert project("loop", "unit", unit, "--pr", str(n))[0] == 0
+        key = card_key(unit)
+        if shape != "no-run":
+            board.leave_claim(key, url=url(n), head=head_of(n), commit=commit_of(n))
+        if shape == "stale-run":
+            board.stale_claim(key)
+            board.leave_claim(key, url=url(n), head=head_of(n), commit=commit_of(n))
+        extra = {**merged_at, "merge_commit_sha": commit_of(n)} if merged else {"state": "closed", "merged_at": None}
+        run.update_gh(lambda state, n=n, extra=extra: next(p for p in state["pulls"] if p["number"] == n).update(extra))
+    done = json_of(project("loop", "reconcile"))
+    cards = {n: board.by_key()[card_key(f"event-{n}")] for n in plan}
+    run.step("card events: Pal replay, one reconcile ends merged #147-#152 and #154 (open run, none, stale reclaimed first) done and unmerged #153 archived and abandoned, no claim left",
+             all(cards[n]["status"] == "done" for n, (_, merged) in plan.items() if merged) and cards[153]["status"] == "archived" and "State: abandoned" in lines(cards[153])
+             and all(board.open_claims(card_key(f"event-{n}")) == [] for n in plan) and "event-153" in done["entries"]["closed"], json.dumps(done["entries"])[:300])
+
+    for n, label in ((155, "ready"), (156, "draft")):
+        add_pr(n, f"event-{n}", **({"draft": True} if label == "draft" else {}))
+        assert project("loop", "unit", f"event-{n}", "--pr", str(n))[0] == 0
+        board.leave_claim(card_key(f"event-{n}"), url=url(n), head=head_of(n), commit=commit_of(n))
+
+    def published(n: int) -> list[str]:
+        card = board.by_key()[card_key(f"event-{n}")]
+        return [e["payload"]["head_sha"] for e in board.state()["evidence"] if e["task_id"] == card["id"] and e["kind"] == "pr_published"]
+
+    first = json_of(project("loop", "reconcile"))
+    run.step("card events: an open ready pull request records pr_published once on the live run, and a draft records nothing",
+             published(155) == [head_of(155)] and published(156) == [] and "event-155" in first["entries"]["published"], json.dumps(first["entries"]["published"]))
+    before = board.mutations()
+    project("loop", "reconcile")
+    run.step("card events: the same head again writes nothing", board.mutations() == before and published(155) == [head_of(155)], str(board.mutations()))
+    new_head = f"{2155:040x}"
+    run.update_gh(lambda state: next(p for p in state["pulls"] if p["number"] == 155)["head"].update(sha=new_head))
+    project("loop", "reconcile")
+    after = board.mutations()
+    project("loop", "reconcile")
+    run.step("card events: a new head adds its evidence to the current run once and a repeat writes nothing", published(155) == [head_of(155), new_head] and board.mutations() == after,
+             json.dumps(published(155)))
+
+    add_pr(157, "event-157")
+    assert project("loop", "unit", "event-157", "--pr", "157")[0] == 0
+    board.leave_claim(card_key("event-157"), url=url(157), head=head_of(157), commit=commit_of(157))
+    run.update_gh(lambda state: next(p for p in state["pulls"] if p["number"] == 157).update(**merged_at, merge_commit_sha=commit_of(157)))
+    board.set(complete_refuse="pending")
+    refused = json_of(project("loop", "reconcile"))
+    card = board.by_key()[card_key("event-157")]
+    row = next((r for r in refused["entries"]["refused"] if r["card"] == card["id"]), {})
+    run.step("card events: a Pal refusal leaves the card ready, claim released, names the head, never forced",
+             card["status"] == "ready" and board.open_claims(card_key("event-157")) == [] and row.get("head") == head_of(157) and row.get("classification") == "pending", json.dumps(row))
+    board.set(complete_refuse=None)
+    project("loop", "reconcile")
+    run.step("card events: the next reconcile retries and completes the card", board.by_key()[card_key("event-157")]["status"] == "done", "")
+
+    add_pr(158, "event-ghost")
+    before = board.state()["creates"]
+    project("loop", "reconcile")
+    checked = json_of(project("loop", "check"))
+    run.step("card events: a pull request with no unit card gets none from reconcile; loop check lists it with the fix",
+             board.state()["creates"] == before and card_key("event-ghost") not in board.by_key()
+             and any("event-ghost" in line and "faker-kit loop unit event-ghost --pr 158" in line for line in checked["lines"]),
+             json.dumps(checked["lines"])[:300])

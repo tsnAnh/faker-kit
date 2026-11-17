@@ -44,6 +44,7 @@ LABELED = {"number": 11, "labeler": "alice", "url": "https://github.com/acme/sho
 REAL_LABELED = {"number": 21, "labeler": "alice", "url": "https://github.com/acme/shop/issues/21", "event": 301}
 FINGERPRINT = re.compile(r"\A[0-9a-f]{64}\Z")
 SHORT_STDERR = 500
+RECONCILE_QUIET = {"mode": "apply", "read": 0, "entries": {"merged": [], "closed": [], "unchanged": [], "published": [], "unreadable": [], "refused": [], "stale_blocked": []}}
 
 
 class Run(Protocol):
@@ -156,6 +157,7 @@ class Gates:
         self.program("issues", issues if issues is not None else issues_json([]))
         self.program("news", json.dumps({"tracked": []}))
         self.program("loop-check", json.dumps({"findings": [], "lines": [], "ok": True, "needs_action": False}))
+        self.program("loop-reconcile", json.dumps(RECONCILE_QUIET))
 
     def calls(self) -> list[str]:
         log = self.fake / "calls.log"
@@ -283,7 +285,7 @@ class Gates:
         step("the babysit gate's first tick with a pull request open wakes the agent with the issues JSON and the status lines as its Script Output, after one faker-kit issues and one status",
              self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:6] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
              and first.stdout.splitlines()[6].startswith("Closing summaries to read: unit csv (#1, head aaaaaaa, ready)") and len(first.stdout.splitlines()) == 7
-             and self.calls() == ["issues", "status", "news", "loop check", "loop show"], self.say(first))
+             and self.calls() == ["issues", "loop reconcile", "status", "news", "loop check", "loop show"], self.say(first))
         step("it stores the status fingerprint and the wake time as an owner-only file, with no temp file left beside it",
              set(stored) == {"fingerprint", "woke_at", "retries", "pulls", "asked", "units", "stuck"} and stored["asked"] == [f"csv|{'a' * 40}|ready"]
              and stored["retries"] == 0 and stored["stuck"] == []
@@ -434,6 +436,34 @@ class Gates:
         step("card check gate: with nothing wrong loop check adds nothing and the tick stays quiet; a card that does not show the work wakes it with exactly one line naming the card and its fix",
              self.silent(quiet) and wakes(loud.stdout) and len(added) == 1 and line in added[0], self.say(loud))
         self.program("loop-check", json.dumps({"findings": [], "lines": [], "ok": True, "needs_action": False}))
+        self.reset()
+        self.card_events()
+
+    def card_events(self) -> None:
+        step = self.run.step
+        self.serve(STATUS)
+        self.tick(BABYSIT)
+        refused = {"card": "t_1abb3883", "id": "event-153", "head": "d" * 40, "completion": "refused", "classification": "pending", "detail": "CI acceptance pending on the exact head"}
+        unreadable = {"id": "event-154", "reason": "GitHub's answer for #154 is not a pull request of acme/shop"}
+        report = {**RECONCILE_QUIET, "entries": {**RECONCILE_QUIET["entries"], "refused": [refused], "unreadable": [unreadable]}}
+        self.program("loop-reconcile", json.dumps(report))
+        loud = self.tick(BABYSIT)
+        lines = [row for row in loud.stdout.splitlines() if row.startswith("faker-kit loop reconcile:")]
+        again = self.tick(BABYSIT)
+        step("card events: a card Kanban refused and a GitHub read that failed wake the agent with one line each",
+             self.woke(loud, "faker-kit loop reconcile: card t_1abb3883 was refused (pending: CI acceptance pending on the exact head); its claim is released and the next tick retries")
+             and len(lines) == 2 and "loop reconcile" in self.calls(), self.say(loud))
+        step("card events: the same refusal and unreadable read on the next tick print nothing and the gate stays quiet", self.silent(again), self.say(again))
+        self.program("loop-reconcile", json.dumps(RECONCILE_QUIET))
+        kept = self.snapshot(BABYSIT)
+        cleared = self.tick(BABYSIT)
+        step("card events: a tick with nothing to settle prints nothing, adds no model turn, and writes no gate state", self.silent(cleared) and self.snapshot(BABYSIT) == kept, self.say(cleared))
+        self.program("loop-reconcile", "", 1, "boom")
+        broken = self.tick(BABYSIT)
+        broken_again = self.tick(BABYSIT)
+        step("card events: a reconcile that cannot run prints one line once and leaves the rest of the gate working",
+             wakes(broken.stdout) and "could not settle the unit cards" in broken.stdout and self.silent(broken_again), self.say(broken))
+        self.program("loop-reconcile", json.dumps(RECONCILE_QUIET))
         self.reset()
 
     def quiet_without_pulls(self) -> None:

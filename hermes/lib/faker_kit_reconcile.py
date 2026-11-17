@@ -7,7 +7,7 @@ from pathlib import Path
 
 from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, let_go, part_entry
 from faker_kit_gh import Refused, scrub
-from faker_kit_kanban import Card, Kanban
+from faker_kit_kanban import Card, Kanban, KanbanError
 from faker_kit_loop import CLOSED, DEFAULT_OUTCOME, Loop
 from faker_kit_text import refresh
 
@@ -42,6 +42,7 @@ class Seen:
     head: str
     merge_commit: str
     merged_at: str
+    draft: bool = False
 
 
 @dataclass
@@ -50,6 +51,7 @@ class Findings:
     merged: list[str] = field(default_factory=list)
     closed: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
+    published: list[str] = field(default_factory=list)
     unreadable: list[dict[str, str]] = field(default_factory=list)
     awaiting: list[dict[str, str]] = field(default_factory=list)
     waiting: list[dict[str, object]] = field(default_factory=list)
@@ -64,6 +66,9 @@ class Settler:
     def close(self, item: Tracked) -> None:
         raise NotImplementedError
 
+    def publish(self, item: Tracked, live: Seen) -> bool:
+        raise NotImplementedError
+
 
 def seen_pull(raw: dict, repo: str, number: int) -> Seen:
     state, merged_at = raw.get("state"), raw.get("merged_at")
@@ -72,7 +77,7 @@ def seen_pull(raw: dict, repo: str, number: int) -> Seen:
     if state not in ("open", "closed") or "merged_at" not in raw or (merged_at is not None and not isinstance(merged_at, str)) or (merged_at and state != "closed"):
         raise Unreadable(f"GitHub's answer for #{number} has no usable state or merged_at")
     head = str((raw.get("head") or {}).get("sha") or "")
-    return Seen(number, state == "open", bool(merged_at), str(raw["html_url"]), head, str(raw.get("merge_commit_sha") or ""), str(merged_at or ""))
+    return Seen(number, state == "open", bool(merged_at), str(raw["html_url"]), head, str(raw.get("merge_commit_sha") or ""), str(merged_at or ""), raw.get("draft") is True)
 
 
 def read_seen(read: PullReader, repo: str, number: int) -> Seen:
@@ -108,6 +113,9 @@ def reconcile(items: list[Tracked], read: PullReader, settle: Settler | None) ->
             found.unreadable.append({"id": item.ident, "reason": reason})
         elif any(s.open for s in seen):
             found.unchanged.append(item.ident)
+            live = max((s for s in seen if s.open and not s.draft), key=lambda s: s.number, default=None)
+            if settle is not None and live is not None and item.kind == "unit":
+                publish(found, item, live, settle)
         elif any(s.merged for s in seen):
             land(found, item, max((s for s in seen if s.merged), key=lambda s: s.merged_at), settle)
         elif settle is not None:
@@ -117,6 +125,15 @@ def reconcile(items: list[Tracked], read: PullReader, settle: Settler | None) ->
             found.closed.append(item.ident)
     found.read = len(cache)
     return found
+
+
+def publish(found: Findings, item: Tracked, live: Seen, settle: Settler) -> None:
+    try:
+        if settle.publish(item, live):
+            found.published.append(item.ident)
+    except KanbanError as err:
+        found.refused.append({"id": item.ident, "card": item.card.id if item.card else item.ident, "head": live.head, "completion": "evidence_refused",
+                              "classification": "unknown", "detail": scrub(str(err))[:160]})
 
 
 def land(found: Findings, item: Tracked, last: Seen, settle: Settler | None) -> None:
@@ -138,7 +155,7 @@ def land(found: Findings, item: Tracked, last: Seen, settle: Settler | None) -> 
 
 
 def entries(found: Findings) -> dict[str, object]:
-    return {"unchanged": found.unchanged, "unreadable": found.unreadable, "awaiting_stage_evidence": found.awaiting, "waiting_on_units": found.waiting,
+    return {"unchanged": found.unchanged, "published": found.published, "unreadable": found.unreadable, "awaiting_stage_evidence": found.awaiting, "waiting_on_units": found.waiting,
             "refused": found.refused, "stale_blocked": found.stale_blocked}
 
 
@@ -222,13 +239,14 @@ class CardSettler(Settler):
                 return "stale_blocked", {"card": card.id, "completion": "stale_blocked", "unblock": f"hermes kanban unblock {card.id}",
                                          "detail": "Kanban gave this card up after a stale kit claim; the owner or chief can run the unblock line, then loop reconcile completes it"}
             if not SHA.match(last.merge_commit) or not SHA.match(last.head):
-                return "refused", {"card": card.id, "completion": "refused", "classification": "unknown", "detail": f"GitHub reports no merge commit for #{last.number} yet; run loop reconcile again"}
+                missing = f"GitHub reports no merge commit for #{last.number} yet; run loop reconcile again"
+                return "refused", {"card": card.id, "head": last.head, "completion": "refused", "classification": "unknown", "detail": missing}
             open_units = [p for p in self.kanban.parents(card.id) if self.status.get(p) != "done"] if item.kind == "part" else []
             if open_units:
                 return "waiting", {"card": card.id, "units": open_units}
             result = complete_card(self.kanban, card, item.outcome, Merged(last.number, last.url, last.head, last.merge_commit))
             if result["completion"] != "done":
-                return "refused", {"card": result.pop("id"), **result}
+                return "refused", {"card": result.pop("id"), "head": last.head, **result}
         self.mark(item, card, "merged", last.number)
         return "done", {}
 
@@ -236,6 +254,19 @@ class CardSettler(Settler):
         if item.card is not None:
             let_go(self.kanban, item.card, "faker-kit: the pull request closed unmerged, claim released")
             self.mark(item, item.card, "abandoned", None)
+
+    def publish(self, item: Tracked, live: Seen) -> bool:
+        card = item.card
+        if card is None or card.status == "done" or not SHA.match(live.head):
+            return False
+        run_id = self.kanban.open_run(card.id)
+        if run_id is None:
+            return False
+        payload: dict[str, object] = {"pr_url": live.url, "head_sha": live.head}
+        if any(row.run_id == run_id and row.kind == "pr_published" and row.payload == payload for row in self.kanban.evidence_list(card.id)):
+            return False
+        self.kanban.evidence_add(card.id, run_id, "pr_published", payload)
+        return True
 
     def mark(self, item: Tracked, card: Card, state: str, pr: int | None) -> None:
         if item.kind == "part":
