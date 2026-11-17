@@ -754,19 +754,20 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     run.step("kanban refusal detail: a Kanban refusal with no receipt for the run keeps its text and says so",
              "unknown id or terminal state" in bare_card["detail"] and bare_card["detail"].endswith(" (receipt: none for this run)") and "checks" not in bare_card, json.dumps(bare_card))
     board.set(complete_refuse="failure", receipt_extra=real)
-    m0 = board.mutations()
     first = json_of(project("loop", "reconcile"))
     m1 = board.mutations()
     second = json_of(project("loop", "reconcile"))
     m2 = board.mutations()
+    third = json_of(project("loop", "reconcile"))
+    m3 = board.mutations()
     board.set(complete_refuse=None, receipt_extra={})
 
     def lines_of(out: dict) -> list[str]:
         return sorted(r["detail"] for r in out["entries"]["refused"] if "build" in r["detail"])
 
     run.step("kanban refusal detail: loop reconcile prints the same named line on a repeat pass, and the repeat adds only the retry the kit already made",
-             lines_of(first) and lines_of(first) == lines_of(second) and all(r.get("checks") for r in second["entries"]["refused"] if "build" in r["detail"])
-             and m2 - m1 == m1 - m0, json.dumps(second["entries"]["refused"])[:300])
+             lines_of(first) and lines_of(first) == lines_of(second) == lines_of(third) and all(r.get("checks") for r in third["entries"]["refused"] if "build" in r["detail"])
+             and m3 - m2 == m2 - m1, json.dumps(third["entries"]["refused"])[:300])
 
     add_pr(60, "wait-u")
     add_pr(61, "wait-v")
