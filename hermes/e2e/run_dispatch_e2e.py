@@ -32,6 +32,7 @@ import import_scenario
 import kanban_claims_scenario
 import kanban_scenario
 import kanban_text_scenario
+import kanban_visibility_scenario
 import refresh_scenario
 import session_summary_scenario
 import t3code_scenario
@@ -544,7 +545,7 @@ class Run:
             "FAKER_KIT_HOME": str(self.team), "CLAUDE_CONFIG_DIR": "", "E2E_GH_STATE": str(self.gh_state), "E2E_GH_LOG": str(self.gh_log),
             "E2E_CLAUDE_LOG": str(self.claude_log), "E2E_ORIGIN": str(self.root / "origin"),
             "E2E_TOOL_LOG": str(self.root / "tool-calls.log"), "E2E_NO_IMAGE": str(self.root / "no-image"),
-            "E2E_DOCKER_STDIN": str(self.root / "docker-stdin"), "E2E_DOCKER_ONCE": str(self.root / "docker-once"),
+            "E2E_DOCKER_STDIN": str(self.root / "docker-stdin"), "E2E_DOCKER_ONCE": str(self.root / "docker-once"), "E2E_CLOCK": str(self.clock),
         }
 
     def write_exec(self, name: str, text: str) -> None:
@@ -4053,6 +4054,9 @@ def main(argv: list[str] | None = None) -> int:
         kanban_claims_run = Run(root / "kanban-claims", run.steps, run.verdicts)
         kanban_claims_run.build()
         kanban_claims_scenario.claims_scenario(kanban_claims_run)
+        kanban_visibility_run = Run(root / "kanban-visibility", run.steps, run.verdicts)
+        kanban_visibility_run.build()
+        kanban_visibility_scenario.visibility_scenario(kanban_visibility_run)
         session_run = Run(root / "session-summary", run.steps, run.verdicts)
         session_run.build()
         session_summary_scenario.session_scenario(session_run)

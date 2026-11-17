@@ -16,7 +16,7 @@ BOARD = "default"
 MARKER = "kanban-cutover.json"
 TIMEOUT_SECONDS = 60
 EXTERNAL = "external"
-MUTATING = frozenset({"create", "link", "edit", "claim", "reclaim", "evidence", "complete", "archive"})
+MUTATING = frozenset({"create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "complete", "archive"})
 ACCEPTANCE_CLASSIFICATIONS = ("pending", "failure", "missing", "stale", "provenance", "auth", "infra", "mismatch")
 EVIDENCE_KINDS = ("execution_ref", "pr_published", "pr_merged", "artifact_built", "app_installed", "other_result")
 SINGLE = ("Key", "Kind", "Project", "Bot", "Outcome", "State", "Waits-on", "PRs", "Reported", "Part", "Added", "Updated", "Decisions")
@@ -293,9 +293,10 @@ class Kanban:
         self.edit_body(card, header)
         return True
 
-    def claim(self, card: str) -> int:
+    def claim(self, card: str, ttl: int | None = None, session: str | None = None) -> int:
         self.require_external()
-        shown = self.call(["claim", card_id(card), "--json"])
+        extra = [*(["--ttl", str(int(ttl))] if ttl else []), *(["--session", session] if session else [])]
+        shown = self.call(["claim", card_id(card), *extra, "--json"])
         try:
             run_id = json.loads(shown).get("run_id")
         except (ValueError, AttributeError):
@@ -303,6 +304,17 @@ class Kanban:
         if not isinstance(run_id, int):
             raise KanbanError("Kanban did not accept the change (the claim has no run id); the card was not changed")
         return run_id
+
+    def heartbeat(self, card: str, run_id: int, note: str) -> None:
+        self.require_external()
+        self.call(["heartbeat", card_id(card), "--run-id", str(run_id), "--note", note])
+
+    def live_run(self, card: str) -> dict[str, object] | None:
+        runs = self.shown(card).get("runs")
+        if not isinstance(runs, list):
+            raise KanbanError("could not read Kanban (the runs are not a list); nothing was changed")
+        live = [r for r in runs if isinstance(r, dict) and isinstance(r.get("id"), int) and r.get("ended_at") is None]
+        return max(live, key=lambda r: int(r["id"])) if live else None
 
     def release(self, card: str, reason: str) -> None:
         self.require_external()

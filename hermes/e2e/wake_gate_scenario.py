@@ -154,6 +154,7 @@ class Gates:
         self.program("status", status if isinstance(status, str) else "\n".join(status) + "\n")
         self.program("issues", issues if issues is not None else issues_json([]))
         self.program("news", json.dumps({"tracked": []}))
+        self.program("loop-check", json.dumps({"problems": [], "ok": True}))
 
     def calls(self) -> list[str]:
         log = self.fake / "calls.log"
@@ -165,7 +166,7 @@ class Gates:
         (self.fake / "calls.log").unlink(missing_ok=True)
         self.wrapper.write_text("\n".join([
             "#!/bin/sh", f"d={self.fake}", 'printf "%s\\n" "$*" >> "$d/calls.log"',
-            '[ -f "$d/$1.err" ] && cat "$d/$1.err" >&2', '[ -f "$d/$1.out" ] && cat "$d/$1.out"',
+            '[ -f "$d/$1-$2.out" ] && { cat "$d/$1-$2.out"; exit 0; }', '[ -f "$d/$1.err" ] && cat "$d/$1.err" >&2', '[ -f "$d/$1.out" ] && cat "$d/$1.out"',
             '[ -f "$d/$1.code" ] && exit "$(cat "$d/$1.code")"', "exit 0", ""]))
         self.wrapper.chmod(mode)
         try:
@@ -281,7 +282,7 @@ class Gates:
         step("the babysit gate's first tick with a pull request open wakes the agent with the issues JSON and the status lines as its Script Output, after one faker-kit issues and one status",
              self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:6] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
              and first.stdout.splitlines()[6].startswith("Closing summaries to read: unit csv (#1, head aaaaaaa, ready)") and len(first.stdout.splitlines()) == 7
-             and self.calls() == ["issues", "status", "news"], self.say(first))
+             and self.calls() == ["issues", "status", "news", "loop check"], self.say(first))
         step("it stores the status fingerprint and the wake time as an owner-only file, with no temp file left beside it",
              set(stored) == {"fingerprint", "woke_at", "retries", "pulls", "asked", "units"} and stored["asked"] == [f"csv|{'a' * 40}|ready"] and stored["retries"] == 0
              and set(stored["pulls"]) == {"#1", "#2"} and stored["fingerprint"] == fingerprint_of(STATUS)
@@ -419,6 +420,20 @@ class Gates:
         problem = self.tick(BABYSIT)
         step("a status line the gate cannot classify is kept and counts", self.woke(problem, CHANGED) and unreadable in problem.stdout.splitlines(), self.say(problem))
 
+    def card_check(self) -> None:
+        step = self.run.step
+        self.reset()
+        self.serve([NO_PULLS])
+        quiet = self.tick(BABYSIT)
+        line = "t_1abb3883 unit kanban-visual-mockup: PR #153 draft open, card ready, no run; fix: faker-kit loop reconcile"
+        self.program("loop-check", json.dumps({"problems": [{"line": line}], "ok": False}))
+        loud = self.tick(BABYSIT)
+        added = [row for row in loud.stdout.splitlines() if row.startswith("faker-kit loop check:")]
+        step("card check gate: with nothing wrong loop check adds nothing and the tick stays quiet; a card that does not show the work wakes it with exactly one line naming the card and its fix",
+             self.silent(quiet) and wakes(loud.stdout) and len(added) == 1 and line in added[0], self.say(loud))
+        self.program("loop-check", json.dumps({"problems": [], "ok": True}))
+        self.reset()
+
     def quiet_without_pulls(self) -> None:
         step = self.run.step
         self.reset()
@@ -426,7 +441,7 @@ class Gates:
         lists = self.hermes_lists()
         opening = self.tick(BABYSIT)
         step("with no pull request open, no issue, and no notice the first tick is quiet, with no first-run wake, and records the empty status so the next pull request counts as a change",
-             self.silent(opening) and self.state(BABYSIT)["fingerprint"] == fingerprint_of([NO_PULLS]) and self.calls()[-3:] == ["issues", "status", "news"]
+             self.silent(opening) and self.state(BABYSIT)["fingerprint"] == fingerprint_of([NO_PULLS]) and self.calls()[-4:] == ["issues", "status", "news", "loop check"]
              and self.hermes_lists() == lists, self.say(opening))
         self.set_woke_at(BABYSIT, time.time() - 7 * 60 * 60)
         kept = self.snapshot(BABYSIT)
@@ -862,6 +877,7 @@ def wake_scenario(run: Run, hermes: Path, bot: str, chief: str, env: dict[str, s
     gates.real_loop(chief, env)
     with gates.fake_wrapper():
         gates.babysit()
+        gates.card_check()
         gates.summaries()
         gates.chief_news()
         gates.loop()
