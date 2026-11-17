@@ -50,7 +50,7 @@ def kanban_main():
     def parents_of(ident):
         return [p for p, c in st["links"] if c == ident]
 
-    allowed = {"boards", "list", "show", "create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "complete", "archive"}
+    allowed = {"boards", "list", "show", "create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "complete", "archive", "block"}
     clock = float(os.environ.get("E2E_CLOCK", "1"))
     for run in st["runs"]:
         expires = run.get("claim_expires")
@@ -155,6 +155,13 @@ def kanban_main():
         st.setdefault("failures", {})[found["id"]] = 0
         st.setdefault("events", []).append({"task_id": found["id"], "kind": "reclaimed", "run_id": live["id"], "created_at": 2, "payload": {"manual": True,
             "reason": rest[rest.index("--reason") + 1]}})
+    elif verb == "block":
+        found, positional = opts(rest)
+        card = task(positional[0])
+        if card is None or card["status"] not in ("running", "ready") or found.get("--kind") not in ("dependency", "needs_input", "capability", "transient"):
+            die(f"cannot block {positional[0]}")
+        card["status"] = "blocked"
+        st.setdefault("events", []).append({"task_id": card["id"], "kind": "blocked", "run_id": None, "created_at": clock, "payload": {"kind": found["--kind"], "reason": " ".join(positional[1:])}})
     elif verb == "evidence" and rest[0] == "add":
         found, positional = opts(rest[1:])
         run_id = int(found["--run-id"])
@@ -195,7 +202,7 @@ BOT = "meo-beo"
 PROJECT = "shop"
 REPO = "acme/shop"
 DECISIONS = "none: bug fix, expected behaviour obvious from the report"
-ALLOWED_VERBS = {"boards", "list", "show", "create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "archive"}
+ALLOWED_VERBS = {"boards", "list", "show", "create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "archive", "block"}
 FORBIDDEN_TOKENS = {"dispatch", "daemon", "swarm", "specify", "decompose", "promote", "unblock", "--force", "set-dispatch-mode", "switch", "rm"}
 HEADER_KEYS = {"id", "project", "bot", "part", "decisions", "outcome", "stages", "reached", "state", "prs", "waits_on", "added", "updated", "reported"}
 
@@ -284,7 +291,7 @@ class Board:
         return str(self.by_key()[key]["body"])
 
     def mutating(self) -> list[str]:
-        return [verb[0] for verb in self.verbs() if verb[0] in ("create", "link", "edit", "claim", "reclaim", "evidence", "complete", "archive")]
+        return [verb[0] for verb in self.verbs() if verb[0] in ("create", "link", "edit", "claim", "reclaim", "evidence", "complete", "archive", "block")]
 
     def mutations(self) -> int:
         return int(self.state()["mutations"])

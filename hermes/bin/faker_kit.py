@@ -36,6 +36,7 @@ from faker_kit_card_watch import check as check_cards
 from faker_kit_card_watch import hold_live_units
 from faker_kit_cards import CLOSE_KINDS, CardLoop, Merged, bound_pr_url, close_card, complete_card, create_unit, hold, refresh_work, unit_key, unit_rows
 from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, SESSION_ID, Cloud, CloudError, trust_checkout
+from faker_kit_cron_list import cron_jobs
 from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
 from faker_kit_gh import NAME, Coded, Gh, Refused, Runner, credential_problem, credential_state, fix_git_protocol, run_gh, scrub
 from faker_kit_guard.policy import (
@@ -81,6 +82,7 @@ from faker_kit_merge import (
     unlabeled_text,
 )
 from faker_kit_migrate import chief_parts, migrate_chief, migrate_project, read_units
+from faker_kit_pickup import abandoned_after_steer, pickup_candidates, read_pickup, slots, write_pickup
 from faker_kit_profiles import Profiles
 from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, reconcile, render, seen_pull, tsv_items
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
@@ -139,9 +141,9 @@ SUMMARY_RULE = SUMMARY_FOOTER.strip().removeprefix("Closing summary rule: ")
 LOOP_ACTIONS = {"chief": ("show", "set", "digest", "migrate", "reconcile", "backfill", "close", "check", "align"),
                 "project": ("show", "migrate", "unit", "reconcile", "backfill", "close", "check")}
 ROLE_COMMANDS = {
-    "project": {"launch", "merge", "status", "andon", "incidents", "issues", "loop", "news", "session"},
+    "project": {"launch", "merge", "status", "andon", "incidents", "issues", "loop", "news", "session", "pickup"},
     "bootstrap": {"add-project", "launch", "status", "andon", "refresh", "import"},
-    "chief": {"status", "handoff", "loop", "add-project", "merge", "refresh"},
+    "chief": {"status", "handoff", "loop", "add-project", "merge", "refresh", "pickup"},
 }
 OWNER_ONLY = {"install", "runner", "projects", "host"}
 SECRET_COMMANDS = {"install", "projects", "host"}
@@ -353,7 +355,7 @@ class Kit:
         digest = hashlib.sha256(prompt.encode()).hexdigest()[:8]
         owner, name = repo.split("/")
         workdir = self.home / "checkouts" / f"{owner}__{name}" / f"launch-{int(self.now())}-{digest}"
-        unit_card_found = self.launch_card(caller, target, brief_file)
+        unit_card_found = self.launch_card(caller, target, brief_file, dispatch)
         result = launcher.start(repo, prompt, workdir, model, effort)
         self.record_session(target, Path(brief_file).name.removesuffix(".md"), result.fields.get("session"))
         out = {"repo": repo, "backend": dispatch.backend, "brief": digest, **result.fields}
@@ -361,7 +363,7 @@ class Kit:
             out["card"] = self.launch_claim(target, *unit_card_found, str(result.fields.get("session") or f"{dispatch.backend} launch {digest}"))
         return out
 
-    def launch_card(self, caller: Bot | None, target: Bot, brief_file: str) -> tuple[Kanban, Card] | None:
+    def launch_card(self, caller: Bot | None, target: Bot, brief_file: str, dispatch: Dispatch) -> tuple[Kanban, Card] | None:
         if caller is None or caller.role != "project" or not cutover(self.home):
             return None
         unit = unit_id(Path(brief_file).name)
@@ -377,6 +379,10 @@ class Kit:
                           "read the session with faker-kit session summary " + unit)
         if card.status != "ready":
             raise Refused(f"the unit card {card.id} for {unit} is {card.status}, not ready, so nothing was launched; faker-kit loop check names the fix")
+        if read_pickup(self.home).enabled:
+            refusal = slots(kanban.cards(False), str(target.project), dispatch.max_in_flight, self.policy().max_in_flight_total).refusal(unit)
+            if refusal:
+                raise Refused(refusal)
         return kanban, card
 
     def launch_claim(self, target: Bot, kanban: Kanban, card: Card, session: str) -> dict:
@@ -939,7 +945,7 @@ class Kit:
     def loop_check(self, caller: Bot) -> dict:
         if not cutover(self.home):
             return {"findings": [], "lines": [], "ok": True, "needs_action": False, "cutover": False}
-        return check_cards(self.kanban(caller), caller.role, caller.project, self.open_units(caller), self.now())
+        return check_cards(self.kanban(caller), caller.role, caller.project, self.open_units(caller), self.now(), caller.name)
 
     def reconcile_sources(self, caller: Bot) -> tuple[dict[str, str], list[dict], list[list[str]] | None]:
         repos = {name: str(bot.repo) for name, bot in self.policy().projects().items()} if caller.role == "chief" else {str(caller.project): str(caller.repo)}
@@ -977,12 +983,71 @@ class Kit:
         if writes and caller.role == "project":
             with Loop(self.home, caller.name).locked():
                 out["claims"] = hold_live_units(kanban, str(caller.project), caller.name, self.open_units(caller))
+                out["blocked"] = self.block_abandoned(caller, kanban)
                 for held in out["claims"]:
                     unit = kanban.find_card(unit_key(str(caller.project), str(held["unit"])))
                     if unit is not None:
                         with contextlib.suppress(KanbanError):
                             self.refresh_parent_work(kanban, unit, str(caller.repo))
         return out
+
+    def block_abandoned(self, caller: Bot, kanban: Kanban) -> list[dict]:
+        if not read_pickup(self.home).enabled:
+            return []
+        blocked: list[dict] = []
+        for card in abandoned_after_steer(kanban.cards(False), caller.name, str(caller.project), self.open_units(caller), self.now()):
+            reason = f"faker-kit: unit {card.title} still had no pull request after its one steer; blocked, never relaunched"
+            try:
+                if card.status == "running":
+                    kanban.release(card.id, reason)
+                kanban.block(card.id, reason)
+                blocked.append({"unit": card.title, "card": card.id, "blocked": True, "reason": reason})
+            except KanbanError as err:
+                blocked.append({"unit": card.title, "card": card.id, "blocked": False, "detail": scrub(str(err))[:160]})
+        return blocked
+
+    def pickup_command(self, caller: Bot | None, action: str) -> dict:
+        if action != "status":
+            if caller is not None and caller.role != "chief":
+                raise Refused(f"{caller.name} is a {caller.role} bot; pickup {action} is for the owner and the chief of staff, and faker-kit pickup status reads it")
+            write_pickup(self.home, action == "on", caller.name if caller else "owner", self.now())
+        return self.pickup_status(caller)
+
+    def pickup_limits(self, bot: Bot) -> tuple[int | None, int]:
+        try:
+            per = self.dispatch(bot.name, str(bot.repo)).max_in_flight
+        except Refused:
+            per = None
+        return per, self.policy().max_in_flight_total
+
+    def babysit_job(self, bot: Bot) -> dict:
+        code, text = self.tool(["hermes", "-p", bot.name, "cron", "list", "--all"], 60)
+        job = cron_jobs(text).get("faker-kit-babysit") if code == 0 else None
+        if job is None:
+            return {"id": None, "next_run": "unreadable"}
+        return {"id": job.get("id"), "enabled": job.get("enabled"), "next_run": job.get("next_run") or job.get("overdue") or "unknown"}
+
+    def pickup_status(self, caller: Bot | None) -> dict:
+        state = read_pickup(self.home)
+        out: dict = {"enabled": state.enabled, "since": self.stamp_of(state.since), "by": state.by}
+        bots = [caller] if caller is not None and caller.role == "project" else sorted(self.policy().projects().values(), key=lambda b: b.project or "")
+        out["jobs"] = {str(b.project): self.babysit_job(b) for b in bots}
+        if not cutover(self.home) or not bots:
+            return {**out, "candidates": {}, "pickup": []}
+        cards = self.kanban(caller or bots[0]).cards(False)
+        found = {str(b.project): pickup_candidates(cards, b.name, str(b.project)) for b in bots}
+        out["candidates"] = {project: len(rows) for project, rows in found.items()}
+        listed: list[dict] = []
+        if state.enabled and caller is not None and caller.role == "project":
+            per, total = self.pickup_limits(caller)
+            free = slots(cards, str(caller.project), per, total).free
+            out["free_slots"] = free
+            listed = [{"unit": c.title, "card": c.id} for c in found[str(caller.project)][:free]]
+        return {**out, "pickup": listed}
+
+    @staticmethod
+    def stamp_of(moment: float | None) -> str | None:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(moment)) if moment is not None else None
 
     @staticmethod
     def part_number(value: int | str) -> int:
@@ -1786,6 +1851,8 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("ref", metavar="UNIT-OR-PR")
     cmd.add_argument("--dry-run", action="store_true", help="summary: show what would be read and stored; writes nothing")
     cmd.add_argument("--session", help="steer: the session id or link to ask once for its closing summary")
+    cmd = sub.add_parser("pickup")
+    cmd.add_argument("action", nargs="?", choices=["status", "on", "off"], default="status")
     cmd = sub.add_parser("andon")
     cmd.add_argument("action", nargs="?", choices=["show", "raise", "clear"], default="show")
     cmd.add_argument("reason", nargs="*")
@@ -1874,6 +1941,8 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
         if caller is None or caller.role != "chief":
             raise Refused("handoff runs in the chief of staff's chat or job")
         return kit.handoff(caller, args.project, args.part, args.decisions, args.outcome)
+    if args.command == "pickup":
+        return kit.pickup_command(caller, args.action)
     if args.command == "andon":
         return kit.andon_command(caller, args.action, args.reason)
     return run_runner(args)

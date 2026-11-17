@@ -31,6 +31,7 @@ class Dispatch:
     backend: str
     default_branch: str
     t3code: object
+    max_in_flight: int | None = None
 
 
 class Launcher(Protocol):
@@ -68,7 +69,8 @@ def read_dispatch(text: str | None, default_branch: str) -> Dispatch:
     backend = config.get("backend", DEFAULT_BACKEND)
     if not isinstance(backend, str):
         raise Refused(f"{DISPATCH_FILE} backend must be a name")
-    return Dispatch(backend, default_branch, config.get("t3code"))
+    limit = config.get("max_in_flight")
+    return Dispatch(backend, default_branch, config.get("t3code"), limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None)
 
 
 Factory = Callable[[Dispatch], Launcher]

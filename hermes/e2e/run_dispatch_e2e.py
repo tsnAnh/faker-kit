@@ -33,6 +33,7 @@ import kanban_claims_scenario
 import kanban_scenario
 import kanban_text_scenario
 import kanban_visibility_scenario
+import pickup_scenario
 import refresh_scenario
 import session_summary_scenario
 import t3code_scenario
@@ -4057,6 +4058,9 @@ def main(argv: list[str] | None = None) -> int:
         kanban_visibility_run = Run(root / "kanban-visibility", run.steps, run.verdicts)
         kanban_visibility_run.build()
         kanban_visibility_scenario.visibility_scenario(kanban_visibility_run)
+        pickup_run = Run(root / "pickup", run.steps, run.verdicts)
+        pickup_run.build()
+        pickup_scenario.pickup_scenario(pickup_run)
         session_run = Run(root / "session-summary", run.steps, run.verdicts)
         session_run.build()
         session_summary_scenario.session_scenario(session_run)

@@ -8,7 +8,7 @@ KIT_OWNED = True
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 JOB_HEAD = re.compile(r"^\s*(\S+)\s+\[(active|paused|enabled|disabled)\]")
 JOB_NAME_ROW = re.compile(r"^\s*Name:\s*(.*?)\s*$")
-JOB_ROW = re.compile(r"^\s*(Schedule|Script|Mode|Last run):\s*(.*?)\s*$")
+JOB_ROW = re.compile(r"^\s*(Schedule|Script|Mode|Last run|Next run|Overdue):\s*(.*?)\s*$")
 FINISHED_OUTCOMES = ("ok", "finished;", "ran, but the result was not delivered", "cancelled")
 
 

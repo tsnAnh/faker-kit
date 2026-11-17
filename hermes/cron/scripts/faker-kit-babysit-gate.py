@@ -36,20 +36,20 @@ def card_check_line() -> str | None:
     return f"faker-kit loop check: {len(wrong)} card(s) need action, first: {wrong[0].get('line')}; run faker-kit loop check for every fix line"
 
 
-def told_path() -> Path:
-    return Path(gate.KIT_HOME) / "gates" / gate.profile_name() / f"{JOB}-settle.json"
+def told_path(kind: str = "settle") -> Path:
+    return Path(gate.KIT_HOME) / "gates" / gate.profile_name() / f"{JOB}-{kind}.json"
 
 
-def read_told() -> set[str]:
+def read_told(kind: str = "settle") -> set[str]:
     try:
-        data = json.loads(told_path().read_text())
+        data = json.loads(told_path(kind).read_text())
     except (OSError, ValueError):
         return set()
     return {key for key in data if isinstance(key, str)} if isinstance(data, list) else set()
 
 
-def write_told(keys: set[str]) -> None:
-    path = told_path()
+def write_told(keys: set[str], kind: str = "settle") -> None:
+    path = told_path(kind)
     temp = path.with_name(f".{path.name}.{os.getpid()}")
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -71,6 +71,12 @@ def settle_cards() -> dict[str, str]:
     if not isinstance(entries, dict):
         return {"could-not-run": "faker-kit loop reconcile could not settle the unit cards this tick; run faker-kit loop reconcile"}
     found: dict[str, str] = {}
+    for row in report.get("blocked") or []:
+        if isinstance(row, dict) and row.get("blocked") is True:
+            found[f"blocked:{row.get('card')}"] = (f"faker-kit loop reconcile: unit {row.get('unit')} (card {row.get('card')}) was blocked: its session left no pull request after the one steer. "
+                                                   "Tell the owner once; the card is never picked up or relaunched")
+        elif isinstance(row, dict):
+            found[f"block-refused:{row.get('card')}:{row.get('detail', '')}"] = f"faker-kit loop reconcile: could not block unit {row.get('unit')} ({row.get('detail', '')}); the next pass retries"
     for row in entries.get("refused") or []:
         if isinstance(row, dict):
             card = row.get("card") or row.get("id")
@@ -83,6 +89,17 @@ def settle_cards() -> dict[str, str]:
     return found
 
 
+def pickup_lines() -> dict[str, str]:
+    try:
+        done = subprocess.run([gate.WRAPPER, "pickup", "status"], env=gate.child_env(), capture_output=True, text=True, timeout=gate.TIMEOUT_SECONDS, check=False)
+        report = json.loads(done.stdout) if done.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        report = None
+    rows = report.get("pickup") if isinstance(report, dict) and report.get("enabled") is True else None
+    return {str(row["card"]): f"Ready card to pick up: {row['unit']} (card {row['card']})" for row in rows or []
+            if isinstance(row, dict) and isinstance(row.get("unit"), str) and isinstance(row.get("card"), str)}
+
+
 def main() -> None:
     issues = listed_issues()
     settled = settle_cards()
@@ -90,11 +107,17 @@ def main() -> None:
     refusals = [line for key, line in settled.items() if key not in told]
     if told != set(settled):
         write_told(set(settled))
+    picked = pickup_lines()
+    told_picks = read_told("pickup")
+    fresh_picks = [line for key, line in picked.items() if key not in told_picks]
+    if told_picks != set(picked):
+        write_told(set(picked), "pickup")
     lines = gate.labeled_lines(gate.collapse(gate.status_lines()))
     news = f"faker-kit issues lists {len(issues)} issue(s) to handle" if issues else None
     undelivered = chief_news.deliver(lines, time.time())
     cards = card_check_line()
-    news = news or undelivered or cards or (refusals[0] if refusals else None)
+    ready = f"faker-kit pickup: {len(fresh_picks)} ready unit card(s) to pick up" if fresh_picks else None
+    news = news or undelivered or cards or (refusals[0] if refusals else None) or ready
     wake = gate.tick(JOB, lines, time.time(), news, summaries=True, stuck=gate.stuck_units(time.time()))
     if wake is None:
         gate.quiet()
@@ -108,6 +131,7 @@ def main() -> None:
         *([undelivered] if undelivered else []),
         *([cards] if cards else []),
         *refusals,
+        *fresh_picks,
         *([wake.summary] if wake.summary else []),
         *wake.stuck,
     )
