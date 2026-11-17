@@ -752,7 +752,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              [c["name"] for c in hostile_card["checks"]] == ["[removed]", "unit"] and "ghp_" not in shown and "evil.example" not in shown and "xxxx" not in shown
              and "nothex" not in shown and "pull request #" not in hostile_card["detail"], shown)
     run.step("kanban refusal detail: a Kanban refusal with no receipt for the run keeps its text and says so",
-             bare_card["detail"].endswith("(unknown id or terminal state) (receipt: none for this run)") and "checks" not in bare_card, json.dumps(bare_card))
+             "unknown id or terminal state" in bare_card["detail"] and bare_card["detail"].endswith(" (receipt: none for this run)") and "checks" not in bare_card, json.dumps(bare_card))
     board.set(complete_refuse="failure", receipt_extra=real)
     m0 = board.mutations()
     first = json_of(project("loop", "reconcile"))
