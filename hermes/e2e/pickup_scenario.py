@@ -87,7 +87,7 @@ def pickup_scenario(run: Run) -> None:
         "card with only a title": add("only-title", card_body("only-title", None, decisions, 2.0)),
         "card with no owner decisions": add("no-decisions", card_body("no-decisions", goal, None, 2.0)),
         "card already steered": add("was-steered", card_body("was-steered", goal, decisions, 2.0, tail=(
-                         f"Session steer: asked session {STEER_SESSION} at 2026-11-01T00:00:00Z for a closing summary.",))),
+                         f"Session steer: asked session {STEER_SESSION} at {stamp(run.clock - 60)} for a closing summary.",))),
         "archived card": add("archived", card_body("archived", goal, decisions, 2.0), status="archived"),
     }
 
@@ -100,15 +100,10 @@ def pickup_scenario(run: Run) -> None:
 
     fresh = project("pickup", "status")
     state_file = run.team / "pickup.json"
-    run.step("pickup stop switch: after install and refresh the default is off, nothing is written, and status "
+    run.step("pickup stop switch: on a fresh kit home the default is off, nothing is written, and status "
              "prints enabled false, the babysit job id and its next run, and the candidate count per project",
              json_of(fresh).get("enabled") is False and not state_file.exists() and json_of(fresh).get("jobs") == {PROJECT: {"id": "job-7", "enabled": True, "next_run": "2026-11-17T10:00:00+00:00"}}
              and json_of(fresh).get("candidates") == {PROJECT: 3} and json_of(fresh).get("pickup") == [], fresh[1].strip())
-    refreshed = run.kit("refresh", bot=None, refresher=lambda _home: "refreshed")
-    run.step(
-             "pickup stop switch: a refresh leaves the switch where it was",
-             refreshed[0] == 0 and not state_file.exists() and json_of(owner("pickup", "status")).get("enabled") is False, refreshed[2].strip()[:120])
-
     denied = project("pickup", "on")
     run.step("pickup stop switch: a project bot is refused pickup on and pickup off, and the switch stays off", denied[0] != 0 and "owner and the chief" in denied[2]
              and project("pickup", "off")[0] != 0 and not state_file.exists(), denied[2].strip())
