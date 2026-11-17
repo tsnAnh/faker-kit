@@ -40,7 +40,7 @@ def main() -> None:
     undelivered = chief_news.deliver(lines, time.time())
     cards = card_check_line()
     news = news or undelivered or cards
-    wake = gate.tick(JOB, lines, time.time(), news, summaries=True)
+    wake = gate.tick(JOB, lines, time.time(), news, summaries=True, stuck=gate.stuck_units(time.time()))
     if wake is None:
         gate.quiet()
         return
@@ -53,6 +53,7 @@ def main() -> None:
         *([undelivered] if undelivered else []),
         *([cards] if cards else []),
         *([wake.summary] if wake.summary else []),
+        *wake.stuck,
     )
 
 

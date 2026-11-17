@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from kanban_scenario import BOT, CHIEF, PROJECT, Board, head_of, json_of, ledger
@@ -55,7 +56,7 @@ def visibility_scenario(run: Run) -> None:
     def lines_for(result: tuple[int, str, str], ident: str) -> list[str]:
         return [f["line"] for f in findings(result) if ident in f["line"]]
 
-    def change(edit) -> None:  # noqa: ANN001
+    def change(edit: Callable[[dict], object]) -> None:
         data = board.state()
         edit(data)
         board.path.write_text(json.dumps(data))
@@ -101,7 +102,7 @@ def visibility_scenario(run: Run) -> None:
 
     run.clock += 7 * HOUR
     swept = project("loop", "check")
-    run.step("visibility lifecycle: with an hour left the sweep in loop check heartbeats the live unit's claim (Pal's heartbeat has no --ttl, so the kit sets the claim TTL env) back to 8 hours, quietly",
+    run.step("visibility lifecycle: with an hour left the sweep in loop check heartbeats the live unit's claim back to 8 hours (heartbeat has no --ttl; the kit sets the TTL env), quietly",
              swept[0] == 0 and lines_for(swept, card(key)["id"]) == [] and live_runs(key)[0]["claim_expires"] == run.clock + TTL
              and [r["id"] for r in live_runs(key)] == [shown.get("run_id")], json.dumps(live_runs(key)))
     run.clock += TTL - 15 * 60
@@ -136,7 +137,7 @@ def visibility_scenario(run: Run) -> None:
     swept_board = project("loop", "check")
     blocked = findings(swept_board, "stale_blocked")
     merged = findings(swept_board, "merged_not_done")
-    run.step("visibility stale: the five cards Kanban gave up on after two stale reclaims (t_13b1a9a1, t_2046fbaa, t_a42c3979, t_2156551a, t_4d4b9fb7) are each listed with the unblock line, which the kit never runs",
+    run.step("visibility stale: the five cards Kanban gave up on after two stale reclaims (t_13b1a9a1 and four more) are each listed with the unblock line the kit never runs",
              sorted(f["card"] for f in blocked) == sorted(STALE_BLOCKED) and all(f"hermes kanban unblock {f['card']}" in f["fix"] for f in blocked)
              and "unblock" not in [c[0] for c in board.calls()], json.dumps([f["line"] for f in blocked])[:300])
     run.step("visibility merged: a card whose merged pull request is not done is listed with the refusal phase from its last pr_acceptance event",

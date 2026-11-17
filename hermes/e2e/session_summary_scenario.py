@@ -123,6 +123,13 @@ def session_scenario(run: Run) -> None:
     run.step("session summary: a unit with no pull request prints readable false, reason no pull request, and no readable summary",
              bare["readable"] is False and bare["reason"] == "no pull request" and bare["result"] == "no readable summary" and bare["pr"] is None and bare["summary"] is None, json.dumps(bare))
 
+    def lonely_row() -> dict:
+        return next(row for row in json_of(project("loop", "show"))["units"] if row["unit"] == "lonely-unit")
+
+    before = lonely_row()
+    run.step("loop show: a unit card lists when it was added, its sessions, and whether it was steered, for the gate's stuck-unit rule",
+             isinstance(before["added"], float) and before["sessions"] == [] and before["steered"] is False and before["prs"] == [] and before["closed"] is False
+             and before["state"] == "in-progress", json.dumps(before))
     steered_before, mutated = claude_calls(run), board.mutations()
     with_pr = project("session", "steer", "csv-export", "--session", SESSION)
     bad_id = project("session", "steer", "lonely-unit", "--session", "not a session")
@@ -136,8 +143,32 @@ def session_scenario(run: Run) -> None:
     run.step("session steer: a unit with no pull request after its timebox sends one claude -p --cloud message that asks for the closing summary or a draft pull request, and the card records it",
              steer["steered"] is True and claude_calls(run) == steered_before + 1 and sent.get("steer") is True and sent["argv"][:3] == ["-p", "--cloud", SESSION]
              and "Closing summary:" in sent["argv"][3] and "draft pull request" in sent["argv"][3] and f"Session steer: asked session {SESSION} at " in card("lonely-unit"), json.dumps(sent)[:240])
+    run.step("loop show: after the steer the same unit row reads steered true", lonely_row()["steered"] is True, json.dumps(lonely_row()))
     twice = json_of(project("session", "steer", "lonely-unit", "--session", SESSION))
     run.step("session steer: a second call sends nothing and says it already asked once", twice["steered"] is False and "already asked once" in twice["reason"]
     and claude_calls(run) == steered_before + 1, json.dumps(twice))
     run.step("session summary: no run above changed GitHub or ran claude, other than the one steer",
              len(writes(run)) == written and claude_calls(run) == steered_before + 1, "\n".join(writes(run))[:200])
+
+    def sessions(unit: str) -> list[str]:
+        return next(row for row in json_of(project("loop", "show"))["units"] if row["unit"] == unit)["sessions"]
+
+    brief_text = "/faker-mode\n\nGOAL: finish the unit.\nSCOPE: one file.\n"
+    mutated, started = board.mutations(), claude_calls(run)
+    launched = project("launch", "--brief-file", str(run.brief("lonely-unit.md", brief_text)))
+    seen = json.loads(launched[1]).get("session", "") if launched[0] == 0 else ""
+    lonely = board.by_key()[f"faker-kit:{PROJECT}:lonely-unit"]
+    run.step("launch: a brief named for an existing unit card adds the started session as one Session line, claims the card, and records the run on it",
+             launched[0] == 0 and seen.startswith("https://claude.ai/code/session_") and sessions("lonely-unit") == [seen] and lonely["status"] == "running"
+             and f"session {seen}" in card("lonely-unit") and claude_calls(run) == started + 1,
+             launched[2].strip() or json.dumps(sessions("lonely-unit")))
+    mutated = board.mutations()
+    again = project("launch", "--brief-file", str(run.brief("lonely-unit.md", brief_text)))
+    run.step("launch: a second launch of a unit whose card is running refuses, starts no session, and adds no Session line",
+             again[0] != 0 and "already running" in again[2] and sessions("lonely-unit") == [seen] and board.mutations() == mutated and claude_calls(run) == started + 1,
+             again[2].strip() or json.dumps(sessions("lonely-unit")))
+    cards = len(board.by_key())
+    nameless = project("launch", "--brief-file", str(run.brief("no-card-unit.md", brief_text)))
+    run.step("launch: after the cutover a brief with no unit card refuses with the loop unit command, starts no session, and creates no card",
+             nameless[0] != 0 and "faker-kit loop unit no-card-unit --part <id>" in nameless[2] and len(board.by_key()) == cards and claude_calls(run) == started + 1,
+             nameless[2].strip() or nameless[1][:200])

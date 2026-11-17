@@ -89,6 +89,7 @@ from faker_kit_session_card import steered, with_steer, with_summary
 from faker_kit_session_summary import STEER_MESSAGE, read_summary
 from faker_kit_t3code import T3CodeLauncher, check_t3code_backend, parse_settings, unit_id
 from faker_kit_text import refresh as refresh_text
+from faker_kit_units import SESSION_URL
 from install_config import InstallError, config_set, hermes, mapping, value_at
 
 BRIEF_START = "/faker-mode"
@@ -354,6 +355,7 @@ class Kit:
         workdir = self.home / "checkouts" / f"{owner}__{name}" / f"launch-{int(self.now())}-{digest}"
         unit_card_found = self.launch_card(caller, target, brief_file)
         result = launcher.start(repo, prompt, workdir, model, effort)
+        self.record_session(target, Path(brief_file).name.removesuffix(".md"), result.fields.get("session"))
         out = {"repo": repo, "backend": dispatch.backend, "brief": digest, **result.fields}
         if unit_card_found is not None:
             out["card"] = self.launch_claim(target, *unit_card_found, str(result.fields.get("session") or f"{dispatch.backend} launch {digest}"))
@@ -396,6 +398,21 @@ class Kit:
         parent = kanban.find_card(f"faker-kit:chief:{part}") if part and part.isdigit() else None
         if parent is not None:
             refresh_work(kanban, parent, {c.id: c for c in kanban.cards(False)}, repo, True)
+
+    def record_session(self, bot: Bot, unit: str, session: object) -> None:
+        if not isinstance(session, str) or not SESSION_URL.match(session) or not UNIT_ID.match(unit) or not cutover(self.home):
+            return
+        try:
+            kanban, found = self.unit_card(bot, unit)
+            if found is None or found.header is None or ("Session", session) in found.header.repeated:
+                return
+            with Loop(self.home, bot.name).locked():
+                kanban.require_external()
+                fresh = kanban.find_card(found.key or "")
+                if fresh is not None and fresh.header is not None and ("Session", session) not in fresh.header.repeated:
+                    kanban.edit_body(fresh.id, fresh.header.with_fields({}, (*fresh.header.repeated, ("Session", session))))
+        except Refused:
+            return
 
     def source_import(self, caller: Bot | None, step: str, project: str, source: str, repo_id: int, receipt: str) -> dict:
         bot = self.project_bot(self.policy(), project)

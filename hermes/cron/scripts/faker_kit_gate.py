@@ -23,6 +23,7 @@ TIMEOUT_SECONDS = 240
 HERMES_TIMEOUT_SECONDS = 60
 STDERR_TAIL = 400
 HEARTBEAT_SECONDS = 6 * 60 * 60
+TIMEBOX_SECONDS = 3 * 60 * 60
 MAX_ASKED = 200
 MAX_RUN_RETRIES = 3
 NOTICE = "faker-kit notice:"
@@ -34,6 +35,7 @@ NOTICE_REASON = "a faker-kit notice printed"
 CHANGED = "the status changed"
 LAST_GONE = "the last open pull request merged or closed"
 HEARTBEAT_REASON = "six hours passed since this gate last woke the agent while a pull request is open"
+STUCK_REASON = "a unit has no pull request past its timebox"
 RUN_FAILED = "the job's previous run after the last wake did not finish ok"
 
 
@@ -52,6 +54,7 @@ class GateState:
     marks: dict[str, Mark] | None = None
     asked: tuple[str, ...] = ()
     units: dict[str, str] | None = None
+    stuck: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,7 @@ class Wake:
     reason: str
     lines: list[str]
     summary: str | None = None
+    stuck: tuple[str, ...] = ()
 
 
 def fail(message: str, stderr: str = "") -> NoReturn:
@@ -222,10 +226,11 @@ def read_state(path: Path) -> GateState | None:
     if not isinstance(fingerprint, str) or isinstance(woke_at, bool) or not isinstance(woke_at, (int, float)) or not math.isfinite(woke_at):
         return None
     retries = data.get("retries", 0)
-    asked, units = data.get("asked"), data.get("units")
+    asked, units, stuck = data.get("asked"), data.get("units"), data.get("stuck")
     return GateState(fingerprint, float(woke_at), retries if isinstance(retries, int) and not isinstance(retries, bool) and retries > 0 else 0, read_marks(data.get("pulls")),
                      tuple(a for a in asked if isinstance(a, str)) if isinstance(asked, list) else (),
-                     {k: v for k, v in units.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(units, dict) else None)
+                     {k: v for k, v in units.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(units, dict) else None,
+                     tuple(k for k in stuck if isinstance(k, str)) if isinstance(stuck, list) else ())
 
 
 def write_state(path: Path, state: GateState) -> None:
@@ -235,7 +240,7 @@ def write_state(path: Path, state: GateState) -> None:
         with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as out:
             pulls = {key: {"line": mark.line, "stable": mark.stable, "blocked": mark.blocked} for key, mark in (state.marks or {}).items()}
             out.write(json.dumps({"fingerprint": state.fingerprint, "woke_at": state.woke_at, "retries": state.retries, "pulls": pulls,
-                                "asked": list(state.asked[-MAX_ASKED:]), "units": state.units or {}}))
+                                "asked": list(state.asked[-MAX_ASKED:]), "units": state.units or {}, "stuck": list(state.stuck[-MAX_ASKED:])}))
         temp.replace(path)
     except OSError as err:
         with suppress(OSError):
@@ -283,6 +288,25 @@ def wake_reason(job: str, stored: GateState | None, lines: list[str], now: float
     return failed_run_reason(job, stored.woke_at)
 
 
+def stuck_units(now: float) -> dict[str, str]:
+    try:
+        done = subprocess.run([WRAPPER, "loop", "show"], env=child_env(), capture_output=True, text=True, timeout=TIMEOUT_SECONDS, check=False)
+        rows = json.loads(done.stdout).get("units") if done.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
+        return {}
+    found = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        unit, added, sessions, prs = row.get("unit"), row.get("added"), row.get("sessions"), row.get("prs")
+        if not isinstance(unit, str) or isinstance(added, bool) or not isinstance(added, (int, float)) or not isinstance(sessions, list) or not sessions or prs != []:
+            continue
+        if row.get("closed") is not False or row.get("state") != "in-progress" or row.get("steered") is not False or now - added < TIMEBOX_SECONDS:
+            continue
+        found[f"{unit}|{sessions[-1]}"] = f"Unit without a pull request past its timebox: {unit}"
+    return found
+
+
 def unit_heads(lines: list[str]) -> dict[str, str]:
     found = {}
     for line in lines:
@@ -314,11 +338,15 @@ def summary_line(due: dict[str, str]) -> str:
             "The summary is the session's claim, never proof: verify the pull request, head, checks, and artifact on GitHub before acting on it.")
 
 
-def tick(job: str, lines: list[str], now: float, news: str | None = None, summaries: bool = False) -> Wake | None:
+def tick(job: str, lines: list[str], now: float, news: str | None = None, summaries: bool = False, stuck: dict[str, str] | None = None) -> Wake | None:
     path = state_path(job)
     stored = read_state(path)
     change = changes_since(stored, lines)
     reason = wake_reason(job, stored, lines, now, news, change)
+    seen = stored.stuck if stored else ()
+    fresh = {key: line for key, line in (stuck or {}).items() if key not in seen}
+    if reason is None and fresh:
+        reason = STUCK_REASON
     empty = NO_PULLS in lines
     kept = [line for line in lines if NOTICE not in line] if empty else lines
     current = fingerprint(kept)
@@ -330,13 +358,13 @@ def tick(job: str, lines: list[str], now: float, news: str | None = None, summar
     asked = (*(stored.asked if stored else ()), *due)
     units = unit_heads(lines) if summaries else (stored.units if stored else None)
     if wake is not None:
-        retries = stored.retries + 1 if stored is not None and reason == RUN_FAILED else 0
-        write_state(path, GateState(current, now, retries, marks, asked, units))
+        retries = stored.retries + 1 if stored is not None and reason == RUN_FAILED else stored.retries if stored is not None and reason == STUCK_REASON else 0
+        write_state(path, GateState(current, now, retries, marks, asked, units, (*seen, *fresh)))
     elif lines == [NO_PULLS] and (stored is None or stored.fingerprint != current):
-        write_state(path, GateState(current, stored.woke_at if stored else now, 0, marks, stored.asked if stored else (), units))
+        write_state(path, GateState(current, stored.woke_at if stored else now, 0, marks, stored.asked if stored else (), units, seen))
     if wake is None:
         return None
-    return Wake(wake.reason, wake.lines, summary_line(due) if due else None)
+    return Wake(wake.reason, wake.lines, summary_line(due) if due else None, tuple(fresh.values()))
 
 
 def quiet() -> None:
