@@ -857,7 +857,7 @@ def events_scenario(run: Run, board: Board, project: Callable[..., tuple[int, st
     project("loop", "reconcile")
     run.step("card events: the same head again writes nothing", board.mutations() == before and published(155) == [head_of(155)], str(board.mutations()))
     new_head = f"{2155:040x}"
-    run.update_gh(lambda state: next(p for p in state["pulls"] if p["number"] == 155)["head"].update(sha=new_head))
+    run.update_gh(lambda state: next(p for p in state["pulls"] if p["number"] == 155).update(head=new_head))
     project("loop", "reconcile")
     after = board.mutations()
     project("loop", "reconcile")
