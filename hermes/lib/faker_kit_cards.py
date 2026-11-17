@@ -10,7 +10,7 @@ from pathlib import Path
 
 from faker_kit_gh import scrub
 from faker_kit_guard.t3code import SECRET_SHAPES
-from faker_kit_kanban import ACCEPTANCE_CLASSIFICATIONS, CLAIM_TTL, Card, EvidenceRow, Header, Kanban, KanbanError, NewCard
+from faker_kit_kanban import ACCEPTANCE_CLASSIFICATIONS, CLAIM_TTL, Card, EvidenceRow, FailedCheck, Header, Kanban, KanbanError, NewCard, Receipt
 from faker_kit_loop import (
     CLOSED,
     DEFAULT_OUTCOME,
@@ -49,6 +49,9 @@ SHA256 = re.compile(r"\b[0-9a-f]{64}\b")
 VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.]+)?)(?![\w.])")
 DEVICE = re.compile(r"\b(emulator-\d+)\b|\bdevice[ =:]+([A-Za-z0-9_.:-]+)")
 ONE_LINE_KEYS = frozenset({"text", "head_sha", "sha256", "version", "device"})
+MAX_DETAIL = 400
+MAX_LINE_CHECKS = 3
+NO_RECEIPT = "receipt: none for this run"
 REFUSAL_CLASS = re.compile(r"PR acceptance (" + "|".join(ACCEPTANCE_CLASSIFICATIONS) + r")\b")
 
 
@@ -430,16 +433,34 @@ def complete_card(kanban: Kanban, card: Card, outcome: str, merged: Merged) -> d
     return {"id": card.id, "completion": "done"}
 
 
+def check_line(check: FailedCheck) -> str:
+    where = f" ({check.workflow})" if check.workflow else ""
+    link = f": {check.url}" if check.url else ""
+    return scrub(f"CI {check.classification} on {check.name}{where}{link}")
+
+
+def receipt_line(receipt: Receipt) -> str:
+    shown = "; ".join(check_line(c) for c in receipt.checks[:MAX_LINE_CHECKS])
+    more = f"; +{len(receipt.checks) - MAX_LINE_CHECKS} more" if len(receipt.checks) > MAX_LINE_CHECKS else ""
+    pr = f", pull request #{receipt.pr}" if receipt.pr is not None else ""
+    head = f"head {receipt.head}{pr}: " if receipt.head else (f"pull request #{receipt.pr}: " if receipt.pr is not None else "")
+    return f"{head}{shown}{more}"
+
+
 def refusal_detail(kanban: Kanban, card_id: str, run_id: int | None, text: str) -> dict:
     receipt = None
     if run_id is not None:
         try:
-            receipt = kanban.acceptance(card_id, run_id)
+            receipt = kanban.receipt(card_id, run_id)
         except KanbanError:
             receipt = None
-    named = REFUSAL_CLASS.search(text)
-    classification = receipt[0] if receipt else (named.group(1) if named else "unknown")
-    return {"classification": classification, "detail": scrub(receipt[1] if receipt and receipt[1] else text)[:160]}
+    if receipt is None:
+        named = REFUSAL_CLASS.search(text)
+        return {"classification": named.group(1) if named else "unknown", "detail": f"{scrub(text)} ({NO_RECEIPT})"}
+    if receipt.checks:
+        fields = [{"name": c.name, "workflow": c.workflow, "classification": c.classification, "url": c.url} for c in receipt.checks]
+        return {"classification": receipt.classification, "checks": fields, "detail": receipt_line(receipt)[:MAX_DETAIL]}
+    return {"classification": receipt.classification, "detail": scrub(receipt.detail or text)[:MAX_DETAIL]}
 
 
 def clean_reason(text: str | None) -> str:

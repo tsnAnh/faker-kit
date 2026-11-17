@@ -180,7 +180,8 @@ def kanban_main():
         published = json.loads(found["--metadata"])["published_pr"]
         if not refuse or not (refuse.startswith("text-") or refuse == "bare"):
             st.setdefault("events", []).append({"task_id": card["id"], "kind": "pr_acceptance", "run_id": run_id, "created_at": 1,
-                                                "payload": {"ok": not refuse, "classification": refuse or "success", "detail": f"CI acceptance {refuse or 'success'} on the exact head"}})
+                                                "payload": {"ok": not refuse, "classification": refuse or "success",
+                                                            "detail": f"CI acceptance {refuse or 'success'} on the exact head", **st.get("receipt_extra", {})}})
         st.setdefault("completions", []).append({"task": card["id"], "run_id": run_id, "published": published, "kinds": kinds, "profile": profile})
         if refuse:
             die(f"cannot complete {card['id']}: PR acceptance {refuse[5:]}: no proof yet" if refuse.startswith("text-") else f"cannot complete {card['id']} (unknown id or terminal state)")
@@ -714,6 +715,44 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
                  json.dumps(out.get("card")))
     board.set(complete_refuse=None)
 
+    job = "https://github.com/TitoniumLab/SmileWallpaper/actions/runs/44002827263/job/133770839492"
+    head = "4f8722139d321a5acca2c5ecd22677535493431e"
+    real = {"head_sha": head, "pr_url": "https://github.com/TitoniumLab/SmileWallpaper/pull/1", "detail": "", "policy": "fleet-ci",
+            "checks": [{"name": "build", "id": 133770839492, "url": job, "head_sha": head, "classification": "failure", "conclusion": "failure", "qualifying": False,
+                        "workflow": ".github/workflows/ci.yml"}]}
+    hostile = {"head_sha": "nothex", "pr_url": "https://evil.example/pull/9", "detail": "",
+               "checks": [{"name": 7, "url": job, "classification": "failure"},
+                          {"name": "lint", "url": "https://evil.example/x", "classification": "failure"},
+                          {"name": "x" * 500, "url": job, "classification": "failure"},
+                          {"name": "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "workflow": "w.yml", "url": job, "classification": "failure"},
+                          {"name": "ok-check", "workflow": "ci.yml", "url": job, "classification": "success"},
+                          {"name": "unit", "workflow": "ci.yml", "url": job, "classification": "failure"}]}
+    replays = [("failure", real), ("infra", {"checks": [], "detail": "GitHub acceptance evidence unavailable or incomplete; check gh authentication/API access and retry."}),
+               ("pending", {}), ("missing", {}), ("failure", hostile), ("bare", {})]
+    seen: dict[str, dict] = {}
+    for index, (mode, extra) in enumerate(replays):
+        n, unit = 80 + index, f"replay-{index}"
+        add_pr(n, unit)
+        assert project("loop", "unit", unit, "--pr", str(n))[0] == 0
+        ready(n)
+        board.set(complete_refuse=mode, receipt_extra=extra)
+        seen[unit] = json_of(project("merge", "--pr", str(n)))["card"]
+    board.set(complete_refuse=None, receipt_extra={})
+    real_card, infra_card, pending_card, missing_card, hostile_card, bare_card = (seen[f"replay-{i}"] for i in range(6))
+    run.step("kanban refusal detail: a failed CI receipt names the check, workflow, job link, head, and pull request, with the checks as separate fields",
+             real_card["classification"] == "failure"
+             and real_card["detail"] == f"head 4f8722139d32, pull request #1: CI failure on build (.github/workflows/ci.yml): {job}"
+             and real_card["checks"] == [{"name": "build", "workflow": ".github/workflows/ci.yml", "classification": "failure", "url": job}], json.dumps(real_card))
+    run.step("kanban refusal detail: infra, pending, and missing receipts keep their own detail",
+             infra_card["detail"].startswith("GitHub acceptance evidence unavailable") and "checks" not in infra_card
+             and pending_card["detail"] == "CI acceptance pending on the exact head" and missing_card["detail"] == "CI acceptance missing on the exact head",
+             json.dumps([infra_card, pending_card, missing_card]))
+    shown = json.dumps(hostile_card)
+    run.step("kanban refusal detail: malformed or hostile check entries are dropped or scrubbed and never printed raw",
+             [c["name"] for c in hostile_card["checks"]] == ["[removed]", "unit"] and "ghp_" not in shown and "evil.example" not in shown and "xxxx" not in shown
+             and "nothex" not in shown and "pull request #" not in hostile_card["detail"], shown)
+    run.step("kanban refusal detail: a Kanban refusal with no receipt for the run keeps its text and says so",
+             "unknown id or terminal state" in bare_card["detail"] and bare_card["detail"].endswith(" (receipt: none for this run)") and "checks" not in bare_card, json.dumps(bare_card))
     add_pr(60, "wait-u")
     add_pr(61, "wait-v")
     assert project("loop", "unit", "wait-u", "--pr", "60")[0] == 0
@@ -778,6 +817,27 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     mutations = board.mutations()
     quiet = json_of(project("loop", "reconcile"))
     run.step("kanban reconcile: a second run after completion changes nothing", quiet["set_merged"] == 0 and quiet["set_closed"] == 0 and board.mutations() == mutations, json.dumps(quiet)[:200])
+    add_pr(90, "repeat-u")
+    assert project("loop", "unit", "repeat-u", "--pr", "90")[0] == 0
+    ready(90)
+    board.set(complete_refuse="failure", receipt_extra=real)
+    assert project("merge", "--pr", "90")[0] == 0
+    first = json_of(project("loop", "reconcile"))
+    m1 = board.mutations()
+    second = json_of(project("loop", "reconcile"))
+    m2 = board.mutations()
+    third = json_of(project("loop", "reconcile"))
+    m3 = board.mutations()
+    board.set(complete_refuse=None, receipt_extra={})
+
+    def lines_of(out: dict) -> list[str]:
+        return sorted(r["detail"] for r in out["entries"]["refused"] if "build" in r["detail"])
+
+    run.step("kanban refusal detail: loop reconcile prints the same named line on a repeat pass, and the repeat adds only the retry the kit already made",
+             lines_of(first) and lines_of(first) == lines_of(second) == lines_of(third) and all(r.get("checks") for r in third["entries"]["refused"] if "build" in r["detail"])
+             and m3 - m2 == m2 - m1, json.dumps(third["entries"]["refused"])[:300])
+    assert project("loop", "reconcile")[0] == 0
+
 
     events_scenario(run, board, project, add_pr, card_key)
 
