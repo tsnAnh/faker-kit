@@ -881,8 +881,9 @@ def events_scenario(run: Run, board: Board, project: Callable[..., tuple[int, st
     add_pr(158, "event-ghost")
     before = board.state()["creates"]
     project("loop", "reconcile")
-    checked = json_of(project("loop", "check"))
+    check = project("loop", "check")
+    checked = json.loads(check[1])
     run.step("card events: a pull request with no unit card gets none from reconcile; loop check lists it with the fix",
-             board.state()["creates"] == before and card_key("event-ghost") not in board.by_key()
+             check[0] == 4 and board.state()["creates"] == before and card_key("event-ghost") not in board.by_key()
              and any("event-ghost" in line and "faker-kit loop unit event-ghost --pr 158" in line for line in checked["lines"]),
              json.dumps(checked["lines"])[:300])
