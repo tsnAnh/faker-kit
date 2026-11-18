@@ -64,9 +64,11 @@ def claims_scenario(run: Run) -> None:
              json.dumps(refused["later-a"]))
 
     board.set(complete_refuse="text-infra")
+    run.clock += 1000
     infra = json_of(project("loop", "reconcile"))
     infra_row = {r["id"]: r for r in infra["entries"]["refused"]}["later-a"]
     board.set(complete_refuse=None)
+    run.clock += 1000
     done = json_of(project("loop", "reconcile"))
     later = board.by_key()[key("later-a")]
     run.step("kanban claims: after a pending and an infra refusal the next pass completes the card; evidence rows exist for the completing run and at most one claim was ever open",
@@ -112,13 +114,15 @@ def claims_scenario(run: Run) -> None:
 
     card_for("never-f", 74)
     board.set(complete_refuse="pending")
-    for _ in range(3):
+    for pause in (0, 1000, 4000):
+        run.clock += pause
         project("loop", "reconcile")
     never = board.by_key()[key("never-f")]
-    run.step("kanban claims: three refused passes in a row leave the card ready with no claim and no failure count, so Kanban never gives it up",
+    run.step("kanban claims: three refused attempts in a row, each after its hold, leave the card ready with no claim and no failure count, so Kanban never gives it up",
              never["status"] == "ready" and board.open_claims(key("never-f")) == [] and len(runs(key("never-f"))) == 3 and board.state()["failures"].get(never["id"], 0) == 0
              and board.state()["peak"][never["id"]] == 1, str(never["status"]))
     board.set(complete_refuse=None)
+    run.clock += 15000
     assert project("loop", "reconcile")[0] == 0
     mutations, snapshot = board.mutations(), board.state()
     quiet = json_of(project("loop", "reconcile"))

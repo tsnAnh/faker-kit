@@ -9,6 +9,7 @@ from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, let_g
 from faker_kit_gh import Refused, scrub
 from faker_kit_kanban import Card, Kanban, KanbanError
 from faker_kit_loop import CLOSED, DEFAULT_OUTCOME, Loop
+from faker_kit_refusals import Refusals
 from faker_kit_text import refresh
 
 PullReader = Callable[[str, int], dict]
@@ -240,6 +241,7 @@ def card_items(kanban: Kanban, cards: list[Card], kind: str, repos: dict[str, st
 class CardSettler(Settler):
     def __init__(self, kanban: Kanban, loop: CardLoop, cards: list[Card], now: float) -> None:
         self.kanban, self.loop, self.now = kanban, loop, now
+        self.refusals = Refusals(loop.home, loop.bot)
         self.status = {c.id: c.status for c in cards}
 
     def merge(self, item: Tracked, last: Seen) -> tuple[str, dict[str, object]]:
@@ -256,7 +258,8 @@ class CardSettler(Settler):
             open_units = [p for p in self.kanban.parents(card.id) if self.status.get(p) != "done"] if item.kind == "part" else []
             if open_units:
                 return "waiting", {"card": card.id, "units": open_units}
-            result = complete_card(self.kanban, card, item.outcome, Merged(last.number, last.url, last.head, last.merge_commit), item.stages)
+            merged = Merged(last.number, last.url, last.head, last.merge_commit)
+            result = self.refusals.attempt(card.id, last.number, last.head, self.now, lambda: complete_card(self.kanban, card, item.outcome, merged, item.stages))
             if result["completion"] != "done":
                 return "refused", {"card": result.pop("id"), "head": last.head, **result}
         self.mark(item, card, "merged", last.number)
@@ -275,10 +278,7 @@ class CardSettler(Settler):
         if run_id is None:
             return False
         payload: dict[str, object] = {"pr_url": live.url, "head_sha": live.head}
-        if any(row.run_id == run_id and row.kind == "pr_published" and row.payload == payload for row in self.kanban.evidence_list(card.id)):
-            return False
-        self.kanban.evidence_add(card.id, run_id, "pr_published", payload)
-        return True
+        return self.kanban.evidence_add(card.id, run_id, "pr_published", payload)
 
     def mark(self, item: Tracked, card: Card, state: str, pr: int | None) -> None:
         if item.kind == "part":

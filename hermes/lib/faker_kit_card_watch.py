@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from faker_kit_cards import CHIEF_KEY, hold, part_entry, refresh_work, unit_key
 from faker_kit_gh import scrub
-from faker_kit_kanban import EXTERNAL, Card, Header, Kanban, KanbanError
+from faker_kit_kanban import EXTERNAL, Card, EvidenceRow, Header, Kanban, KanbanError
 from faker_kit_loop import CLOSED, Loop
 from faker_kit_pickup import needs_brief
 
@@ -75,7 +76,20 @@ def sweep(kanban: Kanban, card: Card, now: float) -> tuple[str, bool] | None:
     return None
 
 
-def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple[str, str], dict], now: float, bot: str | None = None) -> dict:
+def payload_ref(payload: dict[str, object]) -> str:
+    head = payload.get("head_sha")
+    return f"head {head[:12]}" if isinstance(head, str) and head else scrub(json.dumps(payload, sort_keys=True))[:80]
+
+
+def duplicate_groups(rows: list[EvidenceRow]) -> list[dict]:
+    groups: dict[tuple[str, str], list[EvidenceRow]] = {}
+    for row in rows:
+        groups.setdefault((row.kind, json.dumps(row.payload, sort_keys=True)), []).append(row)
+    return [{"kind": kind, "payload": payload_ref(found[0].payload), "count": len(found), "runs": sorted({r.run_id for r in found if r.run_id is not None}), "rows": [r.id for r in found]}
+            for (kind, _), found in groups.items() if len(found) > 1]
+
+
+def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple[str, str], dict], now: float, bot: str | None = None, evidence: bool = False) -> dict:
     scope = None if role == "chief" else project
     cards = kanban.cards(False)
     by_id = {c.id: c for c in cards}
@@ -93,6 +107,13 @@ def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple
         fields = card.header.fields
         ident = (card.key or "").rsplit(":", 1)[-1]
         subject = f"unit {card.slug}" if fields.get("Kind") == "unit" else f"part {ident}"
+        if evidence:
+            groups = duplicate_groups(kanban.evidence_list(card.id))
+            if groups:
+                shown = "; ".join(f"{g['kind']} x{g['count']} ({g['payload']}) on runs {','.join(str(r) for r in g['runs'])}" for g in groups)
+                report("duplicate_evidence", card, subject, f"duplicate evidence rows: {shown}",
+                       "none to run: hermes kanban evidence takes add and list only, so the kit lists the rows and never removes one; no pass adds further copies", False)
+                findings[-1]["duplicates"] = groups
         if card.status == "blocked" and kanban.given_up_on_stale_claim(card):
             report("stale_blocked", card, subject, "Kanban gave the card up after two stale claims", f"hermes kanban unblock {card.id} (the owner or the chief runs it; the kit never does)")
             continue
