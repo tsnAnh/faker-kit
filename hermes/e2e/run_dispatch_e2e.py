@@ -554,7 +554,7 @@ class Run:
             "HOME": str(self.home), "PATH": f"{self.bin}:/usr/bin:/bin", "TMPDIR": str(self.root), "LANG": "C.UTF-8",
             "FAKER_KIT_HOME": str(self.team), "CLAUDE_CONFIG_DIR": "", "E2E_GH_STATE": str(self.gh_state), "E2E_GH_LOG": str(self.gh_log),
             "E2E_CLAUDE_LOG": str(self.claude_log), "E2E_ORIGIN": str(self.root / "origin"),
-            "E2E_TOOL_LOG": str(self.root / "tool-calls.log"), "E2E_NO_IMAGE": str(self.root / "no-image"),
+            "E2E_TOOL_LOG": str(self.root / "tool-calls.log"), "FAKER_KIT_PING_PAUSE_SECONDS": "0", "E2E_NO_IMAGE": str(self.root / "no-image"),
             "E2E_DOCKER_STDIN": str(self.root / "docker-stdin"), "E2E_DOCKER_ONCE": str(self.root / "docker-once"), "E2E_CLOCK": str(self.clock),
         }
 
@@ -2251,7 +2251,7 @@ def install_script(run: Run, source: Path, ref: str, home: Path) -> subprocess.C
                           env=env, capture_output=True, text=True, timeout=300)
 
 
-def install_scenario(run: Run, work: Path) -> None:
+def install_bed(run: Run, work: Path) -> tuple[Path, Path, Path, Path, str, dict[str, str], Callable[..., subprocess.CompletedProcess[str]], faker_kit.Services, Path]:
     home = work / "home"
     hermes = home / ".hermes"
     state = hermes / "faker-kit"
@@ -2302,6 +2302,11 @@ def install_scenario(run: Run, work: Path) -> None:
         return subprocess.run(["bash", str(source / "hermes" / "install.sh"), "--ref", ref, "--source", source_url or str(source), "--no-gateway", *flags],
                               env={**env, **(extra_env or {})}, capture_output=True, text=True, timeout=300)
 
+    return home, hermes, state, source, ref, env, install, services, hermes_bin
+
+
+def install_scenario(run: Run, work: Path) -> None:
+    home, hermes, state, source, ref, env, install, services, hermes_bin = install_bed(run, work)
     calls_before = len(run.gh_log.read_text().splitlines())
     done = install()
     new = state
@@ -2503,8 +2508,23 @@ def install_scenario(run: Run, work: Path) -> None:
                             env={**env, "PATH": f"{shared_bin}:{env['PATH']}"}, capture_output=True, text=True, timeout=300)
     run.step("install.sh never links faker-kit into a folder outside the home folder, and says so",
              shared.returncode == 0 and not (shared_bin / "faker-kit").exists() and "outside your home folder" in shared.stderr, shared.stderr.strip()[-200:])
+
+
+def install_gate_scenario(run: Run, work: Path) -> None:
+    _, hermes, _, _, _, env, install, _, _ = install_bed(run, work)
+    install()
     gate_scenario.gate_scenario(run, hermes, BOT, BOOTSTRAP, install, env, work)
+
+
+def install_wake_gate_scenario(run: Run, work: Path) -> None:
+    _, hermes, _, _, _, env, install, _, _ = install_bed(run, work)
+    install()
     wake_gate_scenario.wake_scenario(run, hermes, BOT, CHIEF, env, work)
+
+
+def install_wrapper_scenario(run: Run, work: Path) -> None:
+    _, hermes, new, _, _, env, install, _, _ = install_bed(run, work)
+    install()
     launched = subprocess.run([str(hermes / "bin" / "faker-kit"), "andon", "show"], env={**env, "HERMES_HOME": str(hermes / "profiles" / BOOTSTRAP)}, capture_output=True, text=True)
     run.step("the installed wrapper runs the command and sees the machine cord",
              launched.returncode == 0 and json.loads(launched.stdout)["reason"] == "cloud bill spike", launched.stdout.strip() or launched.stderr.strip())
@@ -2517,6 +2537,7 @@ def install_scenario(run: Run, work: Path) -> None:
     run.step("the owner's shell launches a setup session from the briefs/default folder the installer created",
              owner_launch.returncode == 0 and json.loads(owner_launch.stdout)["repo"] == REPO and (new / "briefs" / "default").is_dir()
              and len(run.claude_log.read_text().splitlines()) == launches + 1, owner_launch.stdout.strip() or owner_launch.stderr.strip())
+
 
 
 PROVIDER = "e2e-provider-placeholder"
@@ -3126,7 +3147,7 @@ def profile_validation_scenario(run: Run, other: Run) -> None:
     calls_before = len(profile_creates(other.hermes))
     repo("acme/half")
     for mode, env in (("fails", {"E2E_HERMES_SHOW": "fail"}), ("hangs", {"E2E_HERMES_SHOW": "hang"})):
-        profiles_module.PROFILE_CHECK_SECONDS = 1
+        profiles_module.PROFILE_CHECK_SECONDS = 0.2
         started = time.monotonic()
         code, status, err = other.kit("status", bot=BOOTSTRAP, env=env)
         took = time.monotonic() - started
@@ -4132,6 +4153,9 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "trust": lambda c: trust_scenario(c.run()),
     "loop": lambda c: loop_scenario(c.run()),
     "install": lambda c: install_scenario(c.run(), c.root / "install"),
+    "install-gate": lambda c: install_gate_scenario(c.run(), c.root / "install-gate"),
+    "install-wake-gate": lambda c: install_wake_gate_scenario(c.run(), c.root / "install-wake-gate"),
+    "install-wrapper": lambda c: install_wrapper_scenario(c.run(), c.root / "install-wrapper"),
     "refresh": scenario_refresh,
     "provider": lambda c: provider_scenario(c.run(), c.root / "provider"),
     "runner": lambda c: runner_scenario(c.run(), c.root / "runner"),
