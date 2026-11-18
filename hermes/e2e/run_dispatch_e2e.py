@@ -942,7 +942,7 @@ def launch_scenario(run: Run) -> None:
     andon_at = first.find("Stop rule:")
     run.step("the prompt carries the faker-mode footer once, after the brief and next to the andon footer, and the brief ends where it did",
              first.count(footer_text) == 1 and first.count("Faker-mode rule:") == 1 and first.index("README.md only.") < andon_at < first.index(footer_text)
-             and first.endswith(footer_text) and "Add no new documentation file unless this brief asks for one" in first
+             and first.endswith(footer_text + faker_kit.CODING_FOOTER) and "Add no new documentation file unless this brief asks for one" in first
              and first.count('subagent_type "faker-agent"') == 1 and first.count("absolute path of the faker-mode skill's SKILL.md in its prompt") == 1, first[-420:].replace("\n", " "))
     sessions_before = len(run.claude_log.read_text().splitlines())
     repeated = run.brief("repeat.md", "/faker-mode\n\nGOAL: x.\n" + faker_kit.FAKER_RULE + "\n")
@@ -950,6 +950,18 @@ def launch_scenario(run: Run) -> None:
     seen_repeat = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
     run.step("a brief that already holds the faker-mode sentence still gets it once, and the andon footer stays",
              code == 0 and seen_repeat.count(faker_kit.FAKER_RULE) == 1 and "agent:andon" in seen_repeat and len(run.claude_log.read_text().splitlines()) == sessions_before + 1, err.strip())
+    reuse, confirm = "Reuse before build:", "Confirm before coding."
+    run.step("the launch prompt carries the coding rule once, both its parts once each, after the faker-mode footer, under 1500 characters, no secret shape",
+             first.count(faker_kit.CODING_RULE) == 1 and first.count(reuse) == 1 and first.count(confirm) == 1 and first.index("Faker-mode rule:") < first.index("Coding rule:")
+             and first.count("Coding rule:") == 1 and 'report the question under "Open questions" of your closing summary or pull request body' in first
+             and "ONE batched question" in first and "OWNER DECISIONS line" in first and "search the web" in first and "SVG icons" in first
+             and len(faker_kit.CODING_RULE) < 1500 and not faker_kit.SECRET_SHAPES.search(faker_kit.CODING_FOOTER), first[-700:].replace("\n", " "))
+    held_rule = run.brief("holds-coding.md", "/faker-mode\n\nGOAL: x.\n" + faker_kit.CODING_RULE + "\n")
+    code, _, err = run.kit("launch", "--brief-file", str(held_rule))
+    seen_coding = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
+    run.step("a brief that already holds the coding rule still gets it once, and the other footers stay once",
+             code == 0 and seen_coding.count(faker_kit.CODING_RULE) == 1 and seen_coding.count("Faker-mode rule:") == 1 and seen_coding.count("Closing summary rule:") == 1
+             and seen_coding.count("Stop rule:") == 1, err.strip())
     summary_rule = first.count("Closing summary rule:")
     held = run.brief("holds-summary.md", "/faker-mode\n\nGOAL: x.\n" + faker_kit.SUMMARY_RULE + "\n")
     code, _, err = run.kit("launch", "--brief-file", str(held))
@@ -961,6 +973,8 @@ def launch_scenario(run: Run) -> None:
     code, out, err = run.kit("launch", "--project", "shop", "--brief-file", str(run.brief_for(BOOTSTRAP, "setup.md", "/faker-mode\n\nGOAL: set up the repository.\n")), bot=BOOTSTRAP)
     seen_boot = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
     run.step("a launch from the bootstrap bot carries both footers once", code == 0 and seen_boot.count(faker_kit.FAKER_FOOTER) == 1 and seen_boot.count("Stop rule:") == 1, out.strip() or err.strip())
+    run.step("a launch from the bootstrap bot carries the coding rule once, with both of its parts",
+             seen_boot.count(faker_kit.CODING_RULE) == 1 and seen_boot.count("Reuse before build:") == 1 and seen_boot.count("Confirm before coding.") == 1, seen_boot[-300:].replace("\n", " "))
     run.step("a launch prompt carries the pull request label rule once, in the andon footer both backends share, and neither footer trips the secret check",
              seen_boot.count("Label rule:") == 1 and "add the label faker-kit to it in the same step" in seen_boot and "check the label is on the pull request before the session ends" in seen_boot
              and "add the line `Label: faker-kit` to the pull request body" in seen_boot and "Never add the label to a pull request you did not open" in seen_boot
@@ -984,7 +998,7 @@ def launch_scenario(run: Run) -> None:
     seen_rule = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1]
     sentence = "Do not decide an unspecified requirement or choose between visible patterns (a new switch, screen, flag) yourself"
     run.step("the launch footer tells the session not to decide an unspecified requirement, to follow the existing pattern or leave it out and list it under Open questions, once",
-             seen_rule.count(sentence) == 1 and seen_rule.count('under "Open questions" in the pull request body') == 1 and seen_rule.endswith(faker_kit.FAKER_FOOTER)
+             seen_rule.count(sentence) == 1 and seen_rule.count('under "Open questions" in the pull request body') == 1 and seen_rule.endswith(faker_kit.FAKER_FOOTER + faker_kit.CODING_FOOTER)
              and sentence in faker_kit.FAKER_RULE, seen_rule[-300:].replace("\n", " "))
     operating = (HERMES / "profiles" / "OPERATING.md").read_text()
     dispatch = (HERMES / "skills" / "dispatch" / "SKILL.md").read_text()
@@ -2328,9 +2342,23 @@ def install_scenario(run: Run, work: Path) -> None:
     operating = (HERMES / "profiles" / "OPERATING.md").read_text()
     souls = {bot: (hermes / "profiles" / bot / "SOUL.md").read_text() for bot in (BOOTSTRAP, BOT)}
     run.step("every bot's SOUL.md is its role prompt followed by the shared operating guide",
-             souls[BOT].startswith((HERMES / "profiles" / "project" / "SOUL.md").read_text().rstrip()) and souls[BOT].endswith(operating)
-             and souls[BOOTSTRAP].startswith((HERMES / "profiles" / "bootstrap" / "SOUL.md").read_text().rstrip()) and souls[BOOTSTRAP].endswith(operating),
+             souls[BOT].startswith((HERMES / "profiles" / "project" / "SOUL.md").read_text().rstrip()) and (operating + "\n" + faker_kit.CODING_RULE + "\n") in souls[BOT]
+             and souls[BOOTSTRAP].startswith((HERMES / "profiles" / "bootstrap" / "SOUL.md").read_text().rstrip()) and (operating + "\n" + faker_kit.CODING_RULE + "\n") in souls[BOOTSTRAP],
              " | ".join(f"{bot}: {len(text)} chars" for bot, text in souls.items()))
+    run.step("a fresh install gives every bot's SOUL.md the coding rule once, with both of its parts, after the shared guide",
+             all(text.count(faker_kit.CODING_RULE) == 1 and text.count("Reuse before build:") == 1 and text.count("Confirm before coding.") == 1 and text.index(operating) < text.index("Coding rule:")
+                 for text in souls.values()), " | ".join(f"{bot}: {text.count('Coding rule:')}" for bot, text in souls.items()))
+    previous = {bot: souls[bot].replace("\n" + faker_kit.CODING_RULE + "\n", "") for bot in souls}
+    edited = "my own notes about this bot\n"
+    (hermes / "profiles" / BOT / "SOUL.md").write_text(previous[BOT])
+    (hermes / "profiles" / BOOTSTRAP / "SOUL.md").write_text(edited)
+    (hermes / "profiles" / BOT / "SOUL.md.bak").unlink(missing_ok=True)
+    again = install()
+    after = {bot: (hermes / "profiles" / bot / "SOUL.md").read_text() for bot in (BOOTSTRAP, BOT)}
+    run.step("a refresh over the previous kit's SOUL.md adds the coding rule once, and over a user-edited SOUL.md keeps the old file as SOUL.md.bak",
+             again.returncode == 0 and faker_kit.CODING_RULE not in previous[BOT] and after[BOT] == souls[BOT] and after[BOT].count(faker_kit.CODING_RULE) == 1
+             and after[BOOTSTRAP] == souls[BOOTSTRAP] and (hermes / "profiles" / BOOTSTRAP / "SOUL.md.bak").read_text() == edited
+             and (hermes / "profiles" / BOT / "SOUL.md.bak").read_text() == previous[BOT], (again.stdout + again.stderr).strip()[-300:])
     dirs = __import__("yaml").safe_load((hermes / "config.yaml").read_text())["skills"]["external_dirs"]
     skill = hermes / "profiles" / BOT / "skills" / "dispatch"
     run.step("skill folders and links point at the faker-kit kit", dirs == ["/elsewhere/skills", str(new / "kit" / "plugins" / "pstack" / "skills")]
