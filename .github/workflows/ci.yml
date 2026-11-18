@@ -94,6 +94,8 @@ jobs:
           node-version: 22
       - uses: oven-sh/setup-bun@v2
       - name: Vendored plugins match upstream plus model rules
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/sync-upstream.mjs --check
       - name: Manifests, frontmatter, links, catalog
         run: node scripts/validate.mjs

@@ -20,7 +20,7 @@ A hand edit under a vendored plugin fails `node scripts/sync-upstream.mjs --chec
 3. A name the team chose over upstream's: add a path or text rule to `upstream/renames.json`.
 4. An upstream hook event the adapter does not map yet: add it to `UPSTREAM_TO_AGENT_EVENT` in the sync script and to the adapter, with a step in `scripts/e2e/kit-e2e.mjs` that runs the adapter on that event.
 5. Anything else: change the behavior in `plugins/trust-ladder/` (a wrapper skill, hook, or template), not in the vendored file.
-6. Run `node scripts/sync-upstream.mjs --src <checkout of the upstream repository>` or without `--src` to clone it.
+6. Run `node scripts/sync-upstream.mjs --src <checkout of the upstream repository>` or without `--src` to clone it. The clone retries transient failures; `SYNC_UPSTREAM_RETRY_SCALE` (0 to 1) only shortens its delays and wall bound, for the e2e steps.
 
 To take a newer upstream: `node scripts/sync-upstream.mjs --ref <sha>`. Fix any rule whose count changed, then read `upstream/CHANGES.md` in the diff.
 
@@ -108,6 +108,7 @@ The Claude review workflow reads this section with REVIEW.md.
 | Rule | Enforced by |
 |---|---|
 | Vendored plugins match upstream plus the rules | `sync-upstream.mjs --check` in CI's `validate` job |
+| The upstream fetch retries only transient failures (429, 408, 5xx, network errors) with bounded backoff and jitter, fails with a message that names an unreachable upstream, and sends the workflow token only to github.com over https, through git's environment configuration | the `sync-upstream` steps of `scripts/e2e/kit-e2e.mjs` (stub `git` on `PATH`, local upstream repository, no network), in CI's `agents-load-the-kit` job |
 | Manifests, frontmatter, links, and catalog entries are valid | `validate.mjs` in CI's `validate` job |
 | Generated docs are current | `gen-catalog.mjs --check` in CI's `validate` job |
 | The kit's Python lint rules hold | `ruff check` in CI's `lint` job |
