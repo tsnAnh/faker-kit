@@ -79,7 +79,7 @@ def sha(letter: str) -> str:
 
 
 FAKE_GH = r'''
-import base64, json, os, re, subprocess, sys, urllib.parse
+import json, os, re, sys, urllib.parse
 from pathlib import Path
 
 state_path = Path(os.environ["E2E_GH_STATE"])
@@ -238,6 +238,7 @@ if args[0] == "api":
         name = route[len(prefix + "/contents/"):]
         if name not in state["files"]:
             fail("gh: Not Found (HTTP 404)")
+        import base64
         answer({"content": base64.b64encode(state["files"][name].encode()).decode()})
     elif route == prefix + "/pulls":
         query = urllib.parse.parse_qs(split.query)
@@ -310,6 +311,7 @@ elif args[:2] == ["issue", "close"]:
             issue["state"] = "closed"
     save()
 elif args[:2] == ["repo", "clone"]:
+    import subprocess
     origin = Path(os.environ["E2E_ORIGIN"])
     if not (origin / ".git").exists():
         subprocess.run(["git", "init", "-q", "-b", "main", str(origin)], check=True)
@@ -382,7 +384,15 @@ if args[:1] == ["run"]:
 FAKE_HERMES = r'''
 import json, os, sys
 from pathlib import Path
-import yaml
+
+
+class LazyYaml:
+    def __getattr__(self, name):
+        import yaml as real
+        return getattr(real, name)
+
+
+yaml = LazyYaml()
 
 home = os.environ.get("HERMES_HOME")
 root = (Path(home).parent.parent if Path(home).parent.name == "profiles" else Path(home)) if home else Path(os.environ["HOME"]) / ".hermes"
@@ -522,6 +532,10 @@ def no_network(*_args: object) -> object:
     raise AssertionError("the e2e must stub every outbound call")
 
 
+def stub_file(name: str, text: str) -> str:
+    return f"#!{sys.executable}{' -S' if name == 'gh' else ''}\n{text}"
+
+
 class Failure(Exception):
     pass
 
@@ -560,7 +574,7 @@ class Run:
 
     def write_exec(self, name: str, text: str) -> None:
         path = self.bin / name
-        path.write_text(f"#!{sys.executable}\n{text}")
+        path.write_text(stub_file(name, text))
         path.chmod(0o755)
 
     def build(self) -> None:
@@ -2516,10 +2530,10 @@ def install_gate_scenario(run: Run, work: Path) -> None:
     gate_scenario.gate_scenario(run, hermes, BOT, BOOTSTRAP, install, env, work)
 
 
-def install_wake_gate_scenario(run: Run, work: Path) -> None:
+def install_wake_gate_scenario(run: Run, work: Path, scenario: Callable[..., None]) -> None:
     _, hermes, _, _, _, env, install, _, _ = install_bed(run, work)
     install()
-    wake_gate_scenario.wake_scenario(run, hermes, BOT, CHIEF, env, work)
+    scenario(run, hermes, BOT, CHIEF, env, work)
 
 
 def install_wrapper_scenario(run: Run, work: Path) -> None:
@@ -4154,7 +4168,8 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "loop": lambda c: loop_scenario(c.run()),
     "install": lambda c: install_scenario(c.run(), c.root / "install"),
     "install-gate": lambda c: install_gate_scenario(c.run(), c.root / "install-gate"),
-    "install-wake-gate": lambda c: install_wake_gate_scenario(c.run(), c.root / "install-wake-gate"),
+    "install-wake-gate-real": lambda c: install_wake_gate_scenario(c.run(), c.root / "install-wake-gate-real", wake_gate_scenario.real_wake_scenario),
+    "install-wake-gate-fake": lambda c: install_wake_gate_scenario(c.run(), c.root / "install-wake-gate-fake", wake_gate_scenario.fake_wake_scenario),
     "install-wrapper": lambda c: install_wrapper_scenario(c.run(), c.root / "install-wrapper"),
     "refresh": scenario_refresh,
     "provider": lambda c: provider_scenario(c.run(), c.root / "provider"),
@@ -4194,7 +4209,7 @@ def worker(name: str, root: Path, result: Path) -> int:
     error: str | None = "the scenario raised before it finished; the worker's stderr has the traceback"
     STEP_CLOCK[0] = started = time.perf_counter()
     if not os.environ.get(REAL_STUBS_ENV):
-        inprocess_stubs.install({"gh": f"#!{sys.executable}\n{FAKE_GH}", "hermes": f"#!{sys.executable}\n{FAKE_HERMES}"})
+        inprocess_stubs.install({"gh": stub_file("gh", FAKE_GH), "hermes": stub_file("hermes", FAKE_HERMES)})
     try:
         SCENARIOS[name](Ctx(root, steps, verdicts))
         error = None
@@ -4293,6 +4308,7 @@ def main(argv: list[str] | None = None) -> int:
         os.environ[REAL_STUBS_ENV] = "1"
     budgets: dict[str, float] = json.loads(BUDGETS_PATH.read_text()) if BUDGETS_PATH.exists() else {}
     root = Path(tempfile.mkdtemp(prefix="faker-kit-e2e-"))
+    print(f"running {len(names)} scenarios on {max(1, args.jobs)} workers ({os.cpu_count()} CPUs)", flush=True)
     began = time.perf_counter()
     results = run_workers(names, root, max(1, args.jobs), budgets)
     wall = time.perf_counter() - began
