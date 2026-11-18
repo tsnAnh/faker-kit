@@ -88,7 +88,7 @@ def visibility_scenario(run: Run) -> None:
     run.step("visibility case 4: after the cutover a launch with no unit card refuses, names the unit and the exact command, and starts nothing",
              refused[0] != 0 and "no unit card for kanban-compact-board in shop" in refused[2] and "faker-kit loop unit kanban-compact-board --part <id>" in refused[2]
              and key not in board.by_key(), refused[2].strip())
-    assert project("loop", "unit", "kanban-compact-board")[0] == 0
+    assert project("loop", "unit", "kanban-compact-board", "--title", "Visitors see the fixture change")[0] == 0
     launched = project("launch", "--brief-file", str(late))
     out = json_of(launched)
     shown = out.get("card", {})
@@ -168,7 +168,7 @@ def visibility_scenario(run: Run) -> None:
     run.step("visibility case 2: align --apply writes the Status text on each part card, and a second apply changes nothing",
              applied.get("count") == plan.get("count") and again.get("count") == 0 and f"in progress: unit work-0 running (card {running_units[0]})" in board.body("faker-kit:chief:100")
              and "Work: every unit done" in board.body("faker-kit:chief:300"), json.dumps(again))
-    added = json_of(chief("handoff", "--project", PROJECT, "--part", "Ship the new flow", "--decisions", "owner said so"))
+    added = json_of(chief("handoff", "--project", PROJECT, "--part", "Ship the new flow", "--title", "Ship the new flow", "--decisions", "owner said so"))
     part_key = f"faker-kit:chief:{added.get('id')}"
     moved = chief("loop", "set", str(added.get("id")), "--state", "in-progress")
     run.step("visibility case 2: loop set --state in-progress on a new part writes its Status text in the same call and leaves the Kanban status to Pal",

@@ -30,11 +30,11 @@ if (HERE.parent / "vendor").is_dir() and str(HERE.parent / "vendor") not in sys.
 
 import yaml
 from faker_kit_andon import LABEL, MACHINE, Andon, AndonError, Cord, clean_reason, issue_body
-from faker_kit_backfill import backfill
+from faker_kit_backfill import backfill, backfill_refs
 from faker_kit_card_watch import align as align_parts
 from faker_kit_card_watch import check as check_cards
 from faker_kit_card_watch import hold_live_units
-from faker_kit_cards import CLOSE_KINDS, CardLoop, Merged, bound_pr_url, close_card, complete_card, create_unit, hold, refresh_work, unit_key, unit_rows
+from faker_kit_cards import CLOSE_KINDS, CardLoop, Merged, bound_pr_url, close_card, complete_card, create_unit, hold, ref_view, refresh_work, retitle_card, unit_key, unit_rows
 from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, SESSION_ID, Cloud, CloudError, trust_checkout
 from faker_kit_cron_list import cron_jobs
 from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
@@ -86,6 +86,7 @@ from faker_kit_pickup import Slots, abandoned_after_steer, pickup_candidates, re
 from faker_kit_profiles import Profiles
 from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, reconcile, render, seen_pull, tsv_items
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
+from faker_kit_refs import belongs_elsewhere, find_ref, foreign, known_ref
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
 from faker_kit_session_card import steered, with_steer, with_summary
 from faker_kit_session_summary import STEER_MESSAGE, read_summary
@@ -138,8 +139,8 @@ SUMMARY_FOOTER = (
     "a draft is a hold and no bot merges it.\n"
 )
 SUMMARY_RULE = SUMMARY_FOOTER.strip().removeprefix("Closing summary rule: ")
-LOOP_ACTIONS = {"chief": ("show", "set", "digest", "migrate", "reconcile", "backfill", "close", "check", "align"),
-                "project": ("show", "migrate", "unit", "reconcile", "backfill", "close", "check")}
+LOOP_ACTIONS = {"chief": ("show", "set", "digest", "migrate", "reconcile", "backfill", "close", "check", "align", "title"),
+                "project": ("show", "migrate", "unit", "reconcile", "backfill", "close", "check", "title")}
 ROLE_COMMANDS = {
     "project": {"launch", "merge", "status", "andon", "incidents", "issues", "loop", "news", "session", "pickup"},
     "bootstrap": {"add-project", "launch", "status", "andon", "refresh", "import"},
@@ -851,12 +852,12 @@ class Kit:
     def kanban(self, caller: Bot) -> Kanban:
         return Kanban(self.kanban_runner(caller.name))
 
-    def handoff(self, caller: Bot, project: str, part: str, decisions: str, outcome: str = DEFAULT_OUTCOME) -> dict:
+    def handoff(self, caller: Bot, project: str, part: str, decisions: str, outcome: str = DEFAULT_OUTCOME, title: str | None = None) -> dict:
         owner = self.policy().projects().get(project)
         if owner is None:
             raise Refused(f"no project {project} on this machine; faker-kit status --all lists them")
         if cutover(self.home):
-            return CardLoop(self.kanban(caller), self.home, caller.name, self.role_repos(caller)).add(project, owner.name, str(owner.repo), part, decisions, self.now(), outcome)
+            return CardLoop(self.kanban(caller), self.home, caller.name, self.role_repos(caller)).add(project, owner.name, str(owner.repo), part, decisions, self.now(), outcome, title)
         return part_row(Loop(self.home, caller.name).add(project, owner.name, part, decisions, self.now(), outcome))
 
     def role_repos(self, caller: Bot) -> dict[str, str]:
@@ -866,15 +867,29 @@ class Kit:
 
     def loop(self, caller: Bot, action: str, part_id: int | str | None, state: str | None, prs: list[int], waits_on: str | None, reported: bool,
              everything: bool, evidence: list[str] | None = None, dry_run: bool = False, apply: bool = False, part: int | None = None,
-             reason: str | None = None, close_as: str | None = None) -> dict:
+             reason: str | None = None, close_as: str | None = None, title: str | None = None, text: str | None = None, refs: bool = False) -> dict:
         if action not in LOOP_ACTIONS[caller.role]:
             raise Refused(f"loop {action} is not one of {caller.name}'s actions ({', '.join(LOOP_ACTIONS[caller.role])})")
         if (reason is not None or close_as is not None) and action != "close":
             raise Refused("--reason and --as belong to loop close")
+        if title is not None and action != "unit":
+            raise Refused("--title belongs to loop unit; loop title takes --text")
+        if text is not None and action != "title":
+            raise Refused("--text belongs to loop title")
+        if refs and action != "backfill":
+            raise Refused("--refs belongs to loop backfill")
+        if action == "title":
+            return self.loop_title(caller, part_id, state, prs, waits_on, reported, evidence, dry_run, apply, part, text)
+        if action == "show" and isinstance(part_id, str) and known_ref(part_id):
+            if state or prs or waits_on or reported or evidence or part is not None or dry_run or apply:
+                raise Refused("loop show <ref> takes no changes")
+            if not cutover(self.home):
+                raise Refused("the Kanban cutover is not done: there are no cards, so no card holds a reference")
+            return ref_view(self.kanban(caller), caller.role, caller.project, part_id)
         if action == "migrate":
             return self.loop_migrate(caller, part_id, state, prs, waits_on, reported, evidence, dry_run, apply, part)
         if action == "backfill":
-            return self.loop_backfill(caller, part_id, state, prs, waits_on, reported, evidence, dry_run, apply, part)
+            return self.loop_backfill(caller, part_id, state, prs, waits_on, reported, evidence, dry_run, apply, part, refs)
         if action == "close":
             return self.loop_close(caller, part_id, state, prs, waits_on, reported, evidence, dry_run, apply, part, reason, close_as)
         if action in ("check", "align"):
@@ -897,7 +912,7 @@ class Kit:
                 raise Refused("loop reconcile takes no arguments; it reads GitHub for every recorded pull request and updates the record")
             return self.loop_reconcile(caller, strict=True)
         if action == "unit":
-            return self.loop_unit(caller, part_id, state, waits_on, reported, evidence, prs, part)
+            return self.loop_unit(caller, part_id, state, waits_on, reported, evidence, prs, part, title)
         if part is not None:
             raise Refused("--part belongs to loop unit")
         if caller.role == "project":
@@ -913,7 +928,7 @@ class Kit:
         if action == "set":
             if part_id is None:
                 raise Refused("loop set takes the part's id: faker-kit loop set <id> --state <state>")
-            return cards.update(self.part_number(part_id), state, prs, waits_on, reported, self.now(), evidence, self.head_reader(caller))
+            return cards.update(self.part_number(self.ref_target(caller, part_id)), state, prs, waits_on, reported, self.now(), evidence, self.head_reader(caller))
         if part_id is not None or state or prs or waits_on or reported or evidence:
             raise Refused(f"loop {action} takes no part id or changes; use loop set <id>")
         if action == "digest":
@@ -996,14 +1011,14 @@ class Kit:
             return []
         blocked: list[dict] = []
         for card in abandoned_after_steer(kanban.cards(False), caller.name, str(caller.project), self.open_units(caller), self.now()):
-            reason = f"faker-kit: unit {card.title} still had no pull request after its one steer; blocked, never relaunched"
+            reason = f"faker-kit: unit {card.slug} still had no pull request after its one steer; blocked, never relaunched"
             try:
                 if card.status == "running":
                     kanban.release(card.id, reason)
                 kanban.block(card.id, reason)
-                blocked.append({"unit": card.title, "card": card.id, "blocked": True, "reason": reason})
+                blocked.append({"unit": card.slug, "card": card.id, "blocked": True, "reason": reason})
             except KanbanError as err:
-                blocked.append({"unit": card.title, "card": card.id, "blocked": False, "detail": scrub(str(err))[:160]})
+                blocked.append({"unit": card.slug, "card": card.id, "blocked": False, "detail": scrub(str(err))[:160]})
         return blocked
 
     def pickup_command(self, caller: Bot | None, action: str, with_job: bool = True) -> dict:
@@ -1049,7 +1064,7 @@ class Kit:
         if state.enabled and caller is not None and caller.role == "project":
             free = limits[str(caller.project)].free
             out["free_slots"] = free
-            listed = [{"unit": c.title, "card": c.id} for c in found[str(caller.project)][:free]]
+            listed = [{"unit": c.slug, "card": c.id} for c in found[str(caller.project)][:free]]
         return {**out, "pickup": listed}
 
     @staticmethod
@@ -1090,13 +1105,15 @@ class Kit:
         return planned
 
     def loop_backfill(self, caller: Bot, part_id: int | str | None, state: str | None, prs: list[int], waits_on: str | None, reported: bool,
-                      evidence: list[str] | None, dry_run: bool, apply: bool, part: int | None) -> dict:
+                      evidence: list[str] | None, dry_run: bool, apply: bool, part: int | None, refs: bool = False) -> dict:
         if part_id is not None or state or prs or waits_on or reported or evidence or part is not None:
-            raise Refused("loop backfill takes only --dry-run or --apply")
+            raise Refused("loop backfill takes only --refs, --dry-run or --apply")
         if dry_run == apply:
             raise Refused("loop backfill takes exactly one of --dry-run (read only) or --apply")
         if not cutover(self.home):
             raise Refused("the Kanban cutover is not done: there are no cards to rewrite, so nothing was changed")
+        if refs:
+            return backfill_refs(self.kanban(caller), self.home, caller.role, caller.name, caller.project, apply)
         return backfill(self.kanban(caller), self.home, caller.role, caller.name, caller.project, self.role_repos(caller), apply)
 
     def loop_close(self, caller: Bot, target: int | str | None, state: str | None, prs: list[int], waits_on: str | None, reported: bool,
@@ -1110,12 +1127,35 @@ class Kit:
         return close_card(self.kanban(caller), self.home, caller.role, caller.name, caller.project, self.role_repos(caller), target, reason, close_as or "abandoned", self.now(), dry_run)
 
     def loop_unit(self, caller: Bot, unit: int | str | None, state: str | None, waits_on: str | None, reported: bool, evidence: list[str] | None,
-                  prs: list[int], part: int | None) -> dict:
+                  prs: list[int], part: int | None, title: str | None = None) -> dict:
         if not isinstance(unit, str) or state or waits_on or reported or evidence:
-            raise Refused("loop unit takes the unit id: faker-kit loop unit <unit-id> [--part N] [--pr N]")
+            raise Refused('loop unit takes the unit id: faker-kit loop unit <unit-id> --title "<what changes, in a short phrase>" [--part N] [--pr N]')
         if not cutover(self.home):
             raise Refused("the Kanban cutover is not done: units still live in units.tsv, so no unit card was created")
-        return create_unit(self.kanban(caller), caller.name, str(caller.project), str(caller.repo), unit, part, prs, self.now(), self.home)
+        return create_unit(self.kanban(caller), caller.name, str(caller.project), str(caller.repo), unit, part, prs, self.now(), self.home, title)
+
+    def loop_title(self, caller: Bot, target: int | str | None, state: str | None, prs: list[int], waits_on: str | None, reported: bool,
+                   evidence: list[str] | None, dry_run: bool, apply: bool, part: int | None, text: str | None) -> dict:
+        if state or prs or waits_on or reported or evidence or part is not None or dry_run or apply:
+            raise Refused("loop title takes a reference, unit id or card id, and --text")
+        if target is None:
+            raise Refused('loop title takes what to retitle: faker-kit loop title <ref | unit id | card id> --text "<short phrase>"')
+        if not cutover(self.home):
+            raise Refused("the Kanban cutover is not done: there are no cards to retitle, so nothing was changed")
+        return retitle_card(self.kanban(caller), self.home, caller.role, caller.name, caller.project, target, text)
+
+    def ref_target(self, caller: Bot, target: int | str) -> int | str:
+        if not isinstance(target, str) or known_ref(target) is None or not cutover(self.home):
+            return target
+        card = find_ref(self.kanban(caller).cards(True), target)
+        if caller.role == "project" and foreign(card, caller.project):
+            raise belongs_elsewhere(card, str(card.ref))
+        fields = card.header.fields if card.header else {}
+        if fields.get("Kind") == "part" and card.slug.isdigit():
+            return int(card.slug)
+        if fields.get("Kind") == "unit":
+            return card.slug
+        raise Refused(f"{card.ref} is not a part or unit card; nothing was changed")
 
     def session_pr(self, caller: Bot, gh: Gh, ref: str) -> tuple[str | None, int | None]:
         if ref.isdecimal():
@@ -1145,6 +1185,7 @@ class Kit:
         return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.now()))
 
     def session_summary(self, caller: Bot, ref: str, dry_run: bool) -> dict:
+        ref = str(self.ref_target(caller, ref))
         gh = Gh(self.home, caller.name, str(caller.repo), self.run)
         unit, number = self.session_pr(caller, gh, ref)
         report = read_summary(gh, unit, number, lambda: self.acting_login(caller))
@@ -1171,6 +1212,7 @@ class Kit:
         return {**report, "dry_run": dry_run, "card": card}
 
     def session_steer(self, caller: Bot, unit: str, session: str) -> dict:
+        unit = str(self.ref_target(caller, unit))
         if not UNIT_ID.match(unit):
             raise Refused("session steer takes a unit id: faker-kit session steer <unit-id> --session <id>")
         if not SESSION_ID.fullmatch(session):
@@ -1838,14 +1880,18 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--project", required=True)
     cmd.add_argument("--part", required=True)
     cmd.add_argument("--decisions", required=True, help='the requirements the owner decided, in their words; "none: <why>" for a bug fix whose expected behaviour is obvious')
+    cmd.add_argument("--title", help="a short phrase for what changes for the user or the owner, at most 70 characters with the reference; the card title is the reference and this phrase")
     cmd.add_argument("--outcome", choices=OUTCOMES, default=DEFAULT_OUTCOME, help="what done means: a merged pull request (default), or a built, installed, or verified result with evidence")
     cmd = sub.add_parser("loop")
-    cmd.add_argument("action", nargs="?", choices=["show", "set", "digest", "migrate", "unit", "reconcile", "backfill", "close", "check", "align"], default="show")
+    cmd.add_argument("action", nargs="?", choices=["show", "set", "digest", "migrate", "unit", "reconcile", "backfill", "close", "check", "align", "title"], default="show")
     cmd.add_argument("id", nargs="?", type=part_or_unit)
     cmd.add_argument("--dry-run", action="store_true", help="loop migrate, backfill, close: print what would change; writes nothing")
     cmd.add_argument("--apply", action="store_true", help="loop migrate: create the cards, then the cutover marker; loop backfill: rewrite the card bodies")
     cmd.add_argument("--part", type=int, help="loop unit: the part this unit serves")
     cmd.add_argument("--reason", help="loop close: why, in plain text on one line")
+    cmd.add_argument("--title", help="loop unit: a short phrase for what changes for the user or the owner; the card title is the reference and this phrase")
+    cmd.add_argument("--refs", action="store_true", help="loop backfill: number your cards that have no reference, writing only the Ref field of the footer")
+    cmd.add_argument("--text", help="loop title: the new short phrase; the reference stays at the front")
     cmd.add_argument("--as", dest="close_as", choices=CLOSE_KINDS, help="loop close: what kind of close this is (default abandoned)")
     cmd.add_argument("--state")
     cmd.add_argument("--pr", type=int, action="append", default=[])
@@ -1944,11 +1990,12 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
     if args.command == "loop":
         if caller is None or caller.role not in LOOP_ACTIONS:
             raise Refused("loop runs in the chief of staff's or a project bot's chat or job")
-        return kit.loop(caller, args.action, args.id, args.state, args.pr, args.waits_on, args.reported, args.all, args.evidence, args.dry_run, args.apply, args.part, args.reason, args.close_as)
+        return kit.loop(caller, args.action, args.id, args.state, args.pr, args.waits_on, args.reported, args.all, args.evidence, args.dry_run, args.apply, args.part,
+                        args.reason, args.close_as, args.title, args.text, args.refs)
     if args.command == "handoff":
         if caller is None or caller.role != "chief":
             raise Refused("handoff runs in the chief of staff's chat or job")
-        return kit.handoff(caller, args.project, args.part, args.decisions, args.outcome)
+        return kit.handoff(caller, args.project, args.part, args.decisions, args.outcome, args.title)
     if args.command == "pickup":
         return kit.pickup_command(caller, args.action, not args.no_job)
     if args.command == "andon":

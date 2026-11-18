@@ -35,7 +35,7 @@ def session_of(header: Header) -> str | None:
 
 def live_unit(card: Card, open_units: dict[tuple[str, str], dict]) -> dict | None:
     fields = card.header.fields if card.header else {}
-    pull = open_units.get((fields.get("Project", ""), card.title))
+    pull = open_units.get((fields.get("Project", ""), card.slug))
     if pull is not None:
         return {"pr": pull}
     if card.header and (card.header.fields.get("Run") or card.header.lines("Session")):
@@ -79,7 +79,7 @@ def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple
     scope = None if role == "chief" else project
     cards = kanban.cards(False)
     by_id = {c.id: c for c in cards}
-    known = {(c.header.fields.get("Project", ""), c.title) for c in cards if c.header and unit_card(c, None)}
+    known = {(c.header.fields.get("Project", ""), c.slug) for c in cards if c.header and unit_card(c, None)}
     findings: list[dict] = []
     sweeps = role != "chief" and kanban.board().dispatch_mode == EXTERNAL
 
@@ -92,7 +92,7 @@ def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple
             continue
         fields = card.header.fields
         ident = (card.key or "").rsplit(":", 1)[-1]
-        subject = f"unit {card.title}" if fields.get("Kind") == "unit" else f"part {ident}"
+        subject = f"unit {card.slug}" if fields.get("Kind") == "unit" else f"part {ident}"
         if card.status == "blocked" and kanban.given_up_on_stale_claim(card):
             report("stale_blocked", card, subject, "Kanban gave the card up after two stale claims", f"hermes kanban unblock {card.id} (the owner or the chief runs it; the kit never does)")
             continue
@@ -139,11 +139,11 @@ def hold_live_units(kanban: Kanban, project: str, bot: str, open_units: dict[tup
     for card in kanban.cards(False):
         if not unit_card(card, project) or card.assignee != bot or not open_card(card) or card.status != "ready" or not live_unit(card, open_units):
             continue
-        label = (session_of(card.header) if card.header else None) or f"unit {card.title} reconcile"
+        label = (session_of(card.header) if card.header else None) or f"unit {card.slug} reconcile"
         try:
-            done.append({"unit": card.title, **hold(kanban, card, label)})
+            done.append({"unit": card.slug, **hold(kanban, card, label)})
         except KanbanError as err:
-            done.append({"unit": card.title, "card": card.id, "claim": "refused", "detail": scrub(str(err))[:160]})
+            done.append({"unit": card.slug, "card": card.id, "claim": "refused", "detail": scrub(str(err))[:160]})
     return done
 
 

@@ -123,7 +123,10 @@ def kanban_main():
         found = task(rest[0])
         if found is None:
             die("no such task")
-        found["body"] = rest[rest.index("--body") + 1]
+        if "--title" in rest:
+            found["title"] = rest[rest.index("--title") + 1]
+        if "--body" in rest:
+            found["body"] = rest[rest.index("--body") + 1]
     elif verb == "archive":
         found = task(rest[0])
         if found is None:
@@ -380,7 +383,7 @@ def kanban_scenario(run: Run, loop_store: type, loop_error: type[Exception]) -> 
     def project(*argv: str) -> tuple[int, str, str]:
         return run.kit(*argv, bot=BOT)
 
-    early = project("loop", "unit", "csv-export", "--part", "5")
+    early = project("loop", "unit", "csv-export", "--title", "Visitors see the fixture change", "--part", "5")
     run.step("kanban: loop unit before the cutover is refused and creates nothing, since units still live in units.tsv",
              early[0] == 1 and "cutover is not done" in early[2] and board.mutations() == 0 and not board.state()["tasks"], early[2].strip())
 
@@ -456,14 +459,16 @@ def kanban_scenario(run: Run, loop_store: type, loop_error: type[Exception]) -> 
     run.step("kanban: a project bot's second apply makes no write call", board.mutations() == mutations, str(board.mutations()))
 
     run.clock += 60
-    handed = chief("handoff", "--project", PROJECT, "--part", "Build the changelog archive", "--decisions", DECISIONS, "--outcome", "built")
+    handed = chief("handoff", "--project", PROJECT, "--part", "Build the changelog archive", "--decisions", DECISIONS, "--outcome", "built",
+                   "--title", "Releases ship a changelog archive")
     part = json_of(handed)
     new_card = board.by_key().get("faker-kit:chief:10", {})
     run.step("kanban: after the cutover a handoff creates the part card with the next id, over the ledger's and the cards' highest, and prints the usual keys plus the card",
              handed[0] == 0 and part.get("id") == 10 and set(part) >= HEADER_KEYS and part["card"] == new_card["id"] and new_card["assignee"] == CHIEF
              and json.loads(new_card["outcome_contract"]) == {"kind": "built_artifact"} and "Decisions: " + DECISIONS in lines(new_card)
-             and "Outcome: built" in lines(new_card), json.dumps(part)[:200])
-    dup = chief("handoff", "--project", PROJECT, "--part", "build the CHANGELOG archive", "--decisions", DECISIONS)
+             and "Outcome: built" in lines(new_card) and part["ref"] == "SHOP-1" and new_card["title"] == "SHOP-1 Releases ship a changelog archive"
+             and "Ref: SHOP-1" in lines(new_card), json.dumps(part)[:200])
+    dup = chief("handoff", "--project", PROJECT, "--part", "build the CHANGELOG archive", "--decisions", DECISIONS, "--title", "Releases ship a changelog archive")
     run.step("kanban: a part already open for the project is refused after the cutover too", dup[0] == 1 and "follow up with" in dup[2] and len(board.state()["tasks"]) == 8, dup[2].strip())
 
     shown_loop = json_of(chief("loop"))
@@ -514,15 +519,15 @@ def kanban_scenario(run: Run, loop_store: type, loop_error: type[Exception]) -> 
     run.step("kanban: the old loop JSON is byte for byte what it was before the cutover, and a write to it is refused",
              sha(ledger_file.read_text()) == ledger_hash and "read-only history" in write_refused, write_refused)
 
-    unit = json_of(project("loop", "unit", "parser-fix", "--part", "3", "--pr", "40"))
+    unit = json_of(project("loop", "unit", "parser-fix", "--title", "Visitors see the fixture change", "--part", "3", "--pr", "40"))
     cards = board.by_key()
     parser_card = cards["faker-kit:shop:parser-fix"]
     run.step("kanban: loop unit creates the unit card for the project bot, with the part's outcome, and links it as the part's prerequisite",
              unit.get("created") is True and unit["linked"] is True and parser_card["assignee"] == BOT and "Part: 3" in lines(parser_card) and "PRs: 40" in lines(parser_card)
              and [parser_card["id"], cards["faker-kit:chief:3"]["id"]] in board.state()["links"], json.dumps(unit))
     mutations = board.mutations()
-    repeat = json_of(project("loop", "unit", "parser-fix", "--part", "3"))
-    unknown_part = project("loop", "unit", "other-fix", "--part", "77")
+    repeat = json_of(project("loop", "unit", "parser-fix", "--title", "Visitors see the fixture change", "--part", "3"))
+    unknown_part = project("loop", "unit", "other-fix", "--title", "Visitors see the fixture change", "--part", "77")
     run.step("kanban: loop unit twice makes no second card and no second link, and a part that is not there is refused",
              repeat.get("created") is False and repeat["linked"] is False and board.mutations() == mutations and unknown_part[0] == 1 and "no part 77" in unknown_part[2], unknown_part[2].strip())
     listed = json_of(project("loop"))
@@ -533,8 +538,8 @@ def kanban_scenario(run: Run, loop_store: type, loop_error: type[Exception]) -> 
 
     board.set(dispatch_mode="workers")
     mutations = board.mutations()
-    blocked = [chief("handoff", "--project", PROJECT, "--part", "Another part", "--decisions", DECISIONS), chief("loop", "set", "1", "--reported"),
-               project("loop", "unit", "late-unit"), chief("loop", "migrate", "--apply")]
+    blocked = [chief("handoff", "--project", PROJECT, "--part", "Another part", "--title", "Another part", "--decisions", DECISIONS), chief("loop", "set", "1", "--reported"),
+               project("loop", "unit", "late-unit", "--title", "Visitors see the fixture change"), chief("loop", "migrate", "--apply")]
     reading = chief("loop")
     run.step("kanban: every write is refused while the board spawns workers, and reading still works",
              all(r[0] == 1 and "not an external board" in r[2] for r in blocked) and board.mutations() == mutations and reading[0] == 0, " | ".join(r[2].strip()[:60] for r in blocked))
@@ -600,7 +605,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     for ident, prs in ((1, "41"), (3, "42"), (4, "43")):
         chief("loop", "set", str(ident), "--pr", prs)
     for text, pr in (("Build the nightly archive", "44"), ("Fix the cart total", "45"), ("Add dark mode", "46")):
-        made = json_of(chief("handoff", "--project", PROJECT, "--part", text, "--decisions", DECISIONS, *(["--outcome", "built"] if "archive" in text else [])))
+        made = json_of(chief("handoff", "--project", PROJECT, "--part", text, "--title", text, "--decisions", DECISIONS, *(["--outcome", "built"] if "archive" in text else [])))
         chief("loop", "set", str(made["id"]), "--state", "in-progress", "--pr", pr)
     settled(41, True)
     settled(42, False)
@@ -662,7 +667,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     def case(label: str, n: int, unit: str | None, needle: str, create: bool = True, prepare: Callable[[], None] | None = None, undo: Callable[[], None] | None = None) -> None:
         add_pr(n, unit)
         if unit and create:
-            assert project("loop", "unit", unit, "--pr", str(n))[0] == 0
+            assert project("loop", "unit", unit, "--title", "Visitors see the fixture change", "--pr", str(n))[0] == 0
         if prepare:
             prepare()
         ready(n)
@@ -687,7 +692,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
          prepare=lambda: board.add_evidence(card_key("bound-f"), "pr_published", {"pr_url": f"https://github.com/{REPO}/pull/99", "head_sha": "d" * 40}))
 
     add_pr(30, "ship-ok")
-    assert project("loop", "unit", "ship-ok", "--pr", "30")[0] == 0
+    assert project("loop", "unit", "ship-ok", "--title", "Visitors see the fixture change", "--pr", "30")[0] == 0
     ready(30)
     shipped = project("merge", "--pr", "30")
     ship = json_of(shipped)
@@ -701,7 +706,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              and [c["profile"] for c in state["completions"]] == [BOT], shipped[1].strip() or shipped[2].strip())
 
     add_pr(29, "legacy-u")
-    assert project("loop", "unit", "legacy-u", "--pr", "29")[0] == 0
+    assert project("loop", "unit", "legacy-u", "--title", "Visitors see the fixture change", "--pr", "29")[0] == 0
     board.legacy(card_key("legacy-u"))
     ready(29)
     legacy_ship = json_of(project("merge", "--pr", "29"))
@@ -713,7 +718,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     for index, (mode, wanted) in enumerate(pal_cases):
         n, unit = 31 + index, f"pal-{mode}"
         add_pr(n, unit)
-        assert project("loop", "unit", unit, "--pr", str(n))[0] == 0
+        assert project("loop", "unit", unit, "--title", "Visitors see the fixture change", "--pr", str(n))[0] == 0
         ready(n)
         board.set(complete_refuse=mode)
         result = project("merge", "--pr", str(n))
@@ -745,7 +750,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     for index, (mode, extra) in enumerate(replays):
         n, unit = 80 + index, f"replay-{index}"
         add_pr(n, unit)
-        assert project("loop", "unit", unit, "--pr", str(n))[0] == 0
+        assert project("loop", "unit", unit, "--title", "Visitors see the fixture change", "--pr", str(n))[0] == 0
         ready(n)
         board.set(complete_refuse=mode, receipt_extra=extra)
         seen[unit] = json_of(project("merge", "--pr", str(n)))["card"]
@@ -767,8 +772,8 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              "unknown id or terminal state" in bare_card["detail"] and bare_card["detail"].endswith(" (receipt: none for this run)") and "checks" not in bare_card, json.dumps(bare_card))
     add_pr(60, "wait-u")
     add_pr(61, "wait-v")
-    assert project("loop", "unit", "wait-u", "--pr", "60")[0] == 0
-    assert project("loop", "unit", "wait-v", "--pr", "61")[0] == 0
+    assert project("loop", "unit", "wait-u", "--title", "Visitors see the fixture change", "--pr", "60")[0] == 0
+    assert project("loop", "unit", "wait-v", "--title", "Visitors see the fixture change", "--pr", "61")[0] == 0
     def hold(n: int) -> None:
         run.update_gh(lambda state: state["check_runs"].__setitem__(head_of(n), [{"name": "check", "status": "in_progress", "conclusion": ""}]))
 
@@ -783,12 +788,12 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
                  waiting[0] == 1 and needle in waiting[2] and n not in merged_prs() and run.sleeps == [30.0], f"{waiting[2].strip()} {run.sleeps}")
 
     add_pr(62, "ci-u")
-    assert project("loop", "unit", "ci-u", "--pr", "62")[0] == 0
+    assert project("loop", "unit", "ci-u", "--title", "Visitors see the fixture change", "--pr", "62")[0] == 0
     ready(62)
     run.update_gh(lambda state: state["check_runs"].__setitem__(head_of(62), [{"name": "check", "status": "completed", "conclusion": "failure"}]))
     red = project("merge", "--pr", "62")
     add_pr(63, "cord-u")
-    assert project("loop", "unit", "cord-u", "--pr", "63")[0] == 0
+    assert project("loop", "unit", "cord-u", "--title", "Visitors see the fixture change", "--pr", "63")[0] == 0
     ready(63)
     raised = project("andon", "raise", "card", "gate", "probe")
     cord = project("merge", "--pr", "63")
@@ -799,7 +804,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
 
     add_pr(51)
     run.update_gh(lambda state: next(p for p in state["pulls"] if p["number"] == 51).update(state="closed", merged_at=None, body="Unit: dead-u"))
-    assert project("loop", "unit", "dead-u", "--pr", "51")[0] == 0
+    assert project("loop", "unit", "dead-u", "--title", "Visitors see the fixture change", "--pr", "51")[0] == 0
 
     board.set(complete_refuse="pending")
     before = board.state()
@@ -830,7 +835,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     quiet = json_of(project("loop", "reconcile"))
     run.step("kanban reconcile: a second run after completion changes nothing", quiet["set_merged"] == 0 and quiet["set_closed"] == 0 and board.mutations() == mutations, json.dumps(quiet)[:200])
     add_pr(90, "repeat-u")
-    assert project("loop", "unit", "repeat-u", "--pr", "90")[0] == 0
+    assert project("loop", "unit", "repeat-u", "--title", "Visitors see the fixture change", "--pr", "90")[0] == 0
     ready(90)
     board.set(complete_refuse="failure", receipt_extra=real)
     assert project("merge", "--pr", "90")[0] == 0
@@ -854,10 +859,10 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     events_scenario(run, board, project, add_pr, card_key)
 
     for text, pr, merged in (("Add the wishlist", 48, True), ("Add reviews", 49, True), ("Add gift cards", 50, False)):
-        made = json_of(chief("handoff", "--project", PROJECT, "--part", text, "--decisions", DECISIONS))
+        made = json_of(chief("handoff", "--project", PROJECT, "--part", text, "--title", text, "--decisions", DECISIONS))
         assert chief("loop", "set", str(made["id"]), "--state", "in-progress", "--pr", str(pr))[0] == 0
         settled(pr, merged)
-    assert project("loop", "unit", "u14", "--part", "14")[0] == 0
+    assert project("loop", "unit", "u14", "--title", "Visitors see the fixture change", "--part", "14")[0] == 0
     board.set(complete_refuse="pending")
     stuck = json_of(chief("loop", "reconcile"))
     cards = board.by_key()
@@ -896,11 +901,12 @@ def stage_deadlock_scenario(run: Run, board: Board, chief: Callable[..., tuple[i
         return f"https://github.com/{REPO}/pull/{n}"
 
     run.clock += 60
-    made = json_of(chief("handoff", "--project", PROJECT, "--part", "Install the sale debug build", "--decisions", DECISIONS, "--outcome", "installed"))
+    made = json_of(chief("handoff", "--project", PROJECT, "--part", "Install the sale debug build", "--title", "Sale debug builds install on a device", "--decisions", DECISIONS,
+                        "--outcome", "installed"))
     pid, part_key = str(made["id"]), f"faker-kit:chief:{made['id']}"
     add_pr(70, "sale-debug")
     assert chief("loop", "set", pid, "--state", "in-progress", "--pr", "70")[0] == 0
-    assert project("loop", "unit", "sale-debug", "--part", pid, "--pr", "70")[0] == 0
+    assert project("loop", "unit", "sale-debug", "--title", "Visitors see the sale fixture change", "--part", pid, "--pr", "70")[0] == 0
     part_card, unit_card = board.by_key()[part_key], board.by_key()[card_key("sale-debug")]
 
     def kanban_cli(*args: str) -> subprocess.CompletedProcess[str]:
@@ -957,7 +963,7 @@ def stage_deadlock_scenario(run: Run, board: Board, chief: Callable[..., tuple[i
              and [c["task"] for c in completions] == [unit_after["id"], final_part["id"]] and all(c["published"] == url(70) for c in completions) and board.open_claims(part_key) == [],
              json.dumps({"unit": [unit_after["status"], unit_kinds], "part": [final_part["status"], part_rows]}))
 
-    claimable = json_of(chief("handoff", "--project", PROJECT, "--part", "Build the sale archive", "--decisions", DECISIONS, "--outcome", "built"))
+    claimable = json_of(chief("handoff", "--project", PROJECT, "--part", "Build the sale archive", "--title", "Sale archives build for release", "--decisions", DECISIONS, "--outcome", "built"))
     kept_runs = len(board.state()["runs"])
     row = chief("loop", "set", str(claimable["id"]), "--evidence", 'built=Built sale-archive.tgz sha256 ' + "c" * 64)
     row_out = json_of(row)
@@ -969,7 +975,7 @@ def stage_deadlock_scenario(run: Run, board: Board, chief: Callable[..., tuple[i
 
     for n, unit in ((71, "bump-lint"),):
         add_pr(n, unit)
-        assert project("loop", "unit", unit, "--pr", str(n))[0] == 0
+        assert project("loop", "unit", unit, "--title", "Visitors see the fixture change", "--pr", str(n))[0] == 0
         board.leave_claim(card_key(unit), url=url(n), head=head_of(n), commit=commit_of(n))
         run.update_gh(lambda state, n=n: next(p for p in state["pulls"] if p["number"] == n).update({"state": "closed", "merged_at": "2026-10-10T00:00:00Z", "merge_commit_sha": commit_of(n)}))
     before = board.by_key()[card_key("bump-lint")]
@@ -997,7 +1003,7 @@ def events_scenario(run: Run, board: Board, project: Callable[..., tuple[int, st
     for n, (shape, merged) in plan.items():
         unit = f"event-{n}"
         add_pr(n, unit)
-        assert project("loop", "unit", unit, "--pr", str(n))[0] == 0
+        assert project("loop", "unit", unit, "--title", "Visitors see the fixture change", "--pr", str(n))[0] == 0
         key = card_key(unit)
         if shape != "no-run":
             board.leave_claim(key, url=url(n), head=head_of(n), commit=commit_of(n))
@@ -1014,7 +1020,7 @@ def events_scenario(run: Run, board: Board, project: Callable[..., tuple[int, st
 
     for n, label in ((155, "ready"), (156, "draft")):
         add_pr(n, f"event-{n}", **({"draft": True} if label == "draft" else {}))
-        assert project("loop", "unit", f"event-{n}", "--pr", str(n))[0] == 0
+        assert project("loop", "unit", f"event-{n}", "--title", "Visitors see the fixture change", "--pr", str(n))[0] == 0
         board.leave_claim(card_key(f"event-{n}"), url=url(n), head=head_of(n), commit=commit_of(n))
 
     def published(n: int) -> list[str]:
@@ -1036,7 +1042,7 @@ def events_scenario(run: Run, board: Board, project: Callable[..., tuple[int, st
              json.dumps(published(155)))
 
     add_pr(157, "event-157")
-    assert project("loop", "unit", "event-157", "--pr", "157")[0] == 0
+    assert project("loop", "unit", "event-157", "--title", "Visitors see the fixture change", "--pr", "157")[0] == 0
     board.leave_claim(card_key("event-157"), url=url(157), head=head_of(157), commit=commit_of(157))
     run.update_gh(lambda state: next(p for p in state["pulls"] if p["number"] == 157).update(**merged_at, merge_commit_sha=commit_of(157)))
     board.set(complete_refuse="pending")
