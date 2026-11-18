@@ -11,12 +11,15 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from faker_kit_gh import Coded
+from faker_kit_claude_cli import CLAUDE_BIN_ENV, check_login, missing_message, resolve_claude
+from faker_kit_gh import Coded, Refused
+from faker_kit_machine import MachineError, load_machine
 
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 SOURCE_FILE = "kit-source"
 INSTALLED_FILE = "installed-ref"
 LOCK_FILE = "refresh.lock"
+MACHINE_FILE = "machine.yaml"
 MAIN = "refs/heads/main"
 INSTALL_ARGS = ("--no-gateway",)
 LS_REMOTE_SECONDS = 60
@@ -114,12 +117,36 @@ def fetch_kit(source: str, commit: str, into: Path) -> None:
         raise Coded(f"the fetched kit is not {short(commit)} ({clean_source(source)})", "kit_fetch_failed")
 
 
-def install_kit(staged: Path, home: Path, source: str, commit: str) -> None:
+def uses_subscription(home: Path) -> bool:
+    machine = home / MACHINE_FILE
+    if not machine.is_file():
+        return False
+    try:
+        return load_machine(machine).claude_subscription
+    except MachineError:
+        return False
+
+
+def claude_preflight(home: Path) -> dict[str, str]:
+    if not uses_subscription(home):
+        return {}
+    unchanged = "the installed kit was not changed"
+    found = resolve_claude(home)
+    if not found.path:
+        raise Coded(f"{missing_message(found.looked, 'run the update again')}; {unchanged}", "kit_install_failed", "contact_support")
+    try:
+        check_login(found.path)
+    except Refused as err:
+        raise Coded(f"{err}; {unchanged}", "kit_install_failed", "contact_support") from None
+    return {CLAUDE_BIN_ENV: found.path}
+
+
+def install_kit(staged: Path, home: Path, source: str, commit: str, extra_env: dict[str, str]) -> None:
     script = staged / "hermes" / "install.sh"
     for needed in (script, staged / "hermes" / "bin" / "faker_kit.py"):
         if not needed.is_file():
             raise Coded(f"kit {short(commit)} has no {needed.relative_to(staged)}; the installed kit was not changed", "kit_install_failed")
-    env = {**git_env(), "FAKER_KIT_HOME": str(home)}
+    env = {**git_env(), **extra_env, "FAKER_KIT_HOME": str(home)}
     run(["bash", str(script), "--ref", commit, "--source", source, *INSTALL_ARGS], INSTALL_SECONDS,
         f"installing kit {short(commit)}", source, cwd=home, env=env, code="kit_install_failed")
     if installed_commit(home) != commit:
@@ -133,10 +160,11 @@ def refresh(home: Path) -> str:
         before = installed_commit(home)
         if before == latest:
             return f"kit already current at {short(latest)}"
+        install_env = claude_preflight(home)
         staging = Path(tempfile.mkdtemp(prefix=".refresh-", dir=home))
         try:
             fetch_kit(source, latest, staging)
-            install_kit(staging, home, source, latest)
+            install_kit(staging, home, source, latest, install_env)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
         return f"kit moved {short(before)} -> {short(latest)}"

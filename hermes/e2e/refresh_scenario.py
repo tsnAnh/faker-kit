@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import shutil
 import stat
@@ -208,3 +209,91 @@ def refresh_scenario(work: Path, step: Step, base_env: dict[str, str], fake_herm
     refused = subprocess.run([str(wrapper), "host", "update", "--json"], env={**env, "HERMES_HOME": str(hermes_home / "profiles" / "meo-beo")}, cwd=away, capture_output=True, text=True, timeout=120)
     step("a project bot is refused host update with a typed envelope and the kit stays where it was",
          refused.returncode == 1 and json.loads(refused.stdout)["code"] == "request_refused" and installed() == newest, (refused.stdout + refused.stderr).strip()[:300])
+
+
+def tree_state(root: Path) -> dict[str, str]:
+    seen: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        relative = str(path.relative_to(root))
+        if path.is_symlink():
+            seen[relative] = f"link {path.readlink()}"
+        elif path.is_file():
+            seen[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        elif path.is_dir():
+            seen[relative] = "dir"
+    return seen
+
+
+def refresh_claude_scenario(work: Path, step: Step, base_env: dict[str, str], fake_hermes: Path, fake_gh: Path, fake_claude: Path,
+                            make_source: Callable[[Path], tuple[Path, str]]) -> None:
+    home = work / "home"
+    hermes_home = home / ".hermes"
+    state = hermes_home / "faker-kit"
+    state.mkdir(parents=True)
+    source, first = make_source(work)
+    git(source, "branch", "-M", "main")
+    tools = work / "tools"
+    tools.mkdir()
+    shutil.copy2(fake_hermes, tools / "hermes")
+    shutil.copy2(fake_gh, tools / "gh")
+    on_path = work / "on-path"
+    on_path.mkdir()
+    shutil.copy2(fake_claude, on_path / "claude")
+    unit_path = f"{tools}:/usr/bin:/bin"
+    env = {**base_env, "HOME": str(home), "FAKER_KIT_HOME": str(state), "PATH": f"{on_path}:{unit_path}"}
+    env.pop("HERMES_HOME", None)
+    wrapper = hermes_home / "bin" / "faker-kit"
+    machine = state / "machine.yaml"
+
+    def machine_config(subscription: bool) -> None:
+        machine.write_text(f"version: 1\nbootstrap_bot: ong-xay\nclaude_subscription: {str(subscription).lower()}\nguard:\n  trusted_authors:\n    - Codertocat\n"
+                           "projects:\n  - bot: meo-beo\n    project: shop\n    repo: acme/shop\n")
+        machine.chmod(0o600)
+
+    def unit_refresh() -> subprocess.CompletedProcess[str]:
+        unit_env = {**env, "PATH": unit_path}
+        unit_env.pop("FAKER_KIT_CLAUDE_BIN", None)
+        return subprocess.run([str(wrapper), "refresh"], env=unit_env, capture_output=True, text=True, timeout=600)
+
+    def installed() -> str:
+        return (state / "installed-ref").read_text().strip()
+
+    def recorded() -> str:
+        return (state / "claude-path").read_text().strip() if (state / "claude-path").exists() else ""
+
+    machine_config(True)
+    done = subprocess.run(["bash", str(source / "hermes" / "install.sh"), "--ref", first, "--source", str(source), "--no-gateway"], env=env, capture_output=True, text=True, timeout=300)
+    step("install on a subscription machine with claude on PATH works as before and records claude's absolute path beside the installed ref",
+         done.returncode == 0 and installed() == first and recorded() == str(on_path / "claude"), (done.stdout + done.stderr).strip()[-300:])
+
+    second = commit(source, "hermes/templates/refresh-marker", "second\n", "second kit commit")
+    moved = unit_refresh()
+    step("the post-update step on a PATH with no claude uses the recorded path and moves the kit",
+         moved.returncode == 0 and moved.stdout.strip() == f"kit moved {first[:12]} -> {second[:12]}" and installed() == second and recorded() == str(on_path / "claude"),
+         (moved.stdout + moved.stderr).strip())
+
+    shutil.rmtree(on_path)
+    known = home / ".npm-global" / "bin"
+    known.mkdir(parents=True)
+    shutil.copy2(fake_claude, known / "claude")
+    third = commit(source, "hermes/templates/refresh-marker", "third\n", "third kit commit")
+    moved = unit_refresh()
+    step("the post-update step with a stale recorded path falls through to ~/.npm-global/bin, moves the kit and records the new path",
+         moved.returncode == 0 and moved.stdout.strip() == f"kit moved {second[:12]} -> {third[:12]}" and installed() == third and recorded() == str(known / "claude"),
+         (moved.stdout + moved.stderr).strip())
+
+    (known / "claude").unlink()
+    fourth = commit(source, "hermes/templates/refresh-marker", "fourth\n", "fourth kit commit")
+    before = tree_state(hermes_home)
+    absent = unit_refresh()
+    step("the post-update step with no claude anywhere fails in the preflight, names every place it looked and the one fix, and leaves every file under ~/.hermes byte for byte as it was",
+         absent.returncode == 1 and "Claude Code was not found" in absent.stderr and "PATH (" in absent.stderr and str(state / "claude-path") in absent.stderr
+         and str(known) in absent.stderr and str(home / ".local" / "bin") in absent.stderr and str(home / ".claude" / "local") in absent.stderr
+         and "npm install -g @anthropic-ai/claude-code, then claude auth login, then run the update again" in absent.stderr
+         and "the installed kit was not changed" in absent.stderr and installed() == third and tree_state(hermes_home) == before and fourth != third,
+         (absent.stdout + absent.stderr).strip())
+
+    machine_config(False)
+    plain = unit_refresh()
+    step("a machine that does not use the subscription provider needs no claude: the same step moves the kit",
+         plain.returncode == 0 and plain.stdout.strip() == f"kit moved {third[:12]} -> {fourth[:12]}" and installed() == fourth, (plain.stdout + plain.stderr).strip())
