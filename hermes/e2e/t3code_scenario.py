@@ -141,9 +141,12 @@ def brief_refusals(run: Run, bot: str) -> None:
     pulled = (code, err.strip(), len(records(run, bot)) == kept)
     run.kit("andon", "clear")
     run.step("t3code: a pulled andon cord refuses the launch and writes no prepared launch", pulled[0] == 1 and "andon" in pulled[1].lower() and pulled[2], pulled[1])
+    existing = set(records(run, bot))
     code, printed, err = prepare(run, "incident-main-red.md", "/faker-mode\n\nGOAL: triage.\n", bot)
     run.step("t3code: a brief file named incident-<key>.md needs no CHANGES line, and the launch it prepares is the one record added",
              code == 0 and printed.get("backend") == "t3code" and len(records(run, bot)) == kept + 1, err or json.dumps(printed)[:200])
+    for record in set(records(run, bot)) - existing:
+        record.unlink()
 
 
 def launch_output(run: Run, bot: str, real: float) -> dict:
