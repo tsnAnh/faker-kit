@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
+from faker_kit_coding_rule import CODING_RULE
 from faker_kit_cron_list import cron_jobs
 from faker_kit_env import CLAUDE_CONFIG_DIR, parse_env_file, set_env
 from faker_kit_gh import Refused
@@ -147,7 +148,7 @@ class Profiles:
             self.unset_endpoint(bot, home)
         elif model:
             config_set(self.root, bot, ("model", "default"), model)
-        soul = (self.pkg / "profiles" / role / "SOUL.md").read_text().rstrip() + "\n\n" + (self.pkg / "profiles" / "OPERATING.md").read_text()
+        soul = (self.pkg / "profiles" / role / "SOUL.md").read_text().rstrip() + "\n\n" + (self.pkg / "profiles" / "OPERATING.md").read_text() + "\n" + CODING_RULE + "\n"
         if (home / "SOUL.md").exists() and (home / "SOUL.md").read_text() != soul:
             shutil.copy2(home / "SOUL.md", home / "SOUL.md.bak")
         (home / "SOUL.md").write_text(soul)

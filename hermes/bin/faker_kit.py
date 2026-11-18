@@ -36,6 +36,7 @@ from faker_kit_card_watch import check as check_cards
 from faker_kit_card_watch import hold_live_units
 from faker_kit_cards import CLOSE_KINDS, CardLoop, Merged, bound_pr_url, close_card, complete_card, create_unit, hold, refresh_work, unit_key, unit_rows
 from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, SESSION_ID, Cloud, CloudError, trust_checkout
+from faker_kit_coding_rule import CODING_FOOTER, CODING_RULE
 from faker_kit_cron_list import cron_jobs
 from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
 from faker_kit_gh import NAME, Coded, Gh, Refused, Runner, credential_problem, credential_state, fix_git_protocol, run_gh, scrub
@@ -352,6 +353,8 @@ class Kit:
             prompt += SUMMARY_FOOTER
         if FAKER_RULE not in text:
             prompt += FAKER_FOOTER
+        if CODING_RULE not in text:
+            prompt += CODING_FOOTER
         digest = hashlib.sha256(prompt.encode()).hexdigest()[:8]
         owner, name = repo.split("/")
         workdir = self.home / "checkouts" / f"{owner}__{name}" / f"launch-{int(self.now())}-{digest}"

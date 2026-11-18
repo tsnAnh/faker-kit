@@ -161,6 +161,9 @@ def launch_output(run: Run, bot: str, real: float) -> dict:
     run.step("t3code: the message is the brief with the andon stop rule and the faker-mode rule, and its first 8 hash characters are the printed brief id",
              message.startswith("/faker-mode") and "agent:andon" in message and "Faker-mode rule:" in message and "SCOPE: reports only." in message
              and hashlib.sha256(message.encode()).hexdigest()[:8] == printed.get("brief"), message[-120:].replace("\n", " "))
+    run.step("t3code: the message carries the coding rule once, with both of its parts, from the same footer the claude backend gets",
+             message.count("Coding rule: reuse before build, and confirm before coding.") == 1 and message.count("Reuse before build:") == 1 and message.count("Confirm before coding.") == 1
+             and message.index("Faker-mode rule:") < message.index("Coding rule:") and message.rstrip().endswith("never wait for a reply."), message[-400:].replace("\n", " "))
     run.step("t3code: launch makes no cloud session, no clone, and no call to the claude CLI",
              claude_calls(run) == calls_before and "clone" not in run.gh_log.read_text()[len(gh_before):], "")
     return printed
