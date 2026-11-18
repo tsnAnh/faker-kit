@@ -32,6 +32,7 @@ import card_refs_scenario
 import gate_scenario
 import guard_scenario
 import import_scenario
+import inprocess_stubs
 import kanban_claims_scenario
 import kanban_evidence_scenario
 import kanban_scenario
@@ -4160,7 +4161,7 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "card-prefixes": lambda c: card_prefix_scenario.card_prefix_scenario(c.run()),
 }
 BUDGETS_PATH = Path(__file__).resolve().parent / "budgets.json"
-WORKER_FLAG = "--worker"
+REAL_STUBS_ENV = "E2E_REAL_STUBS"
 
 
 def worker(name: str, root: Path, result: Path) -> int:
@@ -4168,6 +4169,8 @@ def worker(name: str, root: Path, result: Path) -> int:
     verdicts: list[dict] = []
     error: str | None = "the scenario raised before it finished; the worker's stderr has the traceback"
     STEP_CLOCK[0] = started = time.perf_counter()
+    if not os.environ.get(REAL_STUBS_ENV):
+        inprocess_stubs.install({"gh": f"#!{sys.executable}\n{FAKE_GH}", "hermes": f"#!{sys.executable}\n{FAKE_HERMES}"})
     try:
         SCENARIOS[name](Ctx(root, steps, verdicts))
         error = None
@@ -4251,6 +4254,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 1, help="scenarios run at once, each in its own process and temp home (default: the CPU count)")
     ap.add_argument("--only", help="comma-separated scenario names to run (default: all)")
     ap.add_argument("--list", action="store_true", help="print the scenario names and exit")
+    ap.add_argument("--real-stubs", action="store_true", help="run every gh and hermes stub call as a real process, also the test driver's own (slower; by default those run in-process)")
     ap.add_argument("--budget-scale", type=float, default=1.0, help="multiply every time budget, for a slower machine than CI")
     args = ap.parse_args(argv)
     if args.list:
@@ -4261,6 +4265,8 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         print(f"unknown scenario: {', '.join(unknown)}", file=sys.stderr)
         return 2
+    if args.real_stubs:
+        os.environ[REAL_STUBS_ENV] = "1"
     budgets: dict[str, float] = json.loads(BUDGETS_PATH.read_text()) if BUDGETS_PATH.exists() else {}
     root = Path(tempfile.mkdtemp(prefix="faker-kit-e2e-"))
     began = time.perf_counter()
