@@ -993,11 +993,15 @@ class Gates:
         self.reset()
 
 
-def wake_scenario(run: Run, hermes: Path, bot: str, chief: str, env: dict[str, str], work: Path) -> None:
+def real_wake_scenario(run: Run, hermes: Path, bot: str, chief: str, env: dict[str, str], work: Path) -> None:
     gates = Gates(run, hermes, bot, chief, env, work)
     gates.real_command()
     gates.real_news()
     gates.real_loop(chief, env)
+
+
+def fake_wake_scenario(run: Run, hermes: Path, bot: str, chief: str, env: dict[str, str], work: Path) -> None:
+    gates = Gates(run, hermes, bot, chief, env, work)
     with gates.fake_wrapper():
         gates.babysit()
         gates.card_check()
