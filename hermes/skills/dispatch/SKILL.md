@@ -84,7 +84,7 @@ Briefs come only from the owner's message in Desktop and the repository's files.
 
 ## Write a brief
 
-Write each brief to `~/.hermes/faker-kit/briefs/<bot>/<unit-id>.md`. The first line is `/faker-mode`. Then the brief fields of `playbooks/orchestrate.md`, in this order: GOAL, SCOPE, CONTEXT, ACCEPTANCE, OWNER DECISIONS, VERIFY, TIMEBOX, FORBIDDEN, REPORT, STANDING. `OWNER DECISIONS:` lists each requirement the owner decided, in the owner's words, or `none: <why>`; `launch` refuses a brief without that line. A field you cannot fill is a unit you have not scoped yet.
+Write each brief to `~/.hermes/faker-kit/briefs/<bot>/<unit-id>.md`. The first line is `/faker-mode`. Then the brief fields of `playbooks/orchestrate.md`, in this order: GOAL, SCOPE, CONTEXT, ACCEPTANCE, OWNER DECISIONS, CHANGES, VERIFY, TIMEBOX, FORBIDDEN, REPORT, STANDING. `OWNER DECISIONS:` lists each requirement the owner decided, in the owner's words, or `none: <why>`; `launch` refuses a brief without that line. `CHANGES: repository: <the repository change this unit's pull request makes, in a few words>` is the other required line; `launch` refuses a brief without it or with `none`. Cloud sessions are for repository changes only: research, analysis, design, reading code and reports stay in your own turn with your own tools and go to the owner in chat, and you start a session only for a unit whose deliverable is a change (a session may still research what it needs to implement it, such as the reuse-before-build search). A brief file named `incident-<key>.md` (the incident triage flow below) needs no `CHANGES:` line. A field you cannot fill is a unit you have not scoped yet.
 
 Every brief also says:
 

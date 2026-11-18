@@ -116,7 +116,11 @@ def brief_refusals(run: Run, bot: str) -> None:
         ("a brief that does not start with /faker-mode", run.brief("loose.md", "Add a CSV export.\n"), "/faker-mode"),
         ("a brief that holds a token", run.brief("secret.md", f"/faker-mode\n\nUse {secret} to push.\n"), "token"),
         ("a brief with no OWNER DECISIONS line", run.brief("undecided.md", "/faker-mode\n\nGOAL: add a toggle.\n", decided=False), "OWNER DECISIONS"),
-        ("a brief over the length limit", run.brief("long.md", "/faker-mode\nOWNER DECISIONS: none: x\n" + "x" * 60_000), "longer than 60000"),
+        ("a brief whose CHANGES line says none",
+         run.brief("research.md", "/faker-mode\n\nGOAL: research ad performance and write a report.\nCHANGES: none: research and a written report\n", changes=False), "changes no repository"),
+        ("a brief with no CHANGES line", run.brief("no-changes.md", "/faker-mode\n\nGOAL: research ad performance.\n", changes=False), "CHANGES: repository:"),
+        ("a brief with an empty CHANGES value", run.brief("empty-changes.md", "/faker-mode\n\nGOAL: research ad performance.\nCHANGES:   \n", changes=False), "changes no repository"),
+        ("a brief over the length limit", run.brief("long.md", "/faker-mode\nOWNER DECISIONS: none: x\nCHANGES: repository: x\n" + "x" * 60_000), "longer than 60000"),
         ("a brief outside the bot's briefs folder", elsewhere, "briefs"),
         ("a brief that is a symlink", link, "links"),
         ("a brief with a second hard link", good.with_name("hard.md"), "no other names"),
@@ -137,6 +141,9 @@ def brief_refusals(run: Run, bot: str) -> None:
     pulled = (code, err.strip(), len(records(run, bot)) == kept)
     run.kit("andon", "clear")
     run.step("t3code: a pulled andon cord refuses the launch and writes no prepared launch", pulled[0] == 1 and "andon" in pulled[1].lower() and pulled[2], pulled[1])
+    code, printed, err = prepare(run, "incident-main-red.md", "/faker-mode\n\nGOAL: triage.\n", bot)
+    run.step("t3code: a brief file named incident-<key>.md needs no CHANGES line, and the launch it prepares is the one record added",
+             code == 0 and printed.get("backend") == "t3code" and len(records(run, bot)) == kept + 1, err or json.dumps(printed)[:200])
 
 
 def launch_output(run: Run, bot: str, real: float) -> dict:

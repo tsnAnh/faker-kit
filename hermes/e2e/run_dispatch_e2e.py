@@ -60,6 +60,7 @@ Coded = faker_kit.Coded
 REPO = "acme/shop"
 BOT = "meo-beo"
 DECISIONS_LINE = "OWNER DECISIONS: none: e2e fixture"
+CHANGES_FIXTURE_LINE = "CHANGES: repository: e2e fixture"
 NONE_DECISIONS = "none: bug fix, expected behaviour obvious from the report"
 OWNER_ANSWERS = "Pal shows it as one catalog row like the other connectors, with an Allow button"
 BOOTSTRAP = "ong-xay"
@@ -630,16 +631,19 @@ class Run:
             self.clock += seconds
             self.on_sleep.pop(0)()
 
-    def brief(self, name: str, text: str, decided: bool = True) -> Path:
-        return self.brief_for(BOT, name, text, decided)
+    def brief(self, name: str, text: str, decided: bool = True, changes: bool = True) -> Path:
+        return self.brief_for(BOT, name, text, decided, changes)
 
-    def brief_for(self, bot: str, name: str, text: str, decided: bool = True) -> Path:
+    def brief_for(self, bot: str, name: str, text: str, decided: bool = True, changes: bool = True) -> Path:
         folder = self.team / "briefs" / bot
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / name
         if decided and "OWNER DECISIONS:" not in text:
             first, _, rest = text.partition("\n")
             text = f"{first}\n{DECISIONS_LINE}\n{rest}"
+        if decided and changes and not re.search(r"^CHANGES:", text, re.M):
+            first, _, rest = text.partition("\n")
+            text = f"{first}\n{CHANGES_FIXTURE_LINE}\n{rest}"
         path.write_text(text)
         return path
 
@@ -982,7 +986,7 @@ def launch_scenario(run: Run) -> None:
              and "add the line `Label: faker-kit` to the pull request body" in seen_boot and "Never add the label to a pull request you did not open" in seen_boot
              and "If you cannot use gh, use the GitHub integration you have" in seen_boot and not faker_kit.SECRET_SHAPES.search(faker_kit.ANDON_FOOTER + faker_kit.FAKER_FOOTER),
              seen_boot[-700:].replace("\n", " "))
-    edge_head = f"/faker-mode\n{DECISIONS_LINE}\n"
+    edge_head = f"/faker-mode\n{DECISIONS_LINE}\n{CHANGES_FIXTURE_LINE}\n"
     code, _, err = run.kit("launch", "--brief-file", str(run.brief("long.md", edge_head + "x" * faker_kit.MAX_BRIEF_CHARS)))
     run.step("the length limit applies to the brief before the footers and is unchanged", code == 1 and "longer than 60000" in err
              and not run.kit("launch", "--brief-file", str(run.brief("edge.md", edge_head + "x" * (faker_kit.MAX_BRIEF_CHARS - len(edge_head)))))[0], err.strip())
@@ -995,7 +999,7 @@ def launch_scenario(run: Run) -> None:
              all(code == 1 and err.strip().endswith(reason) for code, _, err in (missing, empty, inline)) and len(run.claude_log.read_text().splitlines()) == sessions_decided,
              " | ".join(err.strip() for _, _, err in (missing, empty, inline)))
     answered = run.kit("launch", "--brief-file", str(run.brief(
-        "with-decisions.md", "/faker-mode\n\nGOAL: add a toggle.\nOWNER DECISIONS: the Pal app shows it as a catalog row with an Allow button.\n", decided=False)))
+        "with-decisions.md", "/faker-mode\n\nGOAL: add a toggle.\nOWNER DECISIONS: the Pal app shows it as a catalog row with an Allow button.\n" + CHANGES_FIXTURE_LINE + "\n", decided=False)))
     run.step("launch starts a brief that lists the owner's decisions", answered[0] == 0 and len(run.claude_log.read_text().splitlines()) == sessions_decided + 1, answered[2].strip())
     seen_rule = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1]
     sentence = "Do not decide an unspecified requirement or choose between visible patterns (a new switch, screen, flag) yourself"
@@ -1018,7 +1022,7 @@ def launch_scenario(run: Run) -> None:
     templates = [(HERMES / "templates" / name).read_text() for name in ("fix-issue-brief.md", "triage-incident-brief.md")]
     run.step("the dispatch skill puts an open requirement to the owner with clarify or back to the chief, and has the OWNER DECISIONS brief field before VERIFY",
              "Never decide an open requirement or UI choice yourself: put it to the owner with `clarify` (real options, recommended first) or return it to the chief." in dispatch
-             and "ACCEPTANCE, OWNER DECISIONS, VERIFY," in dispatch
+             and "ACCEPTANCE, OWNER DECISIONS, CHANGES, VERIFY," in dispatch
              and all(re.search(r"^OWNER DECISIONS: none: \S", t, re.M) for t in templates), "")
     chief_handoff = "Owner decisions: <the owner's answers, or none: <why>>"
     bootstrap = (HERMES / "skills" / "bootstrap" / "SKILL.md").read_text()
@@ -1034,6 +1038,92 @@ def launch_scenario(run: Run) -> None:
             "when there is none, write nothing, never a line that says `none`")
     run.step("no shipped text tells a bot to state the owner answers or none, and the dispatch skill carries the rule that the line appears only when the work rests on an owner decision",
              len(shipped) > 20 and not flagged and rule in dispatch, ", ".join(flagged))
+    sessions_only_for_changes(run)
+
+
+def sessions_only_for_changes(run: Run) -> None:
+    def started() -> int:
+        return len(run.claude_log.read_text().splitlines())
+
+    def hermes_claims() -> int:
+        return sum(1 for call in hermes_calls(run.hermes) if "claim" in call)
+
+    admob = ("/faker-mode\n\nGOAL: Research how AdMob mediation affects app start time and write a report.\nSCOPE: Web research only.\n"
+             "CONTEXT: The owner asked why the first screen is slow after the ads SDK update.\nACCEPTANCE: A written report with sources.\n"
+             "OWNER DECISIONS: none: research only\nCHANGES: none: research and a written report\nVERIFY: Cite every claim.\nTIMEBOX: 60 minutes.\n"
+             "FORBIDDEN: Changing source files.\nREPORT: The report text.\n")
+    sessions, claims = started(), hermes_claims()
+    code, _, err = run.kit("launch", "--brief-file", str(run.brief("admob-perf-research.md", admob, changes=False)))
+    run.step("launch refuses a research-only brief with every other required field, with the one reason, and starts no session and claims no card",
+             code == 1 and faker_kit.NOT_A_CHANGE.split(" (")[0] in err and "CHANGES: repository:" in err
+             and started() == sessions and hermes_claims() == claims, err.strip())
+    code, out, err = run.kit("launch", "--brief-file", str(run.brief("admob-csv-export.md", admob.replace("none: research and a written report", "repository: a CSV export button"), changes=False)))
+    run.step("the same brief with CHANGES: repository: starts a session", code == 0 and started() == sessions + 1, out.strip() or err.strip())
+
+    def verdicts(values: list[str | None], expect_ok: bool) -> list[str]:
+        bad = []
+        for position, value in enumerate(values):
+            body = "/faker-mode\n\nGOAL: x.\n" + (f"CHANGES:{value}\n" if value is not None else "") + "SCOPE: x.\n"
+            before = started()
+            code, _, err = run.kit("launch", "--brief-file", str(run.brief(f"changes-{expect_ok}-{position}.md", body, changes=False)))
+            ok = code == 0 and started() == before + 1 if expect_ok else code == 1 and faker_kit.NOT_A_CHANGE.split(" (")[0] in err and started() == before
+            if not ok:
+                bad.append(f"{value!r}: {err.strip()[:80]}")
+        return bad
+
+    refused = verdicts([None, "", "   ", " none", " None", " NONE", "   none : x", " none: research", " none:", " repository", " repository:",
+                        " repository :", " repositor: x", " repository x", " a repository change: x", " ", " Repository"], False)
+    indented = run.brief("changes-indented.md", "/faker-mode\n\nGOAL: x.\n  CHANGES: repository: x\nGOAL: CHANGES: repository: y\n", changes=False)
+    code, _, err = run.kit("launch", "--brief-file", str(indented))
+    run.step("launch refuses no CHANGES line, an empty value, none in any case or spacing, a repository word with no change after it, and a CHANGES line that is indented or inside another line",
+             not refused and code == 1 and "changes no repository" in err, "; ".join(refused) or err.strip())
+    passed = verdicts([" repository: a CSV export button", " Repository: x", " REPOSITORY: x", "   repository:x", " repository : x", "\trepository:\tx"], True)
+    run.step("launch starts a brief whose CHANGES value is repository: and a change, in any case of repository and with odd spacing around the colon", not passed, "; ".join(passed))
+
+    before = started()
+    code, _, err = run.kit("launch", "--brief-file", str(run.brief("incident-main-red.md", "/faker-mode\n\nGOAL: triage.\n", changes=False)))
+    run.step("a brief file named incident-<key>.md needs no CHANGES line", code == 0 and started() == before + 1, err.strip())
+    others = [run.kit("launch", "--brief-file", str(run.brief(name, "/faker-mode\n\nGOAL: triage.\n", changes=False)))
+              for name in ("incident.md", "triage-incident-main-red.md", "Incident-main-red.md", "fix-incident-1.md")]
+    run.step("a brief file with any other name needs the CHANGES line", all(code == 1 and "changes no repository" in err for code, _, err in others) and started() == before + 1, "")
+
+    fixed = (HERMES / "templates" / "fix-issue-brief.md").read_text()
+    filled = re.sub(r"\{[a-z_]+\}", "7", fixed)
+    before = started()
+    code, _, err = run.kit("launch", "--brief-file", str(run.brief("fix-issue-7.md", filled, changes=False)))
+    declared = re.search(r"^CHANGES: repository: the fix and its test$", fixed, re.M) is not None
+    run.step("the fix-issue template, filled in, starts a session", code == 0 and started() == before + 1 and declared, err.strip())
+    triage = re.sub(r"\{[a-z_]+\}", "7", (HERMES / "templates" / "triage-incident-brief.md").read_text())
+    before = started()
+    code, _, err = run.kit("launch", "--brief-file", str(run.brief("incident-main-7.md", triage, changes=False)))
+    run.step("the triage template, filled in, starts a session by the incident- exemption and carries no CHANGES line", code == 0 and started() == before + 1 and "CHANGES:" not in triage, err.strip())
+    bootstrap_text = (HERMES / "skills" / "bootstrap" / "SKILL.md").read_text()
+    setup_brief = re.search(r"```text\n(/faker-mode\n\nSet up .*?)```", bootstrap_text, re.S)
+    before = started()
+    setup_text = re.sub(r"<[^>\n]+>", "x", setup_brief.group(1) if setup_brief else "")
+    code, _, err = run.kit("launch", "--project", "shop", "--brief-file", str(run.brief_for(BOOTSTRAP, "setup-shop.md", setup_text, changes=False)), bot=BOOTSTRAP)
+    run.step("the bootstrap skill's repository-setup brief starts a session and carries CHANGES: repository: the dispatch and agent setup files",
+             setup_brief is not None and code == 0 and started() == before + 1 and "CHANGES: repository: the dispatch and agent setup files" in setup_brief.group(1), err.strip())
+
+    briefs = {path: path.read_text() for folder in (HERMES / "templates", HERMES / "skills") for path in folder.rglob("*.md")}
+    undeclared = sorted(str(path.relative_to(HERMES)) for path, text in briefs.items()
+                        if re.search(r"^OWNER DECISIONS:", text, re.M) and path.name != "triage-incident-brief.md" and not re.search(r"^CHANGES: repository: \S", text, re.M))
+    run.step("every brief text shipped in hermes/templates and hermes/skills that has an OWNER DECISIONS line, except the triage brief, has a CHANGES: repository line",
+             len(briefs) >= 5 and not undeclared and sum(1 for text in briefs.values() if re.search(r"^OWNER DECISIONS:", text, re.M)) >= 3, ", ".join(undeclared))
+    marker = "Cloud sessions are for repository changes only"
+    dispatch_skill = (HERMES / "skills" / "dispatch" / "SKILL.md").read_text()
+    chief_skill = (HERMES / "skills" / "chief" / "SKILL.md").read_text()
+    docs = [*(HERMES.parent / "docs").rglob("*.md"), HERMES.parent / "AGENTS.md"]
+    elsewhere = sorted(str(path.relative_to(HERMES.parent)) for path in [*HERMES.rglob("*"), *docs]
+                       if path.is_file() and path.suffix in {".md", ".py", ".sh", ".yaml", ".yml", ".json", ".txt"} and path.name != "SKILL.md" and "e2e" not in path.parts
+                       and "vendor" not in path.parts and "__pycache__" not in path.parts and marker in path.read_text(errors="replace"))
+    others_with = sorted(str(path.relative_to(HERMES.parent)) for path in (HERMES / "skills").rglob("SKILL.md")
+                         if path.parent.name not in {"dispatch", "chief"} and marker in path.read_text())
+    run.step("the sentence that cloud sessions are for repository changes only appears once in the dispatch skill and once in the chief skill, and in no other shipped text",
+             dispatch_skill.count(marker) == 1 and chief_skill.count(marker) == 1 and not elsewhere and not others_with
+             and "a session may still research what it needs to implement it" in dispatch_skill and faker_kit.NOT_A_CHANGE.count(marker) == 0, ", ".join(elsewhere + others_with))
+    operating = (HERMES / "profiles" / "OPERATING.md").read_text()
+    run.step("the guide lists the CHANGES line as a brief field and does not repeat the sentence", "a `CHANGES: repository: <the change>` line" in operating and marker not in operating, "")
 
 
 def webhook_scenario(run: Run) -> None:

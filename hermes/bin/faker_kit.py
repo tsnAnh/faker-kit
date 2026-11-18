@@ -99,6 +99,14 @@ from install_config import InstallError, config_set, hermes, mapping, value_at
 
 BRIEF_START = "/faker-mode"
 OWNER_DECISIONS_LINE = re.compile(r"^OWNER DECISIONS:[ \t]*\S", re.M)
+CHANGES_LINE = re.compile(r"^CHANGES:[ \t]*(.*?)[ \t]*$", re.M)
+REPOSITORY_CHANGE = re.compile(r"(?i:repository)[ \t]*:[ \t]*\S")
+TRIAGE_BRIEF_PREFIX = "incident-"
+NOT_A_CHANGE = (
+    "this unit changes no repository, so it is not for a cloud session: do the research, analysis or report in your own turn with your own tools "
+    "and tell the owner in chat; start a session only after the owner approves a code plan "
+    '(a unit that changes a repository says so on a CHANGES: line of the brief, for example "CHANGES: repository: a CSV export button")'
+)
 MAX_BRIEF_CHARS = 60_000
 SESSION_MODEL = re.compile(r"\A(?:opus|sonnet|haiku|fable|claude-[a-z0-9]+(?:-[a-z0-9]+){1,6})\Z")
 UNIT_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,63}\Z")
@@ -334,6 +342,10 @@ class Kit:
             raise Refused(f"the brief must start with {BRIEF_START}, so the session works in faker-mode")
         if not OWNER_DECISIONS_LINE.search(text):
             raise Refused('the brief must list the owner\'s decisions on an OWNER DECISIONS: line; write "none: <why>" when there are none')
+        if not Path(brief_file).name.startswith(TRIAGE_BRIEF_PREFIX):
+            declared = CHANGES_LINE.search(text)
+            if declared is None or not REPOSITORY_CHANGE.match(declared.group(1)):
+                raise Refused(NOT_A_CHANGE)
         if len(text) > MAX_BRIEF_CHARS:
             raise Refused(f"the brief is longer than {MAX_BRIEF_CHARS} characters; write the detail into a file in the repository and point to it")
         if SECRET_SHAPES.search(text):
