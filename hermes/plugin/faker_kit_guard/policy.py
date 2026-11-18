@@ -60,9 +60,13 @@ SECRET_SEGMENTS = re.compile(
 WIPE = re.compile(r"""\brm\s+(?:-\S+\s+)*-[a-zA-Z]*[rR][a-zA-Z]*\s+(?:-\S+\s+)*["']?(?:/|~|\$HOME|\$\{HOME\})/?\*?["']?(?=$|[\s;&|)'"])""")
 SEPARATORS = set(";&|()\n")
 MAX_WRAPPERS = 16
-MAX_COMMAND_CHARS = 100_000
+MAX_COMMAND_CHARS = 200_000
 MAX_SHELL_DEPTH = 3
+COMMAND_LIMIT_REASON = f"the command is longer than the guard scans ({MAX_COMMAND_CHARS:,} characters); split it into shorter commands"
+WRAPPER_LIMIT_REASON = f"more than {MAX_WRAPPERS} wrapper programs (env, command, xargs, ...) before the command; the guard cannot see the program"
+DEPTH_LIMIT_REASON = f"shell scripts nested deeper than {MAX_SHELL_DEPTH} levels; the guard cannot see the innermost command"
 GRAPHQL_WRITES = re.compile(r"\b(?:mergePullRequest|enablePullRequestAutoMerge|deleteRepository|mergeBranch|updateRef|createRef|deleteRef|createCommitOnBranch|dismissPullRequestReview)\b")
+JOINED_LITERALS = re.compile(r"""['"]\s*\+\s*['"]""")
 GITHUB_MENTION = re.compile(r"github|\bgh\b|\brepos/", re.I)
 GITHUB_WRITE_PATHS = re.compile(
     r"pulls/{1,8}.{0,60}?/{1,8}(?:merge|reviews)\b|/merges\b|/statuses/|/check-runs\b|/check-suites\b|\bgit/{1,8}refs\b|/contents/"
@@ -76,11 +80,17 @@ CODE_BLOCKS = (
     (GRAPHQL_WRITES, "it merges, deletes, moves a ref, or dismisses a review through GraphQL"),
     (WIPE, "it wipes / or the home folder"),
 )
-CODE_PUSH = re.compile(r"\bgit\b[^\n]{0,80}?\bpush\b([^\n]{0,200})")
-RISKY_PUSH = re.compile(
-    r"(?<![\w-])(?:--force(?:-with-lease|-if-includes)?(?:=\S*)?|-f|--mirror|--all|--delete|-d|--prune)(?![\w-])"
-    r"|[\s'\",]\+[\w/.-]|(?<![\w/.-])(?:main|master)(?![\w/.-])|refs/heads/(?:main|master)(?![\w/.-])"
-)
+GIT_WORD = re.compile(r"\bgit\b")
+PUSH_WORD = re.compile(r"(?<![\w./-])(?:push|send-pack|http-push)(?![\w-])")
+PUSH_METHOD = re.compile(r"(?:\bgit|\borigin|\bremote|\brepo)\s*\.\s*push\s*\(")
+PUSH_BARE_WORD = re.compile(r"[\w./@:+=-]+")
+PUSH_SHELL_WORD = re.compile(r"""[^\s'";&|)#\n]+""")
+PUSH_AFTER_STRING = re.compile(r"""['"\s]*(?:[)\],;}]|\Z)""")
+PUSH_AFTER_LIST = re.compile(r"\s*[+%*.]")
+PUSH_TAIL_CHARS = 4000
+PUSH_GIT_WINDOW = 300
+PUSH_REASON = ("code pushes only a literal feature branch: it never force-pushes, mirrors, deletes, or prunes, never pushes to main, "
+               "and the branch is written out in the code, not built at run time")
 INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|perl|ruby|php|bun|deno|osascript)\Z")
 INTERPRETER_CODE_OPTIONS = ("-c", "-e", "-E", "-r", "--eval", "--command", "-p", "--print")
 WRAPPERS = ("env", "command", "exec", "nohup", "sudo", "xargs", "time", "nice", "stdbuf", "caffeinate", "timeout", "arch")
@@ -130,6 +140,12 @@ def faker_kit_program(word: str) -> bool:
 
 class PolicyError(ValueError):
     pass
+
+
+class ScanLimit(Exception):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 def faker_kit_home() -> Path:
@@ -403,37 +419,38 @@ def split_words(text: str) -> list[str]:
 
 def unwrap(program: str, rest: list[str]) -> list[str]:
     valued = WRAPPER_VALUE_OPTIONS.get(program, ())
-    while rest:
-        word = rest[0]
+    i, size = 0, len(rest)
+    while i < size:
+        word = rest[i]
         if ENV_ASSIGN.match(word) or word == "-":
-            rest = rest[1:]
+            i += 1
             continue
         if word == "--":
-            rest = rest[1:]
+            i += 1
             break
         if not word.startswith("-"):
             break
         if word in valued:
-            rest = rest[2:]
+            i += 2
             continue
         if word.startswith("--"):
             name, eq, value = word.partition("=")
             if program == "env" and name == "--split-string":
-                return split_words(value) + rest[1:] if eq else split_words(rest[1]) + rest[2:] if len(rest) > 1 else []
-            rest = rest[2:] if name in valued and not eq else rest[1:]
+                return split_words(value) + rest[i + 1:] if eq else split_words(rest[i + 1]) + rest[i + 2:] if size > i + 1 else []
+            i += 2 if name in valued and not eq else 1
             continue
         for k, letter in enumerate(word[1:], 1):
             if program == "env" and letter == "S":
                 value = word[k + 1:]
-                return split_words(value) + rest[1:] if value else split_words(rest[1]) + rest[2:] if len(rest) > 1 else []
+                return split_words(value) + rest[i + 1:] if value else split_words(rest[i + 1]) + rest[i + 2:] if size > i + 1 else []
             if f"-{letter}" in valued:
-                rest = rest[1:] if word[k + 1:] else rest[2:]
+                i += 1 if word[k + 1:] else 2
                 break
         else:
-            rest = rest[1:]
-    if program == "timeout" and rest:
-        rest = rest[1:]
-    return rest
+            i += 1
+    if program == "timeout" and i < size:
+        i += 1
+    return rest[i:]
 
 
 def shell_parts(words: list[str]) -> tuple[str | None, str | None]:
@@ -633,6 +650,9 @@ def shell_words(segment: str, keep_path: bool = False) -> list[str]:
             words = rest
         else:
             break
+    else:
+        if words and (ENV_ASSIGN.match(words[0]) or words[0] in SHELL_KEYWORDS or Path(words[0]).name in WRAPPERS):
+            raise ScanLimit(WRAPPER_LIMIT_REASON)
     if words and not keep_path:
         words[0] = Path(words[0]).name
     return words
@@ -650,6 +670,8 @@ def shell_commands(text: str, depth: int = 0, keep_path: bool = False) -> list[l
             out.append(words)
         elif depth < MAX_SHELL_DEPTH:
             out += shell_commands(script, depth + 1, keep_path)
+        else:
+            raise ScanLimit(DEPTH_LIMIT_REASON)
     return out
 
 
@@ -768,6 +790,9 @@ def piped_shell(segment: list[str], piped: bool) -> list[tuple[str, str]]:
             break
         fed_by_xargs = fed_by_xargs or Path(words[0]).name == "xargs"
         words = words[1:] if ENV_ASSIGN.match(words[0]) else unwrap(Path(words[0]).name, words[1:])
+    else:
+        if words and (ENV_ASSIGN.match(words[0]) or Path(words[0]).name in WRAPPERS):
+            raise ScanLimit(WRAPPER_LIMIT_REASON)
     if not words or Path(words[0]).name not in SHELLS:
         return []
     if fed_by_xargs:
@@ -1085,34 +1110,112 @@ def device_problem(args: dict) -> str | None:
 
 
 def terminal_problem(command: str, depth: int = 0) -> str | None:
-    scanned = command[:MAX_COMMAND_CHARS]
-    if re.search(r">\s*\S*" + PROTECTED_KIT.pattern, scanned, re.I):
+    if len(command) > MAX_COMMAND_CHARS:
+        return COMMAND_LIMIT_REASON
+    try:
+        return scanned_problem(command, depth)
+    except ScanLimit as limit:
+        return limit.reason
+
+
+def scanned_problem(command: str, depth: int) -> str | None:
+    if re.search(r">\s*\S*" + PROTECTED_KIT.pattern, command, re.I):
         return "bots never change the kit or ~/.hermes/bin"
-    clean = scan_shell(scanned)[1]
-    for words in shell_commands(scanned, keep_path=True):
+    clean = scan_shell(command)[1]
+    for words in shell_commands(command, keep_path=True):
         why = command_problem([Path(words[0]).name, *words[1:]])
         if why:
             return why
     for kind, value in shell_inputs(clean):
-        if kind == "block" and scanned == command:
+        if kind == "block":
             return value
-        if kind == "script" and depth < MAX_SHELL_DEPTH:
+        if kind == "script":
+            if depth >= MAX_SHELL_DEPTH:
+                return DEPTH_LIMIT_REASON
             why = terminal_problem(value, depth + 1)
             if why:
                 return why
-    code = interpreter_code(scanned, clean)
+    code = interpreter_code(command, clean)
     return code_problem(code) or code_push_problem(code)
+
+
+def push_literal_args(text: str, start: int, closer: str) -> list[str] | None:
+    window = text[start:start + PUSH_TAIL_CHARS]
+    args: list[str] = []
+    i, size = 0, len(window)
+    listed = closer in ("]", ")")
+    while True:
+        while i < size and (window[i] in " \t,\r\n" if listed else window[i] in " \t"):
+            i += 1
+        if i >= size:
+            return args if size < PUSH_TAIL_CHARS else None
+        char = window[i]
+        if listed:
+            if char == closer or (closer == "]" and char == ")"):
+                return None if closer == "]" and PUSH_AFTER_LIST.match(window, i + 1) else args
+            if char not in "'\"":
+                return None
+            end = window.find(char, i + 1)
+            if end < 0 or not PUSH_BARE_WORD.fullmatch(window[i + 1:end]):
+                return None
+            args.append(window[i + 1:end])
+            i = end + 1
+            continue
+        if char in "\n;&|)#":
+            return args
+        if char in "'\"":
+            end = window.find(char, i + 1)
+            if (i and window[i - 1] not in " \t") or end < 0 or not PUSH_BARE_WORD.fullmatch(window[i + 1:end]):
+                return args if PUSH_AFTER_STRING.match(window, i) else None
+            args.append(window[i + 1:end])
+            i = end + 1
+            continue
+        word = PUSH_SHELL_WORD.match(window, i)
+        if word is None or not PUSH_BARE_WORD.fullmatch(word.group()):
+            return None
+        args.append(word.group())
+        i = word.end()
+
+
+def push_target_problem(args: list[str]) -> bool:
+    if git_push_problem(args):
+        return True
+    for spec in args[1:]:
+        target = spec.split(":", 1)[1] if ":" in spec else spec
+        if target.lower().removeprefix("refs/").removeprefix("heads/") in ("main", "master", "trunk", "head", ""):
+            return True
+    return False
+
+
+def code_pushes_only_literal_branches(text: str) -> bool:
+    for found in PUSH_METHOD.finditer(text):
+        args = push_literal_args(text, found.end(), ")")
+        if args is None or push_target_problem(["origin", *args]):
+            return False
+    git_seen = GIT_WORD.search(text) is not None
+    for found in PUSH_WORD.finditer(text):
+        begin, end = found.span()
+        quoted = begin > 0 and text[begin - 1] in "'\"" and text[end:end + 1] == text[begin - 1]
+        if quoted:
+            if not (git_seen and text[:begin - 1].rstrip()[-1:] in ("[", ",")):
+                continue
+        elif not GIT_WORD.search(text, max(0, begin - PUSH_GIT_WINDOW), begin):
+            continue
+        args = push_literal_args(text, end + 1 if quoted else end, "]" if quoted else "")
+        if args is None or push_target_problem(args):
+            return False
+    return True
 
 
 def code_push_problem(texts: list[str]) -> str | None:
     for text in texts:
-        if any(RISKY_PUSH.search(found.group(1)) for found in CODE_PUSH.finditer(text)):
-            return "code never force-pushes, mirrors, deletes, prunes, or pushes to main; push a named feature branch"
+        if not code_pushes_only_literal_branches(text):
+            return PUSH_REASON
     return None
 
 
 def github_code_write(text: str) -> bool:
-    seen = urllib.parse.unquote(text)
+    seen = urllib.parse.unquote(JOINED_LITERALS.sub("", text))
     return bool(GITHUB_MENTION.search(seen) and GITHUB_WRITE_PATHS.search(seen) and WRITE_INTENT.search(seen))
 
 
@@ -1160,7 +1263,10 @@ def decide(policy: Policy, profile: str, tool_name: str, args: dict, now: Callab
     for rule in policy.deny:
         if rule.matches(tool_name, args):
             return block(f"{tool_name} matches deny rule `{rule.label()}`")
-    secret = secret_reference(tool_name, args)
+    try:
+        secret = secret_reference(tool_name, args)
+    except ScanLimit as limit:
+        return block(f"{tool_name} is blocked for every bot: {limit.reason}")
     if secret:
         return block(f"{tool_name} touches {secret}, a secret store or the kit's own files; bots never read secrets or edit the kit")
     bot = policy.bots.get(profile)
