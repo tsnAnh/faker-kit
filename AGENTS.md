@@ -127,6 +127,8 @@ The Claude review workflow reads this section with REVIEW.md.
 | The babysit and loop gates wake only for changed pull requests, blockers, and completions, and stay read-only | `hermes/e2e/wake_gate_scenario.py`, in CI's `hermes-e2e` job |
 | The review workflow's runs, jobs, check runs, and statuses neither pass nor block a merge | the removed-gate and ignored-review-workflow steps of `hermes/e2e/run_dispatch_e2e.py` in CI's `hermes-e2e` job |
 | A bot's REST calls cannot move main, write commit statuses or check runs, dismiss reviews, or link inside a briefs folder | the guard section of `hermes/e2e/run_dispatch_e2e.py` (the `guard-calls.json` corpus, run through the real guard plugin) in CI's `hermes-e2e` job |
+| A part's stage evidence is recorded while its unit cards are open (saved in the part card's header with no claim, completion adds the Kanban rows), and a unit serving an `installed`, `built`, or `verified` part completes with that part's stage rows | the `stage evidence:` steps of `hermes/e2e/kanban_scenario.py` (`stage_deadlock_scenario`, run through the fake board that shows a part card `todo` and refuses its claim as Kanban does), in CI's `hermes-e2e` job |
+| A unit whose pull request merged but whose check run can never finish closes with `loop close <unit> --as folded --reason ...`, never by hand | the `folded close:` steps of `hermes/e2e/kanban_scenario.py` (`stage_deadlock_scenario`), in CI's `hermes-e2e` job |
 | Commit messages carry no AI or agent references | `scripts/check-commit-messages.mjs` in CI's `commit-messages` job (promoted from STYLE.md) |
 | Prefer a vendored skill to a second trust-ladder skill | review (REVIEW.md) |
 | Cloud skills use `gh api` REST, not GraphQL-backed subcommands | review (REVIEW.md) |
