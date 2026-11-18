@@ -11,7 +11,7 @@ from pathlib import Path
 from faker_kit_kanban import Card
 from faker_kit_loop import CLOSED
 from faker_kit_session_card import steered, steered_at
-from faker_kit_text import kept_decisions, pull_numbers
+from faker_kit_text import kept_decisions, pull_numbers, summary_of
 
 KIT_OWNED = True
 
@@ -73,8 +73,8 @@ def workable(card: Card) -> bool:
     header = card.header
     if header is None:
         return False
-    goal = header.text.split("\n", 1)[0].strip()
-    return kept_decisions(header) is not None and len(goal) > len(card.title)
+    goal = summary_of(header, card.slug).strip()
+    return kept_decisions(header) is not None and len(goal) > len(card.slug)
 
 
 def added_at(card: Card) -> float:
@@ -114,7 +114,7 @@ class Slots:
         if self.free:
             return None
         def named(cards: list[Card]) -> str:
-            return ", ".join(f"{c.id} {c.title}" for c in cards) or "none"
+            return ", ".join(f"{c.id} {c.slug}" for c in cards) or "none"
         return (f"launching {unit} would exceed the pickup limits, so nothing was launched: {self.project} runs {len(self.in_project)} of {self.per_project} unit cards ({named(self.in_project)}), "
                 f"{len(self.everywhere)} of {self.total} in total ({named(self.everywhere)}); free slots: 0. Launch again when a running unit card finishes")
 
@@ -129,7 +129,7 @@ def abandoned_after_steer(cards: list[Card], bot: str, project: str, open_units:
         header = card.header
         if card.assignee != bot or header is None or not project_unit(card, project) or card.status not in ("running", "ready") or not steered(header):
             continue
-        if pull_numbers(header) or (project, card.title) in open_units:
+        if pull_numbers(header) or (project, card.slug) in open_units:
             continue
         stamp = steered_at(header)
         try:

@@ -45,12 +45,12 @@ def claims_scenario(run: Run) -> None:
     assert chief("loop", "migrate", "--apply")[0] == 0
     assert project("loop", "migrate", "--apply")[0] == 0
 
-    assert project("loop", "unit", "later-a")[0] == 0
+    assert project("loop", "unit", "later-a", "--title", "Visitors see the fixture change")[0] == 0
     merged_pr(71, "later-a")
-    existing = project("loop", "unit", "later-a", "--pr", "71")
-    again = project("loop", "unit", "later-a", "--pr", "71")
+    existing = project("loop", "unit", "later-a", "--title", "Visitors see the fixture change", "--pr", "71")
+    again = project("loop", "unit", "later-a", "--title", "Visitors see the fixture change", "--pr", "71")
     mutations = board.mutations()
-    bound = project("loop", "unit", "later-a", "--pr", "71")
+    bound = project("loop", "unit", "later-a", "--title", "Visitors see the fixture change", "--pr", "71")
     run.step("kanban claims: loop unit <id> --pr <n> on an existing card binds the number into its PRs field once and a repeat edits nothing",
              existing[0] == 0 and "PRs: 71" in board.body(key("later-a")) and again[0] == 0 and bound[0] == 0 and board.mutations() == mutations, existing[2].strip())
 
@@ -77,7 +77,7 @@ def claims_scenario(run: Run) -> None:
 
     def card_for(unit: str, n: int) -> None:
         merged_pr(n, unit)
-        assert project("loop", "unit", unit, "--pr", str(n))[0] == 0
+        assert project("loop", "unit", unit, "--title", "Visitors see the fixture change", "--pr", str(n))[0] == 0
 
     card_for("moved-b", 72)
     old = board.leave_claim(key("moved-b"), "pr_published", "pr_merged", url=url(72), head=head_of(72), commit=commit_of(72))

@@ -26,6 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import card_refs_scenario
 import gate_scenario
 import guard_scenario
 import import_scenario
@@ -50,6 +51,7 @@ from faker_kit_guard.policy import decide, load_policy, reader_source  # noqa: E
 from faker_kit_machine import ROUTE_JOBS, cloudflared_config, routes, secret_env  # noqa: E402
 
 yaml = faker_kit.yaml
+sys.modules["faker_kit_refs"].PREFIXES.update({"shop": "SHOP"})
 Coded = faker_kit.Coded
 
 REPO = "acme/shop"
@@ -4078,6 +4080,12 @@ def main(argv: list[str] | None = None) -> int:
         kanban_close_run = Run(root / "kanban-close", run.steps, run.verdicts)
         kanban_close_run.build()
         kanban_text_scenario.kanban_close_scenario(kanban_close_run)
+        card_refs_run = Run(root / "card-refs", run.steps, run.verdicts)
+        card_refs_run.build()
+        card_refs_scenario.card_refs_scenario(card_refs_run)
+        card_backfill_run = Run(root / "card-refs-backfill", run.steps, run.verdicts)
+        card_backfill_run.build()
+        card_refs_scenario.card_backfill_refs_scenario(card_backfill_run)
     except Failure as err:
         print(f"e2e stopped at: {err}", file=sys.stderr)
         code = 1

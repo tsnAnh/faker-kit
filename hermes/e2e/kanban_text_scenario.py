@@ -68,7 +68,7 @@ def kanban_text_scenario(run: Run) -> None:
     run.clock += 60
     made = json_of(chief("handoff", "--project", PROJECT, "--part", "Build the changelog archive", "--decisions", DECISIONS, "--outcome", "built"))
     part_card = board.by_key()[f"faker-kit:chief:{made['id']}"]
-    unit = json_of(project("loop", "unit", "parser-fix", "--part", "3", "--pr", "40"))
+    unit = json_of(project("loop", "unit", "parser-fix", "--title", "Visitors see the fixture change", "--part", "3", "--pr", "40"))
     unit_card = board.by_key()["faker-kit:shop:parser-fix"]
     shown = subprocess.run([str(run.bin / "hermes"), "-p", CHIEF, "kanban", "--board", "default", "show", part_card["id"], "--json"], env=run.env(), capture_output=True, text=True)
     shown_body = json.loads(shown.stdout)["task"]["body"] if shown.returncode == 0 else ""
@@ -110,10 +110,10 @@ def kanban_text_scenario(run: Run) -> None:
     card = board.by_key()["faker-kit:chief:1"]
     run.step("kanban text: binding a pull request with loop set rewrites the text with its link, and repeating it issues no edit",
              "Pull requests: https://github.com/acme/shop/pull/61" in readable(card) and board.mutations() == mutations, readable(card))
-    project("loop", "unit", "csv-export", "--pr", "70")
+    project("loop", "unit", "csv-export", "--title", "Visitors see the fixture change", "--pr", "70")
     card = board.by_key()["faker-kit:shop:csv-export"]
     mutations = board.mutations()
-    project("loop", "unit", "csv-export", "--pr", "70")
+    project("loop", "unit", "csv-export", "--title", "Visitors see the fixture change", "--pr", "70")
     run.step("kanban text: loop unit --pr on an old-layout unit card binds the pull request into the field and the text and converts the layout, and repeating it issues no edit",
              "PRs: 12,70" in lines(card) and "Pull requests: https://github.com/acme/shop/pull/12, https://github.com/acme/shop/pull/70" in readable(card) and card["body"].count(FOOTER) == 1
              and board.mutations() == mutations and first_line(card["body"]) == f"{GOAL} and keep the file small.", readable(card))

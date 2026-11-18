@@ -88,7 +88,7 @@ def visibility_scenario(run: Run) -> None:
     run.step("visibility case 4: after the cutover a launch with no unit card refuses, names the unit and the exact command, and starts nothing",
              refused[0] != 0 and "no unit card for kanban-compact-board in shop" in refused[2] and "faker-kit loop unit kanban-compact-board --part <id>" in refused[2]
              and key not in board.by_key(), refused[2].strip())
-    assert project("loop", "unit", "kanban-compact-board")[0] == 0
+    assert project("loop", "unit", "kanban-compact-board", "--title", "Visitors see the fixture change")[0] == 0
     launched = project("launch", "--brief-file", str(late))
     out = json_of(launched)
     shown = out.get("card", {})
