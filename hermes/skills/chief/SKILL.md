@@ -54,6 +54,7 @@ Run `faker-kit status --all`. For each project the intent might touch, read its 
 
 ### 2. Split by project
 
+- Cloud sessions are for repository changes only: research or analysis the owner asks for stays with you or the project bot, which answers the owner in chat, and only a part whose deliverable is a change goes to a project bot to launch a session.
 - A part belongs to the project whose repository holds the code it changes. A feature across one product's API, web app, and mobile app is one project's work when they live in one repository: one message to that bot. Do not split it further; the project bot splits units.
 - When two projects must change together (a shared API and its consumer in another repository), the provider goes first. Hand the provider bot its part first and wait for its reply naming the pull request. Message the consumer bot only after that pull request is merged. If the provider project is not on this Hermes machine, the owner sends the consumer message only after the provider's pull request merges.
 - If no project fits, or the owner asks for a new project, create the bot's profile and message the bootstrap bot yourself; see New projects below. Never tell the owner to ask the bootstrap bot, and never send them to another chat.
