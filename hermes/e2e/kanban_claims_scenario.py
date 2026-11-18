@@ -128,7 +128,7 @@ def claims_scenario(run: Run) -> None:
 
     parts = {}
     for label, extra in (("plain", []), ("built", ["--outcome", "built"])):
-        made = json_of(chief("handoff", "--project", PROJECT, "--part", f"Part {label} card", "--decisions", DECISIONS, *extra))
+        made = json_of(chief("handoff", "--project", PROJECT, "--part", f"Part {label} card", "--title", f"Part {label} card", "--decisions", DECISIONS, *extra))
         parts[label] = made["id"]
     base = 90
     for ident in parts.values():

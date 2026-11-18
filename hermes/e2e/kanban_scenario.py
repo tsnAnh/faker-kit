@@ -533,7 +533,7 @@ def kanban_scenario(run: Run, loop_store: type, loop_error: type[Exception]) -> 
 
     board.set(dispatch_mode="workers")
     mutations = board.mutations()
-    blocked = [chief("handoff", "--project", PROJECT, "--part", "Another part", "--decisions", DECISIONS), chief("loop", "set", "1", "--reported"),
+    blocked = [chief("handoff", "--project", PROJECT, "--part", "Another part", "--title", "Another part", "--decisions", DECISIONS), chief("loop", "set", "1", "--reported"),
                project("loop", "unit", "late-unit", "--title", "Visitors see the fixture change"), chief("loop", "migrate", "--apply")]
     reading = chief("loop")
     run.step("kanban: every write is refused while the board spawns workers, and reading still works",
@@ -600,7 +600,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     for ident, prs in ((1, "41"), (3, "42"), (4, "43")):
         chief("loop", "set", str(ident), "--pr", prs)
     for text, pr in (("Build the nightly archive", "44"), ("Fix the cart total", "45"), ("Add dark mode", "46")):
-        made = json_of(chief("handoff", "--project", PROJECT, "--part", text, "--decisions", DECISIONS, *(["--outcome", "built"] if "archive" in text else [])))
+        made = json_of(chief("handoff", "--project", PROJECT, "--part", text, "--title", text, "--decisions", DECISIONS, *(["--outcome", "built"] if "archive" in text else [])))
         chief("loop", "set", str(made["id"]), "--state", "in-progress", "--pr", pr)
     settled(41, True)
     settled(42, False)
@@ -854,7 +854,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     events_scenario(run, board, project, add_pr, card_key)
 
     for text, pr, merged in (("Add the wishlist", 48, True), ("Add reviews", 49, True), ("Add gift cards", 50, False)):
-        made = json_of(chief("handoff", "--project", PROJECT, "--part", text, "--decisions", DECISIONS))
+        made = json_of(chief("handoff", "--project", PROJECT, "--part", text, "--title", text, "--decisions", DECISIONS))
         assert chief("loop", "set", str(made["id"]), "--state", "in-progress", "--pr", str(pr))[0] == 0
         settled(pr, merged)
     assert project("loop", "unit", "u14", "--title", "Visitors see the fixture change", "--part", "14")[0] == 0

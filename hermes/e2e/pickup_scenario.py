@@ -26,8 +26,8 @@ def stamp(moment: float) -> str:
 
 def card_body(unit: str, goal: str | None, decisions: str | None, added: float, project: str = PROJECT, kind: str = "unit", fields: dict[str, str] | None = None,
               repeated: tuple[tuple[str, str], ...] = (), tail: tuple[str, ...] = ()) -> str:
-    text = [goal if goal is not None else unit, f"Unit of {project}, run by {BOT}; serves no chief part.", "", f"Owner decisions: {decisions or 'none recorded'}",
-            "Pull requests: none yet", "Sessions: none yet", "Status: handed-out; not waiting; updated unknown", *tail]
+    text = [f"**Goal:** {goal if goal is not None else unit}", "", "**Done means:** One pull request is merged after every CI check passes on its head.", "",
+            "**Current status:** Handed out", "", f"**Owner decisions:** {decisions or 'none'}", *tail]
     head = {"Key": f"faker-kit:{project}:{unit}", "Kind": kind, "Project": project, "Bot": BOT, "Outcome": "merged-pr", "State": "handed-out",
             "Added": str(added), "Updated": str(added), **(fields or {})}
     rows = [f"{name}: {value}" for name, value in head.items()] + [f"{name}: {value}" for name, value in repeated]

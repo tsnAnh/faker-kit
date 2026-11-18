@@ -168,7 +168,7 @@ def visibility_scenario(run: Run) -> None:
     run.step("visibility case 2: align --apply writes the Status text on each part card, and a second apply changes nothing",
              applied.get("count") == plan.get("count") and again.get("count") == 0 and f"in progress: unit work-0 running (card {running_units[0]})" in board.body("faker-kit:chief:100")
              and "Work: every unit done" in board.body("faker-kit:chief:300"), json.dumps(again))
-    added = json_of(chief("handoff", "--project", PROJECT, "--part", "Ship the new flow", "--decisions", "owner said so"))
+    added = json_of(chief("handoff", "--project", PROJECT, "--part", "Ship the new flow", "--title", "Ship the new flow", "--decisions", "owner said so"))
     part_key = f"faker-kit:chief:{added.get('id')}"
     moved = chief("loop", "set", str(added.get("id")), "--state", "in-progress")
     run.step("visibility case 2: loop set --state in-progress on a new part writes its Status text in the same call and leaves the Kanban status to Pal",
