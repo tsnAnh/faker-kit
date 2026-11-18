@@ -2591,7 +2591,7 @@ def install_scenario(run: Run, work: Path) -> None:
     run.step("the installed wrapper runs the command and sees the machine cord",
              launched.returncode == 0 and json.loads(launched.stdout)["reason"] == "cloud bill spike", launched.stdout.strip() or launched.stderr.strip())
     setup_brief = new / "briefs" / "default" / "setup-shop.md"
-    setup_brief.write_text("/faker-mode\n\nGOAL: set the repository up.\n" + DECISIONS_LINE + "\n")
+    setup_brief.write_text("/faker-mode\n\nGOAL: set the repository up.\n" + DECISIONS_LINE + "\n" + CHANGES_FIXTURE_LINE + "\n")
     subprocess.run([str(hermes / "bin" / "faker-kit"), "andon", "clear"], env={key: value for key, value in env.items() if key != "HERMES_HOME"}, capture_output=True, text=True, check=True)
     wrapper_env = {key: value for key, value in env.items() if key != "HERMES_HOME"}
     launches = len(run.claude_log.read_text().splitlines())
