@@ -5,7 +5,7 @@ from pathlib import Path
 
 from faker_kit_cards import CHIEF_KEY
 from faker_kit_kanban import FOOTER, Card, Header, Kanban, KanbanError
-from faker_kit_loop import Loop
+from faker_kit_loop import CLOSED, Loop
 from faker_kit_refs import number_of, numbered, prefix_of
 from faker_kit_stray import stray_cards
 from faker_kit_text import refresh, summary_of
@@ -89,6 +89,11 @@ def added_at(card: Card) -> float:
         return float("inf")
 
 
+def is_open(card: Card) -> bool:
+    fields = card.header.fields if card.header else {}
+    return not card.archived and card.status != "done" and fields.get("State") not in CLOSED
+
+
 def assign_refs(cards: list[Card], mine: list[Card]) -> tuple[dict[str, str], dict[str, str]]:
     refs: dict[str, str] = {}
     missing: dict[str, str] = {}
@@ -125,7 +130,9 @@ def backfill_refs(kanban: Kanban, home: Path, role: str, bot: str, project: str 
             kind = header.fields.get("Kind", "")
             if (role == "chief" and kind == "part" and key.startswith(f"faker-kit:{CHIEF_KEY}:")) or (role == "project" and kind == "unit" and header.fields.get("Project") == project):
                 mine.append(card)
-        refs, missing = assign_refs(cards, mine)
+        opened = [c for c in mine if is_open(c)]
+        skipped = [{"card": c.id, "key": str(c.key), "reason": "not open"} for c in mine if not is_open(c) and c.ref is None]
+        refs, missing = assign_refs(cards, opened)
         plan: list[dict[str, str]] = []
         failed: list[dict[str, str]] = []
         changed = 0
@@ -141,5 +148,5 @@ def backfill_refs(kanban: Kanban, home: Path, role: str, bot: str, project: str 
                     failed.append({"card": card.id, "reason": str(err)[:160]})
                     item["change"] = "failed"
             plan.append(item)
-        return {"mode": "apply" if apply else "dry-run", "refs": True, "cards": plan, "no_prefix": [{"card": c, "reason": r} for c, r in missing.items()], "unparsed": unparsed,
-                "failed": failed, "to_number": len(plan), "changed": changed, "kept": sum(1 for c in mine if c.ref)}
+        return {"mode": "apply" if apply else "dry-run", "refs": True, "cards": plan, "no_prefix": [{"card": c, "reason": r} for c, r in missing.items()], "skipped": skipped, "unparsed": unparsed,
+                "failed": failed, "to_number": len(plan), "changed": changed, "kept": sum(1 for c in opened if c.ref)}

@@ -153,6 +153,9 @@ def card_backfill_refs_scenario(run: Run) -> None:
     old_card(board, "faker-kit:faker-kit:same-time-b", fk, FK_BOT, "unit", 1799990200.0)
     old_card(board, "faker-kit:faker-kit:same-time-a", fk, FK_BOT, "unit", 1799990200.0)
     old_card(board, "faker-kit:faker-kit:old-done", fk, FK_BOT, "unit", 1799990000.0, state="merged", status="archived")
+    old_card(board, "faker-kit:faker-kit:finished", fk, FK_BOT, "unit", 1799990010.0, status="done")
+    old_card(board, "faker-kit:faker-kit:merged-open", fk, FK_BOT, "unit", 1799990020.0, state="merged")
+    old_card(board, "faker-kit:faker-kit:archived-ref", fk, FK_BOT, "unit", 1799989500.0, state="abandoned", status="archived", Ref="FK-20")
     old_card(board, "faker-kit:faker-kit:has-ref", fk, FK_BOT, "unit", 1799989000.0, Ref="FK-7")
     old_card(board, "faker-kit:fren:other-project", "fren", FREN_BOT, "unit", 1799990000.0)
     old_card(board, "faker-kit:chief:11", fk, FK_BOT, "part", 1799990400.0, state="handed-out")
@@ -164,15 +167,17 @@ def card_backfill_refs_scenario(run: Run) -> None:
 
     dry = json_of(kit("loop", "backfill", "--refs", "--dry-run", bot=FK_BOT))
     planned = {c["key"].rsplit(":", 1)[1]: c for c in dry["cards"]}
-    run.step("card refs backfill: the dry run lists card id, key and ref for each own card without one in creation order (ties by card id), numbers after the highest existing ref, "
-             "gives the closed card one, keeps FK-7, lists the unreadable card, and writes nothing",
-             [planned[k]["ref"] for k in ("old-done", "repo-setup", "same-time-b", "same-time-a", "late-unit")] == ["FK-8", "FK-9", "FK-10", "FK-11", "FK-12"] and "has-ref" not in planned
+    run.step("card refs backfill: the dry run lists card id, key and ref for each open own card without one in creation order (ties by card id), numbers after the highest ref any card holds "
+             "(an archived FK-20 counts), skips the done, merged and archived cards as not open, keeps FK-7, lists the unreadable card, and writes nothing",
+             [planned[k]["ref"] for k in ("repo-setup", "same-time-b", "same-time-a", "late-unit")] == ["FK-21", "FK-22", "FK-23", "FK-24"] and "has-ref" not in planned
+             and sorted(c["key"].rsplit(":", 1)[1] for c in dry["skipped"]) == ["finished", "merged-open", "old-done"] and all(c["reason"] == "not open" for c in dry["skipped"])
+             and not {"old-done", "finished", "merged-open", "archived-ref"} & set(planned)
              and "other-project" not in planned and planned["repo-setup"]["card"] == next(i for i, t in first.items() if t["title"] == "repo-setup") and dry["kept"] == 1
-             and [u["card"] for u in dry["unparsed"]] == [broken] and dry["to_number"] == 5 and board.mutations() == mutations and json.dumps(board.state()["tasks"], sort_keys=True) == before,
+             and [u["card"] for u in dry["unparsed"]] == [broken] and dry["to_number"] == 4 and board.mutations() == mutations and json.dumps(board.state()["tasks"], sort_keys=True) == before,
              json.dumps(planned["repo-setup"]))
     cdry = json_of(kit("loop", "backfill", "--refs", "--dry-run", bot=CHIEF))
     run.step("card refs backfill: the chief's dry run numbers its part cards in the project's sequence and lists a part of a project with no prefix row, never inventing one",
-             [c["ref"] for c in cdry["cards"]] == ["FK-8"] and len(cdry["no_prefix"]) == 1
+             [c["ref"] for c in cdry["cards"]] == ["FK-21"] and len(cdry["no_prefix"]) == 1
              and "PREFIXES in hermes/lib/faker_kit_refs.py" in cdry["no_prefix"][0]["reason"] and board.mutations() == mutations,
              json.dumps(cdry["no_prefix"]))
 
@@ -181,11 +186,14 @@ def card_backfill_refs_scenario(run: Run) -> None:
     mutating = board.mutating()
     footer_only = all(after[i]["title"] == first[i]["title"] and (after[i]["body"] == first[i]["body"] or after[i]["body"].replace(f"Ref: {planned[k]['ref']}\n", "", 1) == first[i]["body"])
                       for k in planned for i in (planned[k]["card"],))
-    run.step("card refs backfill: apply writes only the Ref line of the footer with edit calls (never create, archive, complete, "
-             "claim or evidence); the body text and every title stay byte-identical, "
-             "an archived card stays archived, and a card that had a ref keeps it",
-             applied["changed"] == 5 and set(mutating) == {"edit"} and len(mutating) == 5 and footer_only
-             and all(f"Ref: {planned[k]['ref']}" in lines(after[planned[k]["card"]]) for k in planned) and after[planned["old-done"]["card"]]["status"] == "archived"
+    left_alone = [board.by_key()[f"faker-kit:faker-kit:{k}"] for k in ("old-done", "finished", "merged-open")]
+    run.step("card refs backfill: apply writes only the Ref line of the footer of open cards with edit calls (never create, archive, complete, "
+             "claim or evidence); the body text and every title stay byte-identical, the done, merged and archived cards are untouched and get no ref, "
+             "and cards that had a ref keep it",
+             applied["changed"] == 4 and set(mutating) == {"edit"} and len(mutating) == 4 and footer_only
+             and all(f"Ref: {planned[k]['ref']}" in lines(after[planned[k]["card"]]) for k in planned)
+             and all(t["body"] == first[t["id"]]["body"] and "Ref:" not in " ".join(lines(t)) for t in left_alone) and left_alone[0]["status"] == "archived"
+             and "Ref: FK-20" in lines(board.by_key()["faker-kit:faker-kit:archived-ref"])
              and "Ref: FK-7" in lines(board.by_key()["faker-kit:faker-kit:has-ref"])
              and board.by_key()["faker-kit:fren:other-project"]["body"] == first[board.by_key()["faker-kit:fren:other-project"]["id"]]["body"],
              json.dumps(applied)[:300])
@@ -193,9 +201,12 @@ def card_backfill_refs_scenario(run: Run) -> None:
     chief_applied = json_of(kit("loop", "backfill", "--refs", "--apply", bot=CHIEF))
     second = json_of(kit("loop", "backfill", "--refs", "--apply", bot=FK_BOT))
     third = json_of(kit("loop", "backfill", "--refs", "--apply", bot=CHIEF))
-    run.step("card refs backfill: the chief numbers its part card after the project bot's (FK-13), and a second apply by either bot changes nothing and issues no edit",
-             chief_applied["changed"] == 1 and "Ref: FK-13" in lines(board.by_key()["faker-kit:chief:11"]) and board.mutations() == mutations + 1 and second["changed"] == 0 and third["changed"] == 0
-             and second["to_number"] == 0, json.dumps([chief_applied["changed"], second["changed"], third["changed"]]))
+    quiet = board.mutations() == mutations + 1
     verbs = {v[0] for v in board.verbs()}
+    fresh = json_of(kit("loop", "unit", "fresh-one", "--title", "Visitors see the new banner", bot=FK_BOT))
+    run.step("card refs backfill: the chief numbers its part card after the project bot's (FK-25), a second apply by either bot changes nothing and issues no edit, "
+             "and a card created afterwards takes the highest ref of the project, closed cards included, plus one (FK-26)",
+             chief_applied["changed"] == 1 and "Ref: FK-25" in lines(board.by_key()["faker-kit:chief:11"]) and fresh["ref"] == "FK-26" and quiet and second["changed"] == 0 and third["changed"] == 0
+             and second["to_number"] == 0, json.dumps([chief_applied["changed"], second["changed"], third["changed"]]))
     run.step("card refs backfill: across the whole scenario no call creates, archives, completes, claims, reclaims or records evidence",
              not verbs & {"complete", "claim", "reclaim", "evidence", "archive", "block", "create"}, ",".join(sorted(verbs)))
