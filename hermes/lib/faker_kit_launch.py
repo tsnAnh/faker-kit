@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from faker_kit_claude_cli import resolve_claude
 from faker_kit_cloud import PERMISSION_MODE, Cloud, CloudError, session_effort, session_model
 from faker_kit_gh import Refused, Runner, fix_git_protocol
 
@@ -91,7 +91,7 @@ def pick_factory(dispatch: Dispatch, registry: Mapping[str, Factory]) -> Factory
 
 
 def claude_cli_state() -> str:
-    claude = shutil.which("claude")
+    claude = resolve_claude().path
     if not claude:
         return CLAUDE_MISSING
     try:

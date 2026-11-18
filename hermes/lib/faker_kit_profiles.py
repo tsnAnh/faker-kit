@@ -5,11 +5,11 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import NamedTuple
 
+from faker_kit_claude_cli import check_login, missing_message, resolve_claude
 from faker_kit_coding_rule import CODING_RULE
 from faker_kit_cron_list import cron_jobs
 from faker_kit_env import CLAUDE_CONFIG_DIR, parse_env_file, set_env
@@ -29,7 +29,6 @@ KIT_SKILL_DIRS = ("skills", "external_dirs")
 KIT_SKILL_ENABLED = ("skills", "enabled")
 ROLE_SKILL = {"project": "dispatch", "bootstrap": "bootstrap", "chief": "chief"}
 SUBSCRIPTION_PLUGIN = "claude-subscription-directsdk"
-SUBSCRIPTION_MIN_CLI = (2, 1, 284)
 SUBSCRIPTION_DEFAULT_MODEL = "sonnet"
 PLUGIN_CLAUDE_DIR_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR"
 KIT_OWNED_MARK = "\nKIT_OWNED = True\n"
@@ -163,23 +162,10 @@ class Profiles:
         return value_at(mapping(self.home(bot) / "config.yaml"), ("model", "provider")) == SUBSCRIPTION_PROVIDER
 
     def claude_login(self) -> str:
-        claude = shutil.which("claude")
-        if not claude:
-            raise Refused("Claude Code is not installed: npm install -g @anthropic-ai/claude-code, then claude auth login")
-        try:
-            version = subprocess.run([claude, "--version"], capture_output=True, text=True, timeout=30).stdout
-            status = subprocess.run([claude, "auth", "status"], capture_output=True, text=True, timeout=30).stdout
-        except (OSError, subprocess.TimeoutExpired):
-            raise Refused("Claude Code did not answer --version or auth status") from None
-        found = re.match(r"\s*(\d+)\.(\d+)\.(\d+)", version)
-        if not found or tuple(int(n) for n in found.groups()) < SUBSCRIPTION_MIN_CLI:
-            raise Refused(f"Claude Code {'.'.join(map(str, SUBSCRIPTION_MIN_CLI))} or later is needed; update it with npm install -g @anthropic-ai/claude-code")
-        try:
-            logged_in = json.loads(status).get("loggedIn") is True
-        except (ValueError, AttributeError):
-            logged_in = False
-        if not logged_in:
-            raise Refused("Claude Code is not logged in here: run claude auth login, then run this again")
+        found = resolve_claude(self.state)
+        if not found.path:
+            raise Refused(missing_message(found.looked, "run this again"))
+        check_login(found.path)
         return os.environ.get(CLAUDE_CONFIG_DIR, "")
 
     def use_subscription(self, bot: str, home: Path, model: str | None, config_dir: str) -> None:
