@@ -8,7 +8,7 @@ version: 2
 
 # Cloud coding sessions the machine may keep running at once, across every project. They all draw on
 # one Claude subscription, so this is the number a project bot's dispatch skill plans its fan-out against.
-max_in_flight_total: 3
+max_in_flight_total: 20
 
 # GitHub logins that count as the owner: the account the coding agent posts as (for Claude Code
 # on the web, usually the owner). A repository's setup brief writes them into its trusted_dispatchers.

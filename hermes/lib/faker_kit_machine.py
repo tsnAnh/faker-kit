@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TypedDict
 
 import yaml
+from faker_kit_pickup import DEFAULT_TOTAL
 
 NAME = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,63}\Z")
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
@@ -140,7 +141,7 @@ def parse_machine(data: object) -> Machine:
     if PLACEHOLDER in authors:
         raise MachineError("guard.trusted_authors still lists CHANGE-ME; fill it in first")
     ask_owner = guard.get("ask_owner", True)
-    total = guard.get("max_in_flight_total", 3)
+    total = guard.get("max_in_flight_total", DEFAULT_TOTAL)
     if not isinstance(ask_owner, bool):
         raise MachineError("guard.ask_owner must be true or false")
     if not isinstance(total, int) or isinstance(total, bool) or not 1 <= total <= 50:
