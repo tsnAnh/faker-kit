@@ -6,6 +6,7 @@ from faker_kit_cards import CHIEF_KEY, hold, part_entry, refresh_work, unit_key
 from faker_kit_gh import scrub
 from faker_kit_kanban import EXTERNAL, Card, Header, Kanban, KanbanError
 from faker_kit_loop import CLOSED, Loop
+from faker_kit_pickup import needs_brief
 
 EXPIRY_WINDOW = 30 * 60
 EXTEND_BELOW = 2 * 3600
@@ -74,7 +75,7 @@ def sweep(kanban: Kanban, card: Card, now: float) -> tuple[str, bool] | None:
     return None
 
 
-def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple[str, str], dict], now: float) -> dict:
+def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple[str, str], dict], now: float, bot: str | None = None) -> dict:
     scope = None if role == "chief" else project
     cards = kanban.cards(False)
     by_id = {c.id: c for c in cards}
@@ -103,6 +104,9 @@ def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple
                    as_bot(card, RECONCILE, role))
             continue
         if fields.get("Kind") == "unit":
+            if role == "project" and bot and project and needs_brief(card, bot, project) and not live_unit(card, open_units):
+                report("needs_brief", card, subject, "ready, but only a title and no owner decisions, so pickup never launches it", "ask the chief for a brief or owner decisions", False)
+                continue
             live = live_unit(card, open_units)
             if card.status != "running" and live:
                 pull = live.get("pr")

@@ -16,7 +16,7 @@ BOARD = "default"
 MARKER = "kanban-cutover.json"
 TIMEOUT_SECONDS = 60
 EXTERNAL = "external"
-MUTATING = frozenset({"create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "complete", "archive"})
+MUTATING = frozenset({"create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "complete", "archive", "block"})
 ACCEPTANCE_CLASSIFICATIONS = ("pending", "failure", "missing", "stale", "provenance", "auth", "infra", "mismatch")
 EVIDENCE_KINDS = ("execution_ref", "pr_published", "pr_merged", "artifact_built", "app_installed", "other_result")
 SINGLE = ("Key", "Kind", "Project", "Bot", "Outcome", "State", "Waits-on", "PRs", "Reported", "Part", "Added", "Updated", "Decisions", "Run", "Work")
@@ -377,6 +377,10 @@ class Kanban:
     def release(self, card: str, reason: str) -> None:
         self.require_external()
         self.call(["reclaim", card_id(card), "--reason", reason])
+
+    def block(self, card: str, reason: str) -> None:
+        self.require_external()
+        self.call(["block", card_id(card), "--kind", "needs_input", reason])
 
     def evidence_add(self, card: str, run_id: int, kind: str, payload: dict[str, object]) -> None:
         self.require_external()

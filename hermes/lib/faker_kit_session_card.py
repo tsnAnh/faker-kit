@@ -39,3 +39,8 @@ def steered(header: Header) -> bool:
 
 def with_steer(header: Header, session: str, at: str) -> Header:
     return replace(header, text=appended(header.text, f"{STEER_TITLE} asked session {session} at {at} for a closing summary."))
+
+
+def steered_at(header: Header) -> str | None:
+    found = STEERED.search(header.text)
+    return found.group(2) if found else None

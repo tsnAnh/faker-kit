@@ -285,7 +285,7 @@ class Gates:
         step("the babysit gate's first tick with a pull request open wakes the agent with the issues JSON and the status lines as its Script Output, after one faker-kit issues and one status",
              self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:6] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
              and first.stdout.splitlines()[6].startswith("Closing summaries to read: unit csv (#1, head aaaaaaa, ready)") and len(first.stdout.splitlines()) == 7
-             and self.calls() == ["issues", "loop reconcile", "status", "news", "loop check", "loop show"], self.say(first))
+             and self.calls() == ["issues", "loop reconcile", "pickup status --no-job", "status", "news", "loop check", "loop show"], self.say(first))
         step("it stores the status fingerprint and the wake time as an owner-only file, with no temp file left beside it",
              set(stored) == {"fingerprint", "woke_at", "retries", "pulls", "asked", "units", "stuck"} and stored["asked"] == [f"csv|{'a' * 40}|ready"]
              and stored["retries"] == 0 and stored["stuck"] == []
@@ -438,6 +438,44 @@ class Gates:
         self.program("loop-check", json.dumps({"findings": [], "lines": [], "ok": True, "needs_action": False}))
         self.reset()
         self.card_events()
+
+    def pickup(self) -> None:
+        step = self.run.step
+
+        def report(rows: list[dict], enabled: bool = True) -> None:
+            self.program("pickup-status", json.dumps({"enabled": enabled, "candidates": {"shop": len(rows)}, "pickup": rows}))
+
+        self.reset()
+        self.serve([NO_PULLS])
+        report([], True)
+        nothing = self.tick(BABYSIT)
+        report([{"unit": "fix-search", "card": "t_41"}, {"unit": "add-shortcut", "card": "t_42"}], False)
+        off = self.tick(BABYSIT)
+        step("pickup gate: nothing to pick up, or pickup off with candidates present, prints nothing and adds no model turn", self.silent(nothing) and self.silent(off), self.say(off))
+        report([{"unit": "fix-search", "card": "t_41"}, {"unit": "add-shortcut", "card": "t_42"}], True)
+        loud = self.tick(BABYSIT)
+        lines = [row for row in loud.stdout.splitlines() if row.startswith("Ready card to pick up:")]
+        again = self.tick(BABYSIT)
+        step("pickup gate: with pickup on, one line per free-slot candidate wakes the agent once, naming the unit and the card; the same candidates on the next tick are quiet (no cost loop)",
+             wakes(loud.stdout) and lines == ["Ready card to pick up: fix-search (card t_41)", "Ready card to pick up: add-shortcut (card t_42)"]
+             and self.woke(loud, "faker-kit pickup: 2 ready unit card(s) to pick up") and self.silent(again), self.say(loud))
+        report([{"unit": "fix-search", "card": "t_41"}, {"unit": "later-card", "card": "t_43"}])
+        added = self.tick(BABYSIT)
+        picked = [r for r in added.stdout.splitlines() if r.startswith("Ready card to pick up:")]
+        step("pickup gate: a newly listed card prints one line for that card only", picked == ["Ready card to pick up: later-card (card t_43)"], self.say(added))
+        self.program("pickup-status", "", 1, "boom")
+        broken = self.tick(BABYSIT)
+        step("pickup gate: an unreadable pickup status prints nothing and the gate stays quiet", self.silent(broken), self.say(broken))
+        blocked = {"unit": "stuck-unit", "card": "t_44", "blocked": True, "reason": "x"}
+        report([])
+        self.program("loop-reconcile", json.dumps({**RECONCILE_QUIET, "blocked": [blocked]}))
+        told = self.tick(BABYSIT)
+        twice = self.tick(BABYSIT)
+        step("pickup gate: a unit blocked after its one steer is reported once and then stays quiet",
+             wakes(told.stdout) and "unit stuck-unit (card t_44) was blocked" in told.stdout and self.silent(twice), self.say(told))
+        self.program("loop-reconcile", json.dumps(RECONCILE_QUIET))
+        self.program("pickup-status")
+        self.reset()
 
     def card_events(self) -> None:
         step = self.run.step
@@ -962,6 +1000,7 @@ def wake_scenario(run: Run, hermes: Path, bot: str, chief: str, env: dict[str, s
     with gates.fake_wrapper():
         gates.babysit()
         gates.card_check()
+        gates.pickup()
         gates.stuck_units()
         gates.summaries()
         gates.chief_news()
