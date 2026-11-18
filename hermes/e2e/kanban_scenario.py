@@ -901,7 +901,8 @@ def stage_deadlock_scenario(run: Run, board: Board, chief: Callable[..., tuple[i
         return f"https://github.com/{REPO}/pull/{n}"
 
     run.clock += 60
-    made = json_of(chief("handoff", "--project", PROJECT, "--part", "Install the sale debug build", "--title", "Sale debug builds install on a device", "--decisions", DECISIONS, "--outcome", "installed"))
+    made = json_of(chief("handoff", "--project", PROJECT, "--part", "Install the sale debug build", "--title", "Sale debug builds install on a device", "--decisions", DECISIONS,
+                        "--outcome", "installed"))
     pid, part_key = str(made["id"]), f"faker-kit:chief:{made['id']}"
     add_pr(70, "sale-debug")
     assert chief("loop", "set", pid, "--state", "in-progress", "--pr", "70")[0] == 0
