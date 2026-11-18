@@ -525,6 +525,9 @@ class Failure(Exception):
     pass
 
 
+STEP_CLOCK = [time.perf_counter()]
+
+
 class Run:
     def __init__(self, root: Path, steps: list[dict] | None = None, verdicts: list[dict] | None = None) -> None:
         self.root = root
@@ -563,6 +566,8 @@ class Run:
         self.bin.mkdir(parents=True)
         self.profile.mkdir(parents=True)
         self.team.mkdir(parents=True)
+        for log in (self.gh_log, self.claude_log):
+            log.touch()
         for name, text in (("gh", FAKE_GH), ("claude", FAKE_CLAUDE), ("hermes", FAKE_HERMES), ("docker", FAKE_DOCKER), ("launchctl", FAKE_TOOL), ("systemctl", FAKE_TOOL)):
             self.write_exec(name, text)
         guard = (HERMES / "templates" / "guard.yaml").read_text().replace("  - OWNER-LOGIN", f"  - {OWNER}")
@@ -645,7 +650,9 @@ class Run:
 
     def step(self, name: str, ok: bool, evidence: str) -> None:
         shown = " ".join(evidence.replace(str(self.root.resolve()), "<run>").replace(str(self.root), "<run>").split())
-        self.steps.append({"step": name, "ok": bool(ok), "evidence": shown[:400]})
+        now = time.perf_counter()
+        seconds, STEP_CLOCK[0] = now - STEP_CLOCK[0], now
+        self.steps.append({"step": name, "ok": bool(ok), "evidence": shown[:400], "seconds": round(seconds, 3)})
         print(f"{'ok  ' if ok else 'FAIL'} {name}: {shown[:160]}", flush=True)
         if not ok:
             raise Failure(name)
@@ -4071,96 +4078,213 @@ def host_secret_scenario(run: Run, work: Path) -> None:
     run.step("no secret value of this scenario appears in any stdout, stderr, JSON, or stub log", not leaked and len(seen_secrets) >= 3, f"{len(outputs)} outputs, {len(seen_secrets)} secrets")
 
 
+
+
+def pickup_limits_step(run: Run) -> None:
+    defaults = importlib.import_module("faker_kit_pickup")
+    shipped_totals = [int(m.group(1)) for path in ("guard.yaml", "machine.yaml") for m in re.finditer(r"^\s*max_in_flight_total: (\d+)", (HERMES / "templates" / path).read_text(), re.M)]
+    run.step("pickup limits: the shipped guard.yaml and machine.yaml templates carry the one default total in faker_kit_pickup.py, and its defaults are the owner's 20 and 5",
+             shipped_totals == [defaults.DEFAULT_TOTAL] * 2 and (defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT) == (20, 5),
+             json.dumps([shipped_totals, defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT]))
+
+
+class Ctx:
+    def __init__(self, root: Path, steps: list[dict], verdicts: list[dict]) -> None:
+        self.root, self.steps, self.verdicts = root, steps, verdicts
+
+    def run(self, name: str | None = None) -> Run:
+        run = Run(self.root / name if name else self.root / "run", self.steps, self.verdicts)
+        run.build()
+        return run
+
+    def recorder(self) -> Run:
+        return Run(self.root / "recorder", self.steps, self.verdicts)
+
+
+def scenario_refresh(c: Ctx) -> None:
+    run = c.run()
+    refresh_scenario.refresh_scenario(c.root / "refresh", run.step, run.env(), run.bin / "hermes", kit_source)
+
+
+def scenario_owner_merge(c: Ctx) -> None:
+    run = c.run()
+    owner_merge_scenario(run)
+    owner_landing_scenario(run)
+    owner_reviews_scenario(run)
+    merge_open_scenario(run)
+
+
+def scenario_pickup(c: Ctx) -> None:
+    run = c.run()
+    pickup_scenario.pickup_scenario(run)
+    pickup_limits_step(run)
+
+
+SCENARIOS: dict[str, Callable[[Ctx], None]] = {
+    "launch": lambda c: launch_scenario(c.run()),
+    "credential": lambda c: credential_scenario(c.run()),
+    "webhook": lambda c: webhook_scenario(c.run()),
+    "merge": lambda c: merge_scenario(c.run()),
+    "pr-label": lambda c: pr_label_scenario(c.run()),
+    "incident": lambda c: incident_scenario(c.run()),
+    "issues": lambda c: issues_scenario(c.run()),
+    "trust": lambda c: trust_scenario(c.run()),
+    "loop": lambda c: loop_scenario(c.run()),
+    "install": lambda c: install_scenario(c.run(), c.root / "install"),
+    "refresh": scenario_refresh,
+    "provider": lambda c: provider_scenario(c.run(), c.root / "provider"),
+    "runner": lambda c: runner_scenario(c.run(), c.root / "runner"),
+    "profile-approval": lambda c: profile_approval_scenario(c.run(), c.root / "profile-approval"),
+    "host": lambda c: host_scenario(c.run(), c.root / "host"),
+    "host-secret": lambda c: host_secret_scenario(c.run(), c.root / "host-secret"),
+    "install-skip": lambda c: install_skip_scenario(c.run(), c.root / "install-skip"),
+    "install-labels": lambda c: install_labels_scenario(c.run(), c.root / "install-labels"),
+    "environment-setup": lambda c: tooling_scenario.environment_scenario(c.root / "environment-setup", c.recorder().step),
+    "ratchet": lambda c: tooling_scenario.ratchet_scenario(c.root / "ratchet", c.recorder().step),
+    "guard": lambda c: guard_scenario.guard_scenario(c.root / "guard", c.recorder().step, c.verdicts.append),
+    "t3code": lambda c: t3code_scenario.t3code_scenario(c.run(), BOT),
+    "import": lambda c: import_scenario.import_scenario(c.run()),
+    "owner-merge": scenario_owner_merge,
+    "kanban": lambda c: kanban_scenario.kanban_scenario(c.run(), faker_kit.Loop, faker_kit.LoopError),
+    "kanban-merge": lambda c: kanban_scenario.kanban_merge_scenario(c.run(), open_gates),
+    "kanban-claims": lambda c: kanban_claims_scenario.claims_scenario(c.run()),
+    "kanban-evidence": lambda c: kanban_evidence_scenario.evidence_scenario(c.run()),
+    "kanban-visibility": lambda c: kanban_visibility_scenario.visibility_scenario(c.run()),
+    "pickup": scenario_pickup,
+    "session-summary": lambda c: session_summary_scenario.session_scenario(c.run()),
+    "kanban-text": lambda c: kanban_text_scenario.kanban_text_scenario(c.run()),
+    "kanban-backfill": lambda c: kanban_text_scenario.kanban_backfill_scenario(c.run()),
+    "kanban-close": lambda c: kanban_text_scenario.kanban_close_scenario(c.run()),
+    "card-refs": lambda c: card_refs_scenario.card_refs_scenario(c.run()),
+    "card-refs-backfill": lambda c: card_refs_scenario.card_backfill_refs_scenario(c.run()),
+    "card-prefixes": lambda c: card_prefix_scenario.card_prefix_scenario(c.run()),
+}
+BUDGETS_PATH = Path(__file__).resolve().parent / "budgets.json"
+WORKER_FLAG = "--worker"
+
+
+def worker(name: str, root: Path, result: Path) -> int:
+    steps: list[dict] = []
+    verdicts: list[dict] = []
+    error: str | None = "the scenario raised before it finished; the worker's stderr has the traceback"
+    STEP_CLOCK[0] = started = time.perf_counter()
+    try:
+        SCENARIOS[name](Ctx(root, steps, verdicts))
+        error = None
+    except Failure as err:
+        error = f"stopped at: {err}"
+    finally:
+        payload = {"name": name, "ok": error is None, "error": error, "seconds": round(time.perf_counter() - started, 3), "steps": steps, "verdicts": verdicts}
+        staged = result.with_name(result.name + ".tmp")
+        staged.write_text(json.dumps(payload))
+        staged.replace(result)
+    return 0 if error is None else 1
+
+
+def launch_worker(name: str, root: Path) -> subprocess.Popen[bytes]:
+    folder = root / "workers"
+    folder.mkdir(exist_ok=True)
+    code = f"import sys; sys.path.insert(0, {str(Path(__file__).resolve().parent)!r}); import run_dispatch_e2e as m; sys.exit(m.worker(sys.argv[1], m.Path(sys.argv[2]), m.Path(sys.argv[3])))"
+    out, err = (folder / f"{name}.out").open("wb"), (folder / f"{name}.err").open("wb")
+    return subprocess.Popen([sys.executable, "-c", code, name, str(root / name), str(folder / f"{name}.json")], stdout=out, stderr=err, stdin=subprocess.DEVNULL)
+
+
+def run_workers(names: list[str], root: Path, jobs: int, budgets: dict[str, float]) -> dict[str, dict]:
+    pending = sorted(names, key=lambda n: -budgets.get(n, 0.0))
+    running: dict[str, tuple[subprocess.Popen[bytes], float]] = {}
+    results: dict[str, dict] = {}
+    while pending or running:
+        while pending and len(running) < jobs:
+            name = pending.pop(0)
+            running[name] = (launch_worker(name, root), time.perf_counter())
+        time.sleep(0.05)
+        for name, (proc, began) in list(running.items()):
+            if proc.poll() is None:
+                continue
+            del running[name]
+            path = root / "workers" / f"{name}.json"
+            elapsed = time.perf_counter() - began
+            if path.exists():
+                results[name] = json.loads(path.read_text())
+                if not results[name]["ok"]:
+                    results[name]["error"] += (root / "workers" / f"{name}.err").read_text(errors="replace")[-1500:]
+            else:
+                tail = (root / "workers" / f"{name}.err").read_text(errors="replace")[-1500:]
+                results[name] = {"name": name, "ok": False, "error": f"worker died with exit code {proc.returncode}: {tail}", "seconds": round(elapsed, 3), "steps": [], "verdicts": []}
+            print(f"[{'ok' if results[name]['ok'] else 'FAIL'}] {name} {results[name]['seconds']:.1f}s ({len(results[name]['steps'])} steps)", file=sys.stderr, flush=True)
+    return results
+
+
+def top_steps(results: dict[str, dict], count: int) -> list[tuple[float, str, str]]:
+    rows = [(step.get("seconds", 0.0), name, step["step"]) for name, result in results.items() for step in result["steps"]]
+    return sorted(rows, reverse=True)[:count]
+
+
+def report(results: dict[str, dict], budgets: dict[str, float], scale: float, wall: float, jobs: int) -> list[str]:
+    over: list[str] = []
+    lines = ["| scenario | steps | seconds | budget |", "|---|---:|---:|---:|"]
+    for name, result in sorted(results.items(), key=lambda item: -item[1]["seconds"]):
+        budget = budgets.get(name)
+        limit = None if budget is None else budget * scale
+        if limit is not None and result["seconds"] > limit:
+            over.append(f"{name} took {result['seconds']:.1f}s, over its budget of {limit:.1f}s in {BUDGETS_PATH.name}")
+        lines.append(f"| {name} | {len(result['steps'])} | {result['seconds']:.1f} | {'none' if limit is None else f'{limit:.1f}'} |")
+    total = budgets.get("_total")
+    if total is not None and wall > total * scale:
+        over.append(f"the run took {wall:.1f}s, over its total budget of {total * scale:.1f}s in {BUDGETS_PATH.name}")
+    lines.append(f"| **total wall, {jobs} workers** | {sum(len(r['steps']) for r in results.values())} | {wall:.1f} | {'none' if total is None else f'{total * scale:.1f}'} |")
+    print("\n".join(lines))
+    print("slowest steps:")
+    for seconds, name, step in top_steps(results, 10):
+        print(f"  {seconds:6.2f}s  [{name}] {step[:110]}")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with Path(summary).open("a") as handle:
+            handle.write("### Hermes end-to-end\n\n" + "\n".join(lines) + "\n\n")
+    return over
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Stubbed end-to-end run of the faker-kit coordinator path")
     ap.add_argument("--artifact", type=Path, help="where to write the JSON transcript; defaults to a file in the run directory")
     ap.add_argument("--keep", action="store_true", help="keep the run directory")
+    ap.add_argument("--jobs", type=int, default=os.cpu_count() or 1, help="scenarios run at once, each in its own process and temp home (default: the CPU count)")
+    ap.add_argument("--only", help="comma-separated scenario names to run (default: all)")
+    ap.add_argument("--list", action="store_true", help="print the scenario names and exit")
+    ap.add_argument("--budget-scale", type=float, default=1.0, help="multiply every time budget, for a slower machine than CI")
     args = ap.parse_args(argv)
+    if args.list:
+        print("\n".join(SCENARIOS))
+        return 0
+    names = list(SCENARIOS) if not args.only else args.only.split(",")
+    unknown = [n for n in names if n not in SCENARIOS]
+    if unknown:
+        print(f"unknown scenario: {', '.join(unknown)}", file=sys.stderr)
+        return 2
+    budgets: dict[str, float] = json.loads(BUDGETS_PATH.read_text()) if BUDGETS_PATH.exists() else {}
     root = Path(tempfile.mkdtemp(prefix="faker-kit-e2e-"))
-    run = Run(root)
-    code = 0
-    try:
-        run.build()
-        launch_scenario(run)
-        credential_scenario(run)
-        webhook_scenario(run)
-        merge_scenario(run)
-        pr_label_scenario(run)
-        incident_scenario(run)
-        issues_scenario(run)
-        trust_scenario(run)
-        loop_scenario(run)
-        install_scenario(run, root / "install")
-        refresh_scenario.refresh_scenario(root / "refresh", run.step, run.env(), run.bin / "hermes", kit_source)
-        provider_scenario(run, root / "provider")
-        runner_scenario(run, root / "runner")
-        profile_approval_scenario(run, root / "profile-approval")
-        host_scenario(run, root / "host")
-        host_secret_scenario(run, root / "host-secret")
-        install_skip_scenario(run, root / "install-skip")
-        install_labels_scenario(run, root / "install-labels")
-        tooling_scenario.environment_scenario(root / "environment-setup", run.step)
-        tooling_scenario.ratchet_scenario(root / "ratchet", run.step)
-        guard_scenario.guard_scenario(root / "guard", run.step, run.verdicts.append)
-        t3code_run = Run(root / "t3code", run.steps, run.verdicts)
-        t3code_run.build()
-        t3code_scenario.t3code_scenario(t3code_run, BOT)
-        import_run = Run(root / "import", run.steps, run.verdicts)
-        import_run.build()
-        import_scenario.import_scenario(import_run)
-        owner_merge_scenario(run)
-        owner_landing_scenario(run)
-        owner_reviews_scenario(run)
-        merge_open_scenario(run)
-        kanban_run = Run(root / "kanban", run.steps, run.verdicts)
-        kanban_run.build()
-        kanban_scenario.kanban_scenario(kanban_run, faker_kit.Loop, faker_kit.LoopError)
-        kanban_merge_run = Run(root / "kanban-merge", run.steps, run.verdicts)
-        kanban_merge_run.build()
-        kanban_scenario.kanban_merge_scenario(kanban_merge_run, open_gates)
-        kanban_claims_run = Run(root / "kanban-claims", run.steps, run.verdicts)
-        kanban_claims_run.build()
-        kanban_claims_scenario.claims_scenario(kanban_claims_run)
-        kanban_evidence_run = Run(root / "kanban-evidence", run.steps, run.verdicts)
-        kanban_evidence_run.build()
-        kanban_evidence_scenario.evidence_scenario(kanban_evidence_run)
-        kanban_visibility_run = Run(root / "kanban-visibility", run.steps, run.verdicts)
-        kanban_visibility_run.build()
-        kanban_visibility_scenario.visibility_scenario(kanban_visibility_run)
-        pickup_run = Run(root / "pickup", run.steps, run.verdicts)
-        pickup_run.build()
-        pickup_scenario.pickup_scenario(pickup_run)
-        defaults = importlib.import_module("faker_kit_pickup")
-        shipped_totals = [int(m.group(1)) for path in ("guard.yaml", "machine.yaml") for m in re.finditer(r"^\s*max_in_flight_total: (\d+)", (HERMES / "templates" / path).read_text(), re.M)]
-        run.step("pickup limits: the shipped guard.yaml and machine.yaml templates carry the one default total in faker_kit_pickup.py, and its defaults are the owner's 20 and 5",
-                 shipped_totals == [defaults.DEFAULT_TOTAL] * 2 and (defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT) == (20, 5),
-                 json.dumps([shipped_totals, defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT]))
-        session_run = Run(root / "session-summary", run.steps, run.verdicts)
-        session_run.build()
-        session_summary_scenario.session_scenario(session_run)
-        kanban_text_run = Run(root / "kanban-text", run.steps, run.verdicts)
-        kanban_text_run.build()
-        kanban_text_scenario.kanban_text_scenario(kanban_text_run)
-        kanban_backfill_run = Run(root / "kanban-backfill", run.steps, run.verdicts)
-        kanban_backfill_run.build()
-        kanban_text_scenario.kanban_backfill_scenario(kanban_backfill_run)
-        kanban_close_run = Run(root / "kanban-close", run.steps, run.verdicts)
-        kanban_close_run.build()
-        kanban_text_scenario.kanban_close_scenario(kanban_close_run)
-        card_refs_run = Run(root / "card-refs", run.steps, run.verdicts)
-        card_refs_run.build()
-        card_refs_scenario.card_refs_scenario(card_refs_run)
-        card_backfill_run = Run(root / "card-refs-backfill", run.steps, run.verdicts)
-        card_backfill_run.build()
-        card_refs_scenario.card_backfill_refs_scenario(card_backfill_run)
-        card_prefix_run = Run(root / "card-prefixes", run.steps, run.verdicts)
-        card_prefix_run.build()
-        card_prefix_scenario.card_prefix_scenario(card_prefix_run)
-    except Failure as err:
-        print(f"e2e stopped at: {err}", file=sys.stderr)
-        code = 1
-    proof = {"steps": [[s["step"], s["ok"]] for s in run.steps], "verdicts": run.verdicts}
-    transcript = {"ok": code == 0, "steps": run.steps, "verdicts": run.verdicts, "digest": hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest()}
+    began = time.perf_counter()
+    results = run_workers(names, root, max(1, args.jobs), budgets)
+    wall = time.perf_counter() - began
+    steps: list[dict] = []
+    verdicts: list[dict] = []
+    failed: list[str] = []
+    for name in names:
+        result = results[name]
+        print(f"== {name}")
+        print((root / "workers" / f"{name}.out").read_text(errors="replace"), end="")
+        steps.extend(result["steps"])
+        verdicts.extend(result["verdicts"])
+        if not result["ok"]:
+            failed.append(name)
+            print(f"e2e stopped in {name}: {result['error']}", file=sys.stderr)
+    over = report(results, budgets, args.budget_scale, wall, args.jobs) if not args.only else []
+    for line in over:
+        print(f"BUDGET {line}", file=sys.stderr)
+    code = 1 if failed or over else 0
+    proof = {"steps": [[s["step"], s["ok"]] for s in steps], "verdicts": verdicts}
+    transcript = {"ok": code == 0, "steps": steps, "verdicts": verdicts, "digest": hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest(),
+                  "scenarios": {name: {"ok": r["ok"], "seconds": r["seconds"], "steps": len(r["steps"])} for name, r in results.items()}}
     artifact = args.artifact or root / "e2e-transcript.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     artifact.write_text(json.dumps(transcript, indent=2) + "\n")
