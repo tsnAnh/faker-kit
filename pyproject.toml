@@ -61,7 +61,7 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool", "po
 
 # Modules held to strict typing. Move a module here once its baseline markers are gone.
 [[tool.mypy.overrides]]
-module = ["faker_kit_andon", "faker_kit_cloud", "faker_kit_env", "faker_kit_incident_sources", "faker_kit_kanban", "faker_kit_launch", "faker_kit_machine", "faker_kit_t3code", "faker_kit_guard.t3code"]
+module = ["faker_kit_andon", "faker_kit_claude_cli", "faker_kit_cloud", "faker_kit_env", "faker_kit_incident_sources", "faker_kit_kanban", "faker_kit_launch", "faker_kit_machine", "faker_kit_t3code", "faker_kit_guard.t3code"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_calls = true
