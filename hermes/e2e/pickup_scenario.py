@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import time
@@ -40,7 +41,6 @@ def cron(_argv: list[str], _seconds: int) -> tuple[int, str]:
 
 def pickup_scenario(run: Run) -> None:
     guard = run.team / "guard.yaml"
-    guard.write_text(guard.read_text().replace("max_in_flight_total: 3", "max_in_flight_total: 4"))
     bots = run.team / "bots.yaml"
     bots.write_text(bots.read_text().replace("bots:\n", f"bots:\n  {CHIEF}:\n    role: chief\n", 1))
     board = Board(run)
@@ -130,42 +130,75 @@ def pickup_scenario(run: Run) -> None:
     seen = json.loads(fresh_process.stdout) if fresh_process.returncode == 0 and fresh_process.stdout.strip() else {}
     run.step(
              "pickup stop switch: a fresh process (a restart) reads the switch as enabled and offers the same cards",
-             seen.get("enabled") is True and [row["card"] for row in seen.get("pickup", [])] == [old, mid],
+             seen.get("enabled") is True and [row["card"] for row in seen.get("pickup", [])] == [old, mid, new],
              json.dumps(seen)[:200])
 
-    [add(f"busy-{i}", card_body(f"busy-{i}", goal, decisions, 3.0), status="running") for i in range(2)]
+    status_now = json_of(project("pickup", "status"))
+    chief_now = json_of(chief("pickup", "status"))
+    run.step("pickup limits, defaults: a machine and a repository with no explicit limits print 20 running unit cards in total and 5 per project in pickup status",
+             status_now.get("total") == 20 and status_now.get("per_project") == 5 and chief_now.get("total") == 20 and chief_now.get("per_project") == {PROJECT: 5},
+             json.dumps({"project": [status_now.get("per_project"), status_now.get("total")], "chief": [chief_now.get("per_project"), chief_now.get("total")]}))
+
+    [add(f"busy-{i}", card_body(f"busy-{i}", goal, decisions, 3.0), status="running") for i in range(4)]
     owner("pickup", "off")
     launched = project("launch", "--brief-file", str(run.brief("w-new.md", "/faker-mode\nbuild it\n")))
     run.step(
-             "pickup limits: with pickup off a launch is exactly what it was, even with 2 unit cards of the project running",
+             "pickup limits: with pickup off a launch is exactly what it was, even with 4 unit cards of the project running and this one the fifth",
              launched[0] == 0 and json_of(launched).get("card", {}).get("claim") == "claimed"
              and status_of("w-new") == "running" and len(live_runs("w-new")) == 1, launched[2].strip() or launched[1][:160])
     run.step(
              "pickup stop switch: pickup off stopped the candidate lines at once and the state file says so",
              listed() == [] and json.loads(state_file.read_text()).get("enabled") is False, state_file.read_text())
     owner("pickup", "on")
-    third = project("launch", "--brief-file", str(run.brief("w-old.md", "/faker-mode\nbuild the old one\n")))
-    run.step("pickup limits: with 2 running unit cards of the project plus one launched, a further launch is "
-             "refused, names the running cards and the free slots, claims nothing and starts nothing",
-             third[0] != 0 and all(f"{ident} {unit}" in third[2] for ident, unit in ((board.by_key()[key("busy-0")]["id"], "busy-0"), (board.by_key()[key("busy-1")]["id"], "busy-1")))
-             and "free slots: 0" in third[2] and status_of("w-old") == "ready" and live_runs("w-old") == [], third[2].strip())
+    sixth = project("launch", "--brief-file", str(run.brief("w-old.md", "/faker-mode\nbuild the old one\n")))
+    busy_named = all(f"{board.by_key()[key(f'busy-{i}')]['id']} busy-{i}" in sixth[2] for i in range(4))
+    run.step("pickup limits: with 5 unit cards of the project running, a sixth launch is refused, names the running cards and the free slots, claims nothing and starts nothing",
+             sixth[0] != 0 and "5 of 5 unit cards" in sixth[2] and busy_named and "free slots: 0" in sixth[2] and status_of("w-old") == "ready" and live_runs("w-old") == [], sixth[2].strip())
     run.step("pickup limits: with no free slot the gate has no candidate to list", listed() == [], json.dumps(listed()))
-
-    board.edit_card(key("busy-0"), status="done")
-    board.edit_card(key("busy-1"), status="done")
     board.edit_card(key("w-new"), status="done")
-    blog = [add(f"other-{i}", card_body(f"other-{i}", goal, decisions, 3.0, "blog"), status="running", project_name="blog") for i in range(4)]
+    add("w-fifth", card_body("w-fifth", goal, decisions, 30.0))
+    fifth = project("launch", "--brief-file", str(run.brief("w-fifth.md", "/faker-mode\nbuild the fifth one\n")))
+    run.step("pickup limits: with 4 unit cards of the project running, the fifth launch is allowed and claims its card",
+             fifth[0] == 0 and json_of(fifth).get("card", {}).get("claim") == "claimed" and status_of("w-fifth") == "running", fifth[2].strip() or fifth[1][:160])
+    for unit in ("busy-0", "busy-1", "busy-2", "busy-3", "w-fifth"):
+        board.edit_card(key(unit), status="done")
+
+    blog = [add(f"other-{i}", card_body(f"other-{i}", goal, decisions, 3.0, "blog"), status="running", project_name="blog") for i in range(20)]
+    at_twenty = project("launch", "--brief-file", str(run.brief("w-old.md", "/faker-mode\nbuild the old one\n")))
+    status_full = json_of(project("pickup", "status"))
+    printed = (re.search(r"of (\d+) unit cards", at_twenty[2]), re.search(r"of (\d+) in total", at_twenty[2]))
+    refused_per, refused_total = (int(m.group(1)) if m else -1 for m in printed)
+    run.step("pickup limits: with 20 running unit cards in total (another project's) a launch is refused naming them, and the project's own count is 0 of 5",
+             at_twenty[0] != 0 and "20 of 20 in total" in at_twenty[2] and "0 of 5 unit cards" in at_twenty[2] and all(ident in at_twenty[2] for ident in blog)
+             and listed() == [], at_twenty[2].strip())
+    run.step("pickup limits: the numbers a refusal prints are the numbers pickup status prints and the launch checked",
+             (refused_per, refused_total) == (status_full.get("per_project"), status_full.get("total")) == (5, 20),
+             json.dumps([refused_per, refused_total, status_full.get("per_project"), status_full.get("total")]))
+    board.edit_card(key("other-19", "blog"), status="done")
+    add("w-last", card_body("w-last", goal, decisions, 31.0))
+    at_nineteen = project("launch", "--brief-file", str(run.brief("w-last.md", "/faker-mode\nbuild the last one\n")))
+    run.step("pickup limits: with 19 running unit cards in total a launch is allowed and claims its card",
+             at_nineteen[0] == 0 and json_of(at_nineteen).get("card", {}).get("claim") == "claimed" and status_of("w-last") == "running", at_nineteen[2].strip() or at_nineteen[1][:160])
+    board.edit_card(key("w-last"), status="done")
+    for i in range(3, 19):
+        board.edit_card(key(f"other-{i}", "blog"), status="done")
+    guard.write_text(guard.read_text().replace("max_in_flight_total: 20", "max_in_flight_total: 3"))
+    explicit = json_of(project("pickup", "status"))
     total = project("launch", "--brief-file", str(run.brief("w-old.md", "/faker-mode\nbuild the old one\n")))
-    run.step("pickup limits: with 4 running unit cards in total (another project's) a launch is refused naming them, and the project's own count is 0 of 2",
-             total[0] != 0 and "4 of 4 in total" in total[2] and "0 of 2 unit cards" in total[2] and all(ident in total[2] for ident in blog) and listed() == [], total[2].strip())
+    run.step("pickup limits: a guard.yaml that says 3 explicitly is enforced and printed as 3, and the project's own count is 0 of 5",
+             explicit.get("total") == 3 and explicit.get("per_project") == 5 and total[0] != 0 and "3 of 3 in total" in total[2] and "0 of 5 unit cards" in total[2]
+             and listed() == [], total[2].strip())
     board.edit_card(key("other-0", "blog"), status="done")
     run.step("pickup limits: one free slot caps the candidate lines at one, the oldest", listed() == [old], json.dumps(listed()))
     board.edit_card(key("other-1", "blog"), status="done")
     run.step("pickup limits: two free slots list two candidates, oldest first", listed() == [old, mid], json.dumps(listed()))
     run.update_gh(lambda st: st["files"].__setitem__(".agents/dispatch.json", json.dumps({"max_in_flight": 1})))
     board.edit_card(key("busy-0"), status="running")
-    run.step("pickup limits: max_in_flight from the repository's dispatch.json replaces the default of 2 (1 running of 1 leaves no slot)", listed() == [], json.dumps(listed()))
+    capped = json_of(project("pickup", "status"))
+    run.step("pickup limits: max_in_flight from the repository's dispatch.json replaces the default of 5 (1 running of 1 leaves no slot) and is the number printed",
+             listed() == [] and capped.get("per_project") == 1 and capped.get("total") == 3, json.dumps([capped.get("per_project"), capped.get("total")]))
     board.edit_card(key("busy-0"), status="done")
+    guard.write_text(guard.read_text().replace("max_in_flight_total: 3", "max_in_flight_total: 20"))
     run.update_gh(lambda st: st["files"].__setitem__(".agents/dispatch.json", json.dumps({"forbidden_paths": ["infra/"]})))
 
     stuck_unit, pr_unit = "stuck-unit", "pr-unit"

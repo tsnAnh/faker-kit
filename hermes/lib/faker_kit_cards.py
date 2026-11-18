@@ -43,6 +43,7 @@ MAX_CARD_REF = 600
 UNIT_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,63}\Z")
 DIGEST_FILE = "kanban-digest.json"
 PR_EVIDENCE = ("pr_published", "pr_merged")
+DEFERRED_EVIDENCE = "saved on the part card; its unit cards are not done, so Kanban takes no claim yet and completion adds the evidence to Kanban"
 CLOSE_KINDS = ("abandoned", "folded", "superseded", "duplicate", "junk")
 MAX_REASON = 300
 LINE_BREAKS = frozenset("\u0085\u2028\u2029")
@@ -279,8 +280,7 @@ class CardLoop:
             entry = part_entry(card)
             payloads = parse_card_evidence(evidence or [], head(entry["project"], sorted({*entry["prs"], *prs})) if head and evidence else None)
             changed = apply_update(entry, part_id, state, prs, waits_on, reported, now, {s: stage_ref(p) for s, p in payloads.items()})
-            if payloads:
-                self.record(card, payloads)
+            deferred = bool(payloads) and not self.record(card, payloads)
             work = work_line(self.kanban, card, {c.id: c for c in self.kanban.cards(False)})
             fresh = refresh(entry_header(changed, card.header).with_fields({"Work": work}), card.title, self.repos.get(entry["project"]))
             self.kanban.edit_body_if_changed(card.id, fresh, card.header)
@@ -288,11 +288,14 @@ class CardLoop:
                 let_go(self.kanban, card, f"faker-kit: part {part_id} is {changed['state']}")
                 self.kanban.archive(card.id)
                 return part_row(changed)
-        return part_row(changed)
+        row = part_row(changed)
+        return {**row, "evidence_note": DEFERRED_EVIDENCE} if deferred else row
 
-    def record(self, card: Card, payloads: dict[str, dict[str, object]]) -> None:
+    def record(self, card: Card, payloads: dict[str, dict[str, object]]) -> bool:
         try:
             run_id = self.kanban.open_run(card.id)
+            if run_id is None and card.status == "todo":
+                return False
             borrowed = run_id is None
             if run_id is None:
                 run_id = self.kanban.claim(card.id)
@@ -304,6 +307,7 @@ class CardLoop:
                     self.kanban.release(card.id, "faker-kit: stage evidence recorded, claim released; completion adds it again on its own run")
         except KanbanError as err:
             raise LoopError(f"Kanban did not accept the evidence ({err}); the part was not changed") from None
+        return True
 
     def show(self, everything: bool) -> dict:
         return show_view(self.entries(), everything)
@@ -405,11 +409,12 @@ def canonical(payload: dict[str, object]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
-def completion_evidence(card: Card, outcome: str, merged: Merged) -> list[tuple[str, dict[str, object]]]:
+def completion_evidence(card: Card, outcome: str, merged: Merged, stages: dict[str, str] | None = None) -> list[tuple[str, dict[str, object]]]:
     wanted: list[tuple[str, dict[str, object]]] = [("pr_published", {"pr_url": merged.url, "head_sha": merged.head})]
     if outcome == DEFAULT_OUTCOME:
         wanted.append(("pr_merged", {"pr_url": merged.url, "head_sha": merged.head, "merge_commit": merged.merge_commit}))
-    for stage, ref in (line.partition("=")[::2] for line in (card.header.lines("Stage") if card.header else [])):
+    held = stages if stages is not None else dict(line.partition("=")[::2] for line in (card.header.lines("Stage") if card.header else []))
+    for stage, ref in held.items():
         if stage in STAGE_KIND:
             with contextlib.suppress(LoopError):
                 wanted.append((STAGE_KIND[stage], stage_payload(stage, ref)))
@@ -424,14 +429,14 @@ def release_claim(kanban: Kanban, card_id: str) -> dict:
     return {}
 
 
-def complete_card(kanban: Kanban, card: Card, outcome: str, merged: Merged) -> dict:
+def complete_card(kanban: Kanban, card: Card, outcome: str, merged: Merged, stages: dict[str, str] | None = None) -> dict:
     run_id: int | None = None
     try:
         run_id = kanban.open_run(card.id)
         if run_id is None:
             run_id = kanban.claim(card.id)
         have = {(row.kind, canonical(row.payload)) for row in kanban.evidence_list(card.id) if row.run_id == run_id}
-        for kind, payload in completion_evidence(card, outcome, merged):
+        for kind, payload in completion_evidence(card, outcome, merged, stages):
             if (kind, canonical(payload)) not in have:
                 kanban.evidence_add(card.id, run_id, kind, payload)
         kanban.complete(card.id, run_id, merged.url, f"Merged pull request #{merged.pr}")

@@ -16,8 +16,8 @@ from faker_kit_text import kept_decisions, pull_numbers, summary_of
 KIT_OWNED = True
 
 FILE = "pickup.json"
-PER_PROJECT = 2
-TOTAL = 4
+DEFAULT_PER_PROJECT = 5
+DEFAULT_TOTAL = 20
 STEER_GRACE_SECONDS = 3600
 STAMP = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -119,8 +119,8 @@ class Slots:
                 f"{len(self.everywhere)} of {self.total} in total ({named(self.everywhere)}); free slots: 0. Launch again when a running unit card finishes")
 
 
-def slots(cards: list[Card], project: str, per_project: int | None, total: int | None) -> Slots:
-    return Slots(project, running_units(cards, project), running_units(cards), per_project or PER_PROJECT, total or TOTAL)
+def slots(cards: list[Card], project: str, per_project: int | None, total: int) -> Slots:
+    return Slots(project, running_units(cards, project), running_units(cards), DEFAULT_PER_PROJECT if per_project is None else per_project, total)
 
 
 def abandoned_after_steer(cards: list[Card], bot: str, project: str, open_units: dict[tuple[str, str], dict], now: float) -> list[Card]:
