@@ -9,12 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # check-commit-messages.mjs compares the branch with origin/main
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -22,7 +20,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Python lint, type, and end-to-end tools
+      - name: Python lint and type tools
         run: pip install ruff mypy types-PyYAML pyyaml
       - name: Install Claude Code
         run: |
@@ -35,17 +33,57 @@ jobs:
           node scripts/agent-checks/rule-fixtures.mjs
           ruff check
           mypy
+
+  commit-messages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # check-commit-messages.mjs compares the branch with origin/main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Commit messages
         run: node scripts/check-commit-messages.mjs
+
+  hermes-e2e:
+    name: hermes-e2e (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python end-to-end tools
+        run: pip install pyyaml
       - name: Hermes end-to-end
-        run: python3 hermes/e2e/run_dispatch_e2e.py --artifact artifacts/hermes-e2e.json
+        run: python3 hermes/e2e/run_dispatch_e2e.py --shard ${{ matrix.shard }}/4 --artifact artifacts/hermes-e2e-${{ matrix.shard }}.json
       - name: End-to-end transcripts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-transcripts
+          name: e2e-transcripts-${{ matrix.shard }}
           path: artifacts/
           if-no-files-found: ignore
+
+  check:
+    needs: [lint, commit-messages, hermes-e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every CI job passed
+        env:
+          RESULTS: ${{ needs.lint.result }} ${{ needs.commit-messages.result }} ${{ needs.hermes-e2e.result }}
+        run: |
+          echo "lint, commit-messages, hermes-e2e: $RESULTS"
+          [ "$RESULTS" = "success success success" ]
 
   validate:
     runs-on: ubuntu-latest

@@ -4225,6 +4225,8 @@ def worker(name: str, root: Path, result: Path) -> int:
     verdicts: list[dict] = []
     error: str | None = "the scenario raised before it finished; the worker's stderr has the traceback"
     STEP_CLOCK[0] = started = time.perf_counter()
+    if hasattr(yaml, "CSafeLoader"):
+        yaml.safe_load = lambda stream: yaml.load(stream, Loader=yaml.CSafeLoader)
     if not os.environ.get(REAL_STUBS_ENV):
         inprocess_stubs.install({"gh": stub_file("gh", FAKE_GH), "hermes": stub_file("hermes", FAKE_HERMES)})
     try:
@@ -4283,15 +4285,12 @@ def report(results: dict[str, dict], budgets: dict[str, float], scale: float, wa
     over: list[str] = []
     lines = ["| scenario | steps | seconds | budget |", "|---|---:|---:|---:|"]
     for name, result in sorted(results.items(), key=lambda item: -item[1]["seconds"]):
-        budget = budgets.get(name)
-        limit = None if budget is None else budget * scale
-        if limit is not None and result["seconds"] > limit:
+        budget = budgets[name]
+        limit = budget * scale
+        if result["seconds"] > limit:
             over.append(f"{name} took {result['seconds']:.1f}s, over its budget of {limit:.1f}s in {BUDGETS_PATH.name}")
-        lines.append(f"| {name} | {len(result['steps'])} | {result['seconds']:.1f} | {'none' if limit is None else f'{limit:.1f}'} |")
-    total = budgets.get("_total")
-    if total is not None and wall > total * scale:
-        over.append(f"the run took {wall:.1f}s, over its total budget of {total * scale:.1f}s in {BUDGETS_PATH.name}")
-    lines.append(f"| **total wall, {jobs} workers** | {sum(len(r['steps']) for r in results.values())} | {wall:.1f} | {'none' if total is None else f'{total * scale:.1f}'} |")
+        lines.append(f"| {name} | {len(result['steps'])} | {result['seconds']:.1f} | {limit:.1f} |")
+    lines.append(f"| **total wall, {jobs} workers** | {sum(len(r['steps']) for r in results.values())} | {wall:.1f} | |")
     print("\n".join(lines))
     print("slowest steps:")
     for seconds, name, step in top_steps(results, 10):
@@ -4303,6 +4302,17 @@ def report(results: dict[str, dict], budgets: dict[str, float], scale: float, wa
     return over
 
 
+def shard_of(names: list[str], budgets: dict[str, float], index: int, count: int) -> list[str]:
+    loads = [0.0] * count
+    members: list[list[str]] = [[] for _ in range(count)]
+    for name in sorted(names, key=lambda n: (-budgets[n], n)):
+        lightest = min(range(count), key=lambda i: (loads[i], i))
+        loads[lightest] += budgets[name]
+        members[lightest].append(name)
+    chosen = set(members[index - 1])
+    return [n for n in names if n in chosen]
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Stubbed end-to-end run of the faker-kit coordinator path")
     ap.add_argument("--artifact", type=Path, help="where to write the JSON transcript; defaults to a file in the run directory")
@@ -4310,6 +4320,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 1, help="scenarios run at once, each in its own process and temp home (default: the CPU count)")
     ap.add_argument("--only", help="comma-separated scenario names to run (default: all)")
     ap.add_argument("--list", action="store_true", help="print the scenario names and exit")
+    ap.add_argument("--shard", help="K/N: run only the K-th of N balanced groups of scenarios, for a CI matrix; the groups together are every scenario once")
     ap.add_argument("--real-stubs", action="store_true", help="run every gh and hermes stub call as a real process, also the test driver's own (slower; by default those run in-process)")
     ap.add_argument("--budget-scale", type=float, default=1.0, help="multiply every time budget, for a slower machine than CI")
     args = ap.parse_args(argv)
@@ -4321,11 +4332,22 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         print(f"unknown scenario: {', '.join(unknown)}", file=sys.stderr)
         return 2
+    budgets: dict[str, float] = json.loads(BUDGETS_PATH.read_text())
+    unbudgeted = [n for n in SCENARIOS if n not in budgets]
+    if unbudgeted:
+        print(f"no time budget in {BUDGETS_PATH.name} for: {', '.join(unbudgeted)}", file=sys.stderr)
+        return 2
+    sharded = bool(args.shard)
+    if args.shard:
+        index, _, count = args.shard.partition("/")
+        if not (index.isdigit() and count.isdigit() and 1 <= int(index) <= int(count)):
+            print("--shard takes K/N with 1 <= K <= N", file=sys.stderr)
+            return 2
+        names = shard_of(names, budgets, int(index), int(count))
     if args.real_stubs:
         os.environ[REAL_STUBS_ENV] = "1"
-    budgets: dict[str, float] = json.loads(BUDGETS_PATH.read_text()) if BUDGETS_PATH.exists() else {}
     root = Path(tempfile.mkdtemp(prefix="faker-kit-e2e-"))
-    print(f"running {len(names)} scenarios on {max(1, args.jobs)} workers ({os.cpu_count()} CPUs)", flush=True)
+    print(f"running {len(names)} scenarios{' of shard ' + args.shard if sharded else ''} on {max(1, args.jobs)} workers ({os.cpu_count()} CPUs)", flush=True)
     began = time.perf_counter()
     results = run_workers(names, root, max(1, args.jobs), budgets)
     wall = time.perf_counter() - began
