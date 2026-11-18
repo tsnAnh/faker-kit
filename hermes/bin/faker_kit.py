@@ -92,6 +92,7 @@ from faker_kit_refusals import Refusals
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
 from faker_kit_session_card import steered, with_steer, with_summary
 from faker_kit_session_summary import STEER_MESSAGE, read_summary
+from faker_kit_subscriptions import SubscriptionsError, sync_subscriptions
 from faker_kit_t3code import T3CodeLauncher, check_t3code_backend, parse_settings, unit_id
 from faker_kit_text import refresh as refresh_text
 from faker_kit_units import SESSION_URL
@@ -1384,8 +1385,7 @@ class Kit:
         unreachable: list[str] = []
         if webhook_url:
             out["webhooks"] = self.webhooks(webhook_url, [(name, repo)])
-            problem = self.restart_gateway() if reload_gateway else None
-            failed, unreachable = self.ping_routes(name, out["webhooks"], problem)
+            out["loaded"], failed, unreachable = self.load_routes(name, out["webhooks"], reload_gateway)
         trust_checkout(checkout, os.environ.get(CLAUDE_CONFIG_DIR, ""))
         steps: list[str] = []
         if webhook_url:
@@ -1396,7 +1396,8 @@ class Kit:
                 steps.append(f"The public webhook path is not live: {'; '.join(unreachable)} while the local listener answered. "
                              f"The owner runs {owner_step} in the kit checkout to rewrite the tunnel config and restart faker-kit-tunnel, then faker-kit add-project {repo} again to prove it")
             if failed:
-                steps.append(f"The webhook routes are not live: {'; '.join(failed)}. The owner runs `{GATEWAY_RESTART}` in their own shell, then faker-kit add-project {repo} again to prove them")
+                steps.append(f"The webhook routes are not live: {'; '.join(failed)}. The gateway did not load them without a restart, "
+                             f"so the owner runs `{GATEWAY_RESTART}` in their own shell, then faker-kit add-project {repo} again to prove them")
         if not out["jobs_active"]:
             again = f"{repo} --provider {provider} --model {model}" if provider else repo
             steps.append(f"The owner signs in to GitHub for this machine in the Pal app, then runs faker-kit add-project {again} again to start the jobs")
@@ -1422,19 +1423,20 @@ class Kit:
                 self.sleep(PING_PAUSE_SECONDS)
         return answer
 
-    def ping_routes(self, bot: str, hooks: list[dict], problem: str | None, public: bool = True) -> tuple[list[str], list[str]]:
+    def ping_routes(self, bot: str, hooks: list[dict], problem: str | None, public: bool = True, local: bool = True) -> tuple[list[str], list[str]]:
         secret = parse_env_file(self.root / ".env").get(secret_env(bot), "")
         listener = os.environ.get(LISTENER_ENV) or f"http://{WEBHOOK_HOST}:{WEBHOOK_PORT}"
         failed, unreachable = [], []
         for hook in hooks:
             path = urlsplit(hook["url"]).path
             route = path.rsplit("/", 1)[-1]
-            answer = self.signed_ping(listener.rstrip("/") + path, secret)
-            ok = isinstance(answer, int) and 200 <= answer < 300
-            hook["ping"] = "ok" if ok else str(answer)
-            if not ok:
-                failed.append(f"{route} answered {answer}" + (f" and {problem}" if problem else ""))
-                continue
+            if local:
+                answer = self.signed_ping(listener.rstrip("/") + path, secret)
+                ok = isinstance(answer, int) and 200 <= answer < 300
+                hook["ping"] = "ok" if ok else str(answer)
+                if not ok:
+                    failed.append(f"{route} answered {answer}" + (f" and {problem}" if problem else ""))
+                    continue
             if not public:
                 continue
             answer = self.signed_ping(hook["url"], secret)
@@ -1442,6 +1444,21 @@ class Kit:
             if hook["public_ping"] != "ok":
                 unreachable.append(f"{route} answered {answer}")
         return failed, unreachable
+
+    @staticmethod
+    def hot_load_missed(hooks: list[dict]) -> bool:
+        return any(not str(h["ping"]).isdigit() or h["ping"] == "404" for h in hooks if h["ping"] != "ok")
+
+    def load_routes(self, bot: str, hooks: list[dict], restart_allowed: bool, public: bool = True) -> tuple[str, list[str], list[str]]:
+        failed, _ = self.ping_routes(bot, hooks, None, public=False)
+        if not failed:
+            return "hot", [], self.ping_routes(bot, hooks, None, public, local=False)[1] if public else []
+        missed = clean("; ".join(failed), self.secrets_known())
+        if not (restart_allowed and self.hot_load_missed(hooks)):
+            return f"no (hot path failed: {missed})", failed, []
+        problem = self.restart_gateway()
+        again, unreachable = self.ping_routes(bot, hooks, problem, public)
+        return f"restart (hot path failed: {missed})", again, unreachable
 
     def secrets_known(self) -> tuple[str, ...]:
         found: tuple[str, ...] = ()
@@ -1588,16 +1605,23 @@ class Kit:
     def reload_routes(self, machine: Machine) -> tuple[dict, Coded | None]:
         assert machine.webhook_url
         hooks = self.webhooks(machine.webhook_url, [(p.bot, p.repo) for p in machine.projects], github=False)
-        problem = self.restart_gateway()
+        mine = {p.project: [h for h in hooks if h["repo"] == p.repo] for p in machine.projects}
+        failures = {p.project: self.ping_routes(p.bot, mine[p.project], None, public=False)[0] for p in machine.projects}
+        loaded, problem, restarted = "hot", None, False
+        if any(failures.values()):
+            missed = clean("; ".join(f for fs in failures.values() for f in fs), self.secrets_known())
+            restarted = any(self.hot_load_missed(hs) for hs in mine.values())
+            loaded = f"{'restart' if restarted else 'no'} (hot path failed: {missed})"
+            if restarted:
+                problem = self.restart_gateway()
+                failures = {p.project: self.ping_routes(p.bot, mine[p.project], problem, public=False)[0] for p in machine.projects}
         rows: list[dict] = []
         gateway_down = problem is not None
         for p in machine.projects:
-            mine = [h for h in hooks if h["repo"] == p.repo]
-            failed, _ = self.ping_routes(p.bot, mine, problem, public=False)
-            pings = [str(h["ping"]) for h in mine]
+            pings = [str(h["ping"]) for h in mine[p.project]]
             gateway_down = gateway_down or any(ping.startswith("unreachable") for ping in pings)
-            rows.append({"project": p.project, "bot": p.bot, "routes_loaded": not failed, "local_ping": next((ping for ping in pings if ping != "ok"), "ok")})
-        data = {"projects": rows, "restarted_gateway": True}
+            rows.append({"project": p.project, "bot": p.bot, "routes_loaded": not failures[p.project], "local_ping": next((ping for ping in pings if ping != "ok"), "ok")})
+        data = {"projects": rows, "loaded": loaded, "restarted_gateway": restarted}
         if gateway_down:
             return data, Coded("The Hermes gateway did not come back after the restart.", "gateway_unreachable", "restart_gateway", data)
         if not all(r["routes_loaded"] for r in rows):
@@ -1611,7 +1635,7 @@ class Kit:
         data, failure = self.reload_routes(machine)
         if failure:
             raise failure
-        return envelope("ok", "Restarted the gateway, the only way it loads routes, and every project's routes now answer.", data)
+        return envelope("ok", f"loaded: {data['loaded']}. Every project's routes now answer.", data)
 
     def reconcile_public_path(self, machine: Machine, secrets: dict[str, str]) -> Coded | None:
         down = []
@@ -1791,6 +1815,7 @@ class Kit:
                 url = route_url(base_url, bot, name)
                 done.append({"repo": repo, "url": url, "hook": self.github_hook(repo, url, route["events"], secret) if github else None})
             self.prune_routes(bot, listener)
+            self.hot_load(bot, secret)
             stale = json.loads(self.run(["api", f"repos/{repo}/hooks?per_page=100"]) or "[]") if github else []
             for hook in stale:
                 url = str((hook.get("config") or {}).get("url") or "")
@@ -1798,6 +1823,12 @@ class Kit:
                     self.run(["api", "-X", "DELETE", f"repos/{repo}/hooks/{int(hook['id'])}"])
                     print(f"faker-kit: pruned GitHub hook {url} on {repo}", file=sys.stderr)
         return done
+
+    def hot_load(self, bot: str, secret: str) -> None:
+        try:
+            sync_subscriptions(self.root, bot, secret)
+        except SubscriptionsError as err:
+            print(f"faker-kit: webhook subscriptions not written, the gateway loads {bot}'s routes only after a restart: {clean(str(err), self.secrets_known())}", file=sys.stderr)
 
     def prune_routes(self, bot: str, listener: tuple[str, str]) -> None:
         current = value_at(mapping(self.root / "config.yaml"), (*listener, "extra", "routes"))
