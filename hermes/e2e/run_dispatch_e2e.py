@@ -4434,7 +4434,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--only", help="comma-separated scenario names to run (default: all)")
     ap.add_argument("--list", action="store_true", help="print the scenario names and exit")
     ap.add_argument("--shard", help="K/N: run only the K-th of N balanced groups of scenarios, for a CI matrix; the groups together are every scenario once")
-    ap.add_argument("--real-stubs", action="store_true", help="run every gh and hermes stub call as a real process, also the test driver's own (slower; by default those run in-process)")
+    ap.add_argument("--real-stubs", action="store_true", help="run every gh and hermes stub call as a real process, also the driver's own (several times slower: add --budget-scale 5)")
     ap.add_argument("--budget-scale", type=float, default=1.0, help="multiply every time budget, for a slower machine than CI")
     args = ap.parse_args(argv)
     if args.list:
