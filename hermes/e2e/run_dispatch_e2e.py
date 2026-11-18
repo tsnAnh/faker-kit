@@ -2308,6 +2308,11 @@ def install_scenario(run: Run, work: Path) -> None:
              all("a lone \"ê\"" in (hermes / "profiles" / name / "SOUL.md").read_text() and "Never tell the owner what your skill" in (hermes / "profiles" / name / "SOUL.md").read_text()
                  for name in (BOT, CHIEF)),
              "chief and project bot SOUL.md")
+    run.step("every bot's SOUL.md names the owner only in a real greeting or when needed, once, and keeps em for the bot and anh or chị for the owner",
+             all((text := (hermes / "profiles" / name / "SOUL.md").read_text()).count("Use the owner's name only in a real greeting or when the context needs it") == 1
+                 and "as a junior would" not in text and 'In Vietnamese you are always "em" and the owner is "anh", or "chị"' in text
+                 and 'never "mình", "tôi", "bạn", or "you" for them' in text for name in (BOT, CHIEF, BOOTSTRAP)),
+             "bootstrap, chief and project bot SOUL.md")
     run.step("install.sh keeps bot chatter out of the owner's chat: the chief's hourly loop messages no bot, and the project bot's babysit tells the chief its units' news",
              "message no other bot" in chief_jobs.get("faker-kit-loop", {}).get("prompt", "")
              and "tell the chief what changed for its units" in project_jobs.get("faker-kit-babysit", {}).get("prompt", ""),
