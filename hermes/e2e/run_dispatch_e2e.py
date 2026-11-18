@@ -2926,16 +2926,19 @@ def profile_approval_scenario(run: Run, work: Path) -> None:
              and verdicts == [True] * len(accepted) + [False] * len(rejected), f"{'Go regexp' if go else 'Python re, go not found'}: {json.dumps(verdicts)}")
 
     order: list[str] = []
+    restart_before = calls_before
 
-    def after_restart(*_: object) -> int:
-        order.append("ping:" + ("restarted" if (other.hermes / "hermes-calls.log").read_text().count('"gateway"') > calls_before else "before-restart"))
-        return 202
+    def after_restart(*_: object) -> int | str:
+        restarted = (other.hermes / "hermes-calls.log").read_text().count('"gateway"') > restart_before
+        order.append("ping:" + ("restarted" if restarted else "before-restart"))
+        return 202 if restarted else 404
 
     code, out, err = other.kit(*crm, bot=None, post=after_restart)
     owned = json.loads(out)
     restarts = [json.loads(line) for line in (other.hermes / "hermes-calls.log").read_text().splitlines() if '"gateway"' in line][calls_before:]
-    run.step("from the owner's shell add-project restarts the default profile's gateway once, before the first ping, and the pings then pass",
-             code == 0 and restarts == [["-p", "default", "gateway", "restart"]] and order == ["ping:restarted"] * 4 and owned["webhooks_live"] is True, json.dumps(order))
+    run.step("from the owner's shell add-project restarts the default profile's gateway once, only after the routes stayed unloaded through the polling, and the pings then pass",
+             code == 0 and restarts == [["-p", "default", "gateway", "restart"]] and order[:12] == ["ping:before-restart"] * 12 and order[12:] == ["ping:restarted"] * 4
+             and owned["loaded"].startswith("restart (hot path failed: crm-bot-pr answered 404") and owned["webhooks_live"] is True, json.dumps(order))
 
     kept_machine = other.team / "machine.yaml"
     held = kept_machine.read_text()
@@ -3757,10 +3760,23 @@ def host_scenario(run: Run, work: Path) -> None:
     gh_before = written()
     code, out, err, reloaded = host("reload")
     gateway_calls = [json.loads(line) for line in (h.hermes / "hermes-calls.log").read_text().splitlines() if '"gateway"' in line]
-    run.step("host reload writes the routes, restarts the gateway once, pings each route locally, writes no GitHub hook, and says per project routes_loaded and local_ping",
+    run.step("host reload writes the routes, loads them without a restart, pings each route locally, writes no GitHub hook, and says loaded hot and per project routes_loaded and local_ping",
              code == 0 and single(out) and reloaded["ok"] is True and reloaded["data"]["projects"] == [{"project": "shop", "bot": BOT, "routes_loaded": True, "local_ping": "ok"}]
-             and "restarted" in reloaded["message"].lower() and gateway_calls[-1:] == [["-p", "default", "gateway", "restart"]] and written() == gh_before
-             and f"{BOT}-pr" in yaml.safe_load((h.hermes / "config.yaml").read_text())["platforms"]["webhook"]["extra"]["routes"], out[:300])
+             and reloaded["message"].startswith("loaded: hot.") and reloaded["data"]["loaded"] == "hot" and reloaded["data"]["restarted_gateway"] is False
+             and gateway_calls == [] and written() == gh_before and "only way" not in reloaded["message"]
+             and f"{BOT}-pr" in yaml.safe_load((h.hermes / "config.yaml").read_text())["platforms"]["webhook"]["extra"]["routes"]
+             and f"{BOT}-pr" in json.loads((h.hermes / "webhook_subscriptions.json").read_text()), out[:300])
+    shop_config = yaml.safe_load((h.hermes / "config.yaml").read_text())
+    for kind in ROUTE_JOBS:
+        shop_config["platforms"]["webhook"]["extra"]["routes"].pop(f"{BOT}-{kind}")
+    (h.hermes / "config.yaml").write_text(yaml.safe_dump(shop_config, sort_keys=True))
+    reader = importlib.import_module("webhook_hot_load_scenario").PalReader(h.hermes, reads_dynamic=False)
+    code, out, err, fallback = host("reload", post=reader)
+    gateway_calls = [json.loads(line) for line in (h.hermes / "hermes-calls.log").read_text().splitlines() if '"gateway"' in line]
+    run.step("host reload on a gateway that does not read the subscriptions file restarts it once as the fallback, says restart with the ping result, and the routes then answer",
+             code == 0 and fallback["ok"] is True and fallback["message"] == f"loaded: restart (hot path failed: {BOT}-pr answered 404; {BOT}-issues answered 404). Every project's routes now answer."
+             and fallback["data"]["restarted_gateway"] is True and gateway_calls == [["-p", "default", "gateway", "restart"]] and reader.restarts() == 1
+             and fallback["data"]["projects"][0]["routes_loaded"] is True and HOST_SECRET not in out + err, out[:300])
     h.pings.clear()
     code, out, err, gone = host("reload", post=lambda *_: "unreachable (OSError)")
     code2, out2, _err2, missing = host("reload", post=lambda *_: 404)
@@ -4082,92 +4098,111 @@ def host_secret_scenario(run: Run, work: Path) -> None:
     run.step("no secret value of this scenario appears in any stdout, stderr, JSON, or stub log", not leaked and len(seen_secrets) >= 3, f"{len(outputs)} outputs, {len(seen_secrets)} secrets")
 
 
+def hot_load_scenarios(root: Path, run: Run) -> None:
+    hot_run = Run(root / "hot-load", run.steps, run.verdicts)
+    hot_run.build()
+    hot_load = importlib.import_module("webhook_hot_load_scenario")
+    hot_load.hot_load_scenario(hot_run, PROFILE_MACHINE_YAML)
+    fallback_run = Run(root / "hot-load-fallback", run.steps, run.verdicts)
+    fallback_run.build()
+    hot_load.fallback_scenario(fallback_run, PROFILE_MACHINE_YAML, AGENT_TURN, BOOTSTRAP)
+
+
+def all_scenarios(root: Path, run: Run) -> None:
+    launch_scenario(run)
+    credential_scenario(run)
+    webhook_scenario(run)
+    merge_scenario(run)
+    pr_label_scenario(run)
+    incident_scenario(run)
+    issues_scenario(run)
+    trust_scenario(run)
+    loop_scenario(run)
+    install_scenario(run, root / "install")
+    refresh_scenario.refresh_scenario(root / "refresh", run.step, run.env(), run.bin / "hermes", kit_source)
+    refresh_scenario.refresh_claude_scenario(root / "refresh-claude", run.step, run.env(), run.bin / "hermes", run.bin / "gh", run.bin / "claude", kit_source)
+    provider_scenario(run, root / "provider")
+    runner_scenario(run, root / "runner")
+    profile_approval_scenario(run, root / "profile-approval")
+    host_scenario(run, root / "host")
+    host_secret_scenario(run, root / "host-secret")
+    install_skip_scenario(run, root / "install-skip")
+    install_labels_scenario(run, root / "install-labels")
+    tooling_scenario.environment_scenario(root / "environment-setup", run.step)
+    tooling_scenario.ratchet_scenario(root / "ratchet", run.step)
+    guard_scenario.guard_scenario(root / "guard", run.step, run.verdicts.append)
+    t3code_run = Run(root / "t3code", run.steps, run.verdicts)
+    t3code_run.build()
+    t3code_scenario.t3code_scenario(t3code_run, BOT)
+    import_run = Run(root / "import", run.steps, run.verdicts)
+    import_run.build()
+    import_scenario.import_scenario(import_run)
+    owner_merge_scenario(run)
+    owner_landing_scenario(run)
+    owner_reviews_scenario(run)
+    merge_open_scenario(run)
+    kanban_run = Run(root / "kanban", run.steps, run.verdicts)
+    kanban_run.build()
+    kanban_scenario.kanban_scenario(kanban_run, faker_kit.Loop, faker_kit.LoopError)
+    kanban_merge_run = Run(root / "kanban-merge", run.steps, run.verdicts)
+    kanban_merge_run.build()
+    kanban_scenario.kanban_merge_scenario(kanban_merge_run, open_gates)
+    kanban_claims_run = Run(root / "kanban-claims", run.steps, run.verdicts)
+    kanban_claims_run.build()
+    kanban_claims_scenario.claims_scenario(kanban_claims_run)
+    kanban_evidence_run = Run(root / "kanban-evidence", run.steps, run.verdicts)
+    kanban_evidence_run.build()
+    kanban_evidence_scenario.evidence_scenario(kanban_evidence_run)
+    kanban_visibility_run = Run(root / "kanban-visibility", run.steps, run.verdicts)
+    kanban_visibility_run.build()
+    kanban_visibility_scenario.visibility_scenario(kanban_visibility_run)
+    pickup_run = Run(root / "pickup", run.steps, run.verdicts)
+    pickup_run.build()
+    pickup_scenario.pickup_scenario(pickup_run)
+    defaults = importlib.import_module("faker_kit_pickup")
+    shipped_totals = [int(m.group(1)) for path in ("guard.yaml", "machine.yaml") for m in re.finditer(r"^\s*max_in_flight_total: (\d+)", (HERMES / "templates" / path).read_text(), re.M)]
+    run.step("pickup limits: the shipped guard.yaml and machine.yaml templates carry the one default total in faker_kit_pickup.py, and its defaults are the owner's 20 and 5",
+         shipped_totals == [defaults.DEFAULT_TOTAL] * 2 and (defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT) == (20, 5),
+         json.dumps([shipped_totals, defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT]))
+    session_run = Run(root / "session-summary", run.steps, run.verdicts)
+    session_run.build()
+    session_summary_scenario.session_scenario(session_run)
+    kanban_text_run = Run(root / "kanban-text", run.steps, run.verdicts)
+    kanban_text_run.build()
+    kanban_text_scenario.kanban_text_scenario(kanban_text_run)
+    kanban_backfill_run = Run(root / "kanban-backfill", run.steps, run.verdicts)
+    kanban_backfill_run.build()
+    kanban_text_scenario.kanban_backfill_scenario(kanban_backfill_run)
+    kanban_close_run = Run(root / "kanban-close", run.steps, run.verdicts)
+    kanban_close_run.build()
+    kanban_text_scenario.kanban_close_scenario(kanban_close_run)
+    card_refs_run = Run(root / "card-refs", run.steps, run.verdicts)
+    card_refs_run.build()
+    card_refs_scenario.card_refs_scenario(card_refs_run)
+    card_backfill_run = Run(root / "card-refs-backfill", run.steps, run.verdicts)
+    card_backfill_run.build()
+    card_refs_scenario.card_backfill_refs_scenario(card_backfill_run)
+    card_prefix_run = Run(root / "card-prefixes", run.steps, run.verdicts)
+    card_prefix_run.build()
+    card_prefix_scenario.card_prefix_scenario(card_prefix_run)
+    hot_load_scenarios(root, run)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Stubbed end-to-end run of the faker-kit coordinator path")
     ap.add_argument("--artifact", type=Path, help="where to write the JSON transcript; defaults to a file in the run directory")
     ap.add_argument("--keep", action="store_true", help="keep the run directory")
+    ap.add_argument("--only", choices=["hot-load"], help="run one scenario on its own")
     args = ap.parse_args(argv)
     root = Path(tempfile.mkdtemp(prefix="faker-kit-e2e-"))
     run = Run(root)
     code = 0
     try:
         run.build()
-        launch_scenario(run)
-        credential_scenario(run)
-        webhook_scenario(run)
-        merge_scenario(run)
-        pr_label_scenario(run)
-        incident_scenario(run)
-        issues_scenario(run)
-        trust_scenario(run)
-        loop_scenario(run)
-        install_scenario(run, root / "install")
-        refresh_scenario.refresh_scenario(root / "refresh", run.step, run.env(), run.bin / "hermes", kit_source)
-        refresh_scenario.refresh_claude_scenario(root / "refresh-claude", run.step, run.env(), run.bin / "hermes", run.bin / "gh", run.bin / "claude", kit_source)
-        provider_scenario(run, root / "provider")
-        runner_scenario(run, root / "runner")
-        profile_approval_scenario(run, root / "profile-approval")
-        host_scenario(run, root / "host")
-        host_secret_scenario(run, root / "host-secret")
-        install_skip_scenario(run, root / "install-skip")
-        install_labels_scenario(run, root / "install-labels")
-        tooling_scenario.environment_scenario(root / "environment-setup", run.step)
-        tooling_scenario.ratchet_scenario(root / "ratchet", run.step)
-        guard_scenario.guard_scenario(root / "guard", run.step, run.verdicts.append)
-        t3code_run = Run(root / "t3code", run.steps, run.verdicts)
-        t3code_run.build()
-        t3code_scenario.t3code_scenario(t3code_run, BOT)
-        import_run = Run(root / "import", run.steps, run.verdicts)
-        import_run.build()
-        import_scenario.import_scenario(import_run)
-        owner_merge_scenario(run)
-        owner_landing_scenario(run)
-        owner_reviews_scenario(run)
-        merge_open_scenario(run)
-        kanban_run = Run(root / "kanban", run.steps, run.verdicts)
-        kanban_run.build()
-        kanban_scenario.kanban_scenario(kanban_run, faker_kit.Loop, faker_kit.LoopError)
-        kanban_merge_run = Run(root / "kanban-merge", run.steps, run.verdicts)
-        kanban_merge_run.build()
-        kanban_scenario.kanban_merge_scenario(kanban_merge_run, open_gates)
-        kanban_claims_run = Run(root / "kanban-claims", run.steps, run.verdicts)
-        kanban_claims_run.build()
-        kanban_claims_scenario.claims_scenario(kanban_claims_run)
-        kanban_evidence_run = Run(root / "kanban-evidence", run.steps, run.verdicts)
-        kanban_evidence_run.build()
-        kanban_evidence_scenario.evidence_scenario(kanban_evidence_run)
-        kanban_visibility_run = Run(root / "kanban-visibility", run.steps, run.verdicts)
-        kanban_visibility_run.build()
-        kanban_visibility_scenario.visibility_scenario(kanban_visibility_run)
-        pickup_run = Run(root / "pickup", run.steps, run.verdicts)
-        pickup_run.build()
-        pickup_scenario.pickup_scenario(pickup_run)
-        defaults = importlib.import_module("faker_kit_pickup")
-        shipped_totals = [int(m.group(1)) for path in ("guard.yaml", "machine.yaml") for m in re.finditer(r"^\s*max_in_flight_total: (\d+)", (HERMES / "templates" / path).read_text(), re.M)]
-        run.step("pickup limits: the shipped guard.yaml and machine.yaml templates carry the one default total in faker_kit_pickup.py, and its defaults are the owner's 20 and 5",
-                 shipped_totals == [defaults.DEFAULT_TOTAL] * 2 and (defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT) == (20, 5),
-                 json.dumps([shipped_totals, defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT]))
-        session_run = Run(root / "session-summary", run.steps, run.verdicts)
-        session_run.build()
-        session_summary_scenario.session_scenario(session_run)
-        kanban_text_run = Run(root / "kanban-text", run.steps, run.verdicts)
-        kanban_text_run.build()
-        kanban_text_scenario.kanban_text_scenario(kanban_text_run)
-        kanban_backfill_run = Run(root / "kanban-backfill", run.steps, run.verdicts)
-        kanban_backfill_run.build()
-        kanban_text_scenario.kanban_backfill_scenario(kanban_backfill_run)
-        kanban_close_run = Run(root / "kanban-close", run.steps, run.verdicts)
-        kanban_close_run.build()
-        kanban_text_scenario.kanban_close_scenario(kanban_close_run)
-        card_refs_run = Run(root / "card-refs", run.steps, run.verdicts)
-        card_refs_run.build()
-        card_refs_scenario.card_refs_scenario(card_refs_run)
-        card_backfill_run = Run(root / "card-refs-backfill", run.steps, run.verdicts)
-        card_backfill_run.build()
-        card_refs_scenario.card_backfill_refs_scenario(card_backfill_run)
-        card_prefix_run = Run(root / "card-prefixes", run.steps, run.verdicts)
-        card_prefix_run.build()
-        card_prefix_scenario.card_prefix_scenario(card_prefix_run)
+        if args.only == "hot-load":
+            hot_load_scenarios(root, run)
+        else:
+            all_scenarios(root, run)
     except Failure as err:
         print(f"e2e stopped at: {err}", file=sys.stderr)
         code = 1
