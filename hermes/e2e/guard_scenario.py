@@ -476,20 +476,61 @@ def skill_reminders(host: Host) -> None:
     host.step("guard: the reminder forgets the oldest chats", forgotten is not None and remembered is None, "1025 chats")
 
 
+COMMAND_LIMIT = 200_000
+
+
+def scan_limits(host: Host) -> None:
+    host.policy(ask=False)
+    host.skills(False)
+    padding = "a" * COMMAND_LIMIT
+    hidden = {
+        "gh pr merge": "gh pr merge 5",
+        "push main": "git push origin main",
+        "wipe home": "rm -rf ~",
+        "secret read": "gh auth token",
+        "python push main": "python3 -c \"import os; os.system('git push origin main')\"",
+    }
+    refused = {name: host.terminal(f"echo {padding}\n{command}", label=f"hard block after padding: {name}") for name, command in hidden.items()}
+    host.step("guard: a command longer than the guard scans is blocked with a reason that names the limit, whatever hides after the padding",
+              all(blocked(v, "blocked for every bot") and blocked(v, "longer than the guard scans (200,000 characters)") for v in refused.values()),
+              ", ".join(f"{name}: {action(v)}" for name, v in refused.items()))
+    reason = (refused["gh pr merge"] or {}).get("message", "")
+    host.step("guard: the limit's block reason never echoes the command", "gh pr merge" not in reason and "aaaa" not in reason, reason[:160])
+    for tool, args in (("device", {"device": "Mac", "action": "shell.run", "args": {"command": f"echo {padding}\ngh pr merge 5"}}),
+                       ("process_manage", {"command": f"echo {padding}\ngh pr merge 5"})):
+        verdict = host.tool(tool, args, label=f"over-long {tool}")
+        host.step(f"guard: an over-long command is blocked through {tool} too", blocked(verdict, "longer than the guard scans"), action(verdict))
+    at_limit = host.terminal("echo " + "a " * ((COMMAND_LIMIT - 5) // 2), label="exactly at the limit")
+    heredoc = "cat > notes.md <<'EOF'\n" + "".join(f"line {n} of a long note about the release plan and its owners\n" for n in range(3000)) + "EOF\n"
+    body = " ".join(f"word{n}" for n in range(15000))
+    api = host.terminal(f"gh api repos/acme/shop/issues -f title='long report' -f body='{body}'", label="long gh api body")
+    long_heredoc = host.terminal(heredoc, label="3000-line heredoc")
+    big_code = host.tool("execute_code", {"code": "\n".join(f"total_{n} = compute({n}) + helper({n}, 'git status')" for n in range(3000))}, label="3000-line program")
+    host.step("guard: a command at the limit, a 3000-line heredoc, a long gh api body and a 3000-line program pass",
+              at_limit is None and long_heredoc is None and api is None and big_code is None and len(heredoc) < COMMAND_LIMIT and len(body) < COMMAND_LIMIT,
+              f"{action(at_limit)} {action(long_heredoc)} {action(api)} {action(big_code)}")
+    front = host.terminal("gh pr merge 5; echo hi", label="hard block at the front")
+    host.step("guard: the same hard block at the front of a short command still names its own reason", blocked(front, "raw gh pr merge"), action(front))
+
+
 def speed(host: Host) -> None:
     host.policy(ask=False)
     host.skills(False)
     started = time.monotonic()
-    long = host.terminal("echo " + "a" * 100_001, label="too long")
-    padded = host.terminal("gh pr merge 1; echo " + "a" * 100_001, label="too long, hard block first")
-    alias = host.terminal("git " + "alias." * 16666, label="long alias")
-    fast_alias = time.monotonic() - started < 5
+    over = host.terminal("echo " + "a" * 5_000_000, label="five million characters")
+    rejected_fast = time.monotonic() - started < 1
+    started = time.monotonic()
+    alias = host.terminal("git " + "alias." * (COMMAND_LIMIT // 6 - 1), label="long alias at the limit")
+    assigns = host.terminal("env " + "A=1 " * (COMMAND_LIMIT // 4 - 3) + "ls", label="long env assignments at the limit")
+    word = host.terminal("echo " + "a" * (COMMAND_LIMIT - 5), label="one word at the limit")
+    fast_alias = time.monotonic() - started < 15
     started = time.monotonic()
     code = 'run(["hermes", ' + ", ".join(f'"--x={n}", "a"' for n in range(2000)) + ', "status"])' + " --a=b x" * 2000
     host.tool("execute_code", {"code": code}, label="long code")
     fast_code = time.monotonic() - started < 10
-    host.step("guard: a command longer than the guard reads is allowed, a hard block inside the part it reads still blocks, and crafted long input stays fast",
-              long is None and blocked(padded, "blocked for every bot") and fast_alias and fast_code, f"{action(long)} {action(padded)} {action(alias)}")
+    host.step("guard: crafted long input is rejected at once when it is over the limit and scanned within the time budget when it is under it",
+              blocked(over, "longer than the guard scans") and rejected_fast and fast_alias and fast_code and all(v is None for v in (alias, assigns, word)),
+              f"{action(over)} {action(alias)} {action(assigns)} {action(word)}")
 
 
 NO_PYYAML_PROBE = r"""
@@ -569,4 +610,5 @@ def guard_scenario(root: Path, step: Step, record: Record) -> None:
     chief_work(host)
     skill_reminders(host)
     no_pyyaml(host)
+    scan_limits(host)
     speed(host)
