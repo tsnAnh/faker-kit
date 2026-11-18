@@ -382,11 +382,14 @@ class Kanban:
         self.require_external()
         self.call(["block", card_id(card), "--kind", "needs_input", reason])
 
-    def evidence_add(self, card: str, run_id: int, kind: str, payload: dict[str, object]) -> None:
+    def evidence_add(self, card: str, run_id: int, kind: str, payload: dict[str, object]) -> bool:
         self.require_external()
         if kind not in EVIDENCE_KINDS:
             raise KanbanError(f"evidence kind {kind} is not one Kanban takes")
+        if any(row.run_id == run_id and row.kind == kind and row.payload == payload for row in self.evidence_list(card)):
+            return False
         self.call(["evidence", "add", card_id(card), "--run-id", str(run_id), "--kind", kind, "--json", json.dumps(payload, sort_keys=True, separators=(",", ":"))])
+        return True
 
     def evidence_list(self, card: str) -> list[EvidenceRow]:
         rows = self.read_json(["evidence", "list", card_id(card), "--json"])

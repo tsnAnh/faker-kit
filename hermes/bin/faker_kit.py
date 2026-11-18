@@ -86,6 +86,7 @@ from faker_kit_pickup import abandoned_after_steer, pickup_candidates, read_pick
 from faker_kit_profiles import Profiles
 from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, reconcile, render, seen_pull, tsv_items
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
+from faker_kit_refusals import Refusals
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
 from faker_kit_session_card import steered, with_steer, with_summary
 from faker_kit_session_summary import STEER_MESSAGE, read_summary
@@ -731,7 +732,8 @@ class Kit:
             return {**unknown, "detail": scrub(str(err))}
         if not seen.merged or not SHA.match(seen.merge_commit) or not SHA.match(seen.head):
             return {**unknown, "detail": f"GitHub does not report the merge commit of #{pr} yet; faker-kit loop reconcile completes the card"}
-        return complete_card(kanban, card, outcome, Merged(pr, seen.url, seen.head, seen.merge_commit))
+        merged = Merged(pr, seen.url, seen.head, seen.merge_commit)
+        return Refusals(self.home, bot.name).attempt(card.id, pr, seen.head, self.now(), lambda: complete_card(kanban, card, outcome, merged))
 
     def put_merge(self, gh: Gh, repo: str, pr: int, head: str) -> str:
         try:
@@ -883,7 +885,7 @@ class Kit:
             if action == "check":
                 if dry_run or apply:
                     raise Refused("loop check is read only and takes no --dry-run or --apply")
-                return self.loop_check(caller)
+                return self.loop_check(caller, everything)
             if dry_run == apply:
                 raise Refused("loop align takes exactly one of --dry-run (read only) or --apply")
             if not cutover(self.home):
@@ -942,10 +944,10 @@ class Kit:
                     found.setdefault((project, unit), pull)
         return found
 
-    def loop_check(self, caller: Bot) -> dict:
+    def loop_check(self, caller: Bot, evidence: bool = False) -> dict:
         if not cutover(self.home):
             return {"findings": [], "lines": [], "ok": True, "needs_action": False, "cutover": False}
-        return check_cards(self.kanban(caller), caller.role, caller.project, self.open_units(caller), self.now(), caller.name)
+        return check_cards(self.kanban(caller), caller.role, caller.project, self.open_units(caller), self.now(), caller.name, evidence)
 
     def reconcile_sources(self, caller: Bot) -> tuple[dict[str, str], list[dict], list[list[str]] | None]:
         repos = {name: str(bot.repo) for name, bot in self.policy().projects().items()} if caller.role == "chief" else {str(caller.project): str(caller.repo)}
@@ -1846,7 +1848,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--waits-on")
     cmd.add_argument("--reported", action="store_true")
     cmd.add_argument("--evidence", action="append", default=[], metavar="STAGE=REF", help="loop set: a one-line reference proving STAGE (built, installed, or verified); repeatable")
-    cmd.add_argument("--all", action="store_true")
+    cmd.add_argument("--all", action="store_true", help="loop show: closed entries too; loop check: also list duplicate evidence rows per card (read only)")
     cmd = sub.add_parser("session")
     cmd.add_argument("action", choices=["summary", "steer"])
     cmd.add_argument("ref", metavar="UNIT-OR-PR")

@@ -30,6 +30,7 @@ import gate_scenario
 import guard_scenario
 import import_scenario
 import kanban_claims_scenario
+import kanban_evidence_scenario
 import kanban_scenario
 import kanban_text_scenario
 import kanban_visibility_scenario
@@ -4060,6 +4061,9 @@ def main(argv: list[str] | None = None) -> int:
         kanban_claims_run = Run(root / "kanban-claims", run.steps, run.verdicts)
         kanban_claims_run.build()
         kanban_claims_scenario.claims_scenario(kanban_claims_run)
+        kanban_evidence_run = Run(root / "kanban-evidence", run.steps, run.verdicts)
+        kanban_evidence_run.build()
+        kanban_evidence_scenario.evidence_scenario(kanban_evidence_run)
         kanban_visibility_run = Run(root / "kanban-visibility", run.steps, run.verdicts)
         kanban_visibility_run.build()
         kanban_visibility_scenario.visibility_scenario(kanban_visibility_run)

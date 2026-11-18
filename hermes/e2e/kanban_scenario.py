@@ -797,7 +797,6 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     assert project("loop", "unit", "dead-u", "--pr", "51")[0] == 0
 
     board.set(complete_refuse="pending")
-    before = board.state()
     stuck = json_of(project("loop", "reconcile"))
     state = board.state()
     pal_units = [f"pal-{mode}" for mode, _ in pal_cases]
@@ -806,20 +805,24 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     evidence_per = {u: len([e for e in state["evidence"] if e["task_id"] == board.by_key()[card_key(u)]["id"]]) for u in pal_units}
     dead = board.by_key()[card_key("dead-u")]
     run.step("kanban reconcile: after the cutover a merged pull request completes its unit card only on Pal accepting; a refusal releases the claim and leaves it ready",
-             all(refused_ids[u]["classification"] == "pending" for u in pal_units) and all(v == 2 for v in runs_per.values()) and all(v == 4 for v in evidence_per.values())
+             {u: refused_ids[u]["classification"] for u in pal_units} == {f"pal-{mode}": wanted for mode, wanted in pal_cases}
+             and all(v == 1 for v in runs_per.values()) and all(v == 2 for v in evidence_per.values())
+             and all(refused_ids[u].get("held") is True and refused_ids[u]["retry_after"] > run.clock for u in pal_units)
              and all(board.by_key()[card_key(u)]["status"] == "ready" and board.open_claims(card_key(u)) == [] for u in pal_units)
-             and len(state["completions"]) > len(before["completions"]), json.dumps(stuck["entries"]["refused"])[:300])
+             and all(len([c for c in state["completions"] if c["task"] == board.by_key()[card_key(u)]["id"]]) == 1 for u in pal_units),
+             json.dumps(stuck["entries"]["refused"])[:300])
     run.step("kanban reconcile: a closed unmerged pull request abandons its unit card and archives it, and a GitHub read error on another unit changes nothing",
              "dead-u" in stuck["entries"]["closed"] and dead["status"] == "archived" and "State: abandoned" in lines(dead) and "csv-export" in [u["id"] for u in stuck["entries"]["unreadable"]]
              and "State: in-progress" in lines(board.by_key()[card_key("csv-export")]), json.dumps(stuck["entries"]["closed"]))
     board.set(complete_refuse=None)
+    run.clock += 1000
     done = json_of(project("loop", "reconcile"))
     state = board.state()
     run.step("kanban reconcile: once Pal accepts, the open units complete on one fresh claim with evidence of their own run, and their header says merged",
              all(u in done["entries"]["merged"] for u in pal_units)
              and all(board.by_key()[card_key(u)]["status"] == "done" and "State: merged" in lines(board.by_key()[card_key(u)]) for u in pal_units)
-             and all(len([e for e in state["evidence"] if e["task_id"] == board.by_key()[card_key(u)]["id"]]) == 6 for u in pal_units)
-             and all(len([r for r in state["runs"] if r["task_id"] == board.by_key()[card_key(u)]["id"]]) == 3
+             and all(len([e for e in state["evidence"] if e["task_id"] == board.by_key()[card_key(u)]["id"]]) == 4 for u in pal_units)
+             and all(len([r for r in state["runs"] if r["task_id"] == board.by_key()[card_key(u)]["id"]]) == 2
              and board.open_claims(card_key(u)) == [] for u in pal_units), json.dumps(done["entries"]["merged"]))
     mutations = board.mutations()
     quiet = json_of(project("loop", "reconcile"))
@@ -840,9 +843,9 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     def lines_of(out: dict) -> list[str]:
         return sorted(r["detail"] for r in out["entries"]["refused"] if "build" in r["detail"])
 
-    run.step("kanban refusal detail: loop reconcile prints the same named line on a repeat pass, and the repeat adds only the retry the kit already made",
+    run.step("kanban refusal detail: loop reconcile prints the same named line on a repeat pass, and the repeats make no Kanban write",
              lines_of(first) and lines_of(first) == lines_of(second) == lines_of(third) and all(r.get("checks") for r in third["entries"]["refused"] if "build" in r["detail"])
-             and m3 - m2 == m2 - m1, json.dumps(third["entries"]["refused"])[:300])
+             and m3 == m2 == m1, json.dumps(third["entries"]["refused"])[:300])
     assert project("loop", "reconcile")[0] == 0
 
 
@@ -864,6 +867,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              and cards["faker-kit:chief:13"]["status"] == "ready" and cards["faker-kit:chief:14"]["status"] != "done" and cards["faker-kit:chief:10"]["status"] != "done",
              json.dumps(stuck["entries"])[:300])
     board.set(complete_refuse=None)
+    run.clock += 1000
     finished = json_of(chief("loop", "reconcile"))
     cards = board.by_key()
     part_rows = {p["id"]: p for p in json_of(chief("loop", "show", "--all"))["open"]}
@@ -942,8 +946,9 @@ def events_scenario(run: Run, board: Board, project: Callable[..., tuple[int, st
     run.step("card events: a Pal refusal leaves the card ready, claim released, names the head, never forced",
              card["status"] == "ready" and board.open_claims(card_key("event-157")) == [] and row.get("head") == head_of(157) and row.get("classification") == "pending", json.dumps(row))
     board.set(complete_refuse=None)
+    run.clock += 1000
     project("loop", "reconcile")
-    run.step("card events: the next reconcile retries and completes the card", board.by_key()[card_key("event-157")]["status"] == "done", "")
+    run.step("card events: once the hold has passed the next reconcile retries and completes the card", board.by_key()[card_key("event-157")]["status"] == "done", "")
 
     add_pr(158, "event-ghost")
     before = board.state()["creates"]

@@ -489,7 +489,8 @@ class Gates:
         lines = [row for row in loud.stdout.splitlines() if row.startswith("faker-kit loop reconcile:")]
         again = self.tick(BABYSIT)
         step("card events: a card Kanban refused and a GitHub read that failed wake the agent with one line each",
-             self.woke(loud, "faker-kit loop reconcile: card t_1abb3883 was refused (pending: CI acceptance pending on the exact head); its claim is released and the next tick retries")
+             self.woke(loud, "faker-kit loop reconcile: card t_1abb3883 was refused (pending: CI acceptance pending on the exact head); "
+                             "its claim is released and the kit tries again only after a growing hold or when the head moves")
              and len(lines) == 2 and "loop reconcile" in self.calls(), self.say(loud))
         step("card events: the same refusal and unreadable read on the next tick print nothing and the gate stays quiet", self.silent(again), self.say(again))
         self.program("loop-reconcile", json.dumps(RECONCILE_QUIET))

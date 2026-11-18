@@ -80,9 +80,9 @@ def settle_cards() -> dict[str, str]:
     for row in entries.get("refused") or []:
         if isinstance(row, dict):
             card = row.get("card") or row.get("id")
-            found[f"refused:{card}:{row.get('head', '')}"] = (
+            found[f"refused:{card}:{row.get('head', '')}:{row.get('classification', 'unknown')}"] = (
                 f"faker-kit loop reconcile: card {card} was refused ({row.get('classification', 'unknown')}: {row.get('detail', '')}); "
-                "its claim is released and the next tick retries")
+                "its claim is released and the kit tries again only after a growing hold or when the head moves")
     for row in entries.get("unreadable") or []:
         if isinstance(row, dict):
             found[f"unreadable:{row.get('id')}:{row.get('reason', '')}"] = f"faker-kit loop reconcile: could not read GitHub for unit {row.get('id')} ({row.get('reason', '')}); the next tick retries"
