@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, let_go, part_entry
+from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, let_go, part_entry, part_key
 from faker_kit_gh import Refused, scrub
 from faker_kit_kanban import Card, Kanban, KanbanError
 from faker_kit_loop import CLOSED, DEFAULT_OUTCOME, Loop
@@ -29,7 +29,7 @@ class Tracked:
     repo: str | None
     prs: tuple[int, ...]
     outcome: str
-    stages: frozenset[str]
+    stages: dict[str, str]
     card: Card | None = None
     problem: str | None = None
 
@@ -179,7 +179,7 @@ def counts(rendered: dict) -> dict[str, object]:
 
 
 def ledger_items(parts: list[dict], repos: dict[str, str]) -> list[Tracked]:
-    return [Tracked(str(p["id"]), "part", p["project"], repos.get(p["project"]), tuple(int(n) for n in p["prs"]), p.get("outcome", DEFAULT_OUTCOME), frozenset((p.get("stages") or {}).keys()))
+    return [Tracked(str(p["id"]), "part", p["project"], repos.get(p["project"]), tuple(int(n) for n in p["prs"]), p.get("outcome", DEFAULT_OUTCOME), dict(p.get("stages") or {}))
             for p in parts if p["state"] not in CLOSED and p["prs"]]
 
 
@@ -193,7 +193,7 @@ def tsv_items(rows: list[list[str]] | None, parts: list[dict], project: str, rep
         seen.add(row[0])
         serving = [p for p in parts if p.get("project") == project and p.get("state") not in CLOSED and int(pr) in (p.get("prs") or [])]
         outcome = min(serving, key=lambda p: int(p["id"])).get("outcome", DEFAULT_OUTCOME) if serving else DEFAULT_OUTCOME
-        stages = frozenset((min(serving, key=lambda p: int(p["id"])).get("stages") or {}).keys()) if serving else frozenset()
+        stages = dict(min(serving, key=lambda p: int(p["id"])).get("stages") or {}) if serving else {}
         items.append(Tracked(row[0], "unit", project, repo, (int(pr),), outcome, stages))
     return items
 
@@ -207,8 +207,20 @@ def evidence_numbers(kanban: Kanban, card: Card, repo: str | None) -> tuple[list
     return ([int(found.group(1))] if found else []), (None if found else f"card {card.id} is bound to a pull request outside {repo}")
 
 
+def serving_stages(by_key: dict[str, Card], fields: dict[str, str]) -> dict[str, str]:
+    number = fields.get("Part", "")
+    part = by_key.get(part_key(int(number))) if number.isdigit() else None
+    if part is None or part.header is None:
+        return {}
+    try:
+        return dict(part_entry(part)["stages"])
+    except KanbanError:
+        return {}
+
+
 def card_items(kanban: Kanban, cards: list[Card], kind: str, repos: dict[str, str], project: str | None = None, owner: str | None = None) -> list[Tracked]:
     items: list[Tracked] = []
+    by_key = {c.key: c for c in cards if c.key}
     for card in cards:
         fields = card.header.fields if card.header else {}
         if card.archived or fields.get("Kind") != kind or fields.get("State") in CLOSED or (project is not None and fields.get("Project") != project) or (owner is not None and card.assignee != owner):
@@ -216,9 +228,9 @@ def card_items(kanban: Kanban, cards: list[Card], kind: str, repos: dict[str, st
         repo = repos.get(fields.get("Project", ""))
         if kind == "part":
             entry = part_entry(card)
-            header_prs, ident, outcome, stages = entry["prs"], str(entry["id"]), entry["outcome"], frozenset(entry["stages"])
+            header_prs, ident, outcome, stages = entry["prs"], str(entry["id"]), entry["outcome"], dict(entry["stages"])
         else:
-            header_prs, ident, outcome, stages = [int(p) for p in fields.get("PRs", "").split(",") if p.isdigit()], card.title, fields.get("Outcome", DEFAULT_OUTCOME), frozenset()
+            header_prs, ident, outcome, stages = [int(p) for p in fields.get("PRs", "").split(",") if p.isdigit()], card.title, fields.get("Outcome", DEFAULT_OUTCOME), serving_stages(by_key, fields)
         bound, problem = evidence_numbers(kanban, card, repo)
         prs = tuple(sorted(set(bound or header_prs)))
         if prs or problem:
@@ -247,7 +259,7 @@ class CardSettler(Settler):
             if open_units:
                 return "waiting", {"card": card.id, "units": open_units}
             merged = Merged(last.number, last.url, last.head, last.merge_commit)
-            result = self.refusals.attempt(card.id, last.number, last.head, self.now, lambda: complete_card(self.kanban, card, item.outcome, merged))
+            result = self.refusals.attempt(card.id, last.number, last.head, self.now, lambda: complete_card(self.kanban, card, item.outcome, merged, item.stages))
             if result["completion"] != "done":
                 return "refused", {"card": result.pop("id"), "head": last.head, **result}
         self.mark(item, card, "merged", last.number)
