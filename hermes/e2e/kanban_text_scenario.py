@@ -29,6 +29,19 @@ def first_line(body: str) -> str:
     return body.split("\n", 1)[0]
 
 
+def para(text: str, label: str) -> str | None:
+    prefix = f"**{label}:** "
+    return next((p[len(prefix):] for p in text.split("\n\n") if p.startswith(prefix)), None)
+
+
+def labels(text: str) -> list[str]:
+    return [p.partition(":**")[0] + ":**" for p in text.split("\n\n")]
+
+
+LABELS = ["**Goal:**", "**Done means:**", "**Current status:**", "**Owner decisions:**"]
+PULL_12 = "https://github.com/acme/shop/pull/12"
+
+
 def old_body(fields: list[tuple[str, str]], text: str = "") -> str:
     return "\n".join(f"{k}: {v}" for k, v in fields) + "\n\n" + text
 
@@ -54,29 +67,34 @@ def kanban_text_scenario(run: Run) -> None:
     cards = board.by_key()
     csv = cards["faker-kit:shop:csv-export"]
     csv_text = readable(csv)
-    run.step("kanban text: a migrated unit card reads as a ticket: the brief's goal, owner decisions, pull request link, session, and status, then the machine footer and the fields",
-             first_line(csv["body"]) == f"{GOAL} and keep the file small." and f"Owner decisions: {UNIT_DECISIONS}" in csv_text.splitlines()
-             and "Pull requests: https://github.com/acme/shop/pull/12" in csv_text.splitlines() and f"Sessions: {SESSION}" in csv_text.splitlines()
-             and "Unit of shop, run by meo-beo; serves part 5." in csv_text.splitlines() and any(x.startswith("Status: in-progress; not waiting; updated 2027-") for x in csv_text.splitlines())
-             and csv["body"].index(FOOTER) > csv["body"].index("Status:") and lines(csv)[0] == "Key: faker-kit:shop:csv-export" and f"Decisions: {UNIT_DECISIONS}" in lines(csv),
+    run.step("kanban text: a migrated unit card reads as a ticket: the brief's goal, what done means, the status with the pull request link, and owner decisions, then the machine footer "
+             "with the fields and the session",
+             first_line(csv["body"]) == f"**Goal:** {GOAL} and keep the file small." and labels(csv_text) == LABELS and para(csv_text, "Goal") == f"{GOAL} and keep the file small."
+             and para(csv_text, "Owner decisions") == UNIT_DECISIONS and para(csv_text, "Current status") == f"In progress; pull request: {PULL_12}"
+             and "Unit of" not in csv_text and SESSION not in csv_text and csv["body"].index(FOOTER) > csv["body"].index("**Current status:**")
+             and lines(csv)[0] == "Key: faker-kit:shop:csv-export" and f"Decisions: {UNIT_DECISIONS}" in lines(csv) and f"Session: {SESSION}" in lines(csv),
              csv["body"][:300])
-    part_one = readable(cards["faker-kit:chief:1"])
-    run.step("kanban text: a migrated part card shows the part, its handoff line, no recorded decisions, and no pull requests yet",
-             first_line(part_one) == "Add search to the catalog" and "Part 1 handed out to meo-beo for shop." in part_one and "Owner decisions: none recorded" in part_one
-             and "Pull requests: none yet" in part_one and "Sessions: none yet" in part_one and "reported to the owner: no" in part_one, part_one)
+    part_one_card = cards["faker-kit:chief:1"]
+    part_one = readable(part_one_card)
+    run.step("kanban text: a migrated part card shows the part as its goal, no recorded decisions, no pull request in its status, and no reported state",
+             para(part_one, "Goal") == "Add search to the catalog" and labels(part_one) == LABELS and para(part_one, "Owner decisions") == "none"
+             and para(part_one, "Current status") == "Handed out" and not any(x.startswith("Reported:") for x in lines(part_one_card)), part_one)
 
     run.clock += 60
-    made = json_of(chief("handoff", "--project", PROJECT, "--part", "Build the changelog archive", "--decisions", DECISIONS, "--outcome", "built"))
+    made = json_of(chief("handoff", "--project", PROJECT, "--part", "Build the changelog archive", "--title", "Releases ship a changelog archive", "--decisions", DECISIONS,
+                           "--outcome", "built"))
     part_card = board.by_key()[f"faker-kit:chief:{made['id']}"]
-    unit = json_of(project("loop", "unit", "parser-fix", "--part", "3", "--pr", "40"))
+    unit = json_of(project("loop", "unit", "parser-fix", "--title", "Visitors see the fixture change", "--part", "3", "--pr", "40"))
     unit_card = board.by_key()["faker-kit:shop:parser-fix"]
     shown = subprocess.run([str(run.bin / "hermes"), "-p", CHIEF, "kanban", "--board", "default", "show", part_card["id"], "--json"], env=run.env(), capture_output=True, text=True)
     shown_body = json.loads(shown.stdout)["task"]["body"] if shown.returncode == 0 else ""
-    run.step("kanban text: a handed-out part and a created unit get the ticket layout, a goal that looks like a secret is withheld, and hermes kanban show returns the footer",
-             first_line(part_card["body"]) == "Build the changelog archive" and f"Owner decisions: {DECISIONS}" in readable(part_card) and f"Decisions: {DECISIONS}" in lines(part_card)
+    part_text, unit_text = readable(part_card), readable(unit_card)
+    run.step("kanban text: a handed-out part and a created unit get the ticket layout under a ref line, a goal that looks like a secret is withheld, and hermes kanban show returns the footer",
+             first_line(part_card["body"]) == "Ref: SHOP-1" and part_card["title"] == "SHOP-1 Releases ship a changelog archive" and para(part_text, "Goal") == "Build the changelog archive"
+             and para(part_text, "Owner decisions") == DECISIONS and f"Decisions: {DECISIONS}" in lines(part_card) and "Ref: SHOP-1" in lines(part_card)
              and part_card["body"].count(FOOTER) == 1 and shown_body == part_card["body"] and FOOTER in shown_body
-             and unit["created"] is True and first_line(unit_card["body"]) == "[withheld: looks like a secret]" and TOKEN not in unit_card["body"]
-             and "Owner decisions: none: the crash is obvious" in readable(unit_card) and "Pull requests: https://github.com/acme/shop/pull/40" in readable(unit_card)
+             and unit["created"] is True and first_line(unit_card["body"]) == "Ref: SHOP-2" and para(unit_text, "Goal") == "[withheld: looks like a secret]" and TOKEN not in unit_card["body"]
+             and para(unit_text, "Owner decisions") == "none: the crash is obvious" and para(unit_text, "Current status") == "In progress; pull request: https://github.com/acme/shop/pull/40"
              and "PRs: 40" in lines(unit_card) and "Part: 3" in lines(unit_card), unit_card["body"][:300])
 
     before_show = json_of(chief("loop", "show", "--all"))
@@ -101,7 +119,7 @@ def kanban_text_scenario(run: Run) -> None:
     mutations = board.mutations()
     again = chief("loop", "set", "1", "--state", "in-progress")
     run.step("kanban text: loop set converts an old-layout card to the new layout with the new status in its text, and the same call again issues no edit",
-             card["body"].count(FOOTER) == 1 and "Status: in-progress; not waiting; updated" in readable(card) and "State: in-progress" in lines(card) and again[0] == 0
+             card["body"].count(FOOTER) == 1 and (para(readable(card), "Current status") or "").startswith("In progress") and "State: in-progress" in lines(card) and again[0] == 0
                  and board.mutations() == mutations,
              readable(card))
     chief("loop", "set", "1", "--pr", "61")
@@ -109,14 +127,14 @@ def kanban_text_scenario(run: Run) -> None:
     chief("loop", "set", "1", "--pr", "61")
     card = board.by_key()["faker-kit:chief:1"]
     run.step("kanban text: binding a pull request with loop set rewrites the text with its link, and repeating it issues no edit",
-             "Pull requests: https://github.com/acme/shop/pull/61" in readable(card) and board.mutations() == mutations, readable(card))
-    project("loop", "unit", "csv-export", "--pr", "70")
+             "pull request: https://github.com/acme/shop/pull/61" in (para(readable(card), "Current status") or "") and board.mutations() == mutations, readable(card))
+    project("loop", "unit", "csv-export", "--title", "Visitors see the fixture change", "--pr", "70")
     card = board.by_key()["faker-kit:shop:csv-export"]
     mutations = board.mutations()
-    project("loop", "unit", "csv-export", "--pr", "70")
+    project("loop", "unit", "csv-export", "--title", "Visitors see the fixture change", "--pr", "70")
     run.step("kanban text: loop unit --pr on an old-layout unit card binds the pull request into the field and the text and converts the layout, and repeating it issues no edit",
-             "PRs: 12,70" in lines(card) and "Pull requests: https://github.com/acme/shop/pull/12, https://github.com/acme/shop/pull/70" in readable(card) and card["body"].count(FOOTER) == 1
-             and board.mutations() == mutations and first_line(card["body"]) == f"{GOAL} and keep the file small.", readable(card))
+             "PRs: 12,70" in lines(card) and f"pull request: {PULL_12}, https://github.com/acme/shop/pull/70" in (para(readable(card), "Current status") or "") and card["body"].count(FOOTER) == 1
+             and board.mutations() == mutations and para(readable(card), "Goal") == f"{GOAL} and keep the file small.", readable(card))
 
     def settled(n: int, merged: bool) -> None:
         extra = {"state": "closed", "merged_at": "2026-10-10T00:00:00Z", "merge_commit_sha": commit_of(n)} if merged else {"state": "closed", "merged_at": None}
@@ -130,8 +148,9 @@ def kanban_text_scenario(run: Run) -> None:
     reconciled = json_of(chief("loop", "reconcile"))
     one, csv = board.by_key()["faker-kit:chief:1"], board.by_key()["faker-kit:shop:csv-export"]
     run.step("kanban text: reconcile marking a part and a unit merged rewrites their text to merged, in the new layout",
-             sorted(reconciled["entries"]["merged"]) == ["1", "5"] and "Status: merged;" in readable(one) and "State: merged" in lines(one) and "csv-export" in preconciled["entries"]["merged"]
-             and "Status: merged;" in readable(csv) and csv["body"].count(FOOTER) == 1, readable(csv))
+             sorted(reconciled["entries"]["merged"]) == ["1", "5"] and (para(readable(one), "Current status") or "").startswith("Merged") and "State: merged" in lines(one)
+             and "csv-export" in preconciled["entries"]["merged"]
+             and (para(readable(csv), "Current status") or "").startswith("Merged") and csv["body"].count(FOOTER) == 1, readable(csv))
     mutations = board.mutations()
     chief("loop", "reconcile")
     project("loop", "reconcile")
@@ -196,12 +215,14 @@ def kanban_backfill_scenario(run: Run) -> None:
     run.step("kanban backfill: apply rewrites 18 cards with edit calls only, never create, link, archive, claim, complete, or evidence, and leaves the stray card as it was",
              capplied["changed"] == 13 and papplied["changed"] == 5 and board.mutating() == ["edit"] * 18 and after[f"faker-kit:{PROJECT}:unit"]["body"].startswith("Key:")
              and all(t["body"].count(FOOTER) == 1 for k, t in after.items() if k != f"faker-kit:{PROJECT}:unit"), json.dumps([capplied["changed"], papplied["changed"]]))
-    run.step("kanban backfill: unit text comes from the brief and units.tsv (goal, decisions, session, pull request), part text from the card and the ledger's decisions, with no field value changed",
-             first_line(csv["body"]) == GOAL and f"Owner decisions: {UNIT_DECISIONS}" in readable(csv) and f"Sessions: {SESSION}" in readable(csv)
-             and "Pull requests: https://github.com/acme/shop/pull/12" in readable(csv) and "Owner decisions: owner said so" in readable(five)
-             and not any(x.startswith("Decisions:") for x in lines(five))
-             and "Pull requests: #" not in readable(five) and "Pull requests: https://github.com/acme/shop/pull/12" in readable(five) and first_line(five["body"]) == "Part number 5"
-             and "Pull requests: none yet" in readable(nine) and "Part 9 handed out to meo-beo for gone." in readable(nine), readable(csv))
+    csv_text, five_text, nine_text = readable(csv), readable(five), readable(nine)
+    run.step("kanban backfill: unit text comes from the brief and units.tsv (goal, decisions, pull request in the status, session in the footer), "
+             "part text from the card and the ledger's decisions, with no field value changed",
+             para(csv_text, "Goal") == GOAL and para(csv_text, "Owner decisions") == UNIT_DECISIONS and f"Session: {SESSION}" in lines(csv) and SESSION not in csv_text
+             and para(csv_text, "Current status") == f"In progress; pull request: {PULL_12}" and para(five_text, "Owner decisions") == "owner said so"
+             and not any(x.startswith("Decisions:") for x in lines(five)) and para(five_text, "Current status") == f"Ready to merge; pull request: {PULL_12}"
+             and "pull request: #" not in five_text and para(five_text, "Goal") == "Part number 5" and "pull request" not in (para(nine_text, "Current status") or "")
+             and para(nine_text, "Goal") == "Part number 9" and "Project: gone" in lines(nine), csv_text)
     mutations = board.mutations()
     capplied2 = json_of(chief("loop", "backfill", "--apply"))
     papplied2 = json_of(project("loop", "backfill", "--apply"))

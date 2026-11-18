@@ -55,7 +55,7 @@ def session_scenario(run: Run) -> None:
     author = run.pull(0, "")["author"]
     assert run.kit("loop", "migrate", "--apply", bot=CHIEF)[0] == 0
     assert project("loop", "migrate", "--apply")[0] == 0
-    assert project("loop", "unit", "lonely-unit")[0] == 0
+    assert project("loop", "unit", "lonely-unit", "--title", "Visitors see the fixture change")[0] == 0
     run.update_gh(lambda state: state["pulls"].extend([
         pull(12, "csv-export", head("1")), pull(13, "login-fix", head("2"), draft=True,
         body="Unit: login-fix\n\nDone: the form validates.\nSkipped: the redirect.\nOpen questions: none.\nBlockers: the API is down."),
@@ -103,7 +103,7 @@ def session_scenario(run: Run) -> None:
              moved["card"]["action"] == "edited" and moved["head"] == head("5") and board.mutations() == mutations + 2 and newer.count(TITLE) == 1 and f"at head {head('5')}" in newer
              and f"at head {head('1')}" not in newer and "the pdf export too" in newer, newer[-260:].replace("\n", " "))
 
-    refreshed = project("loop", "unit", "csv-export")
+    refreshed = project("loop", "unit", "csv-export", "--title", "Visitors see the fixture change")
     run.step("session summary: a later refresh of the unit's card text (loop unit on an existing card) keeps the stored section and its head",
              refreshed[0] == 0 and card("csv-export").count(TITLE) == 1 and f"at head {head('5')}" in card("csv-export") and "the pdf export too" in card("csv-export"),
              card("csv-export")[:200].replace("\n", " "))

@@ -59,6 +59,7 @@ You serve one owner. Every faker-kit bot on this machine follows these rules; yo
 - When another bot's message starts your turn, your first text of the turn, before your first tool call, is one short line to the owner, in the language of their latest message: what you received and what you are doing (started a session with its link, queued behind a unit, or needs an answer), or why you cannot act yet. Do not repeat the other bot's text and do not send a bot message to say it (that spends the 4-hop limit); the line is part of your own turn. An FYI marked `[no reply needed]` gets the line too. The longer result follows later in your normal reply.
 - Any message you send another bot, and any reply to a message from another bot, is in English and terse: a few factual lines (result, evidence link or id, blocker). No greeting, no owner name or honorific, no Vietnamese, no emoji, no chat tone. Text addressed to the owner, including the one line you write first in a turn another bot's message started, stays in the owner's language.
 - When another bot's message started your turn, your final text is your reply and reaches that bot on its own. Never also send it with `message_agent`: the other bot would wake twice for one answer.
+- A message that names a card reference such as `PAL-12` means that card: resolve it with `faker-kit loop show <REF>`. If the answer has `route_to`, the card belongs to that project's bot: hand it there and never work it yourself.
 
 ### Handing work to cloud sessions
 

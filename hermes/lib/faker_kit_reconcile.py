@@ -230,7 +230,7 @@ def card_items(kanban: Kanban, cards: list[Card], kind: str, repos: dict[str, st
             entry = part_entry(card)
             header_prs, ident, outcome, stages = entry["prs"], str(entry["id"]), entry["outcome"], dict(entry["stages"])
         else:
-            header_prs, ident, outcome, stages = [int(p) for p in fields.get("PRs", "").split(",") if p.isdigit()], card.title, fields.get("Outcome", DEFAULT_OUTCOME), serving_stages(by_key, fields)
+            header_prs, ident, outcome, stages = [int(p) for p in fields.get("PRs", "").split(",") if p.isdigit()], card.slug, fields.get("Outcome", DEFAULT_OUTCOME), serving_stages(by_key, fields)
         bound, problem = evidence_numbers(kanban, card, repo)
         prs = tuple(sorted(set(bound or header_prs)))
         if prs or problem:

@@ -19,8 +19,9 @@ EXTERNAL = "external"
 MUTATING = frozenset({"create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "complete", "archive", "block"})
 ACCEPTANCE_CLASSIFICATIONS = ("pending", "failure", "missing", "stale", "provenance", "auth", "infra", "mismatch")
 EVIDENCE_KINDS = ("execution_ref", "pr_published", "pr_merged", "artifact_built", "app_installed", "other_result")
-SINGLE = ("Key", "Kind", "Project", "Bot", "Outcome", "State", "Waits-on", "PRs", "Reported", "Part", "Added", "Updated", "Decisions", "Run", "Work")
+SINGLE = ("Key", "Ref", "Kind", "Project", "Bot", "Outcome", "State", "Waits-on", "PRs", "Reported", "Part", "Added", "Updated", "Decisions", "Run", "Work")
 REPEATED = ("Stage", "History", "PR", "Session")
+REF = re.compile(r"\A([A-Z]{2,5})-([1-9][0-9]{0,8})\Z")
 HEADER_LINE = re.compile(r"\A([A-Za-z][A-Za-z-]*): (.*)\Z")
 CARD_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 MAX_VALUE = 700
@@ -169,6 +170,10 @@ class Header:
     def key(self) -> str:
         return self.fields["Key"]
 
+    @property
+    def ref(self) -> str | None:
+        return self.fields.get("Ref")
+
 
 def parse_header(body: str) -> Header | None:
     whole = body.replace("\r\n", "\n")
@@ -192,6 +197,8 @@ def parse_header(body: str) -> Header | None:
             fields[name] = value
         else:
             return None
+    if "Ref" in fields and not REF.match(fields["Ref"]):
+        return None
     return Header(fields, tuple(repeated), text, legacy) if "Key" in fields else None
 
 
@@ -203,6 +210,7 @@ class Card:
     assignee: str | None
     created_by: str | None
     header: Header | None
+    body: str = ""
 
     @property
     def archived(self) -> bool:
@@ -211,6 +219,14 @@ class Card:
     @property
     def key(self) -> str | None:
         return self.header.key if self.header else None
+
+    @property
+    def ref(self) -> str | None:
+        return self.header.ref if self.header else None
+
+    @property
+    def slug(self) -> str:
+        return self.header.key.rsplit(":", 1)[-1] if self.header else self.title
 
 
 @dataclass(frozen=True)
@@ -250,7 +266,8 @@ def parse_card(raw: object) -> Card:
     if ident is None or not CARD_ID.match(ident) or title is None or status is None:
         raise KanbanError("could not read Kanban: a card has no id, title, or status; nothing was changed")
     body = raw.get("body")
-    return Card(ident, title, status, string_field(raw, "assignee"), string_field(raw, "created_by"), parse_header(body) if isinstance(body, str) else None)
+    return Card(ident, title, status, string_field(raw, "assignee"), string_field(raw, "created_by"), parse_header(body) if isinstance(body, str) else None,
+                body if isinstance(body, str) else "")
 
 
 def card_id(value: str) -> str:
@@ -341,14 +358,18 @@ class Kanban:
         self.require_external()
         self.call(["link", card_id(parent), card_id(child)])
 
-    def edit_body(self, card: str, header: Header) -> None:
+    def edit_body(self, card: str, header: Header, title: str | None = None) -> None:
         self.require_external()
-        self.call(["edit", card_id(card), "--body", header.render()])
+        self.call(["edit", card_id(card), *(["--title", title] if title is not None else []), "--body", header.render()])
 
-    def edit_body_if_changed(self, card: str, header: Header, current: Header | None) -> bool:
-        if current == header:
+    def edit_title(self, card: str, title: str) -> None:
+        self.require_external()
+        self.call(["edit", card_id(card), "--title", title])
+
+    def edit_body_if_changed(self, card: str, header: Header, current: Header | None, title: str | None = None, current_title: str | None = None) -> bool:
+        if current == header and (title is None or title == current_title):
             return False
-        self.edit_body(card, header)
+        self.edit_body(card, header, title if title != current_title else None)
         return True
 
     def claim(self, card: str, ttl: int | None = None, session: str | None = None) -> int:

@@ -30,8 +30,9 @@ from faker_kit_loop import (
     part_row,
     show_view,
 )
+from faker_kit_refs import belongs_elsewhere, clean_phrase, find_ref, foreign, known_ref, next_ref, numbered, owner_of, with_ref
 from faker_kit_session_card import steered
-from faker_kit_text import refresh
+from faker_kit_text import refresh, summary_of
 from faker_kit_units import brief_source, read_units, unit_index
 
 CHIEF_KEY = "chief"
@@ -138,12 +139,12 @@ def work_line(kanban: Kanban, part: Card, cards: dict[str, Card]) -> str:
         shown = []
         for unit in running:
             prs = unit.header.fields.get("PRs", "") if unit.header else ""
-            shown.append(f"unit {unit.title} running (card {unit.id}" + (f", PR #{prs.split(',')[-1]}" if prs else "") + ")")
+            shown.append(f"unit {unit.slug} running (card {unit.id}" + (f", PR #{prs.split(',')[-1]}" if prs else "") + ")")
         return "in progress: " + "; ".join(shown)
     if units and all(u.status == "done" for u in units):
         return "every unit done"
     if units:
-        return "no unit running: " + ", ".join(f"unit {u.title} {u.status} (card {u.id})" for u in units)
+        return "no unit running: " + ", ".join(f"unit {u.slug} {u.status} (card {u.id})" for u in units)
     return "no unit card yet"
 
 
@@ -196,7 +197,7 @@ def part_entry(card: Card) -> dict:
         if stage not in STAGES:
             raise shape
         stages[stage] = ref
-    return {"id": ident, "project": fields["Project"], "bot": fields["Bot"], "part": card.title, "decisions": fields.get("Decisions", ""),
+    return {"id": ident, "project": fields["Project"], "bot": fields["Bot"], "part": summary_of(header, card.title), "decisions": fields.get("Decisions", ""),
             "outcome": outcome, "stages": stages, "state": state, "prs": prs, "waits_on": fields.get("Waits-on"),
             "added": number(fields.get("Added"), card, "Added"), "updated": number(fields.get("Updated"), card, "Updated"), "reported": fields.get("Reported")}
 
@@ -245,23 +246,25 @@ class CardLoop:
         self.kanban, self.home, self.bot, self.repos = kanban, home, bot, repos or {}
 
     def locked(self) -> contextlib.AbstractContextManager[None]:
-        return Loop(self.home, self.bot).locked()
+        return numbered(self.home, self.bot)
 
     def entries(self) -> list[dict]:
         return sorted((part_entry(c) for c in part_cards(self.kanban)), key=lambda e: e["id"])
 
-    def add(self, project: str, owner_bot: str, repo: str, text: str, decisions: str, now: float, outcome: str = DEFAULT_OUTCOME) -> dict:
+    def add(self, project: str, owner_bot: str, repo: str, text: str, decisions: str, now: float, outcome: str = DEFAULT_OUTCOME, title: str | None = None) -> dict:
         part, owner_decisions = check_new(text, decisions, outcome)
         with self.locked():
             self.kanban.require_external()
             held_part(self.entries(), project, part)
+            ref = next_ref(self.kanban.cards(True), project)
+            card_title = with_ref(ref, clean_phrase(title, ref))
             next_id = max(max((e["id"] for e in self.entries()), default=0), ledger_max(self.home, self.bot)) + 1
             for _ in range(5):
                 entry = new_entry(next_id, project, owner_bot, part, owner_decisions, outcome, now)
-                header = refresh(entry_header(entry), part, repo)
-                made = self.kanban.create(NewCard(part_key(next_id), part, header, self.bot, self.bot, outcome_contract(outcome, repo), completion_contract(repo)))
-                if made.title == part and made.header is not None and made.header.fields.get("Project") == project:
-                    return {**part_row(entry), "card": made.id}
+                header = refresh(entry_header(entry).with_fields({"Ref": ref}), part, repo)
+                made = self.kanban.create(NewCard(part_key(next_id), card_title, header, self.bot, self.bot, outcome_contract(outcome, repo), completion_contract(repo)))
+                if made.title == card_title and made.ref == ref and made.header is not None and made.header.fields.get("Project") == project:
+                    return {**part_row(entry), "card": made.id, "ref": ref, "title": card_title}
                 next_id += 1
         raise LoopError("could not reserve a part id; run the handoff again")
 
@@ -332,41 +335,45 @@ def unit_source(home: Path, bot: str, project: str, unit_id: str) -> tuple[str, 
     return brief_source(home, bot, unit_id, None if unit_id in twice else found.get(unit_id))
 
 
-def create_unit(kanban: Kanban, bot: str, project: str, repo: str, unit_id: str, part: int | None, prs: list[int], now: float, home: Path) -> dict:
+def create_unit(kanban: Kanban, bot: str, project: str, repo: str, unit_id: str, part: int | None, prs: list[int], now: float, home: Path, title: str | None = None) -> dict:
     if not UNIT_ID.match(unit_id):
         raise LoopError("a unit id is lowercase letters, digits, and hyphens, at most 64 characters")
     if any(not 0 < pr < 10**9 for pr in prs):
         raise LoopError("a pull request number must be a positive integer")
     kanban.require_external()
-    outcome, parent = DEFAULT_OUTCOME, None
-    if part is not None:
-        parent = kanban.find_card(part_key(part), archived=True)
-        if parent is None or parent.header is None or parent.header.fields.get("Project") != project:
-            raise LoopError(f"no part {part} for {project}; ask the chief which part this unit serves")
-        outcome = part_entry(parent)["outcome"]
-    key = unit_key(project, unit_id)
-    existing = kanban.find_card(key)
-    if existing is not None:
-        have = existing.header
-        if have is None:
-            raise LoopError(f"card {existing.id} is not in the expected shape; nothing was changed")
-        bound = sorted({*(int(p) for p in have.fields.get("PRs", "").split(",") if p.isdigit()), *prs})
-        changes: dict[str, str | None] = {}
-        if ",".join(str(p) for p in bound) != have.fields.get("PRs", ""):
-            changes = {"PRs": ",".join(str(p) for p in bound) or None, "Updated": str(float(now))}
-        summary = None if have.text else unit_source(home, bot, project, unit_id)[0]
-        kanban.edit_body_if_changed(existing.id, refresh(have.with_fields(changes), existing.title, repo, summary), have)
-        card = existing
-    else:
-        summary, decisions = unit_source(home, bot, project, unit_id)
-        header = unit_header(project, bot, unit_id, outcome, part, sorted(set(prs)), now)
-        header = header.with_fields({"Decisions": decisions}) if decisions else header
-        card = kanban.create(NewCard(key, unit_id, refresh(header, unit_id, repo, summary), bot, bot, outcome_contract(outcome, repo), completion_contract(repo)))
-    linked = False
-    if parent is not None and card.id not in kanban.parents(parent.id):
-        kanban.link(card.id, parent.id)
-        linked = True
-    return {"unit": unit_id, "card": card.id, "key": key, "part": part, "outcome": outcome, "created": existing is None, "linked": linked}
+    with numbered(home, bot):
+        outcome, parent = DEFAULT_OUTCOME, None
+        if part is not None:
+            parent = kanban.find_card(part_key(part), archived=True)
+            if parent is None or parent.header is None or parent.header.fields.get("Project") != project:
+                raise LoopError(f"no part {part} for {project}; ask the chief which part this unit serves")
+            outcome = part_entry(parent)["outcome"]
+        key = unit_key(project, unit_id)
+        existing = kanban.find_card(key)
+        if existing is not None:
+            have = existing.header
+            if have is None:
+                raise LoopError(f"card {existing.id} is not in the expected shape; nothing was changed")
+            bound = sorted({*(int(p) for p in have.fields.get("PRs", "").split(",") if p.isdigit()), *prs})
+            changes: dict[str, str | None] = {}
+            if ",".join(str(p) for p in bound) != have.fields.get("PRs", ""):
+                changes = {"PRs": ",".join(str(p) for p in bound) or None, "Updated": str(float(now))}
+            summary = None if have.text else unit_source(home, bot, project, unit_id)[0]
+            kanban.edit_body_if_changed(existing.id, refresh(have.with_fields(changes), existing.title, repo, summary), have)
+            card = existing
+        else:
+            ref = next_ref(kanban.cards(True), project)
+            phrase = clean_phrase(title, ref, unit_id)
+            summary, decisions = unit_source(home, bot, project, unit_id)
+            header = unit_header(project, bot, unit_id, outcome, part, sorted(set(prs)), now).with_fields({"Ref": ref})
+            header = header.with_fields({"Decisions": decisions}) if decisions else header
+            goal = summary if summary != unit_id else phrase
+            card = kanban.create(NewCard(key, with_ref(ref, phrase), refresh(header, phrase, repo, goal), bot, bot, outcome_contract(outcome, repo), completion_contract(repo)))
+        linked = False
+        if parent is not None and card.id not in kanban.parents(parent.id):
+            kanban.link(card.id, parent.id)
+            linked = True
+    return {"unit": unit_id, "card": card.id, "key": key, "ref": card.ref, "title": card.title, "part": part, "outcome": outcome, "created": existing is None, "linked": linked}
 
 
 def added_at(fields: dict[str, str]) -> float | None:
@@ -381,7 +388,8 @@ def unit_rows(kanban: Kanban, project: str) -> dict:
     for card in kanban.cards(True):
         fields = card.header.fields if card.header else {}
         if fields.get("Kind") == "unit" and fields.get("Project") == project:
-            rows.append({"unit": card.title, "card": card.id, "state": fields.get("State"), "prs": [int(p) for p in fields.get("PRs", "").split(",") if p.isdigit()],
+            rows.append({"unit": card.slug, "ref": card.ref, "title": card.title, "card": card.id, "state": fields.get("State"),
+                         "prs": [int(p) for p in fields.get("PRs", "").split(",") if p.isdigit()],
                          "part": int(fields["Part"]) if fields.get("Part", "").isdigit() else None, "outcome": fields.get("Outcome"), "closed": card.archived or fields.get("State") in CLOSED,
                          "added": added_at(fields),
                          "sessions": card.header.lines("Session") if card.header else [], "steered": card.header is not None and steered(card.header)})
@@ -478,6 +486,11 @@ def clean_reason(text: str | None) -> str:
 def close_target(kanban: Kanban, role: str, project: str | None, target: int | str) -> Card:
     text = str(target)
     cards = kanban.cards(True)
+    if known_ref(text):
+        by_ref = find_ref(cards, text)
+        if role == "project" and foreign(by_ref, project):
+            raise belongs_elsewhere(by_ref, str(by_ref.ref))
+        return by_ref
     if text.startswith("faker-kit:") or text.startswith("t_"):
         found = [c for c in cards if (c.key == text if text.startswith("faker-kit:") else c.id == text)]
     elif role == "chief":
@@ -503,7 +516,7 @@ def close_card(kanban: Kanban, home: Path, role: str, bot: str, project: str | N
         card = close_target(kanban, role, project, target)
         header = card.header
         fields = header.fields if header else {}
-        named = isinstance(target, str) and (target.startswith("faker-kit:") or target.startswith("t_"))
+        named = isinstance(target, str) and (target.startswith("faker-kit:") or target.startswith("t_") or known_ref(target) is not None)
         if role == "chief":
             allowed = (fields.get("Kind") == "part" and (card.key or "").startswith(f"faker-kit:{CHIEF_KEY}:")) or (named and fields.get("Kind") in ("part", "unit"))
         else:
@@ -527,3 +540,37 @@ def close_card(kanban: Kanban, home: Path, role: str, bot: str, project: str | N
         let_go(kanban, card, f"faker-kit: closed {kind}")
         kanban.archive(card.id)
         return {**out, "closed": True, "archived": True}
+
+
+def retitle_card(kanban: Kanban, home: Path, role: str, bot: str, project: str | None, target: int | str, text: str | None) -> dict:
+    with numbered(home, bot):
+        kanban.require_external()
+        card = close_target(kanban, role, project, target)
+        header = card.header
+        fields = header.fields if header else {}
+        own = fields.get("Kind") == "part" and (card.key or "").startswith(f"faker-kit:{CHIEF_KEY}:") if role == "chief" else fields.get("Kind") == "unit" and fields.get("Project") == project
+        if header is None or not own:
+            raise LoopError(f"card {card.id} is not one {bot} may retitle; nothing was changed")
+        if header.ref is None:
+            raise LoopError(f"card {card.id} has no reference yet; run faker-kit loop backfill first, nothing was changed")
+        title = with_ref(header.ref, clean_phrase(text, header.ref, card.slug, "--text"))
+        changed = title != card.title
+        if changed:
+            kanban.edit_title(card.id, title)
+        return {"card": card.id, "ref": header.ref, "was": card.title, "title": title, "changed": changed}
+
+
+def ref_view(kanban: Kanban, role: str, project: str | None, text: str) -> dict:
+    card = find_ref(kanban.cards(True), text)
+    header = card.header
+    fields = header.fields if header else {}
+    kind = fields.get("Kind")
+    sessions = header.lines("Session") if header else []
+    served = card.slug if kind == "part" else fields.get("Part", "")
+    view: dict[str, object] = {"ref": card.ref, "title": card.title, "project": fields.get("Project"), "bot": fields.get("Bot"), "kind": kind,
+                               "unit": card.slug if kind == "unit" else None, "part": int(served) if served.isdigit() else None,
+                               "state": fields.get("State"), "prs": [int(p) for p in fields.get("PRs", "").split(",") if p.isdigit()],
+                               "session": sessions[-1] if sessions else None, "card": card.id, "archived": card.archived}
+    if (role == "project" and foreign(card, project)) or (role == "chief" and kind == "unit"):
+        view["owner"] = view["route_to"] = owner_of(card)
+    return view

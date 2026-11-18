@@ -37,7 +37,7 @@ def evidence_scenario(run: Run) -> None:
         add_pr(n, unit, state="closed", merged_at="2026-10-10T00:00:00Z", merge_commit_sha=commit_of(n))
 
     def new_card(unit: str, n: int) -> str:
-        assert project("loop", "unit", unit, "--pr", str(n))[0] == 0
+        assert project("loop", "unit", unit, "--title", "Visitors see the fixture change", "--pr", str(n))[0] == 0
         return board.by_key()[key(unit)]["id"]
 
     def rows(card_key: str, run_id: int | None = None) -> list[dict]:
@@ -143,7 +143,7 @@ def evidence_scenario(run: Run) -> None:
     removals = {v for v in board.verbs() if v[0] == "evidence" and v != ("evidence", "list") and v != ("evidence", "add")}
     run.step("evidence dedupe: Kanban offers the kit evidence add and list only, so no pass removes or supersedes a row", removals == set(), json.dumps(sorted(removals)))
 
-    made = json_of(chief("handoff", "--project", PROJECT, "--part", "Part with stage evidence", "--decisions", DECISIONS, "--outcome", "built"))
+    made = json_of(chief("handoff", "--project", PROJECT, "--part", "Part with stage evidence", "--title", "Part with stage evidence", "--decisions", DECISIONS, "--outcome", "built"))
     part_key = f"faker-kit:chief:{made['id']}"
     assert chief("loop", "set", str(made["id"]), "--state", "in-progress")[0] == 0
     mutations, mark = board.mutations(), len(board.verbs())

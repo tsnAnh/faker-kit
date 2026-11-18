@@ -1,17 +1,25 @@
 from __future__ import annotations
 
-import time
-
 from faker_kit_guard.t3code import SECRET_SHAPES
 from faker_kit_kanban import Header
 from faker_kit_session_card import carry_sections
 
 MAX_SUMMARY = 300
 MAX_TEXT = 1800
-MAX_SESSIONS = 5
 WITHHELD = "[withheld: looks like a secret]"
 NONE_RECORDED = "none recorded"
-DECISIONS_PREFIX = "Owner decisions: "
+NONE = "none"
+GOAL_PREFIX = "**Goal:** "
+DONE_PREFIX = "**Done means:** "
+STATUS_PREFIX = "**Current status:** "
+DECISIONS_PREFIX = "**Owner decisions:** "
+OLD_DECISIONS_PREFIX = "Owner decisions: "
+DONE_MEANS = {
+    "merged-pr": "One pull request is merged after every CI check passes on its head.",
+    "built": "A built artifact is recorded as evidence on this card.",
+    "installed": "The build is installed on a device and this card records what was read back.",
+    "verified": "The result is verified and this card records the receipt.",
+}
 
 
 def one_line(value: str) -> str:
@@ -24,15 +32,11 @@ def cut(text: str, limit: int) -> str:
 
 
 def summary_of(header: Header, default: str) -> str:
+    for line in header.text.split("\n"):
+        if line.startswith(GOAL_PREFIX):
+            return line[len(GOAL_PREFIX):] or default
     first = header.text.split("\n", 1)[0] if header.text else ""
     return first or default
-
-
-def stamp(value: str | None) -> str:
-    try:
-        return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(float(value))) if value is not None else "unknown"
-    except (ValueError, OverflowError, OSError):
-        return "unknown"
 
 
 def pull_numbers(header: Header) -> list[int]:
@@ -43,9 +47,10 @@ def pull_numbers(header: Header) -> list[int]:
 
 def kept_decisions(header: Header) -> str | None:
     for line in header.text.split("\n"):
-        if line.startswith(DECISIONS_PREFIX):
-            value = line[len(DECISIONS_PREFIX):]
-            return None if value == NONE_RECORDED else value
+        for prefix in (DECISIONS_PREFIX, OLD_DECISIONS_PREFIX):
+            if line.startswith(prefix):
+                value = line[len(prefix):]
+                return None if value in (NONE_RECORDED, NONE) else value
     return None
 
 
@@ -57,38 +62,28 @@ def closed_line(header: Header) -> str | None:
     return None
 
 
-def card_text(header: Header, summary: str, repo: str | None, decisions: str | None = None) -> str:
+def card_text(header: Header, goal: str, repo: str | None, decisions: str | None = None) -> str:
     fields = header.fields
-    project, bot = one_line(fields.get("Project", "?")), one_line(fields.get("Bot", "?"))
     part = fields.get("Kind") == "part"
-    if part:
-        ident = header.key.rsplit(":", 1)[-1]
-        second = f"Part {one_line(ident)} handed out to {bot} for {project}."
-    else:
-        serves = fields.get("Part", "")
-        second = f"Unit of {project}, run by {bot}; serves " + (f"part {one_line(serves)}." if serves else "no chief part.")
-    owner = one_line(fields.get("Decisions") or decisions or "") or NONE_RECORDED
-    numbers = pull_numbers(header)
-    pulls = ", ".join(f"https://github.com/{repo}/pull/{n}" if repo else f"#{n}" for n in numbers) or "none yet"
-    sessions = [one_line(s) for s in header.lines("Session")][:MAX_SESSIONS]
-    session_lines = [f"Sessions: {sessions[0]}", *(f"  {s}" for s in sessions[1:])] if sessions else ["Sessions: none yet"]
+    owner = one_line(fields.get("Decisions") or decisions or "") or NONE
+    pulls = ", ".join(f"https://github.com/{repo}/pull/{n}" if repo else f"#{n}" for n in pull_numbers(header))
     waits = fields.get("Waits-on")
-    status = f"Status: {one_line(fields.get('State', 'unknown'))}; " + (f"waits on {one_line(waits)}" if waits else "not waiting") + f"; updated {stamp(fields.get('Updated'))}"
-    if fields.get("Work"):
-        status += f"; {one_line(fields['Work'])}"
-    if fields.get("Run"):
-        status += f"; Kanban run {one_line(fields['Run'])}"
-    if part:
-        status += f"; reported to the owner: {'yes' if fields.get('Reported') and fields.get('Reported') == fields.get('State') else 'no'}"
-    lines = [cut(one_line(summary), MAX_SUMMARY), second, "", f"{DECISIONS_PREFIX}{owner}", f"Pull requests: {pulls}", *session_lines, status]
+    status = [one_line(fields.get("State", "unknown")).replace("-", " ").capitalize()]
+    if waits:
+        status.append(f"waits on {one_line(waits)}")
+    if pulls:
+        status.append(f"pull request: {pulls}")
+    if part and fields.get("Work"):
+        status.append(one_line(fields["Work"]))
     closed = closed_line(header)
     if closed:
-        lines.append(closed)
-    return cut("\n".join(lines), MAX_TEXT)
+        status.append(closed)
+    paragraphs = [*([f"Ref: {header.ref}"] if header.ref else []), f"{GOAL_PREFIX}{cut(one_line(goal), MAX_SUMMARY)}",
+                  f"{DONE_PREFIX}{DONE_MEANS.get(fields.get('Outcome', ''), DONE_MEANS['merged-pr'])}", f"{STATUS_PREFIX}{'; '.join(status)}", f"{DECISIONS_PREFIX}{owner}"]
+    return cut("\n\n".join(paragraphs), MAX_TEXT)
 
 
-def refresh(header: Header, title: str, repo: str | None, summary: str | None = None, decisions: str | None = None) -> Header:
-    part = header.fields.get("Kind") == "part"
-    chosen = title if part else (summary if summary is not None else summary_of(header, title))
-    text = carry_sections(header.text, card_text(header, chosen, repo, decisions or kept_decisions(header)))
+def refresh(header: Header, fallback: str, repo: str | None, summary: str | None = None, decisions: str | None = None) -> Header:
+    goal = summary if summary is not None else summary_of(header, fallback)
+    text = carry_sections(header.text, card_text(header, goal, repo, decisions or kept_decisions(header)))
     return Header(header.fields, header.repeated, text, False)
