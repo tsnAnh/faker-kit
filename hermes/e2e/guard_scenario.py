@@ -556,7 +556,7 @@ def guard_scenario(root: Path, step: Step, record: Record) -> None:
     declared = sorted(re.findall(r"^  - (\w+)$", manifest, re.M))
     host.step("the guard plugin loads the way Hermes loads it and registers the hooks its plugin.yaml declares", sorted(host.hooks) == sorted(HOOKS) == declared, ", ".join(sorted(host.hooks)))
     sample = GUARD_TEMPLATE.read_text()
-    host.step("the shipped guard.yaml adds no deny rules and loads with three cloud sessions at once", "\ndeny: []\n" in sample and "max_in_flight_total: 3" in sample and "version: 2" in sample, "")
+    host.step("the shipped guard.yaml adds no deny rules and loads with the default total", "\ndeny: []\n" in sample and "max_in_flight_total: 20" in sample and "version: 2" in sample, "")
     for group in json.loads(CORPUS.read_text()):
         corpus_step(host, group)
     add_project_check(host)

@@ -7,6 +7,7 @@ import copy
 import fcntl
 import hashlib
 import hmac
+import importlib
 import inspect
 import io
 import json
@@ -1860,7 +1861,7 @@ guard:
   trusted_authors:
     - {OWNER}
   ask_owner: false
-  max_in_flight_total: 3
+  max_in_flight_total: 20
 projects:
   - bot: {BOT}
     project: shop
@@ -2472,7 +2473,7 @@ guard:
   trusted_authors:
     - {OWNER}
   ask_owner: true
-  max_in_flight_total: 3
+  max_in_flight_total: 20
 projects:
   - bot: {BOT}
     project: shop
@@ -2574,6 +2575,20 @@ def provider_scenario(run: Run, work: Path) -> None:
              and all(tree(hermes / "profiles" / b / "plugins" / "faker_kit_guard") == tree(HERMES / "plugin" / "faker_kit_guard") for b in (BOOTSTRAP, BOT, CHIEF, "cart-bot"))
              and all("faker_kit_guard" in yaml.safe_load((hermes / "profiles" / b / "config.yaml").read_text())["plugins"]["enabled"] for b in (BOOTSTRAP, BOT, CHIEF, "cart-bot")),
              ", ".join(sorted(tree(HERMES / "plugin" / "faker_kit_guard"))))
+
+    guard_before, machine_before = state / "guard.yaml", state / "machine.yaml"
+    kept_guard, kept_machine_bytes = guard_before.read_bytes(), machine_before.read_bytes()
+    explicit_line = "  max_in_flight_total: 3\n"
+    for label, text, wanted in (("no max_in_flight_total in the machine file", PROVIDER_MACHINE.replace("  max_in_flight_total: 20\n", ""), 20),
+                                ("an explicit max_in_flight_total: 3 in the machine file", PROVIDER_MACHINE.replace("  max_in_flight_total: 20\n", explicit_line), 3)):
+        guard_before.write_text(kept_guard.decode().replace("max_in_flight_total: 20", "max_in_flight_total: 7"))
+        machine.write_text(text)
+        refreshed = kit("install", "--config", str(machine))
+        written = re.search(r"^max_in_flight_total: (\d+)$", guard_before.read_text(), re.M)
+        run.step(f"install --config with {label} writes {wanted} into guard.yaml (a missing value takes the one default, an explicit value wins)",
+                 refreshed.returncode == 0 and written is not None and int(written.group(1)) == wanted, refreshed.stderr.strip()[-200:] or (written.group(0) if written else "no line"))
+    guard_before.write_bytes(kept_guard)
+    machine_before.write_bytes(kept_machine_bytes)
 
     subscribed = kit("add-project", "acme/sub", "--bot", "sub-bot", "--claude-subscription")
     sub_config = yaml.safe_load((hermes / "profiles" / "sub-bot" / "config.yaml").read_text())
@@ -2724,7 +2739,7 @@ guard:
   trusted_authors:
     - {OWNER}
   ask_owner: false
-  max_in_flight_total: 3
+  max_in_flight_total: 20
 projects:
   - bot: {BOT}
     project: shop
@@ -3095,7 +3110,7 @@ guard:
   trusted_authors:
     - {OWNER}
   ask_owner: false
-  max_in_flight_total: 3
+  max_in_flight_total: 20
 projects:
   - bot: {BOT}
     project: shop
@@ -4061,6 +4076,11 @@ def main(argv: list[str] | None = None) -> int:
         pickup_run = Run(root / "pickup", run.steps, run.verdicts)
         pickup_run.build()
         pickup_scenario.pickup_scenario(pickup_run)
+        defaults = importlib.import_module("faker_kit_pickup")
+        shipped_totals = [int(m.group(1)) for path in ("guard.yaml", "machine.yaml") for m in re.finditer(r"^\s*max_in_flight_total: (\d+)", (HERMES / "templates" / path).read_text(), re.M)]
+        run.step("pickup limits: the shipped guard.yaml and machine.yaml templates carry the one default total in faker_kit_pickup.py, and its defaults are the owner's 20 and 5",
+                 shipped_totals == [defaults.DEFAULT_TOTAL] * 2 and (defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT) == (20, 5),
+                 json.dumps([shipped_totals, defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT]))
         session_run = Run(root / "session-summary", run.steps, run.verdicts)
         session_run.build()
         session_summary_scenario.session_scenario(session_run)

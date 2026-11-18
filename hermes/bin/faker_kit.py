@@ -82,7 +82,7 @@ from faker_kit_merge import (
     unlabeled_text,
 )
 from faker_kit_migrate import chief_parts, migrate_chief, migrate_project, read_units
-from faker_kit_pickup import abandoned_after_steer, pickup_candidates, read_pickup, slots, write_pickup
+from faker_kit_pickup import Slots, abandoned_after_steer, pickup_candidates, read_pickup, slots, write_pickup
 from faker_kit_profiles import Profiles
 from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, reconcile, render, seen_pull, tsv_items
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
@@ -1013,12 +1013,12 @@ class Kit:
             write_pickup(self.home, action == "on", caller.name if caller else "owner", self.now())
         return self.pickup_status(caller, with_job)
 
-    def pickup_limits(self, bot: Bot) -> tuple[int | None, int]:
+    def pickup_slots(self, bot: Bot, cards: list[Card]) -> Slots:
         try:
             per = self.dispatch(bot.name, str(bot.repo)).max_in_flight
         except Refused:
             per = None
-        return per, self.policy().max_in_flight_total
+        return slots(cards, str(bot.project), per, self.policy().max_in_flight_total)
 
     def babysit_job(self, bot: Bot) -> dict:
         code, text = self.tool(["hermes", "-p", bot.name, "cron", "list", "--all"], 60)
@@ -1033,15 +1033,21 @@ class Kit:
         bots = [caller] if caller is not None and caller.role == "project" else sorted(self.policy().projects().values(), key=lambda b: b.project or "")
         if with_job:
             out["jobs"] = {str(b.project): self.babysit_job(b) for b in bots}
-        if not cutover(self.home) or not bots:
+        ready = cutover(self.home) and bool(bots)
+        cards = self.kanban(caller or bots[0]).cards(False) if ready else []
+        limits = {str(b.project): self.pickup_slots(b, cards) for b in bots}
+        if caller is not None and caller.role == "project":
+            mine = limits[str(caller.project)]
+            out["per_project"], out["total"] = mine.per_project, mine.total
+        else:
+            out["per_project"], out["total"] = {name: row.per_project for name, row in limits.items()}, self.policy().max_in_flight_total
+        if not ready:
             return {**out, "candidates": {}, "pickup": []}
-        cards = self.kanban(caller or bots[0]).cards(False)
         found = {str(b.project): pickup_candidates(cards, b.name, str(b.project)) for b in bots}
         out["candidates"] = {project: len(rows) for project, rows in found.items()}
         listed: list[dict] = []
         if state.enabled and caller is not None and caller.role == "project":
-            per, total = self.pickup_limits(caller)
-            free = slots(cards, str(caller.project), per, total).free
+            free = limits[str(caller.project)].free
             out["free_slots"] = free
             listed = [{"unit": c.title, "card": c.id} for c in found[str(caller.project)][:free]]
         return {**out, "pickup": listed}
