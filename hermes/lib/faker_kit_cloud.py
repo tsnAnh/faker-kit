@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from faker_kit_claude_cli import claude_command
 from faker_kit_env import CLAUDE_CONFIG_DIR
 
 SESSION = re.compile(r"https://claude\.ai/code/[A-Za-z0-9_-]+|\b(?:session|cse)_[A-Za-z0-9]{6,}\b")
@@ -170,13 +171,13 @@ class Cloud:
         checkout = self.checkout(repo, workdir.parent / CHECKOUT)
         trusted_in = trust_checkout(checkout, os.environ.get(CLAUDE_CONFIG_DIR, ""))
         chosen = ["--model", session_model(model)[0], "--effort", session_effort(effort)[0], "--permission-mode", PERMISSION_MODE]
-        return self.launch(["claude", *chosen, "--cloud", prompt], checkout, workdir.with_name(workdir.name + ".log"), prompt, trusted_in)
+        return self.launch([claude_command(), *chosen, "--cloud", prompt], checkout, workdir.with_name(workdir.name + ".log"), prompt, trusted_in)
 
     def steer(self, session: str, message: str) -> None:
         if not SESSION_ID.fullmatch(session):
             raise CloudError("a session to steer is named by its session_ id or its claude.ai/code link")
         try:
-            done = subprocess.run(["claude", "-p", "--cloud", session, message], capture_output=True, text=True, env=child_env(), stdin=subprocess.DEVNULL, timeout=STEER_SECONDS)
+            done = subprocess.run([claude_command(), "-p", "--cloud", session, message], capture_output=True, text=True, env=child_env(), stdin=subprocess.DEVNULL, timeout=STEER_SECONDS)
         except (OSError, subprocess.TimeoutExpired):
             raise CloudError("claude did not send the message") from None
         try:
@@ -234,11 +235,11 @@ class Cloud:
                     if found:
                         return found.group(0)
                     last = next((line for line in reversed(safe.splitlines()) if line.strip()), "no output")
-                    raise CloudError(f"{argv[0]} exited {code} before starting a session: {last[:200]}")
+                    raise CloudError(f"{Path(argv[0]).name} exited {code} before starting a session: {last[:200]}")
                 if self.clock() >= deadline:
                     stop(proc)
                     write_log(log, clean_terminal_text(raw + read_available(master, 0.05)), prompt)
-                    raise CloudError(f"{argv[0]} printed no session in {int(self.wait_seconds)}s; see {log}")
+                    raise CloudError(f"{Path(argv[0]).name} printed no session in {int(self.wait_seconds)}s; see {log}")
                 self.sleep(1.0)
         finally:
             for fd in ([slave] if slave >= 0 else []) + ([] if keep_master else [master]):

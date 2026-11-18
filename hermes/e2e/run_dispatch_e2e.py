@@ -549,7 +549,7 @@ class Run:
     def env(self) -> dict[str, str]:
         return {
             "HOME": str(self.home), "PATH": f"{self.bin}:/usr/bin:/bin", "TMPDIR": str(self.root), "LANG": "C.UTF-8",
-            "FAKER_KIT_HOME": str(self.team), "CLAUDE_CONFIG_DIR": "", "E2E_GH_STATE": str(self.gh_state), "E2E_GH_LOG": str(self.gh_log),
+            "FAKER_KIT_HOME": str(self.team), "CLAUDE_CONFIG_DIR": "", "FAKER_KIT_CLAUDE_SYSTEM_DIRS": "", "E2E_GH_STATE": str(self.gh_state), "E2E_GH_LOG": str(self.gh_log),
             "E2E_CLAUDE_LOG": str(self.claude_log), "E2E_ORIGIN": str(self.root / "origin"),
             "E2E_TOOL_LOG": str(self.root / "tool-calls.log"), "E2E_NO_IMAGE": str(self.root / "no-image"),
             "E2E_DOCKER_STDIN": str(self.root / "docker-stdin"), "E2E_DOCKER_ONCE": str(self.root / "docker-once"), "E2E_CLOCK": str(self.clock),
@@ -875,6 +875,7 @@ def claude_preflight_steps(run: Run, brief: Path) -> None:
     only_gh = run.root / "only-gh"
     only_gh.mkdir()
     (only_gh / "gh").symlink_to(run.bin / "gh")
+    (run.team / "claude-path").unlink(missing_ok=True)
     code, _, err = run.kit("launch", "--brief-file", str(brief), env={"PATH": str(only_gh)})
     run.step("launch preflight: a claude repository on a machine with no claude CLI is refused naming the CLI, with install and sign-in recovery only",
              code == 1 and "claude CLI is not installed" in err and "claude auth login" in err and "t3" not in err.lower() and "dispatch.json" not in err, err.strip())
@@ -887,6 +888,16 @@ def claude_preflight_steps(run: Run, brief: Path) -> None:
     run.step("launch preflight: a claude CLI that is not signed in is refused naming sign-in, with no T3 recovery",
              code == 1 and "not signed in" in err and "claude auth login" in err and "t3" not in err.lower(), err.strip())
     run.step("launch preflight: those refusals started no session", len(run.claude_log.read_text().splitlines()) == before, "")
+    (run.team / "claude-path").unlink(missing_ok=True)
+    known = run.home / ".local" / "bin"
+    known.mkdir(parents=True)
+    (known / "claude").symlink_to(run.bin / "claude")
+    code, out, err = run.kit("launch", "--brief-file", str(brief), env={"PATH": f"{only_gh}:/usr/bin:/bin"})
+    started = len(run.claude_log.read_text().splitlines()) == before + 1
+    run.step("launch on a PATH with no claude starts its session through the claude CLI found in ~/.local/bin and records that path, the same resolver the preflight uses",
+             code == 0 and started and (run.team / "claude-path").read_text().strip() == str(known / "claude"), out.strip() or err.strip())
+    (known / "claude").unlink()
+    (run.team / "claude-path").unlink(missing_ok=True)
 
 
 def launch_scenario(run: Run) -> None:
@@ -4182,6 +4193,7 @@ def main(argv: list[str] | None = None) -> int:
         loop_scenario(run)
         install_scenario(run, root / "install")
         refresh_scenario.refresh_scenario(root / "refresh", run.step, run.env(), run.bin / "hermes", kit_source)
+        refresh_scenario.refresh_claude_scenario(root / "refresh-claude", run.step, run.env(), run.bin / "hermes", run.bin / "gh", run.bin / "claude", kit_source)
         provider_scenario(run, root / "provider")
         runner_scenario(run, root / "runner")
         profile_approval_scenario(run, root / "profile-approval")
