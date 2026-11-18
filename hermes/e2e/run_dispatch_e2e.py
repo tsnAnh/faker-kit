@@ -4363,7 +4363,7 @@ def main(argv: list[str] | None = None) -> int:
         if not result["ok"]:
             failed.append(name)
             print(f"e2e stopped in {name}: {result['error']}", file=sys.stderr)
-    over = report(results, budgets, args.budget_scale, wall, args.jobs) if not args.only else []
+    over = report(results, budgets, args.budget_scale, wall, args.jobs)
     for line in over:
         print(f"BUDGET {line}", file=sys.stderr)
     code = 1 if failed or over else 0

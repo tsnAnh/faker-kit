@@ -42,8 +42,9 @@ There is no single check command. CI runs these jobs in parallel (`.github/workf
 | `lint` | `node scripts/agent-checks/ratchet.mjs check`, `node scripts/agent-checks/import-boundaries.mjs`, `node scripts/agent-checks/rule-fixtures.mjs`, `ruff check`, `mypy` |
 | `validate` | `node scripts/sync-upstream.mjs --check`, `node scripts/validate.mjs`, `node scripts/gen-catalog.mjs --check` |
 | `commit-messages` | `node scripts/check-commit-messages.mjs` |
-| `hermes-e2e` | `python3 hermes/e2e/run_dispatch_e2e.py --artifact artifacts/hermes-e2e.json` |
+| `hermes-e2e` (four matrix jobs) | `python3 hermes/e2e/run_dispatch_e2e.py --shard K/4 --artifact artifacts/hermes-e2e-K.json`; the whole suite in one command is `python3 hermes/e2e/run_dispatch_e2e.py --artifact artifacts/hermes-e2e.json` |
 | `agents-load-the-kit` | `claude plugin validate .`, `node scripts/e2e/kit-e2e.mjs --artifact artifacts/kit-e2e.json` |
+| `check` | no commands: the aggregate that needs `lint`, `commit-messages`, and every `hermes-e2e` job and fails if any did not succeed; keep it, the merge gate and this file name it |
 
 The tools are `node`, `bun`, `jq`, `git`, `python3`, and `pip install ruff mypy types-PyYAML pyyaml`. Run the commands your change can affect, and `git add` new files first because the ratchet counts only tracked files:
 
@@ -51,7 +52,7 @@ The tools are `node`, `bun`, `jq`, `git`, `python3`, and `pip install ruff mypy 
 - `plugins/trust-ladder/`, `scripts/`, `docs/`, `upstream/`: `validate`, `kit-e2e`, then `lint`.
 - A commit: `check-commit-messages`.
 
-Each e2e run writes a JSON transcript to `artifacts/` and prints a digest that is the same on every run.
+Each e2e run writes a JSON transcript to `artifacts/` and prints a digest that is the same on every run. The Hermes run starts one worker process per scenario (as many at a time as CPUs, `--jobs N`), each with its own temp home, stubs, and fixtures, and replays their `ok` lines in the order of the `SCENARIOS` table, so the digest of a whole run does not depend on timing. A scenario that needs another's state is one scenario (`owner-merge` runs four sections on one fixture). The driver's own `gh` and `hermes` stub calls run in-process (`--real-stubs` makes them real processes); every call a real entry point makes still spawns the stub. `--only a,b` runs some scenarios, `--list` names them, `--shard K/N` runs one balanced group (CI runs four, each on its own 2-vCPU runner, because the repository is private and a GitHub-hosted private runner has 2 vCPUs). A new scenario goes in `SCENARIOS` and in `hermes/e2e/budgets.json`, which holds each scenario's time budget in seconds (the slowest observed time, local and CI, times 1.5): the run fails when a scenario exceeds its budget, prints per-scenario and slowest-step times and writes them to the step summary, and `--budget-scale X` stretches the budgets for a slower machine.
 
 The kit has no unit tests. Prove behavior with the e2e runs: add a step that drives the real entry point (a hook, a script, the `faker-kit` command, the guard plugin loaded as Hermes loads it) and records what it observed; never import internals and assert on them. The only other proof is `.agents/rule-fixtures.json` (real linters on good and bad inputs).
 
@@ -133,6 +134,7 @@ The Claude review workflow reads this section with REVIEW.md.
 | A part's stage evidence is recorded while its unit cards are open (saved in the part card's header with no claim, completion adds the Kanban rows), and a unit serving an `installed`, `built`, or `verified` part completes with that part's stage rows | the `stage evidence:` steps of `hermes/e2e/kanban_scenario.py` (`stage_deadlock_scenario`, run through the fake board that shows a part card `todo` and refuses its claim as Kanban does), in CI's `hermes-e2e` job |
 | A unit whose pull request merged but whose check run can never finish closes with `loop close <unit> --as folded --reason ...`, never by hand | the `folded close:` steps of `hermes/e2e/kanban_scenario.py` (`stage_deadlock_scenario`), in CI's `hermes-e2e` job |
 | The coding rule (reuse before build, confirm before coding) is one constant, `CODING_RULE` in `hermes/lib/faker_kit_coding_rule.py`, under 1500 characters: every cloud-session prompt (both backends) and every bot's SOUL.md carries it once, new installs and refreshed installs alike, and a user-edited SOUL.md is kept as `SOUL.md.bak` | the `coding rule` steps in the launch section and `install_scenario` of `hermes/e2e/run_dispatch_e2e.py` and the `t3code:` message step of `hermes/e2e/t3code_scenario.py`, in CI's `hermes-e2e` job |
+| Each Hermes e2e scenario stays inside its time budget, and a new scenario has one (the run refuses to start without it) | `hermes/e2e/budgets.json` checked by `report()` and `main()` in `hermes/e2e/run_dispatch_e2e.py`, in every `hermes-e2e` job of CI |
 | Commit messages carry no AI or agent references | `scripts/check-commit-messages.mjs` in CI's `commit-messages` job (promoted from STYLE.md) |
 | Prefer a vendored skill to a second trust-ladder skill | review (REVIEW.md) |
 | Cloud skills use `gh api` REST, not GraphQL-backed subcommands | review (REVIEW.md) |
