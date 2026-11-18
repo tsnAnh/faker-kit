@@ -1363,9 +1363,9 @@ class Kit:
         if check:
             profile = self.profiles.live(name)
             return {"check": True, "bot": name, "project": slug, "repo": repo, "profile": {True: "exists", False: "missing", None: "unknown"}[profile], "ask_owner": checked_policy.ask_owner}
-        card_prefix, _ = ensure_prefix(self.home, slug, repo)
         fixed = fix_git_protocol(self.run)
         self.profiles.ensure(name)
+        card_prefix, _ = ensure_prefix(self.home, slug, repo)
         data = self.bots_file()
         self.register_project(data, repo, name, slug, {key: wanted.get(key) for key in SCHEDULE_DEFAULTS}, slack_channel)
         policy = self.policy_from(data)
