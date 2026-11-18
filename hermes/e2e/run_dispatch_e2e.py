@@ -1017,8 +1017,22 @@ def launch_scenario(run: Run) -> None:
     templates = [(HERMES / "templates" / name).read_text() for name in ("fix-issue-brief.md", "triage-incident-brief.md")]
     run.step("the dispatch skill puts an open requirement to the owner with clarify or back to the chief, and has the OWNER DECISIONS brief field before VERIFY",
              "Never decide an open requirement or UI choice yourself: put it to the owner with `clarify` (real options, recommended first) or return it to the chief." in dispatch
-             and "ACCEPTANCE, OWNER DECISIONS, VERIFY," in dispatch and "says which owner answers the work relies on" in dispatch
+             and "ACCEPTANCE, OWNER DECISIONS, VERIFY," in dispatch
              and all(re.search(r"^OWNER DECISIONS: none: \S", t, re.M) for t in templates), "")
+    chief_handoff = "Owner decisions: <the owner's answers, or none: <why>>"
+    bootstrap = (HERMES / "skills" / "bootstrap" / "SKILL.md").read_text()
+    run.step("the brief's OWNER DECISIONS: none line, the chief's handoff line, and launch's check stay as inputs",
+             chief_handoff in chief and "then a line `Owner decisions: <the same text as --decisions>`" in chief
+             and re.search(r"^OWNER DECISIONS: none: \S", bootstrap, re.M) is not None, "")
+    shipped = [path for path in [*HERMES.rglob("*"), HERMES.parent / "AGENTS.md"]
+               if path.is_file() and path.suffix in {".md", ".py", ".sh", ".yaml", ".yml", ".json", ".txt"}
+               and not {"e2e", "vendor", "__pycache__"} & set(path.relative_to(HERMES.parent).parts)]
+    none_line = re.compile(r"which owner (answers|decisions?)\b[^.\n]*\bor\s+`?none\b|owner (answers|decisions?)\s+(relied|relies|the work relies)\b[^\n]*\bnone\b|đang dựa vào", re.I)
+    flagged = sorted(str(path.relative_to(HERMES.parent)) for path in shipped if none_line.search(path.read_text(errors="replace")))
+    rule = ("add one line naming the owner decision the work rests on (an owner answer, a chief-relayed owner answer, a gate the owner settled) only when it rests on one; "
+            "when there is none, write nothing, never a line that says `none`")
+    run.step("no shipped text tells a bot to state the owner answers or none, and the dispatch skill carries the rule that the line appears only when the work rests on an owner decision",
+             len(shipped) > 20 and not flagged and rule in dispatch, ", ".join(flagged))
 
 
 def webhook_scenario(run: Run) -> None:
