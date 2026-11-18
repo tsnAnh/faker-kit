@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const USAGE = `Usage: node scripts/e2e/kit-e2e.mjs [--artifact PATH]
 
@@ -443,6 +443,173 @@ step("cloud-setup.sh --help prints its usage and exits before installing anythin
   return {
     ok: help.status === 0 && help.stdout.startsWith("Usage: scripts/cloud-setup.sh") && help.stdout.includes("changes nothing") && help.stderr === "",
     observed: { status: help.status, firstLine: help.stdout.split("\n")[0] },
+  };
+});
+
+const SYNC_UPSTREAM = path.join(KIT, "scripts", "sync-upstream.mjs");
+const FIXTURE_TOKEN = "ghs_FixtureTokenNotARealCredential0123456789";
+const FIXTURE_AUTH_BASIC = Buffer.from(`x-access-token:${FIXTURE_TOKEN}`).toString("base64");
+const RATE_LIMIT_STDERR = "error: RPC failed; HTTP 429 curl 22 The requested URL returned error: 429\nfatal: expected flush after ref listing";
+const REAL_GIT = run("bash", ["-c", "command -v git"]).stdout.trim();
+const GIT_STUB = `#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const argv = process.argv.slice(2);
+const dirAt = argv.indexOf("-C");
+const dir = dirAt >= 0 ? argv[dirAt + 1] : process.cwd();
+const sub = argv[dirAt >= 0 ? dirAt + 2 : 0];
+const state = process.env.GIT_STUB_STATE;
+const log = path.join(state, "calls.jsonl");
+const calls = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+const config = path.join(dir, ".git", "config");
+fs.appendFileSync(log, JSON.stringify({
+  sub, argv, dir,
+  gitConfigEnv: Object.fromEntries(Object.entries(process.env).filter(([name]) => name.startsWith("GIT_CONFIG_"))),
+  tokenEnvNames: ["GITHUB_TOKEN", "GH_TOKEN"].filter((name) => process.env[name]),
+  config: fs.existsSync(config) ? fs.readFileSync(config, "utf8") : null,
+}) + "\\n");
+if (sub === "fetch") {
+  const fetchIndex = calls.filter((call) => call.sub === "fetch").length;
+  const sleepMs = Number(process.env.GIT_STUB_FETCH_SLEEP_MS || 0);
+  if (sleepMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, sleepMs);
+  if (fetchIndex < Number(process.env.GIT_STUB_FAIL_FIRST || 0)) {
+    process.stderr.write(process.env.GIT_STUB_FAIL_STDERR + "\\n");
+    process.exit(128);
+  }
+  argv[argv.indexOf("origin")] = process.env.GIT_STUB_UPSTREAM;
+}
+const result = spawnSync(process.env.GIT_STUB_REAL, argv, { stdio: "inherit" });
+process.exit(result.status ?? 1);
+`;
+
+function syncFixture(repoUrl) {
+  const upstream = tmp("sync-upstream-source");
+  write(path.join(upstream, "demo", ".example-plugin", "plugin.json"), `${JSON.stringify({ name: "demo", version: "1.0.0" })}\n`);
+  write(path.join(upstream, "demo", "README.md"), "demo plugin\n");
+  git(upstream, "init", "-q");
+  git(upstream, "add", "-A");
+  git(upstream, "commit", "-q", "-m", "upstream");
+  const ref = head(upstream);
+  const kit = tmp("sync-upstream-kit");
+  write(path.join(kit, "scripts", "sync-upstream.mjs"), read(SYNC_UPSTREAM));
+  write(path.join(kit, "upstream", "agent-hooks", "hook-adapter.mjs"), read(ADAPTER));
+  write(path.join(kit, "upstream", "model-map.json"), `${JSON.stringify({ rules: [], allowedModelTokens: [], tokenExceptions: [] })}\n`);
+  write(path.join(kit, "upstream", "source.json"), `${JSON.stringify({ repo: repoUrl, ref, manifestDir: ".example-plugin", plugins: ["demo"] })}\n`);
+  const bin = tmp("sync-upstream-bin");
+  write(path.join(bin, "git"), GIT_STUB, 0o755);
+  const state = tmp("sync-upstream-state");
+  const applied = run("node", [path.join(kit, "scripts", "sync-upstream.mjs"), "--src", upstream]);
+  if (applied.status !== 0) throw new Error(`fixture sync failed: ${applied.stderr}`);
+  const check = ({ failFirst = 0, stderr = RATE_LIMIT_STDERR, scale = 0.05, sleepMs = 0, env = {}, source = upstream } = {}) => {
+    fs.rmSync(state, { recursive: true, force: true });
+    fs.mkdirSync(state, { recursive: true });
+    const started = Date.now();
+    const result = run("node", [path.join(kit, "scripts", "sync-upstream.mjs"), "--check"], {
+      env: {
+        ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_CONFIG_"))),
+        GITHUB_TOKEN: "", GH_TOKEN: "", PATH: `${bin}:${process.env.PATH}`,
+        SYNC_UPSTREAM_RETRY_SCALE: String(scale), GIT_STUB_STATE: state, GIT_STUB_REAL: REAL_GIT,
+        GIT_STUB_UPSTREAM: pathToFileURL(source).href, GIT_STUB_FAIL_FIRST: String(failFirst),
+        GIT_STUB_FAIL_STDERR: stderr, GIT_STUB_FETCH_SLEEP_MS: String(sleepMs), ...env,
+      },
+    });
+    const calls = read(state, "calls.jsonl").trim().split("\n").map((line) => JSON.parse(line));
+    const fetches = calls.filter((call) => call.sub === "fetch");
+    const checkoutDirs = [...new Set(calls.map((call) => call.dir))];
+    return { ...result, elapsedMs: Date.now() - started, calls, fetches, leftoverDirs: checkoutDirs.filter((dir) => fs.existsSync(dir)), output: `${result.stdout}${result.stderr}` };
+  };
+  return { kit, upstream, check, vendoredReadme: path.join(kit, "plugins", "demo", "README.md") };
+}
+
+const retryLines = (run_) => run_.stderr.split("\n").filter((line) => line.startsWith("sync-upstream: fetch attempt"));
+
+step("sync-upstream --check retries a rate-limited fetch with backoff, then passes with the same result, and leaves no checkout behind", () => {
+  const fx = syncFixture("https://github.com/example/plugins.git");
+  const clean = fx.check();
+  const limited = fx.check({ failFirst: 2 });
+  return {
+    ok: clean.status === 0 && clean.fetches.length === 1 && retryLines(clean).length === 0
+      && limited.status === 0 && limited.fetches.length === 3 && retryLines(limited).length === 2
+      && retryLines(limited).every((line, i) => line.includes(`attempt ${i + 1}/5`) && line.includes("HTTP 429"))
+      && limited.stdout === clean.stdout && limited.leftoverDirs.length === 0 && clean.leftoverDirs.length === 0,
+    observed: { cleanFetches: clean.fetches.length, limitedFetches: limited.fetches.length, retryLines: retryLines(limited).length, stdout: limited.stdout.replace(/\d+ vendored/, "N vendored").replace(/[0-9a-f]{12}/, "<sha>").trim() },
+  };
+});
+
+step("sync-upstream --check stops after the bounded attempts and says the upstream was unreachable, not a mismatch", () => {
+  const fx = syncFixture("https://github.com/example/plugins.git");
+  const run_ = fx.check({ failFirst: 99 });
+  const message = run_.stderr.trim().split("\n").at(-1);
+  return {
+    ok: run_.status === 1 && run_.fetches.length === 5 && retryLines(run_).length === 4 && run_.elapsedMs < 60_000
+      && /^sync-upstream: could not fetch the upstream plugins \(https:\/\/github\.com\/example\/plugins\.git at [0-9a-f]{12}\) after 5 attempts over \d+\.\d seconds; last error: error: RPC failed; HTTP 429 curl 22 The requested URL returned error: 429\. This is a network or rate-limit problem, not a mismatch; rerun the job\.$/.test(message)
+      && !run_.output.includes("Command failed") && run_.leftoverDirs.length === 0,
+    observed: { status: run_.status, fetches: run_.fetches.length, message: message.replace(/\d+\.\d seconds/, "S seconds").replace(/[0-9a-f]{12}\)/, "<ref>)") },
+  };
+});
+
+step("sync-upstream --check enforces the wall-time bound even when attempts remain", () => {
+  const fx = syncFixture("https://github.com/example/plugins.git");
+  const run_ = fx.check({ failFirst: 99, scale: 0.02, sleepMs: 2000 });
+  return {
+    ok: run_.status === 1 && run_.fetches.length >= 1 && run_.fetches.length < 5 && run_.elapsedMs < 20_000
+      && run_.stderr.includes("attempts over") && run_.stderr.includes("rerun the job") && run_.leftoverDirs.length === 0,
+    observed: { status: run_.status, stoppedBeforeMaxAttempts: run_.fetches.length < 5 },
+  };
+});
+
+step("sync-upstream --check does not retry an unknown ref or an unreadable repository and names the permanent error", () => {
+  const fx = syncFixture("https://github.com/example/plugins.git");
+  const source = path.join(fx.kit, "upstream", "source.json");
+  write(source, read(source).replace(/"ref":"[0-9a-f]{40}"/, `"ref":"${"1".repeat(40)}"`));
+  const unknownRef = fx.check();
+  const notFound = fx.check({ failFirst: 1, stderr: "fatal: unable to access 'https://github.com/example/plugins.git/': The requested URL returned error: 404" });
+  const forbidden = fx.check({ failFirst: 1, stderr: "remote: Permission denied\nfatal: unable to access 'https://github.com/example/plugins.git/': The requested URL returned error: 403" });
+  const rateLimited403 = syncFixture("https://github.com/example/plugins.git").check({ failFirst: 1, stderr: "fatal: unable to access 'https://github.com/example/plugins.git/': The requested URL returned error: 403 API rate limit exceeded" });
+  const permanent = [unknownRef, notFound, forbidden];
+  return {
+    ok: permanent.every((r) => r.status === 1 && r.fetches.length === 1 && retryLines(r).length === 0 && r.stderr.includes("Not retried") && !r.output.includes("Command failed") && r.leftoverDirs.length === 0)
+      && unknownRef.stderr.includes("not our ref") && rateLimited403.fetches.length === 2 && rateLimited403.status === 0,
+    observed: { unknownRef: unknownRef.fetches.length, notFound: notFound.fetches.length, forbidden: forbidden.fetches.length, rateLimited403: rateLimited403.fetches.length },
+  };
+});
+
+step("sync-upstream --check reports a real mismatch with the same output after a clean fetch and after a retried one", () => {
+  const fx = syncFixture("https://github.com/example/plugins.git");
+  write(fx.vendoredReadme, "edited by hand\n");
+  const clean = fx.check();
+  const retried = fx.check({ failFirst: 2 });
+  const drift = (r) => r.stderr.split("\n").filter((line) => !line.startsWith("sync-upstream: fetch attempt")).join("\n");
+  return {
+    ok: clean.status === 1 && retried.status === 1 && clean.fetches.length === 1 && retried.fetches.length === 3
+      && drift(clean) === drift(retried) && /vendored plugins drifted from upstream [0-9a-f]{40} \+ upstream\/\*\.json rules:\n {2}differs plugins\/demo\/README\.md\n/.test(clean.stderr),
+    observed: { cleanStatus: clean.status, retriedStatus: retried.status, drift: drift(clean).replace(/[0-9a-f]{40}/, "<sha>").split("\n").slice(0, 2) },
+  };
+});
+
+step("sync-upstream hands the token to git only through the environment, only for github.com over https, and prints it nowhere", () => {
+  const withToken = { GITHUB_TOKEN: FIXTURE_TOKEN };
+  const hasToken = (value) => JSON.stringify(value).includes(FIXTURE_TOKEN) || JSON.stringify(value).includes(FIXTURE_AUTH_BASIC);
+  const github = syncFixture("https://github.com/example/plugins.git");
+  const ok = github.check({ env: withToken });
+  const failing = github.check({ env: withToken, failFirst: 99 });
+  const fetch = ok.fetches[0];
+  const ghTokenName = github.check({ env: { GH_TOKEN: FIXTURE_TOKEN } }).fetches[0];
+  const others = ["https://github.com.evil.example/example/plugins.git", "http://github.com/example/plugins.git", "https://example.com/example/plugins.git", "https://user:pw@github.com/example/plugins.git", "https://github.com:8443/example/plugins.git"].map((repo) => {
+    const fx = syncFixture(repo);
+    const r = fx.check({ env: withToken, failFirst: 1 });
+    return { repo, status: r.status, anyGitConfigEnv: r.calls.some((call) => Object.keys(call.gitConfigEnv).length > 0), anyTokenEnv: r.calls.some((call) => call.tokenEnvNames.length > 0), leaked: hasToken(r.output) || hasToken(r.calls.map((call) => [call.argv, call.config])) };
+  });
+  return {
+    ok: ok.status === 0 && fetch.gitConfigEnv.GIT_CONFIG_COUNT === "1" && fetch.gitConfigEnv.GIT_CONFIG_KEY_0 === "http.https://github.com/.extraheader"
+      && fetch.gitConfigEnv.GIT_CONFIG_VALUE_0 === `AUTHORIZATION: basic ${FIXTURE_AUTH_BASIC}` && fetch.tokenEnvNames.length === 0
+      && ghTokenName.gitConfigEnv.GIT_CONFIG_VALUE_0 === fetch.gitConfigEnv.GIT_CONFIG_VALUE_0
+      && ok.calls.filter((call) => call.sub !== "fetch").every((call) => Object.keys(call.gitConfigEnv).length === 0 && call.tokenEnvNames.length === 0)
+      && !hasToken(ok.calls.map((call) => [call.argv, call.config])) && !hasToken(ok.output)
+      && failing.status === 1 && failing.fetches.length === 5 && !hasToken(failing.output) && !hasToken(failing.calls.map((call) => [call.argv, call.config]))
+      && others.every((o) => !o.anyGitConfigEnv && !o.anyTokenEnv && !o.leaked && o.status === 0),
+    observed: { header: "environment only", argvAndConfigClean: true, outputClean: true, otherHosts: others.map((o) => [o.repo, o.anyGitConfigEnv, o.anyTokenEnv, o.leaked]) },
   };
 });
 

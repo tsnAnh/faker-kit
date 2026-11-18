@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -15,6 +15,20 @@ const AGENT_HOOKS_DIR = "agent-hooks";
 const UPSTREAM_TO_AGENT_EVENT = { afterFileEdit: "PostToolUse", afterAgentResponse: "Stop", stop: "Stop", subagentStop: "SubagentStop" };
 const EDIT_TOOL_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
 const BINARY_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".woff", ".woff2"]);
+const FETCH_MAX_ATTEMPTS = 5;
+const FETCH_BASE_DELAY_MS = 2_000;
+const FETCH_DELAY_FACTOR = 2;
+const FETCH_MAX_DELAY_MS = 30_000;
+const FETCH_WALL_MS = 150_000;
+const FETCH_ATTEMPT_TIMEOUT_MS = 60_000;
+const RETRY_SCALE = (() => {
+  const scale = Number(process.env.SYNC_UPSTREAM_RETRY_SCALE);
+  return Number.isFinite(scale) && scale > 0 && scale <= 1 ? scale : 1;
+})();
+const GITHUB_AUTH_KEY = "http.https://github.com/.extraheader";
+const TOKEN_ENV_NAMES = ["GITHUB_TOKEN", "GH_TOKEN"];
+const TRANSIENT_HTTP_STATUS = (status) => status === 408 || status === 429 || status >= 500;
+const TRANSIENT_GIT_ERROR = /RPC failed|Could not resolve (?:host|proxy)|Connection (?:reset|timed out|refused)|Failed to connect|early EOF|unable to access|hung up unexpectedly|non-properly terminated|SSL_ERROR_SYSCALL|Operation timed out|Empty reply from server|expected flush after ref listing/i;
 const MODEL_TOKEN = /\b(?:grok|gpt|claude-(?:opus|sonnet|haiku|fable)|composer|gemini)(?:[-.][a-z0-9.]+)*(?:\[[^\]\s]*\])?/gi;
 
 const USAGE = `Usage: node scripts/sync-upstream.mjs [--check] [--src <dir>] [--ref <sha>]
@@ -74,14 +88,93 @@ function globToRegExp(glob) {
   return new RegExp(`^${pattern}$`);
 }
 
+const tempDirs = new Set();
+process.on("exit", () => {
+  for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+function isGithubHttps(repo) {
+  try {
+    const url = new URL(repo);
+    return url.protocol === "https:" && url.hostname === "github.com" && url.port === "" && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+function fetchEnvironment(repo) {
+  const token = TOKEN_ENV_NAMES.map((name) => process.env[name]).find(Boolean);
+  for (const name of TOKEN_ENV_NAMES) delete process.env[name];
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  if (!token) return { env, fetchEnv: env, secrets: [] };
+  const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
+  const secrets = [token, basic];
+  if (!isGithubHttps(repo)) return { env, fetchEnv: env, secrets };
+  const index = Number.parseInt(env.GIT_CONFIG_COUNT ?? "0", 10) || 0;
+  const fetchEnv = {
+    ...env,
+    GIT_CONFIG_COUNT: String(index + 1),
+    [`GIT_CONFIG_KEY_${index}`]: GITHUB_AUTH_KEY,
+    [`GIT_CONFIG_VALUE_${index}`]: `AUTHORIZATION: basic ${basic}`,
+  };
+  return { env, fetchEnv, secrets };
+}
+
+function classifyFetchFailure(result) {
+  if (result.error?.code === "ETIMEDOUT") return { transient: true, line: "git fetch timed out" };
+  if (result.error) return { transient: false, line: `could not run git (${result.error.code ?? result.error.message})` };
+  const lines = String(result.stderr ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
+  const statusLine = lines.find((line) => /(?:error:|HTTP)\s+\d{3}\b/.test(line));
+  const status = statusLine ? Number(/(?:error:|HTTP)\s+(\d{3})\b/.exec(statusLine)[1]) : null;
+  const fallback = lines.at(-1) ?? `git exited with status ${result.status}`;
+  if (status !== null) {
+    const rateLimited = status === 403 && lines.some((line) => /rate limit/i.test(line));
+    return { transient: TRANSIENT_HTTP_STATUS(status) || rateLimited, line: statusLine };
+  }
+  const networkLine = lines.find((line) => TRANSIENT_GIT_ERROR.test(line));
+  return networkLine ? { transient: true, line: networkLine } : { transient: false, line: fallback };
+}
+
+function sleepMs(ms) {
+  if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function fetchBackoffMs(attempt) {
+  const cap = Math.min(FETCH_MAX_DELAY_MS, FETCH_BASE_DELAY_MS * FETCH_DELAY_FACTOR ** (attempt - 1)) * RETRY_SCALE;
+  return Math.floor(Math.random() * cap);
+}
+
 function checkoutUpstream(repo, ref) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "upstream-plugins-"));
-  const git = (...gitArgs) => execFileSync("git", ["-C", dir, ...gitArgs], { stdio: "pipe" });
-  git("init", "-q");
-  git("remote", "add", "origin", repo);
-  git("fetch", "-q", "--depth", "1", "origin", ref);
-  git("checkout", "-q", "FETCH_HEAD");
-  return dir;
+  const { env, fetchEnv, secrets } = fetchEnvironment(repo);
+  const scrub = (text) => secrets.reduce((acc, secret) => acc.split(secret).join("***"), text).slice(0, 300);
+  const location = new URL(repo);
+  const label = `${location.protocol}//${location.host}${location.pathname} at ${ref.slice(0, 12)}`;
+  const wallMs = FETCH_WALL_MS * RETRY_SCALE;
+  const started = Date.now();
+  for (let attempt = 1; ; attempt++) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "upstream-plugins-"));
+    tempDirs.add(dir);
+    const git = (...gitArgs) => execFileSync("git", ["-C", dir, ...gitArgs], { stdio: "pipe", env });
+    git("init", "-q");
+    git("remote", "add", "origin", repo);
+    const timeout = Math.max(1, Math.min(FETCH_ATTEMPT_TIMEOUT_MS, wallMs - (Date.now() - started)));
+    const fetched = spawnSync("git", ["-C", dir, "fetch", "-q", "--depth", "1", "origin", ref], { env: fetchEnv, encoding: "utf8", timeout });
+    if (!fetched.error && fetched.status === 0) {
+      git("checkout", "-q", "FETCH_HEAD");
+      return dir;
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+    tempDirs.delete(dir);
+    const { transient, line } = classifyFetchFailure(fetched);
+    if (!transient) fail(`could not fetch the upstream plugins (${label}): ${scrub(line)}. Not retried: git reports a permanent error, so check "repo" and "ref" in upstream/source.json.`);
+    const elapsedMs = Date.now() - started;
+    const delay = fetchBackoffMs(attempt);
+    if (attempt >= FETCH_MAX_ATTEMPTS || elapsedMs + delay >= wallMs) {
+      fail(`could not fetch the upstream plugins (${label}) after ${attempt} attempts over ${(elapsedMs / 1000).toFixed(1)} seconds; last error: ${scrub(line)}. This is a network or rate-limit problem, not a mismatch; rerun the job.`);
+    }
+    process.stderr.write(`sync-upstream: fetch attempt ${attempt}/${FETCH_MAX_ATTEMPTS} failed (${scrub(line)}); retrying in ${(delay / 1000).toFixed(1)}s\n`);
+    sleepMs(delay);
+  }
 }
 
 function headOf(dir) {
