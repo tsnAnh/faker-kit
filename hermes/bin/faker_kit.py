@@ -87,7 +87,7 @@ from faker_kit_pickup import Slots, abandoned_after_steer, pickup_candidates, re
 from faker_kit_profiles import Profiles
 from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, reconcile, render, seen_pull, tsv_items
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
-from faker_kit_refs import belongs_elsewhere, find_ref, foreign, known_ref
+from faker_kit_refs import belongs_elsewhere, ensure_prefix, find_ref, foreign, known_ref
 from faker_kit_refusals import Refusals
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
 from faker_kit_session_card import steered, with_steer, with_summary
@@ -885,12 +885,12 @@ class Kit:
             raise Refused("--refs belongs to loop backfill")
         if action == "title":
             return self.loop_title(caller, part_id, state, prs, waits_on, reported, evidence, dry_run, apply, part, text)
-        if action == "show" and isinstance(part_id, str) and known_ref(part_id):
+        if action == "show" and isinstance(part_id, str) and known_ref(part_id, self.home):
             if state or prs or waits_on or reported or evidence or part is not None or dry_run or apply:
                 raise Refused("loop show <ref> takes no changes")
             if not cutover(self.home):
                 raise Refused("the Kanban cutover is not done: there are no cards, so no card holds a reference")
-            return ref_view(self.kanban(caller), caller.role, caller.project, part_id)
+            return ref_view(self.kanban(caller), self.home, caller.role, caller.project, part_id)
         if action == "migrate":
             return self.loop_migrate(caller, part_id, state, prs, waits_on, reported, evidence, dry_run, apply, part)
         if action == "backfill":
@@ -1150,9 +1150,9 @@ class Kit:
         return retitle_card(self.kanban(caller), self.home, caller.role, caller.name, caller.project, target, text)
 
     def ref_target(self, caller: Bot, target: int | str) -> int | str:
-        if not isinstance(target, str) or known_ref(target) is None or not cutover(self.home):
+        if not isinstance(target, str) or known_ref(target, self.home) is None or not cutover(self.home):
             return target
-        card = find_ref(self.kanban(caller).cards(True), target)
+        card = find_ref(self.kanban(caller).cards(True), target, self.home)
         if caller.role == "project" and foreign(card, caller.project):
             raise belongs_elsewhere(card, str(card.ref))
         fields = card.header.fields if card.header else {}
@@ -1365,6 +1365,7 @@ class Kit:
             return {"check": True, "bot": name, "project": slug, "repo": repo, "profile": {True: "exists", False: "missing", None: "unknown"}[profile], "ask_owner": checked_policy.ask_owner}
         fixed = fix_git_protocol(self.run)
         self.profiles.ensure(name)
+        card_prefix, _ = ensure_prefix(self.home, slug, repo)
         data = self.bots_file()
         self.register_project(data, repo, name, slug, {key: wanted.get(key) for key in SCHEDULE_DEFAULTS}, slack_channel)
         policy = self.policy_from(data)
@@ -1373,6 +1374,7 @@ class Kit:
         self.write_bots(data)
         out = self.sync_bot(project_bot, policy.ask_owner, model, config_dir, provider)
         out["labels"] = "ready"
+        out["card_prefix"] = card_prefix
         owner, repo_name = repo.split("/")
         try:
             checkout = self.cloud.checkout(repo, self.home / "checkouts" / f"{owner}__{repo_name}" / CHECKOUT)

@@ -77,7 +77,6 @@ def card_refs_scenario(run: Run) -> None:
 
     mutations = board.mutations()
     refusals = {
-        "a project with no prefix row": kit("loop", "unit", "x-one", "--title", "Anything at all", bot=NOPREF_BOT),
         "no title": kit("loop", "unit", "x-two", bot=FK_BOT),
         "an empty title": kit("loop", "unit", "x-five", "--title", "  ", bot=FK_BOT),
         "the unit id as the title": kit("loop", "unit", "x-six", "--title", "x-six", bot=FK_BOT),
@@ -85,10 +84,9 @@ def card_refs_scenario(run: Run) -> None:
         "a title over the limit": kit("loop", "unit", "x-three", "--title", " ".join(["Words"] * 12), bot=FK_BOT),
         "a title that looks like a key": kit("loop", "unit", "x-four", "--title", "Use ghp_" + "Q" * 24 + " here", bot=FK_BOT),
     }
-    run.step("card refs: a project with no prefix row, a missing, empty, unit-id or slug-like title (with the flag and an example named), "
+    run.step("card refs: a missing, empty, unit-id or slug-like title (with the flag and an example named), "
              "a title that does not fit with its ref, and a secret-like title are refused and create nothing ("
              + ", ".join(refusals) + ")", all(r[0] != 0 for r in refusals.values()) and board.mutations() == mutations
-             and "nopref has no card prefix" in refusals["a project with no prefix row"][2] and "PREFIXES in hermes/lib/faker_kit_refs.py" in refusals["a project with no prefix row"][2]
              and "--title" in refusals["no title"][2]
              and all('--title "Admins can export the catalog as CSV"' in refusals[k][2] for k in ("an empty title", "the unit id as the title", "a slug-like title"))
              and "at most" in refusals["a title over the limit"][2] and "token or key" in refusals["a title that looks like a key"][2],
@@ -178,7 +176,7 @@ def card_backfill_refs_scenario(run: Run) -> None:
     cdry = json_of(kit("loop", "backfill", "--refs", "--dry-run", bot=CHIEF))
     run.step("card refs backfill: the chief's dry run numbers its part cards in the project's sequence and lists a part of a project with no prefix row, never inventing one",
              [c["ref"] for c in cdry["cards"]] == ["FK-21"] and len(cdry["no_prefix"]) == 1
-             and "PREFIXES in hermes/lib/faker_kit_refs.py" in cdry["no_prefix"][0]["reason"] and board.mutations() == mutations,
+             and "nopref has no card prefix" in cdry["no_prefix"][0]["reason"] and "faker-kit add-project" in cdry["no_prefix"][0]["reason"] and board.mutations() == mutations,
              json.dumps(cdry["no_prefix"]))
 
     applied = json_of(kit("loop", "backfill", "--refs", "--apply", bot=FK_BOT))
