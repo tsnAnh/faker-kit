@@ -94,7 +94,7 @@ def is_open(card: Card) -> bool:
     return not card.archived and card.status != "done" and fields.get("State") not in CLOSED
 
 
-def assign_refs(cards: list[Card], mine: list[Card]) -> tuple[dict[str, str], dict[str, str]]:
+def assign_refs(cards: list[Card], mine: list[Card], home: Path) -> tuple[dict[str, str], dict[str, str]]:
     refs: dict[str, str] = {}
     missing: dict[str, str] = {}
     top: dict[str, int] = {}
@@ -105,7 +105,7 @@ def assign_refs(cards: list[Card], mine: list[Card]) -> tuple[dict[str, str], di
     for card in sorted((c for c in mine if c.header is not None and c.ref is None), key=lambda c: (added_at(c), c.id)):
         project = card.header.fields.get("Project", "") if card.header else ""
         try:
-            prefix = prefix_of(project)
+            prefix = prefix_of(project, home)
         except KanbanError as err:
             missing[card.id] = str(err)
             continue
@@ -132,7 +132,7 @@ def backfill_refs(kanban: Kanban, home: Path, role: str, bot: str, project: str 
                 mine.append(card)
         opened = [c for c in mine if is_open(c)]
         skipped = [{"card": c.id, "key": str(c.key), "reason": "not open"} for c in mine if not is_open(c) and c.ref is None]
-        refs, missing = assign_refs(cards, opened)
+        refs, missing = assign_refs(cards, opened, home)
         plan: list[dict[str, str]] = []
         failed: list[dict[str, str]] = []
         changed = 0

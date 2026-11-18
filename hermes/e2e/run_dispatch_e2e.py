@@ -27,6 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import card_prefix_scenario
 import card_refs_scenario
 import gate_scenario
 import guard_scenario
@@ -4138,6 +4139,9 @@ def main(argv: list[str] | None = None) -> int:
         card_backfill_run = Run(root / "card-refs-backfill", run.steps, run.verdicts)
         card_backfill_run.build()
         card_refs_scenario.card_backfill_refs_scenario(card_backfill_run)
+        card_prefix_run = Run(root / "card-prefixes", run.steps, run.verdicts)
+        card_prefix_run.build()
+        card_prefix_scenario.card_prefix_scenario(card_prefix_run)
     except Failure as err:
         print(f"e2e stopped at: {err}", file=sys.stderr)
         code = 1

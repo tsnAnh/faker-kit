@@ -30,7 +30,7 @@ from faker_kit_loop import (
     part_row,
     show_view,
 )
-from faker_kit_refs import belongs_elsewhere, clean_phrase, find_ref, foreign, known_ref, next_ref, numbered, owner_of, with_ref
+from faker_kit_refs import belongs_elsewhere, clean_phrase, ensure_prefix, find_ref, foreign, known_ref, next_ref, numbered, owner_of, with_ref
 from faker_kit_session_card import steered
 from faker_kit_text import refresh, summary_of
 from faker_kit_units import brief_source, read_units, unit_index
@@ -256,7 +256,8 @@ class CardLoop:
         with self.locked():
             self.kanban.require_external()
             held_part(self.entries(), project, part)
-            ref = next_ref(self.kanban.cards(True), project)
+            _, registered = ensure_prefix(self.home, project, repo)
+            ref = next_ref(self.kanban.cards(True), project, self.home)
             card_title = with_ref(ref, clean_phrase(title, ref))
             next_id = max(max((e["id"] for e in self.entries()), default=0), ledger_max(self.home, self.bot)) + 1
             for _ in range(5):
@@ -264,7 +265,7 @@ class CardLoop:
                 header = refresh(entry_header(entry).with_fields({"Ref": ref}), part, repo)
                 made = self.kanban.create(NewCard(part_key(next_id), card_title, header, self.bot, self.bot, outcome_contract(outcome, repo), completion_contract(repo)))
                 if made.title == card_title and made.ref == ref and made.header is not None and made.header.fields.get("Project") == project:
-                    return {**part_row(entry), "card": made.id, "ref": ref, "title": card_title}
+                    return {**part_row(entry), "card": made.id, "ref": ref, "title": card_title, **prefix_note(project, ref, registered)}
                 next_id += 1
         raise LoopError("could not reserve a part id; run the handoff again")
 
@@ -350,6 +351,7 @@ def create_unit(kanban: Kanban, bot: str, project: str, repo: str, unit_id: str,
             outcome = part_entry(parent)["outcome"]
         key = unit_key(project, unit_id)
         existing = kanban.find_card(key)
+        registered = False
         if existing is not None:
             have = existing.header
             if have is None:
@@ -362,7 +364,8 @@ def create_unit(kanban: Kanban, bot: str, project: str, repo: str, unit_id: str,
             kanban.edit_body_if_changed(existing.id, refresh(have.with_fields(changes), existing.title, repo, summary), have)
             card = existing
         else:
-            ref = next_ref(kanban.cards(True), project)
+            _, registered = ensure_prefix(home, project, repo)
+            ref = next_ref(kanban.cards(True), project, home)
             phrase = clean_phrase(title, ref, unit_id)
             summary, decisions = unit_source(home, bot, project, unit_id)
             header = unit_header(project, bot, unit_id, outcome, part, sorted(set(prs)), now).with_fields({"Ref": ref})
@@ -373,7 +376,13 @@ def create_unit(kanban: Kanban, bot: str, project: str, repo: str, unit_id: str,
         if parent is not None and card.id not in kanban.parents(parent.id):
             kanban.link(card.id, parent.id)
             linked = True
-    return {"unit": unit_id, "card": card.id, "key": key, "ref": card.ref, "title": card.title, "part": part, "outcome": outcome, "created": existing is None, "linked": linked}
+    made = {"unit": unit_id, "card": card.id, "key": key, "ref": card.ref, "title": card.title, "part": part, "outcome": outcome, "created": existing is None, "linked": linked}
+    return {**made, **prefix_note(project, str(card.ref), registered)}
+
+
+def prefix_note(project: str, ref: str, registered: bool) -> dict[str, str]:
+    note = f"{ref.split('-')[0]} was recorded for {project} now, because it had no card prefix; faker-kit add-project records one from now on"
+    return {"prefix_registered": note} if registered else {}
 
 
 def added_at(fields: dict[str, str]) -> float | None:
@@ -483,11 +492,11 @@ def clean_reason(text: str | None) -> str:
     return raw
 
 
-def close_target(kanban: Kanban, role: str, project: str | None, target: int | str) -> Card:
+def close_target(kanban: Kanban, home: Path, role: str, project: str | None, target: int | str) -> Card:
     text = str(target)
     cards = kanban.cards(True)
-    if known_ref(text):
-        by_ref = find_ref(cards, text)
+    if known_ref(text, home):
+        by_ref = find_ref(cards, text, home)
         if role == "project" and foreign(by_ref, project):
             raise belongs_elsewhere(by_ref, str(by_ref.ref))
         return by_ref
@@ -513,10 +522,10 @@ def close_card(kanban: Kanban, home: Path, role: str, bot: str, project: str | N
     with Loop(home, bot).locked():
         if not dry_run:
             kanban.require_external()
-        card = close_target(kanban, role, project, target)
+        card = close_target(kanban, home, role, project, target)
         header = card.header
         fields = header.fields if header else {}
-        named = isinstance(target, str) and (target.startswith("faker-kit:") or target.startswith("t_") or known_ref(target) is not None)
+        named = isinstance(target, str) and (target.startswith("faker-kit:") or target.startswith("t_") or known_ref(target, home) is not None)
         if role == "chief":
             allowed = (fields.get("Kind") == "part" and (card.key or "").startswith(f"faker-kit:{CHIEF_KEY}:")) or (named and fields.get("Kind") in ("part", "unit"))
         else:
@@ -545,7 +554,7 @@ def close_card(kanban: Kanban, home: Path, role: str, bot: str, project: str | N
 def retitle_card(kanban: Kanban, home: Path, role: str, bot: str, project: str | None, target: int | str, text: str | None) -> dict:
     with numbered(home, bot):
         kanban.require_external()
-        card = close_target(kanban, role, project, target)
+        card = close_target(kanban, home, role, project, target)
         header = card.header
         fields = header.fields if header else {}
         own = fields.get("Kind") == "part" and (card.key or "").startswith(f"faker-kit:{CHIEF_KEY}:") if role == "chief" else fields.get("Kind") == "unit" and fields.get("Project") == project
@@ -560,8 +569,8 @@ def retitle_card(kanban: Kanban, home: Path, role: str, bot: str, project: str |
         return {"card": card.id, "ref": header.ref, "was": card.title, "title": title, "changed": changed}
 
 
-def ref_view(kanban: Kanban, role: str, project: str | None, text: str) -> dict:
-    card = find_ref(kanban.cards(True), text)
+def ref_view(kanban: Kanban, home: Path, role: str, project: str | None, text: str) -> dict:
+    card = find_ref(kanban.cards(True), text, home)
     header = card.header
     fields = header.fields if header else {}
     kind = fields.get("Kind")
