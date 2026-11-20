@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from run_dispatch_e2e import Run
 
 REFUSALS = (("pending", "pending"), ("failure", "failure"), ("bare", "unknown"))
+WRITES = ("claim", "edit", "create", "complete", "reclaim", "evidence", "archive", "block")
 SESSION = "https://claude.ai/code/session_01E2Eabc"
 
 
@@ -90,6 +91,64 @@ def merged_gates_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              done.get("entries", {}).get("merged") == ["landed"] and card("landed")["status"] == "done" and "State: merged" in lines(card("landed")) and not tokens & FORBIDDEN_TOKENS
              and all(c["kinds"] == ["pr_merged", "pr_published"] for c in board.state()["completions"]) and len([c for c in board.state()["completions"] if c["task"] == card("landed")["id"]]) == 4,
              json.dumps(done.get("entries")))
+
+    def project_refusals() -> dict:
+        try:
+            return json.loads((run.team / "refusals" / f"{BOT}.json").read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def reconcile_later() -> dict:
+        run.clock += 7 * 3600
+        return json_of(project("loop", "reconcile"))
+
+    def completions() -> int:
+        return len(board.state()["completions"])
+
+    def evidence_rows() -> int:
+        return len(board.state()["evidence"])
+
+    merged(111, "raced-done")
+    unit_card("raced-done", 111)
+    board.set(claim_done="merged")
+    base_completions, base_evidence = completions(), evidence_rows()
+    settled = reconcile_later()
+    after_done, calls_done = board.mutations(), len(board.calls())
+    reconcile_later()
+    run.step("merged gates 5a: a claim Kanban answers with exit 0 and {already_done: true, run_id: null} is a finished card: no run opens, no evidence or completion is written, "
+             "the card ends State merged with the pull request number, it is listed as merged and not as completion_pending or refused, the refusal hold keeps no entry, "
+             "and the next pass makes no Kanban write",
+             "raced-done" in settled.get("entries", {}).get("merged", []) and "State: merged" in lines(card("raced-done"))
+             and "PRs: 111" in lines(card("raced-done"))
+             and card("raced-done")["status"] == "done" and board.open_claims(key("raced-done")) == [] and "raced-done" not in pending_rows(settled)
+             and settled.get("completion_pending", 0) == 0
+             and not [r for r in settled.get("entries", {}).get("refused", []) if r["id"] == "raced-done"]
+             and card("raced-done")["id"] not in project_refusals() and completions() == base_completions and evidence_rows() == base_evidence
+             and board.mutations() == after_done and not [v for v in board.verbs()[calls_done:] if v[0] in WRITES and v != ("evidence", "list")],
+             json.dumps(settled.get("entries"))[:240])
+
+    merged(112, "raced-unbound")
+    unit_card("raced-unbound", 112)
+    board.set(claim_done="unbound")
+    base_completions, base_evidence = completions(), evidence_rows()
+    refused = reconcile_later()
+    row = pending_rows(refused).get("raced-unbound", {})
+    run.step("merged gates 5b: a claim Kanban refuses with exit 1 (a done card with no merged pull request bound) stays a refusal: a pending row naming "
+             "Kanban's text, never listed as merged, no completion or evidence written, and the Kanban card is not marked done by the kit",
+             row.get("completion") == "pending" and "no merged pull request is bound" in str(row.get("detail"))
+             and "raced-unbound" not in refused.get("entries", {}).get("merged", [])
+             and completions() == base_completions and evidence_rows() == base_evidence and card("raced-unbound")["status"] != "done", json.dumps(row)[:240])
+    board.set(claim_done=None)
+
+    merged(113, "worded")
+    unit_card("worded", 113)
+    board.set(complete_refuse="text-already done")
+    worded = reconcile_later()
+    row = pending_rows(worded).get("worded", {})
+    run.step("merged gates 5c: a completion refusal whose text merely holds the words already done stays a refusal: a pending row, never listed as merged, and Kanban's card is not done",
+             row.get("completion") == "pending" and "already done" in str(row.get("detail")) and "worded" not in worded.get("entries", {}).get("merged", []) and card("worded")["status"] != "done",
+             json.dumps(row)[:240])
+    board.set(complete_refuse=None)
 
     owner("pickup", "on")
     guard = run.team / "guard.yaml"

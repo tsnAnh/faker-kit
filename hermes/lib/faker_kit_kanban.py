@@ -91,6 +91,10 @@ class KanbanError(Refused):
     pass
 
 
+class AlreadyDone(KanbanError):
+    pass
+
+
 def cutover(home: Path) -> bool:
     return (home / MARKER).is_file()
 
@@ -377,9 +381,12 @@ class Kanban:
         extra = [*(["--ttl", str(int(ttl))] if ttl else []), *(["--session", session] if session else [])]
         shown = self.call(["claim", card_id(card), *extra, "--json"])
         try:
-            run_id = json.loads(shown).get("run_id")
-        except (ValueError, AttributeError):
-            run_id = None
+            answer = json.loads(shown)
+        except ValueError:
+            answer = None
+        if isinstance(answer, dict) and answer.get("already_done") is True and answer.get("run_id") is None:
+            raise AlreadyDone("the card is already done and its pull request is merged; there is nothing to claim")
+        run_id = answer.get("run_id") if isinstance(answer, dict) else None
         if not isinstance(run_id, int):
             raise KanbanError("Kanban did not accept the change (the claim has no run id); the card was not changed")
         return run_id

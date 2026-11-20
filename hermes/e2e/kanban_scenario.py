@@ -134,6 +134,14 @@ def kanban_main():
         found["status"] = "archived"
     elif verb == "claim":
         found = task(rest[0])
+        mode = st.get("claim_done")
+        if mode and found is not None and found["assignee"] == profile and view(found)["status"] == "ready":
+            if mode == "unbound":
+                die(f"cannot claim {rest[0]}: status=done, and no merged pull request is bound to it, so there is nothing to accept again")
+            found["status"] = "done"
+            print(json.dumps({"task_id": found["id"], "status": "done", "already_done": True, "run_id": None}))
+            save()
+            sys.exit(0)
         if found is None or found["assignee"] != profile or view(found)["status"] != "ready":
             die(f"cannot claim {rest[0]}: status={view(found)['status'] if found else 'unknown'}; another claimant holds it or it is not ready")
         claim_opts, _ = opts(rest[1:])
