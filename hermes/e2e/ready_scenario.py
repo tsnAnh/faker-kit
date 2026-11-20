@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from kanban_scenario import BOT, CHIEF, PROJECT, Board, head_of, json_of, ledger
@@ -169,7 +169,7 @@ def check_scenario(run: Run, project: Callable[..., tuple[int, str, str]], unit_
         return [f["line"] for f in report["findings"] if f["class"] == "draft_after_session" and f"PR #{number} " in f["line"]]
 
     def say(number: int, seconds_ago: float) -> None:
-        stamp = datetime.fromtimestamp(run.clock - seconds_ago, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        stamp = datetime.fromtimestamp(run.clock - seconds_ago, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         run.update_gh(lambda gh: gh["pr_comments"].__setitem__(str(number), [{"user": {"login": run.pull(0, "")["author"]}, "body": SUMMARY, "created_at": stamp}]))
 
     unit_pull(41, "unit-n", card="running", summary=False)
