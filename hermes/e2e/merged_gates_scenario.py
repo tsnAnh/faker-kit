@@ -10,7 +10,6 @@ if TYPE_CHECKING:
     from run_dispatch_e2e import Run
 
 REFUSALS = (("pending", "pending"), ("failure", "failure"), ("bare", "unknown"))
-WRITES = ("claim", "edit", "create", "complete", "reclaim", "evidence", "archive", "block")
 SESSION = "https://claude.ai/code/session_01E2Eabc"
 
 
@@ -55,12 +54,6 @@ def merged_gates_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     def pending_rows(out: dict) -> dict[str, dict]:
         return {r["id"]: r for r in out.get("entries", {}).get("completion_pending", [])}
 
-    def project_refusals() -> dict:
-        try:
-            return json.loads((run.team / "refusals" / f"{BOT}.json").read_text())
-        except (OSError, ValueError):
-            return {}
-
     def sessions() -> int:
         return len(run.claude_log.read_text().splitlines()) if run.claude_log.exists() else 0
 
@@ -97,24 +90,6 @@ def merged_gates_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              done.get("entries", {}).get("merged") == ["landed"] and card("landed")["status"] == "done" and "State: merged" in lines(card("landed")) and not tokens & FORBIDDEN_TOKENS
              and all(c["kinds"] == ["pr_merged", "pr_published"] for c in board.state()["completions"]) and len([c for c in board.state()["completions"] if c["task"] == card("landed")["id"]]) == 4,
              json.dumps(done.get("entries")))
-
-    merged(111, "finished")
-    unit_card("finished", 111)
-    board.leave_claim(key("finished"), url=f"https://github.com/{REPO}/pull/111", head=head_of(111), commit=commit_of(111))
-    board.set(complete_refuse="already_done")
-    run.clock += 7 * 3600
-    settled = json_of(project("loop", "reconcile"))
-    after_done, calls_done = board.mutations(), len(board.calls())
-    run.clock += 7 * 3600
-    json_of(project("loop", "reconcile"))
-    run.step("merged gates 1: a completion Kanban answers with already_done is a success: the card ends State merged with the pull request number and is done and claim-free, it is listed as merged, "
-             "not as completion_pending or refused, the refusal hold keeps no entry for it, and the next pass makes no Kanban write",
-             "finished" in settled.get("entries", {}).get("merged", []) and "State: merged" in lines(card("finished")) and "PRs: 111" in lines(card("finished"))
-             and card("finished")["status"] == "done" and board.open_claims(key("finished")) == [] and "finished" not in pending_rows(settled)
-             and settled.get("completion_pending", 0) == 0 and not [r for r in settled.get("entries", {}).get("refused", []) if r["id"] == "finished"]
-             and card("finished")["id"] not in project_refusals() and board.mutations() == after_done
-             and not [v for v in board.verbs()[calls_done:] if v[0] in WRITES and v != ("evidence", "list")], json.dumps(settled.get("entries"))[:240])
-    board.set(complete_refuse=None)
 
     owner("pickup", "on")
     guard = run.team / "guard.yaml"

@@ -192,9 +192,6 @@ def kanban_main():
         if json.loads(card["outcome_contract"])["kind"] == "merged_pr" and not {"pr_published", "pr_merged"} <= set(kinds):
             die("cannot complete: the outcome contract needs verified pull request evidence")
         refuse = st.get("complete_refuse")
-        if refuse == "already_done":
-            card["status"], live["ended_at"] = "done", 2
-            die(f"{card['id']} is already_done; nothing to complete")
         published = json.loads(found["--metadata"])["published_pr"]
         if not refuse or not (refuse.startswith("text-") or refuse == "bare"):
             st.setdefault("events", []).append({"task_id": card["id"], "kind": "pr_acceptance", "run_id": run_id, "created_at": 1,

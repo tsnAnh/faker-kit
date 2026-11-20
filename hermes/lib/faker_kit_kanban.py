@@ -87,9 +87,6 @@ def receipt_of(payload: dict[str, object], classification: str) -> Receipt:
 KanbanRunner = Callable[[list[str], str | None], str]
 
 
-ALREADY_DONE = re.compile(r"already[ _-]?done", re.IGNORECASE)
-
-
 class KanbanError(Refused):
     pass
 
