@@ -1034,6 +1034,26 @@ def launch_scenario(run: Run) -> None:
              summary_rule == 1 and first.index("Stop rule:") < first.index("Closing summary rule:") < first.index("Faker-mode rule:") and first.count("Closing summary:") == 1
              and "a draft is a hold and no bot merges it" in first and code == 0 and seen_held.count(faker_kit.SUMMARY_RULE) == 1 and "Closing summary rule:" not in seen_held
              and not faker_kit.SECRET_SHAPES.search(faker_kit.SUMMARY_FOOTER), err.strip() or first[-900:].replace("\n", " "))
+    ci_phrase = "Never sleep, poll or loop on"
+    run.step("the launch prompt carries the CI rule once, after the closing summary rule and before the faker-mode footer, and it names every forbidden wait and the allowed boundary",
+             first.count(faker_kit.CI_RULE) == 1 and first.count("CI rule:") == 1 and first.count(ci_phrase) == 1
+             and first.index("Closing summary rule:") < first.index("CI rule:") < first.index("Faker-mode rule:")
+             and all(thing in faker_kit.CI_RULE for thing in ("`gh run`", "`gh pr checks`", "the check-runs API")) and "do not wait for CI" in first
+             and "run the project's own tests and checks locally" in first and "read the check results once, without waiting" in first and "never block on a check that is still pending" in first
+             and "post your closing summary and end the session" in first and not faker_kit.SECRET_SHAPES.search(faker_kit.CI_FOOTER), first[-1500:].replace("\n", " "))
+    held_ci = run.brief("holds-ci.md", "/faker-mode\n\nGOAL: x.\n" + faker_kit.CI_RULE + "\n")
+    code, _, err = run.kit("launch", "--brief-file", str(held_ci))
+    seen_ci = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
+    run.step("a brief that already holds the CI rule still gets it once, and the closing summary and stop rules stay once",
+             code == 0 and seen_ci.count(faker_kit.CI_RULE) == 1 and seen_ci.count(ci_phrase) == 1 and seen_ci.count("Closing summary rule:") == 1 and seen_ci.count("Stop rule:") == 1, err.strip())
+    owners = sorted(str(path.relative_to(HERMES.parent)) for path in HERMES.rglob("*") if path.is_file() and path.suffix in (".py", ".md", ".yaml", ".json", ".sh")
+                    and "e2e" not in path.parts and "vendor" not in path.parts and ci_phrase in path.read_text(errors="ignore"))
+    dispatch_text = (HERMES / "skills" / "dispatch" / "SKILL.md").read_text()
+    run.step("the CI sentence is defined once in the rule file, in no second footer or template, and the dispatch skill carries its one bullet once",
+             owners == ["hermes/lib/faker_kit_ci_rule.py"] and dispatch_text.count("`launch` appends the CI rule to every brief") == 1
+             and not any(phrase in text for text in (faker_kit.ANDON_FOOTER, faker_kit.SUMMARY_FOOTER, faker_kit.FAKER_FOOTER, faker_kit.CODING_FOOTER) for phrase in ("CI rule:", ci_phrase))
+             and not any(re.search(r"wait for (the )?(CI|checks)|until (CI|the checks)|get (it|the PR|the pull request) green", (HERMES / "templates" / name).read_text(), re.I)
+                         for name in ("fix-issue-brief.md", "triage-incident-brief.md")), ", ".join(owners))
     sentence = "Open the pull request ready for review (draft false) and use a draft only when you cannot finish."
     shipped = [path for base in (Path(__file__).resolve().parents[1], Path(__file__).resolve().parents[2] / "plugins" / "trust-ladder") for path in base.rglob("*")
                if path.is_file() and "e2e" not in path.parts and "vendor" not in path.parts and "__pycache__" not in path.parts and sentence in path.read_text(errors="ignore")]
