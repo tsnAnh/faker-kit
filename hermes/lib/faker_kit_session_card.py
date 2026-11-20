@@ -10,6 +10,8 @@ SECTION_END = "End of session summary."
 STEER_TITLE = "Session steer:"
 STORED = re.compile(re.escape(SECTION_TITLE) + r"\nRead at (\S+) at head (\S+)\n(.*?)\n" + re.escape(SECTION_END), re.S)
 STEERED = re.compile(re.escape(STEER_TITLE) + r" asked session (\S+) at (\S+) for a closing summary\.")
+FOLLOWUP_TITLE = "Conflict follow-up:"
+FOLLOWUP = re.compile(r"(?m)^" + re.escape(FOLLOWUP_TITLE) + r" head ([0-9a-f]{40}) (\S+)$")
 
 
 def appended(text: str, section: str) -> str:
@@ -17,7 +19,7 @@ def appended(text: str, section: str) -> str:
 
 
 def carry_sections(old: str, new: str) -> str:
-    for found in (STORED.search(old), STEERED.search(old)):
+    for found in (STORED.search(old), STEERED.search(old), *FOLLOWUP.finditer(old)):
         if found and found.group(0) not in new:
             new = appended(new, found.group(0))
     return new
@@ -44,3 +46,11 @@ def with_steer(header: Header, session: str, at: str) -> Header:
 def steered_at(header: Header) -> str | None:
     found = STEERED.search(header.text)
     return found.group(2) if found else None
+
+
+def conflict_followups(header: Header) -> tuple[tuple[str, str], ...]:
+    return tuple((found.group(1), found.group(2)) for found in FOLLOWUP.finditer(header.text))
+
+
+def with_conflict_followup(header: Header, head: str, at: str) -> Header:
+    return replace(header, text=appended(header.text, f"{FOLLOWUP_TITLE} head {head} {at}"))

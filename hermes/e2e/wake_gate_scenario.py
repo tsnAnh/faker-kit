@@ -44,6 +44,7 @@ LABELED = {"number": 11, "labeler": "alice", "url": "https://github.com/acme/sho
 REAL_LABELED = {"number": 21, "labeler": "alice", "url": "https://github.com/acme/shop/issues/21", "event": 301}
 FINGERPRINT = re.compile(r"\A[0-9a-f]{64}\Z")
 SHORT_STDERR = 500
+CONFLICTS_QUIET = {"dry_run": False, "open": [], "conflicts": []}
 RECONCILE_QUIET = {"mode": "apply", "read": 0, "entries": {"merged": [], "closed": [], "unchanged": [], "published": [], "unreadable": [], "refused": [], "stale_blocked": []}}
 
 
@@ -158,6 +159,7 @@ class Gates:
         self.program("news", json.dumps({"tracked": []}))
         self.program("loop-check", json.dumps({"findings": [], "lines": [], "ok": True, "needs_action": False}))
         self.program("loop-reconcile", json.dumps(RECONCILE_QUIET))
+        self.program("session-conflicts", json.dumps(CONFLICTS_QUIET))
 
     def calls(self) -> list[str]:
         log = self.fake / "calls.log"
@@ -285,7 +287,7 @@ class Gates:
         step("the babysit gate's first tick with a pull request open wakes the agent with the issues JSON and the status lines as its Script Output, after one faker-kit issues and one status",
              self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:6] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
              and first.stdout.splitlines()[6].startswith("Closing summaries to read: unit csv (#1, head aaaaaaa, ready)") and len(first.stdout.splitlines()) == 7
-             and self.calls() == ["issues", "loop reconcile", "pickup status --no-job", "status", "news", "loop check", "loop show"], self.say(first))
+             and self.calls() == ["issues", "loop reconcile", "session conflicts", "pickup status --no-job", "status", "news", "loop check", "loop show"], self.say(first))
         step("it stores the status fingerprint and the wake time as an owner-only file, with no temp file left beside it",
              set(stored) == {"fingerprint", "woke_at", "retries", "pulls", "asked", "units", "stuck"} and stored["asked"] == [f"csv|{'a' * 40}|ready"]
              and stored["retries"] == 0 and stored["stuck"] == []
@@ -475,6 +477,45 @@ class Gates:
              wakes(told.stdout) and "unit stuck-unit (card t_44) was blocked" in told.stdout and self.silent(twice), self.say(told))
         self.program("loop-reconcile", json.dumps(RECONCILE_QUIET))
         self.program("pickup-status")
+        self.reset()
+
+    def conflicts(self) -> None:
+        step = self.run.step
+        head = "e" * 40
+        row = {"pr": 7, "head": head, "decision": "tell-owner", "action": "tell-owner", "line": f"PR #7 still conflicting after the follow-up, head {head}"}
+        steered = {"pr": 8, "head": "f" * 40, "decision": "steer", "action": "steered", "session": "session_01E2Eabc"}
+        self.reset()
+        self.serve(STATUS)
+        self.tick(BABYSIT)
+        self.program("session-conflicts", json.dumps({"dry_run": False, "open": [f"8:{'f' * 40}"], "conflicts": [steered]}))
+        sent = self.tick(BABYSIT)
+        step("conflict gate: a tick that only sent a follow-up wakes no model turn and prints nothing", self.silent(sent) and "session conflicts" in self.calls(), self.say(sent))
+        self.program("session-conflicts", json.dumps({"dry_run": False, "open": [f"7:{head}", f"8:{'f' * 40}"], "conflicts": [row, steered]}))
+        loud = self.tick(BABYSIT)
+        lines = [r for r in loud.stdout.splitlines() if r.startswith("faker-kit session conflicts:")]
+        again = self.tick(BABYSIT)
+        step("conflict gate: a pull request still conflicting after its follow-up wakes the agent with one line, printed once per head",
+             self.woke(loud, f"faker-kit session conflicts: {row['line']}") and lines == [f"faker-kit session conflicts: {row['line']}"] and self.silent(again), self.say(loud))
+        self.program("session-conflicts", json.dumps({"dry_run": False, "open": [f"8:{'f' * 40}"], "conflicts": [steered]}))
+        self.tick(BABYSIT)
+        self.program("session-conflicts", json.dumps({"dry_run": False, "open": [f"7:{head}"], "conflicts": [row]}))
+        reopened = self.tick(BABYSIT)
+        self.program("session-conflicts", json.dumps({"dry_run": False, "open": [f"7:{head}"], "conflicts": []}))
+        unsettled = self.tick(BABYSIT)
+        self.program("session-conflicts", json.dumps({"dry_run": False, "open": [f"7:{head}"], "conflicts": [row]}))
+        settled = self.tick(BABYSIT)
+        step("conflict gate: the line returns only after its pull request left the open set; a tick where GitHub had not computed it yet does not print it again",
+             wakes(reopened.stdout) and self.silent(unsettled) and self.silent(settled), self.say(reopened))
+        self.program("session-conflicts", "", 1, "boom")
+        broken = self.tick(BABYSIT)
+        broken_again = self.tick(BABYSIT)
+        step("conflict gate: an action that cannot run prints one line once and the rest of the tick still ran",
+             wakes(broken.stdout) and "faker-kit session conflicts could not run this tick" in broken.stdout and "faker-kit status:" in broken.stdout and self.silent(broken_again),
+             self.say(broken))
+        self.program("session-conflicts", json.dumps(CONFLICTS_QUIET))
+        calls = self.calls()
+        step("conflict gate: the action runs after loop reconcile and before the pickup and status reads on every tick",
+             calls.index("loop reconcile") < calls.index("session conflicts") < calls.index("pickup status --no-job") < calls.index("status"), " ".join(calls[:6]))
         self.reset()
 
     def card_events(self) -> None:
@@ -1005,6 +1046,7 @@ def fake_wake_scenario(run: Run, hermes: Path, bot: str, chief: str, env: dict[s
     with gates.fake_wrapper():
         gates.babysit()
         gates.card_check()
+        gates.conflicts()
         gates.pickup()
         gates.stuck_units()
         gates.summaries()
