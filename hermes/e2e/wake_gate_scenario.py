@@ -45,7 +45,8 @@ REAL_LABELED = {"number": 21, "labeler": "alice", "url": "https://github.com/acm
 FINGERPRINT = re.compile(r"\A[0-9a-f]{64}\Z")
 SHORT_STDERR = 500
 CONFLICTS_QUIET = {"dry_run": False, "open": [], "conflicts": []}
-RECONCILE_QUIET = {"mode": "apply", "read": 0, "entries": {"merged": [], "closed": [], "unchanged": [], "published": [], "unreadable": [], "refused": [], "stale_blocked": []}}
+RECONCILE_QUIET = {"mode": "apply", "read": 0, "entries": {"merged": [], "closed": [], "unchanged": [], "published": [], "unreadable": [], "refused": [],
+                                                           "completion_pending": [], "stale_blocked": []}}
 
 
 class Run(Protocol):
@@ -545,6 +546,33 @@ class Gates:
              wakes(broken.stdout) and "could not settle the unit cards" in broken.stdout and self.silent(broken_again), self.say(broken))
         self.program("loop-reconcile", json.dumps(RECONCILE_QUIET))
         self.reset()
+        pending = {"card": "t_1487ed28", "id": "post-update-claude-path", "head": "e" * 40, "completion": "pending", "classification": "pending", "detail": "CI acceptance pending on the exact head"}
+        held_back = json.dumps({**RECONCILE_QUIET, "entries": {**RECONCILE_QUIET["entries"], "completion_pending": [pending]}})
+        self.serve(STATUS)
+        self.tick(BABYSIT)
+        self.program("loop-reconcile", held_back)
+        alone = self.tick(BABYSIT)
+        kept_alone = self.state_of("pending")
+        self.serve([*STATUS[:1], STATUS[1].replace("conflicts", "mergeable")])
+        self.program("loop-reconcile", held_back)
+        loud = self.tick(BABYSIT)
+        notices = [row for row in loud.stdout.splitlines() if row.startswith("Notice, not a blocker:")]
+        self.serve(STATUS)
+        self.program("loop-reconcile", held_back)
+        again = self.tick(BABYSIT)
+        step("card events: a merged card whose completion Kanban holds back is a notice, not a blocker: it wakes nothing alone, prints once with the next wake as a notice naming the card and "
+             "the classification, and is not printed again",
+             self.silent(alone) and kept_alone == [] and self.woke(loud, CHANGED) and len(notices) == 1 and "t_1487ed28" in notices[0] and "pending: CI acceptance pending" in notices[0]
+             and "its slot is free" in notices[0] and not [row for row in again.stdout.splitlines() if row.startswith("Notice, not a blocker:")]
+             and self.state_of("pending") == [f"pending:t_1487ed28:{'e' * 40}"],
+             self.say(loud))
+        self.program("loop-reconcile", json.dumps(RECONCILE_QUIET))
+        self.tick(BABYSIT)
+        self.reset()
+
+    def state_of(self, kind: str) -> list[str]:
+        path = self.states[BABYSIT].parent / f"{BABYSIT}-{kind}.json"
+        return json.loads(path.read_text()) if path.is_file() else []
 
     def quiet_without_pulls(self) -> None:
         step = self.run.step

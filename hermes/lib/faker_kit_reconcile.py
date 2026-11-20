@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from faker_kit_cards import NO_RECEIPT, CardLoop, Merged, bound_pr_url, complete_card, completion_pending, let_go, part_entry, part_key
+from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, completion_pending, let_go, part_entry, part_key
 from faker_kit_gh import Refused, scrub
 from faker_kit_kanban import Card, Kanban, KanbanError
 from faker_kit_loop import CLOSED, DEFAULT_OUTCOME, Loop
@@ -19,11 +19,6 @@ CLOSED_UNIT_STATES = ("merged", "abandoned", "closed", "done")
 
 def recorded_prs(text: str) -> list[int]:
     return [int(p) for p in text.split(",") if p.isdigit()]
-
-
-def pending_detail(result: dict) -> str:
-    detail = str(result.get("detail") or "")
-    return detail if detail.replace(NO_RECEIPT, "").strip(" ()") else "Kanban refused with no reason and left no acceptance receipt for this run"
 
 
 class Unreadable(Exception):
@@ -276,7 +271,7 @@ class CardSettler(Settler):
             result = self.refusals.attempt(card.id, last.number, last.head, self.now, lambda: complete_card(self.kanban, card, item.outcome, merged, item.stages))
             self.mark(item, card, "merged", last.number)
             if result["completion"] != "done":
-                return "pending", {"card": result.pop("id"), "head": last.head, **result, "completion": "pending", "detail": pending_detail(result)}
+                return "pending", {"card": result.pop("id"), "head": last.head, **result, "completion": "pending"}
             return "done", {}
         self.mark(item, card, "merged", last.number)
         return "done", {}

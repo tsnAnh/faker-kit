@@ -100,9 +100,9 @@ from faker_kit_merge import (
     unlabeled_text,
 )
 from faker_kit_migrate import chief_parts, migrate_chief, migrate_project, read_units
-from faker_kit_pickup import Slots, abandoned_after_steer, pickup_candidates, read_pickup, slots, write_pickup
+from faker_kit_pickup import Slots, abandoned_after_steer, pickup_candidates, read_pickup, running_units, slots, write_pickup
 from faker_kit_profiles import Profiles
-from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, mark_unit, pending_detail, reconcile, render, seen_pull, tsv_items
+from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, mark_unit, reconcile, render, seen_pull, tsv_items
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
 from faker_kit_refs import belongs_elsewhere, ensure_prefix, find_ref, foreign, known_ref
 from faker_kit_refusals import Refusals
@@ -815,8 +815,8 @@ class Kit:
         try:
             mark_unit(kanban, card, "merged", pr, self.now(), str(bot.repo))
         except KanbanError as err:
-            return {**result, "completion": "pending", "detail": f"{pending_detail(result)}; {scrub(str(err))}; faker-kit loop reconcile closes the card in the kit"}
-        return {**result, "completion": "pending", "detail": pending_detail(result)}
+            return {**result, "completion": "pending", "detail": f"{result.get('detail', '')}; {scrub(str(err))}; faker-kit loop reconcile closes the card in the kit"}
+        return {**result, "completion": "pending"}
 
     def put_merge(self, gh: Gh, repo: str, pr: int, head: str) -> str:
         try:
@@ -1157,8 +1157,10 @@ class Kit:
         if caller is not None and caller.role == "project":
             mine = limits[str(caller.project)]
             out["per_project"], out["total"] = mine.per_project, mine.total
+            out["running"], out["running_total"] = len(mine.in_project), len(mine.everywhere)
         else:
             out["per_project"], out["total"] = {name: row.per_project for name, row in limits.items()}, self.policy().max_in_flight_total
+            out["running"], out["running_total"] = {name: len(row.in_project) for name, row in limits.items()}, len(running_units(cards))
         if not ready:
             return {**out, "candidates": {}, "pickup": []}
         found = {str(b.project): pickup_candidates(cards, b.name, str(b.project)) for b in bots}
