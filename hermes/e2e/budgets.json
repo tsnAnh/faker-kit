@@ -39,6 +39,7 @@
   "refresh": 28.0,
   "refresh-claude": 22.0,
   "runner": 10.0,
+  "session-conflicts": 10.0,
   "session-summary": 8.0,
   "t3code": 9.0,
   "trust": 9.0,

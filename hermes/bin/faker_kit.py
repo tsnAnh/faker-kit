@@ -16,6 +16,7 @@ import stat
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from types import TracebackType
 from typing import IO, NoReturn
@@ -33,10 +34,25 @@ from faker_kit_andon import LABEL, MACHINE, Andon, AndonError, Cord, clean_reaso
 from faker_kit_backfill import backfill, backfill_refs
 from faker_kit_card_watch import align as align_parts
 from faker_kit_card_watch import check as check_cards
-from faker_kit_card_watch import hold_live_units
+from faker_kit_card_watch import hold_live_units, session_of
 from faker_kit_cards import CLOSE_KINDS, CardLoop, Merged, bound_pr_url, close_card, complete_card, create_unit, hold, ref_view, refresh_work, retitle_card, unit_key, unit_rows
 from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, SESSION_ID, Cloud, CloudError, trust_checkout
 from faker_kit_coding_rule import CODING_FOOTER, CODING_RULE
+from faker_kit_conflicts import (
+    NO_ACTION,
+    REPOLL,
+    STEER,
+    TELL_OWNER,
+    Facts,
+    followup_message,
+    followup_times,
+    not_ours,
+    owner_line,
+    read_settled,
+    told_key,
+    with_detail,
+)
+from faker_kit_conflicts import decide as decide_conflict
 from faker_kit_cron_list import cron_jobs
 from faker_kit_env import CLAUDE_CONFIG_DIR, EnvFileError, parse_env_file, set_env, use_bot_env
 from faker_kit_gh import NAME, Coded, Gh, Refused, Runner, credential_problem, credential_state, fix_git_protocol, run_gh, scrub
@@ -92,10 +108,11 @@ from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_
 from faker_kit_refs import belongs_elsewhere, ensure_prefix, find_ref, foreign, known_ref
 from faker_kit_refusals import Refusals
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
-from faker_kit_session_card import steered, with_steer, with_summary
+from faker_kit_session_card import conflict_followups, steered, with_conflict_followup, with_steer, with_summary
 from faker_kit_session_summary import STEER_MESSAGE, closing_comments, read_summary
 from faker_kit_subscriptions import SubscriptionsError, sync_subscriptions
 from faker_kit_t3code import T3CodeLauncher, check_t3code_backend, parse_settings, unit_id
+from faker_kit_text import pull_numbers
 from faker_kit_text import refresh as refresh_text
 from faker_kit_units import SESSION_URL
 from install_config import InstallError, config_set, hermes, mapping, value_at
@@ -1314,6 +1331,73 @@ class Kit:
                 raise Refused(f"the session was not asked and the card is unchanged: {err}") from None
         return {"unit": unit, "steered": True, "session": session, "card": fresh.id}
 
+    def conflict_card(self, kanban: Kanban, card: Card | None, caller: Bot, pull: dict) -> bool:
+        fields = card.header.fields if card is not None and card.header else {}
+        if card is None or card.header is None or card.archived or card.status == "done" or card.assignee != caller.name or fields.get("Kind") != "unit":
+            return False
+        number = int(pull["number"])
+        return number in pull_numbers(card.header) or bound_pr_url(kanban.evidence_list(card.id)) == str(pull.get("html_url") or "")
+
+    def session_conflicts(self, caller: Bot, dry_run: bool) -> dict:
+        if not cutover(self.home):
+            return {"dry_run": dry_run, "skipped": "the Kanban cutover is not done, so no unit card owns a pull request and no follow-up is sent", "open": [], "conflicts": []}
+        gh = Gh(self.home, caller.name, str(caller.repo), self.run)
+        kanban = self.kanban(caller)
+        cards = {c.key: c for c in kanban.cards(False) if c.key}
+        facts: dict[int, Facts] = {}
+        rows: dict[int, dict] = {}
+        listed: dict[int, dict] = {}
+        for pull in gh.open_pulls():
+            number, unit = int(pull["number"]), unit_of(pull)
+            card = cards.get(unit_key(str(caller.project), unit)) if unit else None
+            known = Facts(number, str((pull.get("head") or {}).get("sha") or ""), bool(pull.get("draft")), "open", from_fork(pull, gh.repo), unit, label_state(pull) == "labeled",
+                          card is not None and self.conflict_card(kanban, card, caller, pull), None, None,
+                          followup_times(conflict_followups(card.header)) if card is not None and card.header else (), self.now())
+            reason = not_ours(known)
+            if reason is not None:
+                rows[number] = {"pr": number, "head": known.head, "decision": NO_ACTION, "action": "none", "reason": reason}
+                continue
+            facts[number], listed[number] = known, pull
+        pulls, unreadable = read_settled(gh.pull, sorted(facts), self.sleep, self.now)
+        for number, why in unreadable.items():
+            rows[number] = {"pr": number, "head": facts[number].head, "decision": NO_ACTION, "action": "unreadable", "reason": why[:160]}
+        for number, pull in pulls.items():
+            if number in unreadable:
+                continue
+            fact = with_detail(facts[number], pull)
+            base = str((pull.get("base") or {}).get("ref") or "")
+            rows[number] = self.conflict_action(caller, kanban, cards[unit_key(str(caller.project), str(fact.unit))], fact, base, dry_run)
+        return {"dry_run": dry_run, "open": [told_key(f.number, f.head) for f in facts.values()], "conflicts": [rows[n] for n in sorted(rows)]}
+
+    def conflict_action(self, caller: Bot, kanban: Kanban, card: Card, fact: Facts, base: str, dry_run: bool) -> dict:
+        decision = decide_conflict(fact)
+        row: dict[str, object] = {"pr": fact.number, "head": fact.head, "decision": decision, "action": "none", "draft": fact.draft}
+        if decision == REPOLL:
+            return {**row, "action": "unsettled", "reason": "GitHub had not computed whether it conflicts after the bounded reads; the next tick reads again"}
+        if decision == TELL_OWNER:
+            reason = "timeout" if any(head == fact.head for head, _ in fact.followups) else "cap"
+            return {**row, "action": TELL_OWNER, "line": owner_line(fact, base, reason)}
+        if decision != STEER:
+            return row
+        session = next((s for s in (session_of(card.header) if card.header else None, *(card.header.lines("Session") if card.header else [])) if s and SESSION_ID.fullmatch(s)), None)
+        if session is None:
+            return {**row, "action": TELL_OWNER, "line": owner_line(fact, base, "no-session")}
+        if dry_run:
+            return {**row, "action": "would steer", "session": session}
+        with Loop(self.home, caller.name).locked():
+            kanban.require_external()
+            fresh = kanban.find_card(card.key or "")
+            if fresh is None or fresh.header is None:
+                return {**row, "action": "none", "reason": "the unit card could not be read; nothing was sent"}
+            if decide_conflict(replace(fact, followups=followup_times(conflict_followups(fresh.header)))) != STEER:
+                return {**row, "action": "none", "reason": "a follow-up for this head is already recorded"}
+            kanban.edit_body(fresh.id, with_conflict_followup(fresh.header, fact.head, self.stamp()))
+            try:
+                self.cloud.steer(session, followup_message(fact.number, base))
+            except CloudError:
+                return {**row, "action": TELL_OWNER, "line": owner_line(fact, base, "delivery")}
+        return {**row, "action": "steered", "session": session}
+
     def andon_command(self, caller: Bot | None, action: str, words: list[str]) -> dict:
         project = caller is not None and caller.role == "project"
         name = caller.name if project and caller else MACHINE
@@ -2005,9 +2089,9 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--evidence", action="append", default=[], metavar="STAGE=REF", help="loop set: a one-line reference proving STAGE (built, installed, or verified); repeatable")
     cmd.add_argument("--all", action="store_true", help="loop show: closed entries too; loop check: also list duplicate evidence rows per card (read only)")
     cmd = sub.add_parser("session")
-    cmd.add_argument("action", choices=["summary", "steer"])
-    cmd.add_argument("ref", metavar="UNIT-OR-PR")
-    cmd.add_argument("--dry-run", action="store_true", help="summary: show what would be read and stored; writes nothing")
+    cmd.add_argument("action", choices=["summary", "steer", "conflicts"])
+    cmd.add_argument("ref", nargs="?", metavar="UNIT-OR-PR", help="summary, steer: the unit id or pull request number; conflicts takes none")
+    cmd.add_argument("--dry-run", action="store_true", help="summary: show what would be read and stored; conflicts: show which pull requests would get a follow-up; writes and sends nothing")
     cmd.add_argument("--session", help="steer: the session id or link to ask once for its closing summary")
     cmd = sub.add_parser("pickup")
     cmd.add_argument("action", nargs="?", choices=["status", "on", "off"], default="status")
@@ -2085,6 +2169,12 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
     if args.command == "session":
         if caller is None or caller.role != "project":
             raise Refused("session runs in a project bot's chat or job")
+        if args.action == "conflicts":
+            if args.ref or args.session:
+                raise Refused("session conflicts takes no unit, pull request or --session: it walks every open unit pull request of this project")
+            return kit.session_conflicts(caller, args.dry_run)
+        if not args.ref:
+            raise Refused(f"session {args.action} takes a unit id or a pull request number")
         if args.action == "steer":
             if not args.session or args.dry_run:
                 raise Refused("session steer takes --session <id> and no --dry-run")

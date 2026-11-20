@@ -41,6 +41,7 @@ import kanban_visibility_scenario
 import pickup_scenario
 import ready_scenario
 import refresh_scenario
+import session_conflicts_scenario
 import session_summary_scenario
 import t3code_scenario
 import tooling_scenario
@@ -147,6 +148,7 @@ def pull_row(pull):
         "number": pull["number"], "node_id": f"PR_{pull['number']}", "html_url": f"https://github.com/{state['repo']}/pull/{pull['number']}",
         "state": pull["state"], "merged_at": pull.get("merged_at"), "draft": pull.get("draft", False), "title": pull.get("title", f"unit {pull['number']}"),
         "user": {"login": pull["author"]}, "mergeable": pull["mergeable"], "body": pull.get("body"),
+        "mergeable_state": pull.get("mergeable_state", {None: "unknown", False: "dirty"}.get(pull["mergeable"], "clean")),
         "created_at": pull.get("created_at", "2026-10-01T00:00:00Z"), "updated_at": pull.get("updated_at", "2026-10-01T00:00:00Z"),
         "head": {"sha": pull["head"], "ref": pull["branch"], "repo": {"full_name": pull.get("head_repo", state["repo"]), "owner": {"login": pull.get("head_repo", state["repo"]).split("/")[0]}}},
         "base": {"ref": pull.get("base", "main"), "repo": {"full_name": state["repo"]}},
@@ -370,6 +372,8 @@ if len(args) == 2 and args[0] == "--cloud":
 elif args[:2] == ["-p", "--cloud"] and len(args) == 4:
     with open(os.environ["E2E_CLAUDE_LOG"], "a") as out:
         out.write(json.dumps({"argv": args, "cwd": os.getcwd(), "steer": True}) + "\n")
+    if args[2].endswith("01E2Efail"):
+        sys.exit(1)
     print(json.dumps({"ok": True, "session_id": args[2], "url": "https://claude.ai/code/" + args[2]}))
 elif args == ["--version"]:
     print("2.1.300 (Claude Code)")
@@ -4347,6 +4351,7 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "kanban-visibility": lambda c: kanban_visibility_scenario.visibility_scenario(c.run()),
     "pickup": scenario_pickup,
     "session-summary": lambda c: session_summary_scenario.session_scenario(c.run()),
+    "session-conflicts": lambda c: session_conflicts_scenario.conflicts_scenario(c.run()),
     "kanban-text": lambda c: kanban_text_scenario.kanban_text_scenario(c.run()),
     "kanban-backfill": lambda c: kanban_text_scenario.kanban_backfill_scenario(c.run()),
     "kanban-close": lambda c: kanban_text_scenario.kanban_close_scenario(c.run()),
