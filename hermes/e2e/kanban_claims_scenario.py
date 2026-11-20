@@ -56,7 +56,7 @@ def claims_scenario(run: Run) -> None:
 
     board.set(complete_refuse="pending")
     first = json_of(project("loop", "reconcile"))
-    refused = {r["id"]: r for r in first["entries"]["refused"]}
+    refused = {r["id"]: r for r in first["entries"]["completion_pending"]}
     later = board.by_key()[key("later-a")]
     run.step("kanban claims: a merged pull request whose acceptance refuses (pending) is reported once, the card stays ready with no claim left open, and it never reaches blocked",
              refused["later-a"]["classification"] == "pending" and later["status"] == "ready" and board.open_claims(key("later-a")) == [] and len(runs(key("later-a"))) == 1
@@ -66,7 +66,7 @@ def claims_scenario(run: Run) -> None:
     board.set(complete_refuse="text-infra")
     run.clock += 1000
     infra = json_of(project("loop", "reconcile"))
-    infra_row = {r["id"]: r for r in infra["entries"]["refused"]}["later-a"]
+    infra_row = {r["id"]: r for r in infra["entries"]["completion_pending"]}["later-a"]
     board.set(complete_refuse=None)
     run.clock += 1000
     done = json_of(project("loop", "reconcile"))

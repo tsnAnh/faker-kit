@@ -55,7 +55,7 @@ def evidence_scenario(run: Run) -> None:
         return [v for v in board.verbs()[mark:] if v[0] in WRITES or v == ("evidence", "add")]
 
     def refused_row(out: dict, card_id: str) -> dict:
-        return next((r for r in out["entries"]["refused"] if r["card"] == card_id), {})
+        return next((r for r in out["entries"]["completion_pending"] if r["card"] == card_id), {})
 
     assert chief("loop", "migrate", "--apply")[0] == 0
     assert project("loop", "migrate", "--apply")[0] == 0

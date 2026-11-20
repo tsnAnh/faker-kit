@@ -61,7 +61,7 @@ def write_told(keys: set[str], kind: str = "settle") -> None:
             temp.unlink(missing_ok=True)
 
 
-def settle_cards() -> dict[str, str]:
+def settle_cards() -> tuple[dict[str, str], dict[str, str]]:
     try:
         done = subprocess.run([gate.WRAPPER, "loop", "reconcile"], env=gate.child_env(), capture_output=True, text=True, timeout=gate.TIMEOUT_SECONDS, check=False)
         report = json.loads(done.stdout) if done.returncode == 0 else None
@@ -69,8 +69,9 @@ def settle_cards() -> dict[str, str]:
         report = None
     entries = report.get("entries") if isinstance(report, dict) else None
     if not isinstance(entries, dict):
-        return {"could-not-run": "faker-kit loop reconcile could not settle the unit cards this tick; run faker-kit loop reconcile"}
+        return {"could-not-run": "faker-kit loop reconcile could not settle the unit cards this tick; run faker-kit loop reconcile"}, {}
     found: dict[str, str] = {}
+    notices: dict[str, str] = {}
     for row in report.get("blocked") or []:
         if isinstance(row, dict) and row.get("blocked") is True:
             found[f"blocked:{row.get('card')}"] = (f"faker-kit loop reconcile: unit {row.get('unit')} (card {row.get('card')}) was blocked: its session left no pull request after the one steer. "
@@ -83,10 +84,16 @@ def settle_cards() -> dict[str, str]:
             found[f"refused:{card}:{row.get('head', '')}:{row.get('classification', 'unknown')}"] = (
                 f"faker-kit loop reconcile: card {card} was refused ({row.get('classification', 'unknown')}: {row.get('detail', '')}); "
                 "its claim is released and the kit tries again only after a growing hold or when the head moves")
+    for row in entries.get("completion_pending") or []:
+        if isinstance(row, dict):
+            card = row.get("card") or row.get("id")
+            notices[f"pending:{card}:{row.get('head', '')}"] = (
+                f"Notice, not a blocker: unit {row.get('id')} (card {card}) is merged on GitHub and closed in the kit, and its slot is free; Kanban has not completed the card yet "
+                f"({row.get('classification', 'unknown')}: {row.get('detail', '')}); the kit retries on its own and needs nothing from you")
     for row in entries.get("unreadable") or []:
         if isinstance(row, dict):
             found[f"unreadable:{row.get('id')}:{row.get('reason', '')}"] = f"faker-kit loop reconcile: could not read GitHub for unit {row.get('id')} ({row.get('reason', '')}); the next tick retries"
-    return found
+    return found, notices
 
 
 def conflict_lines() -> tuple[dict[str, str], set[str] | None]:
@@ -117,7 +124,7 @@ def pickup_lines() -> dict[str, str]:
 
 def main() -> None:
     issues = listed_issues()
-    settled = settle_cards()
+    settled, pending = settle_cards()
     told = read_told()
     refusals = [line for key, line in settled.items() if key not in told]
     if told != set(settled):
@@ -139,7 +146,12 @@ def main() -> None:
     cards = card_check_line()
     ready = f"faker-kit pickup: {len(fresh_picks)} ready unit card(s) to pick up" if fresh_picks else None
     news = news or undelivered or cards or (refusals[0] if refusals else None) or (conflicts[0] if conflicts else None) or ready
+    told_pending = read_told("pending")
+    notices = [line for key, line in pending.items() if key not in told_pending]
     wake = gate.tick(JOB, lines, time.time(), news, summaries=True, stuck=gate.stuck_units(time.time()))
+    kept_pending = {key for key in told_pending if key in pending} | (set(pending) if wake is not None else set())
+    if kept_pending != told_pending:
+        write_told(kept_pending, "pending")
     if wake is None:
         gate.quiet()
         return
@@ -152,6 +164,7 @@ def main() -> None:
         *([undelivered] if undelivered else []),
         *([cards] if cards else []),
         *refusals,
+        *notices,
         *conflicts,
         *fresh_picks,
         *([wake.summary] if wake.summary else []),

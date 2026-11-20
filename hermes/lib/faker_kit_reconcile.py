@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, let_go, part_entry, part_key
+from faker_kit_cards import NO_RECEIPT, CardLoop, Merged, bound_pr_url, complete_card, completion_pending, let_go, part_entry, part_key
 from faker_kit_gh import Refused, scrub
 from faker_kit_kanban import Card, Kanban, KanbanError
 from faker_kit_loop import CLOSED, DEFAULT_OUTCOME, Loop
@@ -15,6 +15,15 @@ from faker_kit_text import refresh
 PullReader = Callable[[str, int], dict]
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 CLOSED_UNIT_STATES = ("merged", "abandoned", "closed", "done")
+
+
+def recorded_prs(text: str) -> list[int]:
+    return [int(p) for p in text.split(",") if p.isdigit()]
+
+
+def pending_detail(result: dict) -> str:
+    detail = str(result.get("detail") or "")
+    return detail if detail.replace(NO_RECEIPT, "").strip(" ()") else "Kanban refused with no reason and left no acceptance receipt for this run"
 
 
 class Unreadable(Exception):
@@ -57,6 +66,7 @@ class Findings:
     awaiting: list[dict[str, str]] = field(default_factory=list)
     waiting: list[dict[str, object]] = field(default_factory=list)
     refused: list[dict[str, object]] = field(default_factory=list)
+    pending: list[dict[str, object]] = field(default_factory=list)
     stale_blocked: list[dict[str, object]] = field(default_factory=list)
 
 
@@ -151,18 +161,20 @@ def land(found: Findings, item: Tracked, last: Seen, settle: Settler | None) -> 
         found.waiting.append({"id": item.ident, **detail})
     elif status == "stale_blocked":
         found.stale_blocked.append({"id": item.ident, **detail})
+    elif status == "pending":
+        found.pending.append({"id": item.ident, **detail})
     else:
         found.refused.append({"id": item.ident, **detail})
 
 
 def entries(found: Findings) -> dict[str, object]:
     return {"unchanged": found.unchanged, "published": found.published, "unreadable": found.unreadable, "awaiting_stage_evidence": found.awaiting, "waiting_on_units": found.waiting,
-            "refused": found.refused, "stale_blocked": found.stale_blocked}
+            "refused": found.refused, "completion_pending": found.pending, "stale_blocked": found.stale_blocked}
 
 
 def render(found: Findings, mode: str) -> dict:
     rest = {"unchanged": len(found.unchanged), "unreadable": len(found.unreadable), "refused": len(found.refused),
-            "stale_blocked": len(found.stale_blocked)}
+            "completion_pending": len(found.pending), "stale_blocked": len(found.stale_blocked)}
     if mode == "dry-run":
         return {"read": found.read, "would_set_merged": len(found.merged), "would_set_closed": len(found.closed), **rest,
                 "entries": {"merged": found.merged, "closed": found.closed, **entries(found)}}
@@ -175,7 +187,7 @@ def render(found: Findings, mode: str) -> dict:
 
 def counts(rendered: dict) -> dict[str, object]:
     return {k: rendered[k] for k in ("mode", "read", "set_merged", "set_closed", "unchanged", "unreadable", "refused",
-        "stale_blocked")} | {"unreadable_ids": [u["id"] for u in rendered["entries"]["unreadable"]]}
+        "completion_pending", "stale_blocked")} | {"unreadable_ids": [u["id"] for u in rendered["entries"]["unreadable"]]}
 
 
 def ledger_items(parts: list[dict], repos: dict[str, str]) -> list[Tracked]:
@@ -223,7 +235,8 @@ def card_items(kanban: Kanban, cards: list[Card], kind: str, repos: dict[str, st
     by_key = {c.key: c for c in cards if c.key}
     for card in cards:
         fields = card.header.fields if card.header else {}
-        if card.archived or fields.get("Kind") != kind or fields.get("State") in CLOSED or (project is not None and fields.get("Project") != project) or (owner is not None and card.assignee != owner):
+        closed = fields.get("State") in CLOSED and not completion_pending(card)
+        if card.archived or fields.get("Kind") != kind or closed or (project is not None and fields.get("Project") != project) or (owner is not None and card.assignee != owner):
             continue
         repo = repos.get(fields.get("Project", ""))
         if kind == "part":
@@ -253,15 +266,18 @@ class CardSettler(Settler):
                 return "stale_blocked", {"card": card.id, "completion": "stale_blocked", "unblock": f"hermes kanban unblock {card.id}",
                                          "detail": "Kanban gave this card up after a stale kit claim; the owner or chief can run the unblock line, then loop reconcile completes it"}
             if not SHA.match(last.merge_commit) or not SHA.match(last.head):
-                missing = f"GitHub reports no merge commit for #{last.number} yet; run loop reconcile again"
-                return "refused", {"card": card.id, "head": last.head, "completion": "refused", "classification": "unknown", "detail": missing}
+                self.mark(item, card, "merged", last.number)
+                return "pending", {"card": card.id, "head": last.head, "completion": "pending", "classification": "unknown",
+                                   "detail": f"GitHub reports no merge commit for #{last.number} yet; loop reconcile completes the card once it does"}
             open_units = [p for p in self.kanban.parents(card.id) if self.status.get(p) != "done"] if item.kind == "part" else []
             if open_units:
                 return "waiting", {"card": card.id, "units": open_units}
             merged = Merged(last.number, last.url, last.head, last.merge_commit)
             result = self.refusals.attempt(card.id, last.number, last.head, self.now, lambda: complete_card(self.kanban, card, item.outcome, merged, item.stages))
+            self.mark(item, card, "merged", last.number)
             if result["completion"] != "done":
-                return "refused", {"card": result.pop("id"), "head": last.head, **result}
+                return "pending", {"card": result.pop("id"), "head": last.head, **result, "completion": "pending", "detail": pending_detail(result)}
+            return "done", {}
         self.mark(item, card, "merged", last.number)
         return "done", {}
 
@@ -282,15 +298,25 @@ class CardSettler(Settler):
 
     def mark(self, item: Tracked, card: Card, state: str, pr: int | None) -> None:
         if item.kind == "part":
-            self.loop.update(int(item.ident), state, [pr] if pr else [], None, False, self.now)
+            if not already_merged(card, state, pr):
+                self.loop.update(int(item.ident), state, [pr] if pr else [], None, False, self.now)
             return
-        header = card.header
-        if header is not None:
-            prs = sorted({*(int(p) for p in header.fields.get("PRs", "").split(",") if p), *([pr] if pr else [])})
-            changed = header.with_fields({"State": state, "PRs": ",".join(str(p) for p in prs) or None, "Updated": str(float(self.now))})
-            self.kanban.edit_body_if_changed(card.id, refresh(changed, card.title, item.repo), header)
-        if state == "abandoned":
-            self.kanban.archive(card.id)
+        mark_unit(self.kanban, card, state, pr, self.now, item.repo)
+
+
+def already_merged(card: Card, state: str, pr: int | None) -> bool:
+    header = card.header
+    return state == "merged" and header is not None and header.fields.get("State") == "merged" and pr is not None and pr in recorded_prs(header.fields.get("PRs", ""))
+
+
+def mark_unit(kanban: Kanban, card: Card, state: str, pr: int | None, now: float, repo: str | None) -> None:
+    header = card.header
+    if header is not None and not already_merged(card, state, pr):
+        prs = sorted({*recorded_prs(header.fields.get("PRs", "")), *([pr] if pr else [])})
+        changed = header.with_fields({"State": state, "PRs": ",".join(str(p) for p in prs) or None, "Updated": str(float(now))})
+        kanban.edit_body_if_changed(card.id, refresh(changed, card.title, repo), header)
+    if state == "abandoned":
+        kanban.archive(card.id)
 
 
 class LoopSettler(Settler):

@@ -30,9 +30,10 @@ from faker_kit_loop import (
     part_row,
     show_view,
 )
+from faker_kit_merge import unit_of
 from faker_kit_refs import belongs_elsewhere, clean_phrase, ensure_prefix, find_ref, foreign, known_ref, next_ref, numbered, owner_of, with_ref
 from faker_kit_session_card import steered
-from faker_kit_text import refresh, summary_of
+from faker_kit_text import pull_numbers, refresh, summary_of
 from faker_kit_units import brief_source, read_units, unit_index
 
 CHIEF_KEY = "chief"
@@ -55,6 +56,11 @@ MAX_DETAIL = 400
 MAX_LINE_CHECKS = 3
 NO_RECEIPT = "receipt: none for this run"
 REFUSAL_CLASS = re.compile(r"PR acceptance (" + "|".join(ACCEPTANCE_CLASSIFICATIONS) + r")\b")
+
+
+def completion_pending(card: Card) -> bool:
+    fields = card.header.fields if card.header else {}
+    return not card.archived and card.status != "done" and fields.get("State") == "merged"
 
 
 def part_key(part_id: int) -> str:
@@ -352,11 +358,12 @@ def create_unit(kanban: Kanban, bot: str, project: str, repo: str, unit_id: str,
         key = unit_key(project, unit_id)
         existing = kanban.find_card(key)
         registered = False
+        recorded = sorted(set(prs))
         if existing is not None:
             have = existing.header
             if have is None:
                 raise LoopError(f"card {existing.id} is not in the expected shape; nothing was changed")
-            bound = sorted({*(int(p) for p in have.fields.get("PRs", "").split(",") if p.isdigit()), *prs})
+            bound = recorded = sorted({*(int(p) for p in have.fields.get("PRs", "").split(",") if p.isdigit()), *prs})
             changes: dict[str, str | None] = {}
             if ",".join(str(p) for p in bound) != have.fields.get("PRs", ""):
                 changes = {"PRs": ",".join(str(p) for p in bound) or None, "Updated": str(float(now))}
@@ -376,7 +383,10 @@ def create_unit(kanban: Kanban, bot: str, project: str, repo: str, unit_id: str,
         if parent is not None and card.id not in kanban.parents(parent.id):
             kanban.link(card.id, parent.id)
             linked = True
-    made = {"unit": unit_id, "card": card.id, "key": key, "ref": card.ref, "title": card.title, "part": part, "outcome": outcome, "created": existing is None, "linked": linked}
+    made = {"unit": unit_id, "card": card.id, "key": key, "ref": card.ref, "title": card.title, "part": part, "outcome": outcome, "created": existing is None, "linked": linked, "prs": recorded}
+    if not linked:
+        made["linked_note"] = ("linked says only whether this call linked the unit card under a part card, and " +
+                               ("no --part was given" if part is None else f"it was already linked to part {part}") + "; the pull requests in prs are recorded on the card either way")
     return {**made, **prefix_note(project, str(card.ref), registered)}
 
 
@@ -408,6 +418,31 @@ def unit_rows(kanban: Kanban, project: str) -> dict:
 def bound_pr_url(rows: list[EvidenceRow]) -> str | None:
     urls = sorted({str(row.payload["pr_url"]) for row in rows if row.kind in PR_EVIDENCE and isinstance(row.payload.get("pr_url"), str)})
     return urls[0] if urls else None
+
+
+class PullOwners:
+    def __init__(self, kanban: Kanban, project: str) -> None:
+        self.kanban, self.project = kanban, project
+        self.loaded: list[Card] | None = None
+
+    def of(self, pull: dict) -> tuple[str | None, str | None]:
+        unit = unit_of(pull)
+        if unit is not None:
+            return unit, None
+        if self.loaded is None:
+            self.loaded = self.kanban.cards(True)
+        number, url = pull.get("number"), str(pull.get("html_url") or "")
+        owners: list[str] = []
+        for card in self.loaded:
+            fields = card.header.fields if card.header else {}
+            if card.header is None or fields.get("Kind") != "unit" or fields.get("Project") != self.project:
+                continue
+            open_card = not card.archived and card.status != "done" and fields.get("State") not in CLOSED
+            if number in pull_numbers(card.header) or (open_card and bool(url) and bound_pr_url(self.kanban.evidence_list(card.id)) == url):
+                owners.append(card.slug)
+        if len(owners) > 1:
+            return None, f"unit cards {', '.join(sorted(owners))} all record it"
+        return (owners[0] if owners else None), None
 
 
 @dataclass(frozen=True)

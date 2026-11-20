@@ -17,6 +17,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from types import TracebackType
 from typing import IO, NoReturn
@@ -35,7 +36,7 @@ from faker_kit_backfill import backfill, backfill_refs
 from faker_kit_card_watch import align as align_parts
 from faker_kit_card_watch import check as check_cards
 from faker_kit_card_watch import hold_live_units, session_of
-from faker_kit_cards import CLOSE_KINDS, CardLoop, Merged, bound_pr_url, close_card, complete_card, create_unit, hold, ref_view, refresh_work, retitle_card, unit_key, unit_rows
+from faker_kit_cards import CLOSE_KINDS, CardLoop, Merged, PullOwners, bound_pr_url, close_card, complete_card, create_unit, hold, ref_view, refresh_work, retitle_card, unit_key, unit_rows
 from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, SESSION_ID, Cloud, CloudError, trust_checkout
 from faker_kit_coding_rule import CODING_FOOTER, CODING_RULE
 from faker_kit_conflicts import (
@@ -78,7 +79,7 @@ from faker_kit_incident_sources import FetchJson, fetch_json
 from faker_kit_incidents import FetchStatus, IncidentStore, Watch, fetch_status
 from faker_kit_issues import LABELS, IssueStore, Reports
 from faker_kit_kanban import EXTERNAL, Card, Kanban, KanbanError, KanbanRunner, cutover, hermes_runner
-from faker_kit_launch import DISPATCH_FILE, BackendCheck, ClaudeLauncher, ClaudeState, Dispatch, Factory, check_claude_backend, claude_cli_state, pick_factory, preflight, read_dispatch
+from faker_kit_launch import DISPATCH_FILE, BackendCheck, Checks, ClaudeLauncher, ClaudeState, Dispatch, Factory, check_claude_backend, claude_cli_state, pick_factory, preflight, read_dispatch
 from faker_kit_loop import CLOSED, DEFAULT_OUTCOME, OUTCOMES, Loop, LoopError, part_row
 from faker_kit_machine import WEBHOOK_HOST, WEBHOOK_PORT, Machine, MachineError, Project, check_model_choice, edit_guard, load_machine, route_url, routes, secret_env, stale_hook, stale_route
 from faker_kit_merge import (
@@ -101,7 +102,7 @@ from faker_kit_merge import (
 from faker_kit_migrate import chief_parts, migrate_chief, migrate_project, read_units
 from faker_kit_pickup import Slots, abandoned_after_steer, pickup_candidates, read_pickup, slots, write_pickup
 from faker_kit_profiles import Profiles
-from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, reconcile, render, seen_pull, tsv_items
+from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, mark_unit, pending_detail, reconcile, render, seen_pull, tsv_items
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
 from faker_kit_refs import belongs_elsewhere, ensure_prefix, find_ref, foreign, known_ref
 from faker_kit_refusals import Refusals
@@ -345,41 +346,27 @@ class Kit:
                 raise Refused(f"{target} must be a regular file with no other names")
             return handle.read()
 
-    def launch(self, caller: Bot | None, project: str | None, brief_file: str, model: str | None = None, effort: str | None = None) -> dict:
-        if model is not None and not SESSION_MODEL.match(model):
-            raise Refused("--model takes opus, sonnet, haiku, fable, or a full claude- model name")
-        if effort is not None and effort not in EFFORT_LEVELS:
-            raise Refused(f"--effort takes one of {', '.join(EFFORT_LEVELS)}")
-        if caller is not None and caller.role == "project":
-            target = caller
-        elif project:
-            target = self.project_bot(self.policy(), project)
-        else:
-            raise Refused("name the project: launch --project P --brief-file F")
-        text = self.brief_text(caller.name if caller else "default", brief_file).strip()
-        if not text.startswith(BRIEF_START):
-            raise Refused(f"the brief must start with {BRIEF_START}, so the session works in faker-mode")
-        if not OWNER_DECISIONS_LINE.search(text):
-            raise Refused('the brief must list the owner\'s decisions on an OWNER DECISIONS: line; write "none: <why>" when there are none')
-        if not Path(brief_file).name.startswith(TRIAGE_BRIEF_PREFIX):
-            declared = CHANGES_LINE.search(text)
-            if declared is None or not REPOSITORY_CHANGE.match(declared.group(1)):
-                raise Refused(NOT_A_CHANGE)
-        if len(text) > MAX_BRIEF_CHARS:
-            raise Refused(f"the brief is longer than {MAX_BRIEF_CHARS} characters; write the detail into a file in the repository and point to it")
-        if SECRET_SHAPES.search(text):
-            raise Refused("the brief looks like it holds a token or key; a session's first message is a process argument, so no secret goes in it")
+    def launch(self, caller: Bot | None, project: str | None, brief_file: str, model: str | None = None, effort: str | None = None, check: bool = False) -> dict:
+        checks = Checks(check)
+        checks.run(lambda: self.launch_options(model, effort))
+        target = checks.run(lambda: self.launch_target(caller, project))
+        if target is None:
+            return checks.report()
+        text = checks.run(lambda: self.brief_text(caller.name if caller else "default", brief_file))
+        if text is not None:
+            text = text.strip()
+            for problem in self.brief_problems(text, brief_file):
+                checks.run(partial(self.refuse, problem))
         repo = str(target.repo)
-        cord = self.cord(target.name)
-        if cord:
-            raise Refused(f"{cord.describe()}; nothing starts until it is cleared")
-        try:
-            use_bot_env(self.root / "profiles" / target.name)
-        except EnvFileError as err:
-            raise Refused(str(err)) from None
-        self.require_credential()
-        dispatch = self.dispatch(target.name, repo)
-        preflight(dispatch, self.backend_checks(brief_file))
+        checks.run(lambda: self.refuse_cord(target.name))
+        ready = checks.run(lambda: self.launch_credentials(target))
+        dispatch = checks.run(lambda: self.dispatch(target.name, repo)) if ready is not None else None
+        if dispatch is not None:
+            checks.run(lambda: preflight(dispatch, self.backend_checks(brief_file)))
+            checks.run(lambda: pick_factory(dispatch, self.backends(caller.name if caller else "default", brief_file)))
+        unit_card_found = self.launch_card(caller, target, brief_file, dispatch, checks)
+        if check or text is None or dispatch is None:
+            return checks.report()
         launcher = pick_factory(dispatch, self.backends(caller.name if caller else "default", brief_file))(dispatch)
         prompt = text + ANDON_FOOTER.format(repo=repo)
         if SUMMARY_RULE not in text:
@@ -391,7 +378,6 @@ class Kit:
         digest = hashlib.sha256(prompt.encode()).hexdigest()[:8]
         owner, name = repo.split("/")
         workdir = self.home / "checkouts" / f"{owner}__{name}" / f"launch-{int(self.now())}-{digest}"
-        unit_card_found = self.launch_card(caller, target, brief_file, dispatch)
         result = launcher.start(repo, prompt, workdir, model, effort)
         self.record_session(target, Path(brief_file).name.removesuffix(".md"), result.fields.get("session"))
         out = {"repo": repo, "backend": dispatch.backend, "brief": digest, **result.fields}
@@ -399,12 +385,69 @@ class Kit:
             out["card"] = self.launch_claim(target, *unit_card_found, str(result.fields.get("session") or f"{dispatch.backend} launch {digest}"))
         return out
 
-    def launch_card(self, caller: Bot | None, target: Bot, brief_file: str, dispatch: Dispatch) -> tuple[Kanban, Card] | None:
+    @staticmethod
+    def refuse(problem: str) -> None:
+        raise Refused(problem)
+
+    @staticmethod
+    def launch_options(model: str | None, effort: str | None) -> None:
+        if model is not None and not SESSION_MODEL.match(model):
+            raise Refused("--model takes opus, sonnet, haiku, fable, or a full claude- model name")
+        if effort is not None and effort not in EFFORT_LEVELS:
+            raise Refused(f"--effort takes one of {', '.join(EFFORT_LEVELS)}")
+
+    def launch_target(self, caller: Bot | None, project: str | None) -> Bot:
+        if caller is not None and caller.role == "project":
+            return caller
+        if project:
+            return self.project_bot(self.policy(), project)
+        raise Refused("name the project: launch --project P --brief-file F")
+
+    @staticmethod
+    def brief_problems(text: str, brief_file: str) -> list[str]:
+        found: list[str] = []
+        if not text.startswith(BRIEF_START):
+            found.append(f"the brief must start with {BRIEF_START}, so the session works in faker-mode")
+        if not OWNER_DECISIONS_LINE.search(text):
+            found.append('the brief must list the owner\'s decisions on an OWNER DECISIONS: line; write "none: <why>" when there are none')
+        if not Path(brief_file).name.startswith(TRIAGE_BRIEF_PREFIX):
+            declared = CHANGES_LINE.search(text)
+            if declared is None or not REPOSITORY_CHANGE.match(declared.group(1)):
+                found.append(NOT_A_CHANGE)
+        if len(text) > MAX_BRIEF_CHARS:
+            found.append(f"the brief is longer than {MAX_BRIEF_CHARS} characters; write the detail into a file in the repository and point to it")
+        if SECRET_SHAPES.search(text):
+            found.append("the brief looks like it holds a token or key; a session's first message is a process argument, so no secret goes in it")
+        return found
+
+    def refuse_cord(self, bot: str) -> None:
+        cord = self.cord(bot)
+        if cord:
+            raise Refused(f"{cord.describe()}; nothing starts until it is cleared")
+
+    def launch_credentials(self, target: Bot) -> bool:
+        try:
+            use_bot_env(self.root / "profiles" / target.name)
+        except EnvFileError as err:
+            raise Refused(str(err)) from None
+        self.require_credential()
+        return True
+
+    def launch_card(self, caller: Bot | None, target: Bot, brief_file: str, dispatch: Dispatch | None, checks: Checks) -> tuple[Kanban, Card] | None:
         if caller is None or caller.role != "project" or not cutover(self.home):
             return None
         unit = unit_id(Path(brief_file).name)
         kanban = self.kanban(target)
         card = kanban.find_card(unit_key(str(target.project), unit))
+        checks.run(lambda: self.require_ready_card(target, unit, card))
+        if dispatch is not None and read_pickup(self.home).enabled:
+            refusal = slots(kanban.cards(False), str(target.project), dispatch.max_in_flight, self.policy().max_in_flight_total).refusal(unit)
+            if refusal:
+                checks.run(partial(self.refuse, refusal))
+        return (kanban, card) if card is not None else None
+
+    @staticmethod
+    def require_ready_card(target: Bot, unit: str, card: Card | None) -> None:
         fields = card.header.fields if card and card.header else {}
         if card is None or fields.get("Kind") != "unit" or fields.get("Project") != target.project:
             raise Refused(f"no unit card for {unit} in {target.project}, so nothing was launched; create it first: faker-kit loop unit {unit} --part <id>")
@@ -415,11 +458,6 @@ class Kit:
                           "read the session with faker-kit session summary " + unit)
         if card.status != "ready":
             raise Refused(f"the unit card {card.id} for {unit} is {card.status}, not ready, so nothing was launched; faker-kit loop check names the fix")
-        if read_pickup(self.home).enabled:
-            refusal = slots(kanban.cards(False), str(target.project), dispatch.max_in_flight, self.policy().max_in_flight_total).refusal(unit)
-            if refusal:
-                raise Refused(refusal)
-        return kanban, card
 
     def launch_claim(self, target: Bot, kanban: Kanban, card: Card, session: str) -> dict:
         try:
@@ -736,16 +774,18 @@ class Kit:
         card: Card | None = None
         bound: str | None = None
         external, error = False, None
-        unit = unit_of(pull)
+        unit, ambiguous = unit_of(pull), None
         try:
             kanban = self.kanban(bot)
             external = kanban.board().dispatch_mode == EXTERNAL
+            if external:
+                unit, ambiguous = PullOwners(kanban, str(bot.project)).of(pull)
             if external and unit:
                 card = kanban.find_card(unit_key(str(bot.project), unit), archived=True)
                 bound = bound_pr_url(kanban.evidence_list(card.id)) if card else None
         except KanbanError as err:
             error = str(err)
-        return card_refusal(pull, card, bot.name, owner_approved, after, external, error, bound)
+        return card_refusal(pull, unit, ambiguous, card, bot.name, owner_approved, after, external, error, bound)
 
     def finish_card(self, bot: Bot, pr: int) -> dict | None:
         if not cutover(self.home):
@@ -753,9 +793,10 @@ class Kit:
         unknown: dict[str, object] = {"id": None, "completion": "refused", "classification": "unknown"}
         try:
             pull = Gh(self.home, bot.name, str(bot.repo), self.run).pull(pr)
-            unit = unit_of(pull)
             kanban = self.kanban(bot)
-            card = kanban.find_card(unit_key(str(bot.project), unit)) if unit and kanban.board().dispatch_mode == EXTERNAL else None
+            external = kanban.board().dispatch_mode == EXTERNAL
+            unit = PullOwners(kanban, str(bot.project)).of(pull)[0] if external else None
+            card = kanban.find_card(unit_key(str(bot.project), unit)) if unit else None
             if card is None or card.status == "done" or card.assignee != bot.name or card.header is None:
                 return None
             unknown["id"] = card.id
@@ -768,7 +809,14 @@ class Kit:
         if not seen.merged or not SHA.match(seen.merge_commit) or not SHA.match(seen.head):
             return {**unknown, "detail": f"GitHub does not report the merge commit of #{pr} yet; faker-kit loop reconcile completes the card"}
         merged = Merged(pr, seen.url, seen.head, seen.merge_commit)
-        return Refusals(self.home, bot.name).attempt(card.id, pr, seen.head, self.now(), lambda: complete_card(kanban, card, outcome, merged))
+        result = Refusals(self.home, bot.name).attempt(card.id, pr, seen.head, self.now(), lambda: complete_card(kanban, card, outcome, merged))
+        if result.get("completion") == "done":
+            return result
+        try:
+            mark_unit(kanban, card, "merged", pr, self.now(), str(bot.repo))
+        except KanbanError as err:
+            return {**result, "completion": "pending", "detail": f"{pending_detail(result)}; {scrub(str(err))}; faker-kit loop reconcile closes the card in the kit"}
+        return {**result, "completion": "pending", "detail": pending_detail(result)}
 
     def put_merge(self, gh: Gh, repo: str, pr: int, head: str) -> str:
         try:
@@ -824,7 +872,26 @@ class Kit:
         gh = Gh(self.home, caller.name, str(caller.repo), self.run)
         default = gh.default_branch()
         own = [pull for pull in gh.open_pulls() if not from_fork(pull, gh.repo)]
-        return [self.pr_line(gh, pull, default) for pull in own[:STATUS_PRS]] or ["no open pull requests"]
+        finder = self.pull_finder(caller)
+        return [self.pr_line(gh, pull, default, finder) for pull in own[:STATUS_PRS]] or ["no open pull requests"]
+
+    def pull_finder(self, bot: Bot) -> Callable[[dict], str | None]:
+        owners: PullOwners | None = None
+
+        def find(pull: dict) -> str | None:
+            nonlocal owners
+            unit = unit_of(pull)
+            if unit is not None or not cutover(self.home):
+                return unit
+            try:
+                kanban = self.kanban(bot)
+                if kanban.board().dispatch_mode != EXTERNAL:
+                    return None
+                owners = owners or PullOwners(kanban, str(bot.project))
+                return owners.of(pull)[0]
+            except KanbanError:
+                return None
+        return find
 
     def news(self, bot: Bot) -> dict:
         try:
@@ -868,7 +935,7 @@ class Kit:
         drafts = sum(1 for p in pulls if p.get("draft"))
         return f"{head}: open {len(pulls)} (draft {drafts}, ready {len(pulls) - drafts})"
 
-    def pr_line(self, gh: Gh, pull: dict, default: str) -> str:
+    def pr_line(self, gh: Gh, pull: dict, default: str, find_unit: Callable[[dict], str | None]) -> str:
         number = int(pull["number"])
         detail = gh.pull(number)
         head = str((detail.get("head") or {}).get("sha") or "")
@@ -879,7 +946,7 @@ class Kit:
         if labels != "labeled":
             gate = f"blocked: {unlabeled_text(labels)}"
         mergeable = {True: "mergeable", False: "conflicts", None: "mergeable unknown"}[detail.get("mergeable")]
-        unit = unit_of(detail)
+        unit = find_unit(detail)
         updated = str(pull.get("updated_at") or "")
         return " | ".join([f"#{number}", *([f"unit {unit}"] if unit else []), f"by {who}", "draft" if pull.get("draft") else "ready",
                            "labeled" if labels == "labeled" else "unlabeled", mergeable,
@@ -1989,6 +2056,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--project")
     cmd.add_argument("--model")
     cmd.add_argument("--effort")
+    cmd.add_argument("--check", action="store_true", help="run every refusal launch would run, print them all, and start nothing")
     cmd = sub.add_parser("merge", allow_abbrev=False)
     cmd.add_argument("--pr", type=int)
     cmd.add_argument("--project")
@@ -2095,7 +2163,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
         added = kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider, check=args.check, reload_gateway=caller is None)
         return kit.add_project_envelope(added) if args.json else added
     if args.command == "launch":
-        return kit.launch(caller, args.project, args.brief_file, args.model, args.effort)
+        return kit.launch(caller, args.project, args.brief_file, args.model, args.effort, args.check)
     if args.command == "merge":
         return kit.merge_command(caller, args.pr, args.project, args.owner_approved, args.wait, args.everything, args.all_projects, args.match)
     if args.command == "import":
