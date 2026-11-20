@@ -98,23 +98,70 @@ def merged_gates_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              and all(c["kinds"] == ["pr_merged", "pr_published"] for c in board.state()["completions"]) and len([c for c in board.state()["completions"] if c["task"] == card("landed")["id"]]) == 4,
              json.dumps(done.get("entries")))
 
+    def completed(unit: str) -> list[dict]:
+        return [c for c in board.state()["completions"] if c["task"] == card(unit)["id"]]
+
+    def card_runs(unit: str) -> list[dict]:
+        return [r for r in board.state()["runs"] if r["task_id"] == card(unit)["id"]]
+
+    def card_evidence(unit: str) -> list[dict]:
+        return [e for e in board.state()["evidence"] if e["task_id"] == card(unit)["id"]]
+
+    def reconcile() -> tuple[dict, int]:
+        mark = len(board.calls())
+        run.clock += 7 * 3600
+        return json_of(project("loop", "reconcile")), mark
+
     merged(111, "finished")
     unit_card("finished", 111)
-    board.leave_claim(key("finished"), url=f"https://github.com/{REPO}/pull/111", head=head_of(111), commit=commit_of(111))
-    board.set(complete_refuse="already_done")
-    run.clock += 7 * 3600
-    settled = json_of(project("loop", "reconcile"))
+    board.set(done_before_claim=[card("finished")["id"]], merged_bound=[card("finished")["id"]])
+    settled, mark = reconcile()
     after_done, calls_done = board.mutations(), len(board.calls())
-    run.clock += 7 * 3600
-    json_of(project("loop", "reconcile"))
-    run.step("merged gates 1: a completion Kanban answers with already_done is a success: the card ends State merged with the pull request number and is done and claim-free, it is listed as merged, "
-             "not as completion_pending or refused, the refusal hold keeps no entry for it, and the next pass makes no Kanban write",
+    reconcile()
+    run.step("merged gates 1: Kanban answering the claim of a done card with a bound merged pull request with exit 0 and already_done true and a null run id is a success: the card ends State "
+             "merged with the pull request number, it is listed as merged, not as completion_pending or refused, no run is opened, no evidence is written, "
+             "nothing is completed or reclaimed, the refusal hold keeps "
+             "no entry for it, "
+             "and the next pass makes no Kanban write",
              "finished" in settled.get("entries", {}).get("merged", []) and "State: merged" in lines(card("finished")) and "PRs: 111" in lines(card("finished"))
              and card("finished")["status"] == "done" and board.open_claims(key("finished")) == [] and "finished" not in pending_rows(settled)
              and settled.get("completion_pending", 0) == 0 and not [r for r in settled.get("entries", {}).get("refused", []) if r["id"] == "finished"]
              and card("finished")["id"] not in project_refusals() and board.mutations() == after_done
+             and card_runs("finished") == [] and card_evidence("finished") == [] and completed("finished") == []
+             and ("claim",) in board.verbs()[len(board.verbs()) - (len(board.calls()) - mark):]
              and not [v for v in board.verbs()[calls_done:] if v[0] in WRITES and v != ("evidence", "list")], json.dumps(settled.get("entries"))[:240])
+
+    merged(112, "unbound")
+    unit_card("unbound", 112)
+    board.set(done_before_claim=[card("unbound")["id"]])
+    unbound, _ = reconcile()
+    row = pending_rows(unbound).get("unbound", {})
+    run.step("merged gates 1: the claim refusal of a done card with no merged pull request bound (exit 1, `cannot claim ... no merged pull request is bound`) is a refusal, never a success: it is a "
+             "pending row "
+             "that keeps the text, no run, evidence or completion exists, and the card is not listed as merged",
+             row.get("completion") == "pending" and "no merged pull request is bound" in str(row.get("detail")) and "unbound" not in unbound.get("entries", {}).get("merged", [])
+             and card_runs("unbound") == [] and card_evidence("unbound") == [] and completed("unbound") == [], json.dumps(row)[:240])
+
+    merged(113, "wording")
+    unit_card("wording", 113)
+    board.leave_claim(key("wording"), url=f"https://github.com/{REPO}/pull/113", head=head_of(113), commit=commit_of(113))
+    board.set(complete_refuse="text-already done")
+    wording, _ = reconcile()
+    row = pending_rows(wording).get("wording", {})
+    run.step("merged gates 1: a completion refusal whose text merely contains the words already done stays a refusal: a pending row with that "
+             "text, the claim released, and the card not listed as merged",
+             row.get("completion") == "pending" and "already done" in str(row.get("detail")) and "wording" not in wording.get("entries", {}).get("merged", [])
+             and board.open_claims(key("wording")) == [] and card("wording")["status"] == "ready", json.dumps(row)[:240])
     board.set(complete_refuse=None)
+
+    merged(114, "plain")
+    unit_card("plain", 114)
+    board.set(claim_extra={"already_done": False})
+    plain, _ = reconcile()
+    board.set(claim_extra={})
+    run.step("merged gates 1: a claim answer with already_done false and a run id takes the normal path: one run, the pull request evidence, one completion, and the card done",
+             "plain" in plain.get("entries", {}).get("merged", []) and card("plain")["status"] == "done" and len(card_runs("plain")) == 1 and len(completed("plain")) == 1
+             and sorted(e["kind"] for e in card_evidence("plain")) == ["pr_merged", "pr_published"] and "plain" not in pending_rows(plain), json.dumps(plain.get("entries"))[:240])
 
     owner("pickup", "on")
     guard = run.team / "guard.yaml"

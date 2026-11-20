@@ -132,6 +132,12 @@ def kanban_main():
         if found is None:
             die("no such task")
         found["status"] = "archived"
+    elif verb == "claim" and task(rest[0]) is not None and task(rest[0])["assignee"] == profile and (task(rest[0])["status"] == "done" or rest[0] in st.get("done_before_claim", [])):
+        found = task(rest[0])
+        found["status"] = "done"
+        if found["id"] not in st.get("merged_bound", []):
+            die(f"cannot claim {found['id']}: status=done, and no merged pull request is bound to it, so there is nothing to accept again")
+        print(json.dumps({"task_id": found["id"], "status": "done", "already_done": True, "run_id": None}))
     elif verb == "claim":
         found = task(rest[0])
         if found is None or found["assignee"] != profile or view(found)["status"] != "ready":
@@ -144,7 +150,7 @@ def kanban_main():
         found["status"] = "running"
         open_now = len([r for r in st["runs"] if r["task_id"] == found["id"] and r["ended_at"] is None])
         st.setdefault("peak", {})[found["id"]] = max(st.get("peak", {}).get(found["id"], 0), open_now)
-        print(json.dumps({"task_id": found["id"], "run_id": run_id, "profile": profile, "claim_expires": clock + ttl}))
+        print(json.dumps({"task_id": found["id"], "run_id": run_id, "profile": profile, "claim_expires": clock + ttl, **st.get("claim_extra", {})}))
     elif verb == "heartbeat":
         found, positional = opts(rest)
         live = next((r for r in st["runs"] if r["id"] == int(found["--run-id"]) and r["task_id"] == positional[0] and r["ended_at"] is None), None)
@@ -192,9 +198,6 @@ def kanban_main():
         if json.loads(card["outcome_contract"])["kind"] == "merged_pr" and not {"pr_published", "pr_merged"} <= set(kinds):
             die("cannot complete: the outcome contract needs verified pull request evidence")
         refuse = st.get("complete_refuse")
-        if refuse == "already_done":
-            card["status"], live["ended_at"] = "done", 2
-            die(f"{card['id']} is already_done; nothing to complete")
         published = json.loads(found["--metadata"])["published_pr"]
         if not refuse or not (refuse.startswith("text-") or refuse == "bare"):
             st.setdefault("events", []).append({"task_id": card["id"], "kind": "pr_acceptance", "run_id": run_id, "created_at": 1,
