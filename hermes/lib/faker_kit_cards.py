@@ -10,7 +10,7 @@ from pathlib import Path
 
 from faker_kit_gh import scrub
 from faker_kit_guard.t3code import SECRET_SHAPES
-from faker_kit_kanban import ACCEPTANCE_CLASSIFICATIONS, ALREADY_DONE, CLAIM_TTL, Card, EvidenceRow, FailedCheck, Header, Kanban, KanbanError, NewCard, Receipt
+from faker_kit_kanban import ACCEPTANCE_CLASSIFICATIONS, CLAIM_TTL, AlreadyDone, Card, EvidenceRow, FailedCheck, Header, Kanban, KanbanError, NewCard, Receipt
 from faker_kit_loop import (
     CLOSED,
     DEFAULT_OUTCOME,
@@ -482,9 +482,9 @@ def complete_card(kanban: Kanban, card: Card, outcome: str, merged: Merged, stag
         for kind, payload in completion_evidence(card, outcome, merged, stages):
             kanban.evidence_add(card.id, run_id, kind, payload)
         kanban.complete(card.id, run_id, merged.url, f"Merged pull request #{merged.pr}")
+    except AlreadyDone:
+        return {"id": card.id, "completion": "done"}
     except KanbanError as err:
-        if ALREADY_DONE.search(str(err)):
-            return {"id": card.id, "completion": "done"}
         refused = {"id": card.id, "completion": "refused", **refusal_detail(kanban, card.id, run_id, str(err))}
         return {**refused, **release_claim(kanban, card.id)} if run_id is not None else refused
     return {"id": card.id, "completion": "done"}

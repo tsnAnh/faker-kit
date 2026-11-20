@@ -87,10 +87,11 @@ def receipt_of(payload: dict[str, object], classification: str) -> Receipt:
 KanbanRunner = Callable[[list[str], str | None], str]
 
 
-ALREADY_DONE = re.compile(r"already[ _-]?done", re.IGNORECASE)
-
-
 class KanbanError(Refused):
+    pass
+
+
+class AlreadyDone(KanbanError):
     pass
 
 
@@ -380,9 +381,13 @@ class Kanban:
         extra = [*(["--ttl", str(int(ttl))] if ttl else []), *(["--session", session] if session else [])]
         shown = self.call(["claim", card_id(card), *extra, "--json"])
         try:
-            run_id = json.loads(shown).get("run_id")
+            answer = json.loads(shown)
+            run_id = answer.get("run_id")
+            finished = answer.get("already_done") is True
         except (ValueError, AttributeError):
-            run_id = None
+            run_id, finished = None, False
+        if run_id is None and finished:
+            raise AlreadyDone("Kanban says the card is already done and its pull request is merged; there is nothing to claim")
         if not isinstance(run_id, int):
             raise KanbanError("Kanban did not accept the change (the claim has no run id); the card was not changed")
         return run_id
