@@ -192,6 +192,9 @@ def kanban_main():
         if json.loads(card["outcome_contract"])["kind"] == "merged_pr" and not {"pr_published", "pr_merged"} <= set(kinds):
             die("cannot complete: the outcome contract needs verified pull request evidence")
         refuse = st.get("complete_refuse")
+        if refuse == "already_done":
+            card["status"], live["ended_at"] = "done", 2
+            die(f"{card['id']} is already_done; nothing to complete")
         published = json.loads(found["--metadata"])["published_pr"]
         if not refuse or not (refuse.startswith("text-") or refuse == "bare"):
             st.setdefault("events", []).append({"task_id": card["id"], "kind": "pr_acceptance", "run_id": run_id, "created_at": 1,
@@ -725,8 +728,9 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
         out = json_of(result)
         card = board.by_key()[card_key(unit)]
         state = board.state()
-        run.step(f"kanban merge: Pal refusing completion ({wanted}) leaves the pull request merged and the card open, and the merge reports the card once with its classification",
-                 result[0] == 0 and out["merged"] is True and n in merged_prs() and out["card"]["completion"] == "refused" and out["card"]["classification"] == wanted
+        run.step(f"kanban merge: Pal refusing completion ({wanted}) leaves the pull request merged, the card State merged, and completion pending, reported once with its classification",
+                 result[0] == 0 and out["merged"] is True and n in merged_prs() and out["card"]["completion"] == "pending" and out["card"]["classification"] == wanted
+                 and "State: merged" in lines(card) and f"PRs: {n}" in lines(card)
                  and out["card"]["id"] == card["id"] and out["card"]["detail"] and card["status"] == "ready" and board.open_claims(card_key(unit)) == []
                  and len([c for c in state["completions"] if c["task"] == card["id"]]) == 1 and len([r for r in state["runs"] if r["task_id"] == card["id"]]) == 1,
                  json.dumps(out.get("card")))
@@ -810,7 +814,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     stuck = json_of(project("loop", "reconcile"))
     state = board.state()
     pal_units = [f"pal-{mode}" for mode, _ in pal_cases]
-    refused_ids = {r["id"]: r for r in stuck["entries"]["refused"]}
+    refused_ids = {r["id"]: r for r in stuck["entries"]["completion_pending"]}
     runs_per = {u: len([r for r in state["runs"] if r["task_id"] == board.by_key()[card_key(u)]["id"]]) for u in pal_units}
     evidence_per = {u: len([e for e in state["evidence"] if e["task_id"] == board.by_key()[card_key(u)]["id"]]) for u in pal_units}
     dead = board.by_key()[card_key("dead-u")]
@@ -820,7 +824,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              and all(refused_ids[u].get("held") is True and refused_ids[u]["retry_after"] > run.clock for u in pal_units)
              and all(board.by_key()[card_key(u)]["status"] == "ready" and board.open_claims(card_key(u)) == [] for u in pal_units)
              and all(len([c for c in state["completions"] if c["task"] == board.by_key()[card_key(u)]["id"]]) == 1 for u in pal_units),
-             json.dumps(stuck["entries"]["refused"])[:300])
+             json.dumps(stuck["entries"]["completion_pending"])[:300])
     run.step("kanban reconcile: a closed unmerged pull request abandons its unit card and archives it, and a GitHub read error on another unit changes nothing",
              "dead-u" in stuck["entries"]["closed"] and dead["status"] == "archived" and "State: abandoned" in lines(dead) and "csv-export" in [u["id"] for u in stuck["entries"]["unreadable"]]
              and "State: in-progress" in lines(board.by_key()[card_key("csv-export")]), json.dumps(stuck["entries"]["closed"]))
@@ -851,11 +855,11 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     board.set(complete_refuse=None, receipt_extra={})
 
     def lines_of(out: dict) -> list[str]:
-        return sorted(r["detail"] for r in out["entries"]["refused"] if "build" in r["detail"])
+        return sorted(r["detail"] for r in out["entries"]["completion_pending"] if "build" in r["detail"])
 
     run.step("kanban refusal detail: loop reconcile prints the same named line on a repeat pass, and the repeats make no Kanban write",
-             lines_of(first) and lines_of(first) == lines_of(second) == lines_of(third) and all(r.get("checks") for r in third["entries"]["refused"] if "build" in r["detail"])
-             and m3 == m2 == m1, json.dumps(third["entries"]["refused"])[:300])
+             lines_of(first) and lines_of(first) == lines_of(second) == lines_of(third) and all(r.get("checks") for r in third["entries"]["completion_pending"] if "build" in r["detail"])
+             and m3 == m2 == m1, json.dumps(third["entries"]["completion_pending"])[:300])
     assert project("loop", "reconcile")[0] == 0
 
 
@@ -871,7 +875,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     cards = board.by_key()
     unit_card = cards[card_key("u14")]
     run.step("kanban reconcile: the chief completes a part only through Pal, waits for the part's unit cards, leaves a built part awaiting its evidence, and abandons a closed part",
-             {r["id"]: r["classification"] for r in stuck["entries"]["refused"]} == {"13": "pending"}
+             {r["id"]: r["classification"] for r in stuck["entries"]["completion_pending"]} == {"13": "pending"}
              and stuck["entries"]["waiting_on_units"] == [{"id": "14", "card": cards["faker-kit:chief:14"]["id"], "units": [unit_card["id"]]}]
              and stuck["entries"]["awaiting_stage_evidence"] == [{"id": "10", "outcome": "built"}] and stuck["entries"]["closed"] == ["15"] and cards["faker-kit:chief:15"]["status"] == "archived"
              and cards["faker-kit:chief:13"]["status"] == "ready" and cards["faker-kit:chief:14"]["status"] != "done" and cards["faker-kit:chief:10"]["status"] != "done",
@@ -1052,7 +1056,7 @@ def events_scenario(run: Run, board: Board, project: Callable[..., tuple[int, st
     board.set(complete_refuse="pending")
     refused = json_of(project("loop", "reconcile"))
     card = board.by_key()[card_key("event-157")]
-    row = next((r for r in refused["entries"]["refused"] if r["card"] == card["id"]), {})
+    row = next((r for r in refused["entries"]["completion_pending"] if r["card"] == card["id"]), {})
     run.step("card events: a Pal refusal leaves the card ready, claim released, names the head, never forced",
              card["status"] == "ready" and board.open_claims(card_key("event-157")) == [] and row.get("head") == head_of(157) and row.get("classification") == "pending", json.dumps(row))
     board.set(complete_refuse=None)

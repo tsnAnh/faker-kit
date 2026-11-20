@@ -95,7 +95,8 @@ def needs_brief(card: Card, bot: str, project: str) -> bool:
 
 
 def running_units(cards: list[Card], project: str | None = None) -> list[Card]:
-    return [c for c in cards if c.status == "running" and not c.archived and fields_of(c).get("Kind") == "unit" and (project is None or fields_of(c).get("Project") == project)]
+    return [c for c in cards if c.status == "running" and not c.archived and fields_of(c).get("Kind") == "unit" and fields_of(c).get("State") not in CLOSED
+            and (project is None or fields_of(c).get("Project") == project)]
 
 
 @dataclass(frozen=True)
@@ -116,7 +117,8 @@ class Slots:
         def named(cards: list[Card]) -> str:
             return ", ".join(f"{c.id} {c.slug}" for c in cards) or "none"
         return (f"launching {unit} would exceed the pickup limits, so nothing was launched: {self.project} runs {len(self.in_project)} of {self.per_project} unit cards ({named(self.in_project)}), "
-                f"{len(self.everywhere)} of {self.total} in total ({named(self.everywhere)}); free slots: 0. Launch again when a running unit card finishes")
+                f"{len(self.everywhere)} of {self.total} in total ({named(self.everywhere)}); free slots: 0. Launch again when a running unit card finishes; "
+                "a card whose pull request already merged frees its slot on the next faker-kit loop reconcile")
 
 
 def slots(cards: list[Card], project: str, per_project: int | None, total: int) -> Slots:

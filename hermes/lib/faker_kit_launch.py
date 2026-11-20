@@ -4,9 +4,9 @@ import json
 import re
 import subprocess
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from faker_kit_claude_cli import resolve_claude
 from faker_kit_cloud import PERMISSION_MODE, Cloud, CloudError, session_effort, session_model
@@ -19,6 +19,27 @@ CLAUDE_READY = "ready"
 CLAUDE_MISSING = "missing"
 CLAUDE_SIGNED_OUT = "signed_out"
 CLAUDE_PROBE_SECONDS = 30
+
+
+T = TypeVar("T")
+
+
+@dataclass
+class Checks:
+    collect: bool
+    problems: list[str] = field(default_factory=list)
+
+    def run(self, step: Callable[[], T]) -> T | None:
+        try:
+            return step()
+        except Refused as err:
+            if not self.collect:
+                raise
+            self.problems.append(str(err))
+            return None
+
+    def report(self) -> dict[str, object]:
+        return {"check": True, "ok": not self.problems, "problems": self.problems, "started": False}
 
 
 @dataclass(frozen=True)

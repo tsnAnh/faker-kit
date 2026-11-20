@@ -77,17 +77,19 @@ def unit_of(pull: dict) -> str | None:
     return found.group(1) if found else None
 
 
-def card_refusal(pull: dict, card: Card | None, bot: str, owner_approved: bool, cutover: bool, board_external: bool, read_error: str | None, bound_pr: str | None) -> str | None:
+def card_refusal(pull: dict, unit: str | None, ambiguous: str | None, card: Card | None, bot: str, owner_approved: bool, cutover: bool, board_external: bool, read_error: str | None,
+                 bound_pr: str | None) -> str | None:
     if owner_approved or not cutover:
         return None
     number = pull.get("number")
-    unit = unit_of(pull)
     if read_error:
         return f"#{number} cannot be checked against its Kanban card: {read_error.removesuffix('; nothing was changed')}; nothing was merged"
     if not board_external:
         return f"#{number}: Kanban board default is not an external board, so no unit card can own it; nothing was merged, and the owner merges it with --owner-approved"
+    if ambiguous:
+        return f"#{number} has no `Unit: <id>` first line in its body and {ambiguous}, so no one unit card owns it; the owner merges it with --owner-approved"
     if unit is None:
-        return (f"#{number} has no `Unit: <id>` first line in its body, so no unit card owns it; add the line and run `faker-kit loop unit <id> --pr {number}`, "
+        return (f"#{number} has no `Unit: <id>` first line in its body, and no unit card records it; add the line and run `faker-kit loop unit <id> --pr {number}`, "
                 "or the owner merges it with --owner-approved")
     if card is None:
         return f"#{number} has no unit card for {unit}; create it with `faker-kit loop unit {unit} --pr {number}`, or the owner merges it with --owner-approved"

@@ -56,7 +56,7 @@ def claims_scenario(run: Run) -> None:
 
     board.set(complete_refuse="pending")
     first = json_of(project("loop", "reconcile"))
-    refused = {r["id"]: r for r in first["entries"]["refused"]}
+    refused = {r["id"]: r for r in first["entries"]["completion_pending"]}
     later = board.by_key()[key("later-a")]
     run.step("kanban claims: a merged pull request whose acceptance refuses (pending) is reported once, the card stays ready with no claim left open, and it never reaches blocked",
              refused["later-a"]["classification"] == "pending" and later["status"] == "ready" and board.open_claims(key("later-a")) == [] and len(runs(key("later-a"))) == 1
@@ -66,7 +66,7 @@ def claims_scenario(run: Run) -> None:
     board.set(complete_refuse="text-infra")
     run.clock += 1000
     infra = json_of(project("loop", "reconcile"))
-    infra_row = {r["id"]: r for r in infra["entries"]["refused"]}["later-a"]
+    infra_row = {r["id"]: r for r in infra["entries"]["completion_pending"]}["later-a"]
     board.set(complete_refuse=None)
     run.clock += 1000
     done = json_of(project("loop", "reconcile"))
@@ -105,10 +105,10 @@ def claims_scenario(run: Run) -> None:
     line = f"hermes kanban unblock {gave['id']}"
     stuck = {r["id"]: r for r in held["entries"]["stale_blocked"]}.get("gaveup-d", {})
     after_state = board.state()
-    run.step("kanban claims: a card Kanban gave up on after a stale kit claim is reported stale_blocked with the exact unblock line and nothing is claimed, written or unblocked",
+    run.step("kanban claims: a card Kanban gave up on after a stale kit claim is reported stale_blocked with the exact unblock line, its header says merged, and nothing is claimed or unblocked",
              gave["status"] == "blocked" and first_run > 0 and stuck.get("unblock") == line and stuck.get("card") == gave["id"] and held["stale_blocked"] == 1
                  and "gaveup-d" not in held["entries"]["merged"]
-             and board.mutations() == mutations and board.by_key()[key("gaveup-d")]["status"] == "blocked" and after_state["runs"] == before_state["runs"]
+             and "State: merged" in board.body(key("gaveup-d")) and board.by_key()[key("gaveup-d")]["status"] == "blocked" and after_state["runs"] == before_state["runs"]
              and after_state["evidence"] == before_state["evidence"]
              and not any(tok == "unblock" for _, rest in board.calls()[verbs_before:] for tok in rest), json.dumps(stuck))
 
