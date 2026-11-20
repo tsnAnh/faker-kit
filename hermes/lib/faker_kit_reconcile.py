@@ -198,6 +198,13 @@ def tsv_items(rows: list[list[str]] | None, parts: list[dict], project: str, rep
     return items
 
 
+def card_prs(kanban: Kanban, card: Card, repo: str | None) -> tuple[tuple[int, ...], str | None]:
+    fields = card.header.fields if card.header else {}
+    bound, problem = evidence_numbers(kanban, card, repo)
+    header_prs = [int(p) for p in fields.get("PRs", "").split(",") if p.isdigit()]
+    return tuple(sorted(set(bound or header_prs))), problem
+
+
 def evidence_numbers(kanban: Kanban, card: Card, repo: str | None) -> tuple[list[int], str | None]:
     rows = kanban.evidence_list(card.id)
     bound = bound_pr_url(rows)
@@ -228,11 +235,12 @@ def card_items(kanban: Kanban, cards: list[Card], kind: str, repos: dict[str, st
         repo = repos.get(fields.get("Project", ""))
         if kind == "part":
             entry = part_entry(card)
-            header_prs, ident, outcome, stages = entry["prs"], str(entry["id"]), entry["outcome"], dict(entry["stages"])
+            ident, outcome, stages = str(entry["id"]), entry["outcome"], dict(entry["stages"])
+            bound, problem = evidence_numbers(kanban, card, repo)
+            prs = tuple(sorted(set(bound or entry["prs"])))
         else:
-            header_prs, ident, outcome, stages = [int(p) for p in fields.get("PRs", "").split(",") if p.isdigit()], card.slug, fields.get("Outcome", DEFAULT_OUTCOME), serving_stages(by_key, fields)
-        bound, problem = evidence_numbers(kanban, card, repo)
-        prs = tuple(sorted(set(bound or header_prs)))
+            ident, outcome, stages = card.slug, fields.get("Outcome", DEFAULT_OUTCOME), serving_stages(by_key, fields)
+            prs, problem = card_prs(kanban, card, repo)
         if prs or problem:
             items.append(Tracked(ident, kind, fields.get("Project", ""), repo, prs, outcome, stages, card, problem))
     return items

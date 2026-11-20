@@ -39,6 +39,7 @@ import kanban_scenario
 import kanban_text_scenario
 import kanban_visibility_scenario
 import pickup_scenario
+import ready_scenario
 import refresh_scenario
 import session_conflicts_scenario
 import session_summary_scenario
@@ -144,7 +145,7 @@ def options(tokens):
 
 def pull_row(pull):
     return {
-        "number": pull["number"], "html_url": f"https://github.com/{state['repo']}/pull/{pull['number']}",
+        "number": pull["number"], "node_id": f"PR_{pull['number']}", "html_url": f"https://github.com/{state['repo']}/pull/{pull['number']}",
         "state": pull["state"], "merged_at": pull.get("merged_at"), "draft": pull.get("draft", False), "title": pull.get("title", f"unit {pull['number']}"),
         "user": {"login": pull["author"]}, "mergeable": pull["mergeable"], "body": pull.get("body"),
         "mergeable_state": pull.get("mergeable_state", {None: "unknown", False: "dirty"}.get(pull["mergeable"], "clean")),
@@ -169,6 +170,8 @@ if args[0] == "api":
         pull = next(p for p in state["pulls"] if p["number"] == number)
         if pull["head"] != fields.get("sha"):
             fail("gh: Head branch was modified (HTTP 409)")
+        if pull.get("draft"):
+            fail("gh: Pull Request is still a draft (HTTP 405)")
         state["put_attempts"] = state.get("put_attempts", 0) + 1
         if state.get("put_mode") == "reject":
             save()
@@ -191,6 +194,16 @@ if args[0] == "api":
         state["deregistered"].append(route.rsplit("/", 1)[-1])
         save()
         print("{}")
+    elif route == "graphql":
+        if "markPullRequestReadyForReview" not in fields.get("query", "") or state.get("ready_fail"):
+            fail("gh: GraphQL: Resource not accessible by personal access token (HTTP 403)")
+        pull = next((p for p in state["pulls"] if f"PR_{p['number']}" == fields.get("id")), None)
+        if pull is None:
+            fail("gh: GraphQL: Could not resolve to a node with the global id (HTTP 200)")
+        pull["draft"] = False
+        state.setdefault("ready_calls", []).append(pull["number"])
+        save()
+        answer({"data": {"markPullRequestReadyForReview": {"pullRequest": {"isDraft": False}}}})
     elif route == "user":
         if state.get("login_unreadable"):
             fail("gh: Bad credentials (HTTP 401)")
@@ -252,6 +265,11 @@ if args[0] == "api":
             answer(own + [p for p in state.get("branch_pulls", []) if p["head"]["ref"] == branch and p["head"].get("owner", state["repo"].split("/")[0]) == owner])
         else:
             answer([pull_row(p) for p in state["pulls"] if p["state"] == "open"])
+            moved = [p for p in state["pulls"] if p.get("race_after_list")]
+            for p in moved:
+                p["head"] = p.pop("race_after_list")
+            if moved:
+                save()
     elif route.startswith(prefix + "/issues/") and route.endswith("/timeline") and method == "GET":
         read_fails("timeline")
         answer(state.get("timelines", {}).get(route.split("/")[-2], []))
@@ -282,6 +300,8 @@ if args[0] == "api":
         answer({"total_count": len(state["runs"]), "workflow_runs": [r for r in state["runs"].values() if r["head_sha"] == head] + state.get("stray_runs", [])})
     elif route.startswith(prefix + "/commits/") and route.endswith("/statuses"):
         answer(state["statuses"].get(route.split("/")[-2], []))
+    elif route.startswith(prefix + "/commits/") and route.count("/") == 4:
+        answer({"sha": route.split("/")[-1], "commit": {"committer": {"date": state.get("commit_dates", {}).get(route.split("/")[-1], "2026-10-01T00:00:00Z")}}})
     elif method == "POST" and route.startswith(prefix + "/issues/") and route.endswith("/comments"):
         state["comments"].append({"issue": int(route.split("/")[-2]), "body": json.loads(sys.stdin.read())["body"]})
         save()
@@ -1033,6 +1053,12 @@ def launch_scenario(run: Run) -> None:
              and not any(phrase in text for text in (faker_kit.ANDON_FOOTER, faker_kit.SUMMARY_FOOTER, faker_kit.FAKER_FOOTER, faker_kit.CODING_FOOTER) for phrase in ("CI rule:", ci_phrase))
              and not any(re.search(r"wait for (the )?(CI|checks)|until (CI|the checks)|get (it|the PR|the pull request) green", (HERMES / "templates" / name).read_text(), re.I)
                          for name in ("fix-issue-brief.md", "triage-incident-brief.md")), ", ".join(owners))
+    sentence = "Open the pull request ready for review (draft false) and use a draft only when you cannot finish."
+    shipped = [path for base in (Path(__file__).resolve().parents[1], Path(__file__).resolve().parents[2] / "plugins" / "trust-ladder") for path in base.rglob("*")
+               if path.is_file() and "e2e" not in path.parts and "vendor" not in path.parts and "__pycache__" not in path.parts and sentence in path.read_text(errors="ignore")]
+    run.step("the launch footer tells the session to open its pull request ready (draft false) once, with or without the footer in the brief, and no other shipped text repeats it",
+             first.count(sentence) == 1 and seen_held.count(sentence) == 1 and sentence in faker_kit.SUMMARY_FOOTER and first.count("a draft is a hold and no bot merges it") == 1
+             and [path.name for path in shipped] == ["faker_kit.py"], ", ".join(path.name for path in shipped))
     code, out, err = run.kit("launch", "--project", "shop", "--brief-file", str(run.brief_for(BOOTSTRAP, "setup.md", "/faker-mode\n\nGOAL: set up the repository.\n")), bot=BOOTSTRAP)
     seen_boot = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
     run.step("a launch from the bootstrap bot carries both footers once", code == 0 and seen_boot.count(faker_kit.FAKER_FOOTER) == 1 and seen_boot.count("Stop rule:") == 1, out.strip() or err.strip())
@@ -4353,6 +4379,7 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "card-refs-backfill": lambda c: card_refs_scenario.card_backfill_refs_scenario(c.run()),
     "card-prefixes": lambda c: card_prefix_scenario.card_prefix_scenario(c.run()),
     "hot-load": scenario_hot_load,
+    "ready": lambda c: ready_scenario.ready_scenario(c.run(), check_run, workflow_run, CI_PATH),
 }
 BUDGETS_PATH = Path(__file__).resolve().parent / "budgets.json"
 REAL_STUBS_ENV = "E2E_REAL_STUBS"
