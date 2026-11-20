@@ -92,6 +92,7 @@ from faker_kit_merge import (
     card_refusal,
     decide,
     from_fork,
+    instant,
     label_refusal,
     label_state,
     token,
@@ -101,13 +102,14 @@ from faker_kit_merge import (
 from faker_kit_migrate import chief_parts, migrate_chief, migrate_project, read_units
 from faker_kit_pickup import Slots, abandoned_after_steer, pickup_candidates, read_pickup, slots, write_pickup
 from faker_kit_profiles import Profiles
+from faker_kit_ready import BULK_DRAFT_HOLD, DRAFT_HOLD, mark_ready, ready_pass
 from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, reconcile, render, seen_pull, tsv_items
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
 from faker_kit_refs import belongs_elsewhere, ensure_prefix, find_ref, foreign, known_ref
 from faker_kit_refusals import Refusals
 from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slot, up
 from faker_kit_session_card import conflict_followups, steered, with_conflict_followup, with_steer, with_summary
-from faker_kit_session_summary import STEER_MESSAGE, read_summary
+from faker_kit_session_summary import STEER_MESSAGE, closing_comments, read_summary
 from faker_kit_subscriptions import SubscriptionsError, sync_subscriptions
 from faker_kit_t3code import T3CodeLauncher, check_t3code_backend, parse_settings, unit_id
 from faker_kit_text import pull_numbers
@@ -163,12 +165,13 @@ FAKER_RULE = FAKER_FOOTER.strip().removeprefix("Faker-mode rule: ")
 SUMMARY_FOOTER = (
     "\nClosing summary rule: before the session ends, post a pull request comment whose first line is exactly `Closing summary:` followed by four short labelled parts: "
     "Done, Skipped, Open questions, Blockers. Plain text only: no secrets, no tokens, and no pull request or issue text from others. "
+    "Open the pull request ready for review (draft false) and use a draft only when you cannot finish. "
     "If you could not finish a pull request, open a draft pull request whose body begins with `Unit: <unit-id>` and carries the same summary, instead of ending with nothing; "
     "a draft is a hold and no bot merges it.\n"
 )
 SUMMARY_RULE = SUMMARY_FOOTER.strip().removeprefix("Closing summary rule: ")
 LOOP_ACTIONS = {"chief": ("show", "set", "digest", "migrate", "reconcile", "backfill", "close", "check", "align", "title"),
-                "project": ("show", "migrate", "unit", "reconcile", "backfill", "close", "check", "title")}
+                "project": ("show", "migrate", "unit", "reconcile", "ready", "backfill", "close", "check", "title")}
 ROLE_COMMANDS = {
     "project": {"launch", "merge", "status", "andon", "incidents", "issues", "loop", "news", "session", "pickup"},
     "bootstrap": {"add-project", "launch", "status", "andon", "refresh", "import"},
@@ -509,7 +512,7 @@ class Kit:
                         ref, gh.branch_pulls(owner, ref) if owner and ref else None, gh.timeline(pr), str(pull.get("created_at") or ""),
                         head_tree is not None and head_tree == gh.workflows_tree(default))
 
-    def mergeable_pull(self, gh: Gh, repo: str, pr: int, owner_approved: bool = False) -> tuple[dict, str, str]:
+    def mergeable_pull(self, gh: Gh, repo: str, pr: int, owner_approved: bool = False, may_ready: bool = False) -> tuple[dict, str, str]:
         for read in range(MERGEABLE_READS):
             data = gh.pull(pr)
             head = str((data.get("head") or {}).get("sha") or "")
@@ -522,6 +525,8 @@ class Kit:
             default = gh.default_branch()
             if (data.get("base") or {}).get("ref") != default:
                 raise Refused(f"#{pr} targets another branch than the default branch {default}; only the owner merges it on GitHub")
+            if data.get("draft") and not may_ready:
+                raise Refused((BULK_DRAFT_HOLD if owner_approved else DRAFT_HOLD).format(number=pr))
             if data.get("mergeable") is False:
                 if owner_approved:
                     raise Refused(f"#{pr} conflicts with its base branch, so the owner-requested merge cannot land; the owning session must update the existing branch against the base, "
@@ -667,7 +672,7 @@ class Kit:
         return {"results": results, **counts, "unreadable": len(unreadable), "complete": not (counts["refused"] or counts["not attempted"] or unreadable)}
 
     def merge_named(self, bot: Bot, pr: int, owner_approved: bool, wait: int) -> dict:
-        landed = self.merge(bot, pr, owner_approved, wait)
+        landed = self.merge(bot, pr, owner_approved, wait, ready=owner_approved)
         try:
             author = str((Gh(self.home, bot.name, str(bot.repo), self.run).pull(pr).get("user") or {}).get("login") or "")
             login = self.acting_login(bot)
@@ -677,10 +682,12 @@ class Kit:
             landed.update(author=author, named_by_owner=True)
         return landed
 
-    def merge(self, bot: Bot, pr: int, owner_approved: bool = False, wait: int = 0) -> dict:
+    def merge(self, bot: Bot, pr: int, owner_approved: bool = False, wait: int = 0, ready: bool = False) -> dict:
         waited: dict[str, int] = {}
-        head, bypassed = self.land(bot, pr, owner_approved, wait, waited)
+        head, bypassed, marked = self.land(bot, pr, owner_approved, wait, waited, ready)
         landed: dict[str, object] = {"pr": pr, "merged": True, "head": head, "method": MERGE_METHOD}
+        if marked:
+            landed["marked_ready"] = True
         if owner_approved:
             landed["owner_approved"] = True
         if bypassed:
@@ -692,13 +699,14 @@ class Kit:
             landed["card"] = card
         return landed
 
-    def land(self, bot: Bot, pr: int, owner_approved: bool, wait: int = 0, waited: dict[str, int] | None = None) -> tuple[str, tuple[str, ...]]:
+    def land(self, bot: Bot, pr: int, owner_approved: bool, wait: int = 0, waited: dict[str, int] | None = None,
+             ready: bool = False) -> tuple[str, tuple[str, ...], bool]:
         repo = str(bot.repo)
         gh = Gh(self.home, bot.name, repo, self.run)
-        started, polls, checked = self.now(), 0, ""
+        started, polls, checked, marked = self.now(), 0, "", False
         while True:
             with MergeLock(self.home, bot.name).locked():
-                data, head, default = self.mergeable_pull(gh, repo, pr, owner_approved)
+                data, head, default = self.mergeable_pull(gh, repo, pr, owner_approved, ready)
                 if checked and head != checked:
                     raise Refused(f"the head of #{pr} moved from {checked[:12]} to {head[:12]} during the wait; nothing was merged, run merge again")
                 checked, polls = head, polls + 1
@@ -714,6 +722,12 @@ class Kit:
                 problem = self.card_gate(bot, data, owner_approved)
                 if problem:
                     raise Refused(problem)
+                if data.get("draft"):
+                    refused = mark_ready(gh, pr, head)
+                    if refused:
+                        raise Refused(refused)
+                    marked = True
+                    data = {**data, "draft": False}
                 evidence = self.evidence(gh, pr, head, default, data)
                 probe = decide(pr, head, evidence, repo, default, False) if wait else None
                 elapsed = int(self.now() - started)
@@ -726,7 +740,7 @@ class Kit:
                     verdict = decide(pr, head, evidence, repo, default, owner_approved)
                     if verdict.action != "merge":
                         raise Refused(verdict.message)
-                    return self.put_merge(gh, repo, pr, head), verdict.bypassed
+                    return self.put_merge(gh, repo, pr, head), verdict.bypassed, marked
             self.sleep(min(MERGE_WAIT_POLL_SECONDS, wait - elapsed))
 
     def card_gate(self, bot: Bot, pull: dict, owner_approved: bool) -> str | None:
@@ -941,6 +955,10 @@ class Kit:
                 raise Refused("the Kanban cutover is not done: there are no cards to align, so nothing was changed")
             kanban = self.kanban(caller)
             return align_parts(kanban, self.home, caller.name, self.role_repos(caller), apply)
+        if action == "ready":
+            if part_id is not None or state or prs or waits_on or reported or evidence or part is not None or apply:
+                raise Refused("loop ready takes no arguments except --dry-run, which prints what it would mark and changes nothing")
+            return self.loop_ready(caller, dry_run)
         if dry_run or apply:
             raise Refused("--dry-run and --apply belong to loop migrate, backfill, close and align")
         if action == "reconcile":
@@ -996,7 +1014,43 @@ class Kit:
     def loop_check(self, caller: Bot, evidence: bool = False) -> dict:
         if not cutover(self.home):
             return {"findings": [], "lines": [], "ok": True, "needs_action": False, "cutover": False}
-        return check_cards(self.kanban(caller), caller.role, caller.project, self.open_units(caller), self.now(), caller.name, evidence)
+        return check_cards(self.kanban(caller), caller.role, caller.project, self.open_units(caller), self.now(), caller.name, evidence, self.summary_time(caller))
+
+    def summary_time(self, caller: Bot) -> Callable[[dict], float | None]:
+        repos = self.role_repos(caller)
+
+        def posted(pull: dict) -> float | None:
+            repo = next((r for r in repos.values() if not from_fork(pull, r)), None)
+            if repo is None:
+                return None
+            try:
+                comments = Gh(self.home, caller.name, repo, self.run).pages(f"repos/{repo}/issues/{int(pull['number'])}/comments")
+                stamps = [moment.timestamp() for c in closing_comments(pull, comments, self.acting_login(caller)) if (moment := instant(c.get("created_at"))) is not None]
+            except (Refused, ValueError):
+                return None
+            return max(stamps) if stamps else None
+        return posted
+
+    def loop_ready(self, caller: Bot, dry_run: bool) -> dict:
+        if not cutover(self.home):
+            return {"dry_run": dry_run, "result": "unchanged", "marked": [], "failed": [], "lines": [], "cutover": False}
+        kanban = self.kanban(caller)
+        kanban.require_external()
+        repo = str(caller.repo)
+        gh = Gh(self.home, caller.name, repo, self.run)
+        default = gh.default_branch()
+
+        def checks(pull: dict) -> str | None:
+            number, head = int(pull["number"]), str((pull.get("head") or {}).get("sha") or "")
+            verdict = decide(number, head, self.evidence(gh, number, head, default, pull), repo, default, False)
+            return None if verdict.action == "merge" else verdict.message
+
+        def write(number: int, head: str) -> str | None:
+            with MergeLock(self.home, caller.name).locked():
+                return mark_ready(gh, number, head)
+
+        cord = self.cord(caller.name)
+        return ready_pass(gh, kanban, caller.name, str(caller.project), repo, lambda: self.acting_login(caller), checks, write, cord.describe() if cord else None, dry_run)
 
     def reconcile_sources(self, caller: Bot) -> tuple[dict[str, str], list[dict], list[list[str]] | None]:
         repos = {name: str(bot.repo) for name, bot in self.policy().projects().items()} if caller.role == "chief" else {str(caller.project): str(caller.repo)}
@@ -2018,7 +2072,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--title", help="a short phrase for what changes for the user or the owner, at most 70 characters with the reference; the card title is the reference and this phrase")
     cmd.add_argument("--outcome", choices=OUTCOMES, default=DEFAULT_OUTCOME, help="what done means: a merged pull request (default), or a built, installed, or verified result with evidence")
     cmd = sub.add_parser("loop")
-    cmd.add_argument("action", nargs="?", choices=["show", "set", "digest", "migrate", "unit", "reconcile", "backfill", "close", "check", "align", "title"], default="show")
+    cmd.add_argument("action", nargs="?", choices=["show", "set", "digest", "migrate", "unit", "reconcile", "ready", "backfill", "close", "check", "align", "title"], default="show")
     cmd.add_argument("id", nargs="?", type=part_or_unit)
     cmd.add_argument("--dry-run", action="store_true", help="loop migrate, backfill, close: print what would change; writes nothing")
     cmd.add_argument("--apply", action="store_true", help="loop migrate: create the cards, then the cutover marker; loop backfill: rewrite the card bodies")

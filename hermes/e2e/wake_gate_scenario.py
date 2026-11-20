@@ -44,6 +44,7 @@ LABELED = {"number": 11, "labeler": "alice", "url": "https://github.com/acme/sho
 REAL_LABELED = {"number": 21, "labeler": "alice", "url": "https://github.com/acme/shop/issues/21", "event": 301}
 FINGERPRINT = re.compile(r"\A[0-9a-f]{64}\Z")
 SHORT_STDERR = 500
+READY_QUIET = {"dry_run": False, "result": "unchanged", "marked": [], "failed": [], "lines": []}
 CONFLICTS_QUIET = {"dry_run": False, "open": [], "conflicts": []}
 RECONCILE_QUIET = {"mode": "apply", "read": 0, "entries": {"merged": [], "closed": [], "unchanged": [], "published": [], "unreadable": [], "refused": [], "stale_blocked": []}}
 
@@ -159,6 +160,7 @@ class Gates:
         self.program("news", json.dumps({"tracked": []}))
         self.program("loop-check", json.dumps({"findings": [], "lines": [], "ok": True, "needs_action": False}))
         self.program("loop-reconcile", json.dumps(RECONCILE_QUIET))
+        self.program("loop-ready", json.dumps(READY_QUIET))
         self.program("session-conflicts", json.dumps(CONFLICTS_QUIET))
 
     def calls(self) -> list[str]:
@@ -287,7 +289,7 @@ class Gates:
         step("the babysit gate's first tick with a pull request open wakes the agent with the issues JSON and the status lines as its Script Output, after one faker-kit issues and one status",
              self.woke(first, NOT_RECORDED) and first.stdout.splitlines()[1:6] == ["faker-kit issues:", issues_json([]), "faker-kit status:", *STATUS]
              and first.stdout.splitlines()[6].startswith("Closing summaries to read: unit csv (#1, head aaaaaaa, ready)") and len(first.stdout.splitlines()) == 7
-             and self.calls() == ["issues", "loop reconcile", "session conflicts", "pickup status --no-job", "status", "news", "loop check", "loop show"], self.say(first))
+             and self.calls() == ["issues", "loop reconcile", "loop ready", "session conflicts", "pickup status --no-job", "status", "news", "loop check", "loop show"], self.say(first))
         step("it stores the status fingerprint and the wake time as an owner-only file, with no temp file left beside it",
              set(stored) == {"fingerprint", "woke_at", "retries", "pulls", "asked", "units", "stuck"} and stored["asked"] == [f"csv|{'a' * 40}|ready"]
              and stored["retries"] == 0 and stored["stuck"] == []
@@ -440,6 +442,35 @@ class Gates:
         self.program("loop-check", json.dumps({"findings": [], "lines": [], "ok": True, "needs_action": False}))
         self.reset()
         self.card_events()
+
+    def ready_gate(self) -> None:
+        step = self.run.step
+        self.reset()
+        self.serve(STATUS)
+        self.tick(BABYSIT)
+        line = f"marked #5 ready for review (unit csv-two, head {'e' * 12})"
+        self.program("loop-ready", json.dumps({**READY_QUIET, "result": "marked", "marked": [{"pr": 5, "unit": "csv-two", "head": "e" * 12}], "lines": [line]}))
+        (self.fake / "calls.log").unlink(missing_ok=True)
+        loud = self.tick(BABYSIT)
+        again = self.tick(BABYSIT)
+        calls = self.calls()
+        step("ready gate: after the unit cards settle the tick runs faker-kit loop ready with no model turn of its own; a flipped pull request wakes the agent with exactly its line, once",
+             self.woke(loud, line) and loud.stdout.splitlines().count(line) == 1 and calls.index("loop reconcile") < calls.index("loop ready") and self.silent(again), self.say(loud))
+        self.program("loop-ready", "", 1, "boom")
+        broken = self.tick(BABYSIT)
+        broken_again = self.tick(BABYSIT)
+        step("ready gate: a loop ready that cannot run prints one line once, the rest of the tick still runs, and the next tick is quiet",
+             wakes(broken.stdout) and "faker-kit loop ready could not check the draft unit pull requests this tick" in broken.stdout and "loop check" in self.calls()
+             and "loop show" in self.calls() and self.silent(broken_again), self.say(broken))
+        failed = {**READY_QUIET, "failed": [{"pr": 6, "unit": "csv-three", "head": "f" * 12, "reason": "GitHub refused"}]}
+        self.program("loop-ready", json.dumps(failed))
+        refused = self.tick(BABYSIT)
+        refused_again = self.tick(BABYSIT)
+        step("ready gate: a flip GitHub refused is named once with its reason and retried by the next tick without repeating the line",
+             wakes(refused.stdout) and "faker-kit loop ready: could not mark #6 ready for review (GitHub refused); the next tick retries" in refused.stdout and self.silent(refused_again),
+             self.say(refused))
+        self.program("loop-ready", json.dumps(READY_QUIET))
+        self.reset()
 
     def pickup(self) -> None:
         step = self.run.step
@@ -1046,6 +1077,7 @@ def fake_wake_scenario(run: Run, hermes: Path, bot: str, chief: str, env: dict[s
     with gates.fake_wrapper():
         gates.babysit()
         gates.card_check()
+        gates.ready_gate()
         gates.conflicts()
         gates.pickup()
         gates.stuck_units()

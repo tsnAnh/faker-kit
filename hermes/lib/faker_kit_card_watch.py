@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 from faker_kit_cards import CHIEF_KEY, hold, part_entry, refresh_work, unit_key
@@ -11,6 +12,8 @@ from faker_kit_pickup import needs_brief
 
 EXPIRY_WINDOW = 30 * 60
 EXTEND_BELOW = 2 * 3600
+DRAFT_AFTER_SESSION_MINUTES = 30
+READY = "faker-kit loop ready"
 LIVE_PARTS = ("in-progress", "ready-to-merge")
 RECONCILE = "faker-kit loop reconcile"
 
@@ -58,6 +61,17 @@ def minutes(seconds: float) -> int:
     return int(seconds // 60)
 
 
+def session_ended(kanban: Kanban, card: Card, pull: dict, summary_time: Callable[[dict], float | None]) -> float | None:
+    posted = summary_time(pull)
+    if posted is not None:
+        return posted
+    if kanban.live_run(card.id) is not None:
+        return None
+    runs = kanban.shown(card.id).get("runs")
+    ends = [r["ended_at"] for r in runs if isinstance(r, dict) and isinstance(r.get("ended_at"), (int, float)) and not isinstance(r["ended_at"], bool)] if isinstance(runs, list) else []
+    return float(max(ends)) if ends else None
+
+
 def sweep(kanban: Kanban, card: Card, now: float) -> tuple[str, bool] | None:
     run = kanban.live_run(card.id)
     expires = run.get("claim_expires") if run else None
@@ -89,7 +103,8 @@ def duplicate_groups(rows: list[EvidenceRow]) -> list[dict]:
             for (kind, _), found in groups.items() if len(found) > 1]
 
 
-def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple[str, str], dict], now: float, bot: str | None = None, evidence: bool = False) -> dict:
+def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple[str, str], dict], now: float, bot: str | None = None, evidence: bool = False,
+          summary_time: Callable[[dict], float | None] | None = None) -> dict:
     scope = None if role == "chief" else project
     cards = kanban.cards(False)
     by_id = {c.id: c for c in cards}
@@ -129,6 +144,12 @@ def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple
                 report("needs_brief", card, subject, "ready, but only a title and no owner decisions, so pickup never launches it", "ask the chief for a brief or owner decisions", False)
                 continue
             live = live_unit(card, open_units)
+            draft = live.get("pr") if live else None
+            if summary_time is not None and draft is not None and draft.get("draft"):
+                ended = session_ended(kanban, card, draft, summary_time)
+                if ended is not None and now - ended >= DRAFT_AFTER_SESSION_MINUTES * 60:
+                    report("draft_after_session", card, subject, f"PR #{draft['number']} is still a draft {minutes(now - ended)}m after its session finished",
+                           as_bot(card, f"{READY} (marks it when the checks passed; --dry-run says why not), or the owner reads the closing summary and marks it ready", role))
             if card.status != "running" and live:
                 pull = live.get("pr")
                 what = f"PR #{pull['number']} {'draft ' if pull.get('draft') else ''}open" if pull else f"session {live['session']} live"
