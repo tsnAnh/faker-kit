@@ -105,10 +105,10 @@ def claims_scenario(run: Run) -> None:
     line = f"hermes kanban unblock {gave['id']}"
     stuck = {r["id"]: r for r in held["entries"]["stale_blocked"]}.get("gaveup-d", {})
     after_state = board.state()
-    run.step("kanban claims: a card Kanban gave up on after a stale kit claim is reported stale_blocked with the exact unblock line and nothing is claimed, written or unblocked",
+    run.step("kanban claims: a card Kanban gave up on after a stale kit claim is reported stale_blocked with the exact unblock line, its header says merged, and nothing is claimed or unblocked",
              gave["status"] == "blocked" and first_run > 0 and stuck.get("unblock") == line and stuck.get("card") == gave["id"] and held["stale_blocked"] == 1
                  and "gaveup-d" not in held["entries"]["merged"]
-             and board.mutations() == mutations and board.by_key()[key("gaveup-d")]["status"] == "blocked" and after_state["runs"] == before_state["runs"]
+             and "State: merged" in board.body(key("gaveup-d")) and board.by_key()[key("gaveup-d")]["status"] == "blocked" and after_state["runs"] == before_state["runs"]
              and after_state["evidence"] == before_state["evidence"]
              and not any(tok == "unblock" for _, rest in board.calls()[verbs_before:] for tok in rest), json.dumps(stuck))
 

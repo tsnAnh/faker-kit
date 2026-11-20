@@ -144,6 +144,8 @@ def publish(found: Findings, item: Tracked, live: Seen, settle: Settler) -> None
 
 def land(found: Findings, item: Tracked, last: Seen, settle: Settler | None) -> None:
     if item.outcome != DEFAULT_OUTCOME and item.outcome not in item.stages:
+        if isinstance(settle, CardSettler) and item.kind == "unit":
+            settle.landed(item, last)
         found.awaiting.append({"id": item.ident, "outcome": item.outcome})
         return
     if settle is None:
@@ -258,6 +260,7 @@ class CardSettler(Settler):
             return "refused", {"completion": "refused", "classification": "unknown", "detail": "the entry has no card"}
         if card.status != "done":
             if self.kanban.given_up_on_stale_claim(card):
+                self.mark(item, card, "merged", last.number)
                 return "stale_blocked", {"card": card.id, "completion": "stale_blocked", "unblock": f"hermes kanban unblock {card.id}",
                                          "detail": "Kanban gave this card up after a stale kit claim; the owner or chief can run the unblock line, then loop reconcile completes it"}
             if not SHA.match(last.merge_commit) or not SHA.match(last.head):
@@ -275,6 +278,11 @@ class CardSettler(Settler):
             return "done", {}
         self.mark(item, card, "merged", last.number)
         return "done", {}
+
+    def landed(self, item: Tracked, last: Seen) -> None:
+        if item.card is not None and item.card.status != "done":
+            let_go(self.kanban, item.card, "faker-kit: the pull request merged and the card waits for its stage evidence, claim released")
+            self.mark(item, item.card, "merged", last.number)
 
     def close(self, item: Tracked) -> None:
         if item.card is not None:

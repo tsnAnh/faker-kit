@@ -114,14 +114,17 @@ def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple
                 report("duplicate_evidence", card, subject, f"duplicate evidence rows: {shown}",
                        "none to run: hermes kanban evidence takes add and list only, so the kit lists the rows and never removes one; no pass adds further copies", False)
                 findings[-1]["duplicates"] = groups
-        if card.status == "blocked" and kanban.given_up_on_stale_claim(card):
-            report("stale_blocked", card, subject, "Kanban gave the card up after two stale claims", f"hermes kanban unblock {card.id} (the owner or the chief runs it; the kit never does)")
-            continue
         if completion_pending(card):
             payload = last_acceptance(kanban, card)
             failed = payload is not None and payload.get("classification") != "success"
             said = f"acceptance {payload.get('classification')}: {scrub(str(payload.get('detail') or ''))[:120]}" if payload is not None and failed else "no acceptance receipt yet"
-            report("merged_not_done", card, subject, f"merged and closed in the kit, Kanban has not completed it ({said})", "none: loop reconcile retries completion on its own hold", False)
+            fix = "none: loop reconcile retries completion on its own hold"
+            if card.status == "blocked" and kanban.given_up_on_stale_claim(card):
+                said, fix = f"{said}; Kanban gave the card up after two stale claims", f"hermes kanban unblock {card.id} (the owner or the chief runs it; the kit never does), then reconcile completes"
+            report("merged_not_done", card, subject, f"merged and closed in the kit, Kanban has not completed it ({said})", fix, False)
+            continue
+        if card.status == "blocked" and kanban.given_up_on_stale_claim(card):
+            report("stale_blocked", card, subject, "Kanban gave the card up after two stale claims", f"hermes kanban unblock {card.id} (the owner or the chief runs it; the kit never does)")
             continue
         if not open_card(card):
             continue

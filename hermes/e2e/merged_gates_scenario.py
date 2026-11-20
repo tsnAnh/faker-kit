@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from kanban_scenario import BOT, CHIEF, FORBIDDEN_TOKENS, PROJECT, REPO, Board, commit_of, head_of, json_of, ledger, lines
+from kanban_scenario import BOT, CHIEF, DECISIONS, FORBIDDEN_TOKENS, PROJECT, REPO, Board, commit_of, head_of, json_of, ledger, lines
 
 if TYPE_CHECKING:
     from run_dispatch_e2e import Run
@@ -130,6 +130,18 @@ def merged_gates_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     capped = project("launch", "--brief-file", str(run.brief("second-unit.md", "/faker-mode\nbuild the second one\n")))
     run.step("merged gates 2: a card with a live session still holds its slot", live[0] == 0 and capped[0] != 0 and "1 of 1 unit cards" in capped[2] and "live-unit" in capped[2], capped[2].strip())
     board.edit_card(key("live-unit"), status="done")
+
+    made = json_of(run.kit("handoff", "--project", PROJECT, "--part", "Build the nightly archive", "--title", "Nightly archive builds", "--decisions", DECISIONS, "--outcome", "built", bot=CHIEF))
+    assert project("loop", "unit", "built-unit", "--title", "Nightly archive builds", "--part", str(made["id"]), "--pr", "400")[0] == 0
+    merged(400, "built-unit")
+    board.leave_claim(key("built-unit"), url=f"https://github.com/{REPO}/pull/400", head=head_of(400), commit=commit_of(400))
+    held = json_of(project("pickup", "status", "--no-job"))
+    waiting = json_of(project("loop", "reconcile"))
+    free = json_of(project("pickup", "status", "--no-job"))
+    run.step("merged gates 5: a unit whose merged pull request still waits for its stage evidence (built) is closed in the kit and holds no slot, and the stage evidence rule is unchanged",
+             held.get("running") == 1 and free.get("running") == 0 and free.get("free_slots") == 1 and {"id": "built-unit", "outcome": "built"} in waiting["entries"]["awaiting_stage_evidence"]
+             and "State: merged" in lines(card("built-unit")) and board.open_claims(key("built-unit")) == [] and card("built-unit")["status"] == "ready",
+             json.dumps({"before": held.get("running"), "after": free.get("running")}))
 
     def ready(n: int) -> None:
         open_gates(run, n, head_of(n))
