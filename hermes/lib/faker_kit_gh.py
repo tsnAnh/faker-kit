@@ -18,6 +18,8 @@ STATUS_LINE = re.compile(r"HTTP/\S+\s+([0-9]{3})")
 
 Runner = Callable[..., str]
 
+READY_MUTATION = "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { isDraft } } }"
+
 
 class Refused(Exception):
     pass
@@ -176,6 +178,18 @@ class Gh:
 
     def pull(self, number: int) -> dict:
         return self.json(f"repos/{self.repo}/pulls/{int(number)}")
+
+    def commit(self, sha: str) -> dict:
+        return self.json(f"repos/{self.repo}/commits/{sha}")
+
+    def mark_ready(self, node_id: str) -> None:
+        text = self.run(["api", "graphql", "-f", f"query={READY_MUTATION}", "-f", f"id={node_id}"])
+        try:
+            draft = json.loads(text)["data"]["markPullRequestReadyForReview"]["pullRequest"]["isDraft"]
+        except (ValueError, KeyError, TypeError):
+            raise Refused("GitHub did not confirm the pull request was marked ready for review") from None
+        if draft is not False:
+            raise Refused("GitHub still reports the pull request as a draft after the ready request")
 
     def open_pulls(self) -> list[dict]:
         return sorted(self.pages(f"repos/{self.repo}/pulls", {"state": "open"}), key=lambda p: int(p["number"]))

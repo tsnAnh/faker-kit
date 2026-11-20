@@ -34,10 +34,14 @@ def clean(text: str) -> str:
     return fence(redact(redact(text, (), SECRET_SHAPES), (), TOKEN_SHAPES), MAX_SUMMARY_CHARS)
 
 
-def pick(pull: dict, comments: list[dict], machine_login: str) -> Found:
+def closing_comments(pull: dict, comments: list[dict], machine_login: str) -> list[dict]:
     author = str((pull.get("user") or {}).get("login") or "").lower()
     trusted = {name for name in (author, machine_login.lower()) if name}
-    said = [str(c.get("body") or "") for c in comments if str(c.get("body") or "").startswith(MARKER) and str((c.get("user") or {}).get("login") or "").lower() in trusted]
+    return [c for c in comments if str(c.get("body") or "").startswith(MARKER) and str((c.get("user") or {}).get("login") or "").lower() in trusted]
+
+
+def pick(pull: dict, comments: list[dict], machine_login: str) -> Found:
+    said = [str(c.get("body") or "") for c in closing_comments(pull, comments, machine_login)]
     if said:
         return Found("comment", said[-1], None)
     body = str(pull.get("body") or "")
