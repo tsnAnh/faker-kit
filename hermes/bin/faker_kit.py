@@ -36,6 +36,7 @@ from faker_kit_card_watch import align as align_parts
 from faker_kit_card_watch import check as check_cards
 from faker_kit_card_watch import hold_live_units, session_of
 from faker_kit_cards import CLOSE_KINDS, CardLoop, Merged, bound_pr_url, close_card, complete_card, create_unit, hold, ref_view, refresh_work, retitle_card, unit_key, unit_rows
+from faker_kit_ci_rule import CI_FOOTER, CI_RULE
 from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, SESSION_ID, Cloud, CloudError, trust_checkout
 from faker_kit_coding_rule import CODING_FOOTER, CODING_RULE
 from faker_kit_conflicts import (
@@ -387,6 +388,8 @@ class Kit:
         prompt = text + ANDON_FOOTER.format(repo=repo)
         if SUMMARY_RULE not in text:
             prompt += SUMMARY_FOOTER
+        if CI_RULE not in text:
+            prompt += CI_FOOTER
         if FAKER_RULE not in text:
             prompt += FAKER_FOOTER
         if CODING_RULE not in text:

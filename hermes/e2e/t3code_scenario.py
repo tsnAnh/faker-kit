@@ -174,6 +174,10 @@ def launch_output(run: Run, bot: str, real: float) -> dict:
     run.step("t3code: the message carries the coding rule once, with both of its parts, from the same footer the claude backend gets",
              message.count("Coding rule: reuse before build, and confirm before coding.") == 1 and message.count("Reuse before build:") == 1 and message.count("Confirm before coding.") == 1
              and message.index("Faker-mode rule:") < message.index("Coding rule:") and message.rstrip().endswith("never wait for a reply."), message[-400:].replace("\n", " "))
+    run.step("t3code: the message carries the CI rule once, after the closing summary rule, from the same footer the claude backend gets",
+             message.count("CI rule: do not wait for CI.") == 1 and message.count("Never sleep, poll or loop on `gh run`, `gh pr checks` or the check-runs API") == 1
+             and "read the check results once, without waiting" in message and "never block on a check that is still pending" in message
+             and message.index("Closing summary rule:") < message.index("CI rule:") < message.index("Faker-mode rule:"), message[-900:].replace("\n", " "))
     run.step("t3code: launch makes no cloud session, no clone, and no call to the claude CLI",
              claude_calls(run) == calls_before and "clone" not in run.gh_log.read_text()[len(gh_before):], "")
     return printed
