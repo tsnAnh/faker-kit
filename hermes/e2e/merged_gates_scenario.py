@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from run_dispatch_e2e import Run
 
 REFUSALS = (("pending", "pending"), ("failure", "failure"), ("bare", "unknown"))
+SESSION = "https://claude.ai/code/session_01E2Eabc"
 
 
 def merged_gates_scenario(run: Run, open_gates: Callable[[Run, int, str], None]) -> None:
@@ -47,7 +48,8 @@ def merged_gates_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     def running_with_pr(unit: str, n: int, done: bool) -> None:
         (merged if done else pull)(n, unit)
         unit_card(unit, n)
-        board.leave_claim(key(unit), url=f"https://github.com/{REPO}/pull/{n}", head=head_of(n), commit=commit_of(n))
+        run_id = board.leave_claim(key(unit), url=f"https://github.com/{REPO}/pull/{n}", head=head_of(n), commit=commit_of(n))
+        board.edit_card(key(unit), body=board.body(key(unit)).rstrip("\n") + f"\nRun: {run_id} session {SESSION}\nSession: {SESSION}")
 
     def pending_rows(out: dict) -> dict[str, dict]:
         return {r["id"]: r for r in out.get("entries", {}).get("completion_pending", [])}
