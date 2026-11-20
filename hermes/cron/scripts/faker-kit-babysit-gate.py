@@ -89,6 +89,21 @@ def settle_cards() -> dict[str, str]:
     return found
 
 
+def conflict_lines() -> tuple[dict[str, str], set[str] | None]:
+    try:
+        done = subprocess.run([gate.WRAPPER, "session", "conflicts"], env=gate.child_env(), capture_output=True, text=True, timeout=gate.TIMEOUT_SECONDS, check=False)
+        report = json.loads(done.stdout) if done.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        report = None
+    rows = report.get("conflicts") if isinstance(report, dict) else None
+    open_keys = report.get("open") if isinstance(report, dict) else None
+    if not isinstance(rows, list) or not isinstance(open_keys, list):
+        return {"could-not-run": "faker-kit session conflicts could not run this tick; run faker-kit session conflicts"}, None
+    found = {f"{row['pr']}:{row['head']}": f"faker-kit session conflicts: {row['line']}" for row in rows
+             if isinstance(row, dict) and row.get("action") == "tell-owner" and isinstance(row.get("line"), str) and isinstance(row.get("pr"), int) and isinstance(row.get("head"), str)}
+    return found, {key for key in open_keys if isinstance(key, str)}
+
+
 def pickup_lines() -> dict[str, str]:
     try:
         done = subprocess.run([gate.WRAPPER, "pickup", "status", "--no-job"], env=gate.child_env(), capture_output=True, text=True, timeout=gate.TIMEOUT_SECONDS, check=False)
@@ -107,6 +122,12 @@ def main() -> None:
     refusals = [line for key, line in settled.items() if key not in told]
     if told != set(settled):
         write_told(set(settled))
+    flagged, still_open = conflict_lines()
+    told_conflicts = read_told("conflicts")
+    conflicts = [line for key, line in flagged.items() if key not in told_conflicts]
+    kept = {key for key in told_conflicts if still_open is None or key in still_open} | set(flagged)
+    if kept != told_conflicts:
+        write_told(kept, "conflicts")
     picked = pickup_lines()
     told_picks = read_told("pickup")
     fresh_picks = [line for key, line in picked.items() if key not in told_picks]
@@ -117,7 +138,7 @@ def main() -> None:
     undelivered = chief_news.deliver(lines, time.time())
     cards = card_check_line()
     ready = f"faker-kit pickup: {len(fresh_picks)} ready unit card(s) to pick up" if fresh_picks else None
-    news = news or undelivered or cards or (refusals[0] if refusals else None) or ready
+    news = news or undelivered or cards or (refusals[0] if refusals else None) or (conflicts[0] if conflicts else None) or ready
     wake = gate.tick(JOB, lines, time.time(), news, summaries=True, stuck=gate.stuck_units(time.time()))
     if wake is None:
         gate.quiet()
@@ -131,6 +152,7 @@ def main() -> None:
         *([undelivered] if undelivered else []),
         *([cards] if cards else []),
         *refusals,
+        *conflicts,
         *fresh_picks,
         *([wake.summary] if wake.summary else []),
         *wake.stuck,
