@@ -53,9 +53,7 @@ from faker_kit_cards import (
     unit_rows,
     waiting_reason,
 )
-from faker_kit_ci_rule import CI_FOOTER, CI_RULE
 from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, SESSION_ID, Cloud, CloudError, trust_checkout
-from faker_kit_coding_rule import CODING_FOOTER, CODING_RULE
 from faker_kit_conflicts import (
     NO_ACTION,
     REPOLL,
@@ -120,6 +118,7 @@ from faker_kit_merge import (
 from faker_kit_migrate import chief_parts, migrate_chief, migrate_project, read_units
 from faker_kit_pickup import Slots, abandoned_after_steer, pickup_candidates, read_pickup, running_units, slots, write_pickup
 from faker_kit_profiles import Profiles
+from faker_kit_prompt import brief_notice, describe, prompt_of
 from faker_kit_ready import BULK_DRAFT_HOLD, DRAFT_HOLD, mark_ready, ready_pass
 from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, mark_unit, reconcile, render, seen_pull, tsv_items
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
@@ -160,34 +159,6 @@ EXIT_ACTION = 4
 MATCH_MAX_CHARS = 100
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 UPDATED_AT = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
-ANDON_FOOTER = (
-    "\n\nStop rule: before every push, run `gh api 'repos/{repo}/issues?labels=agent:andon&state=open' --jq length`. "
-    "If it prints anything but 0, do not push or update a pull request; say so and end the session.\n"
-    "\nEffort rule: you and any subagent run Sonnet at medium effort by default, never at effort xhigh or max, whatever a playbook says; high is the highest allowed. Never use Opus for coding.\n"
-    "\nLabel rule: when you open the pull request, add the label faker-kit to it in the same step (create the label first if the repository lacks it), "
-    "check the label is on the pull request before the session ends, and add the line `Label: faker-kit` to the pull request body. "
-    "Never add the label to a pull request you did not open. If you cannot use gh, use the GitHub integration you have.\n"
-)
-FAKER_FOOTER = (
-    "\nFaker-mode rule: Work as faker-mode says: load the faker-mode skill first and follow it. Spawn every subagent you start inside a playbook step "
-    "as subagent_type \"faker-agent\" and put the absolute path of the faker-mode skill's SKILL.md in its prompt. "
-    "Make the smallest change that meets the goal. "
-    "Add no new documentation file unless this brief asks for one. Write no code comment except a non-obvious why. "
-    "Run the no-comments pass before the pull request opens. If faker-mode is not installed in this session, "
-    "say so in the pull request body and follow these rules anyway. "
-    "Do not decide an unspecified requirement or choose between visible patterns (a new switch, screen, flag) yourself: "
-    "use the pattern the existing items use; if nothing settles it, leave that part out, finish the rest, "
-    "and list the question under \"Open questions\" in the pull request body.\n"
-)
-FAKER_RULE = FAKER_FOOTER.strip().removeprefix("Faker-mode rule: ")
-SUMMARY_FOOTER = (
-    "\nClosing summary rule: before the session ends, post a pull request comment whose first line is exactly `Closing summary:` followed by four short labelled parts: "
-    "Done, Skipped, Open questions, Blockers. Plain text only: no secrets, no tokens, and no pull request or issue text from others. "
-    "Open the pull request ready for review (draft false) and use a draft only when you cannot finish. "
-    "If you could not finish a pull request, open a draft pull request whose body begins with `Unit: <unit-id>` and carries the same summary, instead of ending with nothing; "
-    "a draft is a hold and no bot merges it.\n"
-)
-SUMMARY_RULE = SUMMARY_FOOTER.strip().removeprefix("Closing summary rule: ")
 LOOP_ACTIONS = {"chief": ("show", "set", "digest", "migrate", "reconcile", "backfill", "close", "check", "align", "title"),
                 "project": ("show", "set", "migrate", "unit", "reconcile", "ready", "backfill", "close", "check", "title")}
 ROLE_COMMANDS = {
@@ -366,8 +337,8 @@ class Kit:
                 raise Refused(f"{target} must be a regular file with no other names")
             return handle.read()
 
-    def launch(self, caller: Bot | None, project: str | None, brief_file: str, model: str | None = None, effort: str | None = None, check: bool = False) -> dict:
-        checks = Checks(check)
+    def launch(self, caller: Bot | None, project: str | None, brief_file: str, model: str | None = None, effort: str | None = None, check: bool = False, show_prompt: bool = False) -> dict:
+        checks = Checks(check or show_prompt)
         checks.run(lambda: self.launch_options(model, effort))
         target = checks.run(lambda: self.launch_target(caller, project))
         if target is None:
@@ -377,6 +348,7 @@ class Kit:
             text = text.strip()
             for problem in self.brief_problems(text, brief_file):
                 checks.run(partial(self.refuse, problem))
+            checks.notice = brief_notice(text)
         repo = str(target.repo)
         checks.run(lambda: self.refuse_cord(target.name))
         ready = checks.run(lambda: self.launch_credentials(target))
@@ -385,24 +357,22 @@ class Kit:
             checks.run(lambda: preflight(dispatch, self.backend_checks(brief_file)))
             checks.run(lambda: pick_factory(dispatch, self.backends(caller.name if caller else "default", brief_file)))
         unit_card_found = self.launch_card(caller, target, brief_file, dispatch, checks)
-        if check or text is None or dispatch is None:
-            return checks.report()
+        if check or show_prompt or text is None or dispatch is None:
+            report = checks.report()
+            if show_prompt and text is not None:
+                report["backend"] = dispatch.backend if dispatch is not None else None
+                report.update(describe(text, repo))
+            return report
         launcher = pick_factory(dispatch, self.backends(caller.name if caller else "default", brief_file))(dispatch)
-        prompt = text + ANDON_FOOTER.format(repo=repo)
-        if SUMMARY_RULE not in text:
-            prompt += SUMMARY_FOOTER
-        if CI_RULE not in text:
-            prompt += CI_FOOTER
-        if FAKER_RULE not in text:
-            prompt += FAKER_FOOTER
-        if CODING_RULE not in text:
-            prompt += CODING_FOOTER
+        prompt = prompt_of(text, repo)
         digest = hashlib.sha256(prompt.encode()).hexdigest()[:8]
         owner, name = repo.split("/")
         workdir = self.home / "checkouts" / f"{owner}__{name}" / f"launch-{int(self.now())}-{digest}"
         result = launcher.start(repo, prompt, workdir, model, effort)
         self.record_session(target, Path(brief_file).name.removesuffix(".md"), result.fields.get("session"))
         out = {"repo": repo, "backend": dispatch.backend, "brief": digest, **result.fields}
+        if checks.notice:
+            out["notice"] = checks.notice
         if unit_card_found is not None:
             out["card"] = self.launch_claim(target, *unit_card_found, str(result.fields.get("session") or f"{dispatch.backend} launch {digest}"))
         return out
@@ -2148,6 +2118,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--model")
     cmd.add_argument("--effort")
     cmd.add_argument("--check", action="store_true", help="run every refusal launch would run, print them all, and start nothing")
+    cmd.add_argument("--show-prompt", action="store_true", help="implies --check: print the first message a session gets and its size per component; starts and claims nothing")
     cmd = sub.add_parser("merge", allow_abbrev=False)
     cmd.add_argument("--pr", type=int)
     cmd.add_argument("--project")
@@ -2254,7 +2225,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
         added = kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider, check=args.check, reload_gateway=caller is None)
         return kit.add_project_envelope(added) if args.json else added
     if args.command == "launch":
-        return kit.launch(caller, args.project, args.brief_file, args.model, args.effort, args.check)
+        return kit.launch(caller, args.project, args.brief_file, args.model, args.effort, args.check, args.show_prompt)
     if args.command == "merge":
         return kit.merge_command(caller, args.pr, args.project, args.owner_approved, args.wait, args.everything, args.all_projects, args.match)
     if args.command == "import":

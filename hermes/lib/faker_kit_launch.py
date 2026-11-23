@@ -28,6 +28,7 @@ T = TypeVar("T")
 class Checks:
     collect: bool
     problems: list[str] = field(default_factory=list)
+    notice: str | None = None
 
     def run(self, step: Callable[[], T]) -> T | None:
         try:
@@ -39,7 +40,10 @@ class Checks:
             return None
 
     def report(self) -> dict[str, object]:
-        return {"check": True, "ok": not self.problems, "problems": self.problems, "started": False}
+        report: dict[str, object] = {"check": True, "ok": not self.problems, "problems": self.problems, "started": False}
+        if self.notice:
+            report["notice"] = self.notice
+        return report
 
 
 @dataclass(frozen=True)
