@@ -40,8 +40,10 @@ import kanban_text_scenario
 import kanban_visibility_scenario
 import merged_gates_scenario
 import merged_ready_scenario
+import part_follows_units_scenario
 import pickup_limit_scenario
 import pickup_scenario
+import prompt_size_scenario
 import ready_scenario
 import refresh_scenario
 import session_conflicts_scenario
@@ -59,6 +61,9 @@ import faker_kit  # noqa: E402
 from faker_kit_guard.policy import decide, load_policy, reader_source  # noqa: E402
 from faker_kit_machine import ROUTE_JOBS, cloudflared_config, routes, secret_env  # noqa: E402
 
+ci_rule = importlib.import_module("faker_kit_ci_rule")
+coding_rule = importlib.import_module("faker_kit_coding_rule")
+prompt_rule = importlib.import_module("faker_kit_prompt")
 yaml = faker_kit.yaml
 sys.modules["faker_kit_refs"].PREFIXES.update({"shop": "SHOP"})
 Coded = faker_kit.Coded
@@ -962,7 +967,7 @@ def launch_scenario(run: Run) -> None:
              len(calls) == 1 and first.startswith("/faker-mode") and "agent:andon" in first and "README typo" in first, first[:120].replace("\n", " "))
     run.step("a launch with no model choice starts the session on sonnet at medium effort", calls[-1].get("model") == "sonnet" and calls[-1].get("effort") == "medium", "")
     run.step("the stop rule tells the session and its subagents to run sonnet at medium by default, never xhigh or max, and never opus for coding",
-             "you and any subagent run Sonnet at medium effort by default, never at effort xhigh or max" in first and "Never use Opus for coding" in first, first[-260:].replace("\n", " "))
+             "Subagents: Sonnet at medium, never xhigh, max or Opus" in first, first[-260:].replace("\n", " "))
     run.step("the session starts from the kept launch checkout", Path(calls[-1]["cwd"]).name == "repo" and "checkouts" in calls[-1]["cwd"], calls[-1]["cwd"])
     for name, text, needle in (("loose.md", "Fix the README typo.\n", "/faker-mode"), ("secret.md", "/faker-mode\n\nUse ghp_" + "A" * 36 + " to push.\n", "token")):
         code, _, err = run.kit("launch", "--brief-file", str(run.brief(name, text)))
@@ -1004,73 +1009,72 @@ def launch_scenario(run: Run) -> None:
     cleared = run.kit("andon", "clear")
     run.step("clearing the cord lets work run again", cleared[0] == 0 and json.loads(cleared[1])["stopped"] is False, cleared[1].strip())
     run.update_gh(lambda state: (state["check_runs"].clear(), state["statuses"].clear(), state["reviews"].clear()))
-    footer_text = faker_kit.FAKER_FOOTER
+    footer_text = prompt_rule.FAKER_FOOTER
     andon_at = first.find("Stop rule:")
     run.step("the prompt carries the faker-mode footer once, after the brief and next to the andon footer, and the brief ends where it did",
              first.count(footer_text) == 1 and first.count("Faker-mode rule:") == 1 and first.index("README.md only.") < andon_at < first.index(footer_text)
-             and first.endswith(footer_text + faker_kit.CODING_FOOTER) and "Add no new documentation file unless this brief asks for one" in first
-             and first.count('subagent_type "faker-agent"') == 1 and first.count("absolute path of the faker-mode skill's SKILL.md in its prompt") == 1, first[-420:].replace("\n", " "))
+             and first.endswith(footer_text + coding_rule.SESSION_CODING_FOOTER) and "no documentation file or code comment" in first
+             and first.count("Subagents: Sonnet at medium, never xhigh, max or Opus") == 1, first[-420:].replace("\n", " "))
     sessions_before = len(run.claude_log.read_text().splitlines())
-    repeated = run.brief("repeat.md", "/faker-mode\n\nGOAL: x.\n" + faker_kit.FAKER_RULE + "\n")
+    repeated = run.brief("repeat.md", "/faker-mode\n\nGOAL: x.\n" + prompt_rule.FAKER_RULE + "\n")
     code, _, err = run.kit("launch", "--brief-file", str(repeated))
     seen_repeat = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
     run.step("a brief that already holds the faker-mode sentence still gets it once, and the andon footer stays",
-             code == 0 and seen_repeat.count(faker_kit.FAKER_RULE) == 1 and "agent:andon" in seen_repeat and len(run.claude_log.read_text().splitlines()) == sessions_before + 1, err.strip())
+             code == 0 and seen_repeat.count(prompt_rule.FAKER_RULE) == 1 and "agent:andon" in seen_repeat and len(run.claude_log.read_text().splitlines()) == sessions_before + 1, err.strip())
     reuse, confirm = "Reuse before build:", "Confirm before coding."
-    run.step("the launch prompt carries the coding rule once, both its parts once each, after the faker-mode footer, under 1500 characters, no secret shape",
-             first.count(faker_kit.CODING_RULE) == 1 and first.count(reuse) == 1 and first.count(confirm) == 1 and first.index("Faker-mode rule:") < first.index("Coding rule:")
-             and first.count("Coding rule:") == 1 and 'report the question under "Open questions" of your closing summary or pull request body' in first
-             and "ONE batched question" in first and "OWNER DECISIONS line" in first and "search the web" in first and "SVG icons" in first
-             and len(faker_kit.CODING_RULE) < 1500 and not faker_kit.SECRET_SHAPES.search(faker_kit.CODING_FOOTER), first[-700:].replace("\n", " "))
-    held_rule = run.brief("holds-coding.md", "/faker-mode\n\nGOAL: x.\n" + faker_kit.CODING_RULE + "\n")
+    run.step("the launch prompt carries the session coding rule once, after the faker-mode footer, with no confirm-before-coding part, no secret shape",
+             first.count(coding_rule.SESSION_CODING_RULE) == 1 and first.count(reuse) == 1 and first.count(confirm) == 0 and first.index("Faker-mode rule:") < first.index(reuse)
+             and first.count("Coding rule:") == 0 and not faker_kit.SECRET_SHAPES.search(coding_rule.SESSION_CODING_FOOTER), first[-700:].replace("\n", " "))
+    held_rule = run.brief("holds-coding.md", "/faker-mode\n\nGOAL: x.\n" + coding_rule.SESSION_CODING_RULE + "\n")
     code, _, err = run.kit("launch", "--brief-file", str(held_rule))
     seen_coding = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
     run.step("a brief that already holds the coding rule still gets it once, and the other footers stay once",
-             code == 0 and seen_coding.count(faker_kit.CODING_RULE) == 1 and seen_coding.count("Faker-mode rule:") == 1 and seen_coding.count("Closing summary rule:") == 1
+             code == 0 and seen_coding.count(coding_rule.SESSION_CODING_RULE) == 1 and seen_coding.count("Faker-mode rule:") == 1 and seen_coding.count("Closing summary rule:") == 1
              and seen_coding.count("Stop rule:") == 1, err.strip())
     summary_rule = first.count("Closing summary rule:")
-    held = run.brief("holds-summary.md", "/faker-mode\n\nGOAL: x.\n" + faker_kit.SUMMARY_RULE + "\n")
+    held = run.brief("holds-summary.md", "/faker-mode\n\nGOAL: x.\n" + prompt_rule.SUMMARY_RULE + "\n")
     code, _, err = run.kit("launch", "--brief-file", str(held))
     seen_held = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
     run.step("the closing summary rule is appended once after the andon footer and before the faker-mode footer, and a brief that already holds it gets it once on a second launch",
              summary_rule == 1 and first.index("Stop rule:") < first.index("Closing summary rule:") < first.index("Faker-mode rule:") and first.count("Closing summary:") == 1
-             and "a draft is a hold and no bot merges it" in first and code == 0 and seen_held.count(faker_kit.SUMMARY_RULE) == 1 and "Closing summary rule:" not in seen_held
-             and not faker_kit.SECRET_SHAPES.search(faker_kit.SUMMARY_FOOTER), err.strip() or first[-900:].replace("\n", " "))
-    ci_phrase = "Never sleep, poll or loop on"
+             and code == 0 and seen_held.count(prompt_rule.SUMMARY_RULE) == 1 and "Closing summary rule:" not in seen_held
+             and not faker_kit.SECRET_SHAPES.search(prompt_rule.SUMMARY_FOOTER), err.strip() or first[-900:].replace("\n", " "))
+    ci_phrase = "sleep, poll or loop on"
     run.step("the launch prompt carries the CI rule once, after the closing summary rule and before the faker-mode footer, and it names every forbidden wait and the allowed boundary",
-             first.count(faker_kit.CI_RULE) == 1 and first.count("CI rule:") == 1 and first.count(ci_phrase) == 1
+             first.count(ci_rule.CI_RULE) == 1 and first.count("CI rule:") == 1 and first.count(ci_phrase) == 1
              and first.index("Closing summary rule:") < first.index("CI rule:") < first.index("Faker-mode rule:")
-             and all(thing in faker_kit.CI_RULE for thing in ("`gh run`", "`gh pr checks`", "the check-runs API")) and "do not wait for CI" in first
-             and "run the project's own tests and checks locally" in first and "read the check results once, without waiting" in first and "never block on a check that is still pending" in first
-             and "post your closing summary and end the session" in first and not faker_kit.SECRET_SHAPES.search(faker_kit.CI_FOOTER), first[-1500:].replace("\n", " "))
-    held_ci = run.brief("holds-ci.md", "/faker-mode\n\nGOAL: x.\n" + faker_kit.CI_RULE + "\n")
+             and all(thing in ci_rule.CI_RULE for thing in ("`gh run`", "`gh pr checks`", "the check-runs API")) and "never wait for CI" in first
+             and "post the summary, end" in first and not faker_kit.SECRET_SHAPES.search(ci_rule.CI_FOOTER), first[-1500:].replace("\n", " "))
+    held_ci = run.brief("holds-ci.md", "/faker-mode\n\nGOAL: x.\n" + ci_rule.CI_RULE + "\n")
     code, _, err = run.kit("launch", "--brief-file", str(held_ci))
     seen_ci = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
     run.step("a brief that already holds the CI rule still gets it once, and the closing summary and stop rules stay once",
-             code == 0 and seen_ci.count(faker_kit.CI_RULE) == 1 and seen_ci.count(ci_phrase) == 1 and seen_ci.count("Closing summary rule:") == 1 and seen_ci.count("Stop rule:") == 1, err.strip())
+             code == 0 and seen_ci.count(ci_rule.CI_RULE) == 1 and seen_ci.count(ci_phrase) == 1 and seen_ci.count("Closing summary rule:") == 1 and seen_ci.count("Stop rule:") == 1, err.strip())
     owners = sorted(str(path.relative_to(HERMES.parent)) for path in HERMES.rglob("*") if path.is_file() and path.suffix in (".py", ".md", ".yaml", ".json", ".sh")
                     and "e2e" not in path.parts and "vendor" not in path.parts and ci_phrase in path.read_text(errors="ignore"))
     dispatch_text = (HERMES / "skills" / "dispatch" / "SKILL.md").read_text()
     run.step("the CI sentence is defined once in the rule file, in no second footer or template, and the dispatch skill carries its one bullet once",
              owners == ["hermes/lib/faker_kit_ci_rule.py"] and dispatch_text.count("`launch` appends the CI rule to every brief") == 1
-             and not any(phrase in text for text in (faker_kit.ANDON_FOOTER, faker_kit.SUMMARY_FOOTER, faker_kit.FAKER_FOOTER, faker_kit.CODING_FOOTER) for phrase in ("CI rule:", ci_phrase))
+             and not any(phrase in text for text in (prompt_rule.ANDON_FOOTER, prompt_rule.SUMMARY_FOOTER, prompt_rule.FAKER_FOOTER, coding_rule.SESSION_CODING_FOOTER)
+                         for phrase in ("CI rule:", ci_phrase))
              and not any(re.search(r"wait for (the )?(CI|checks)|until (CI|the checks)|get (it|the PR|the pull request) green", (HERMES / "templates" / name).read_text(), re.I)
                          for name in ("fix-issue-brief.md", "triage-incident-brief.md")), ", ".join(owners))
-    sentence = "Open the pull request ready for review (draft false) and use a draft only when you cannot finish."
+    sentence = "Open the pull request ready, or if you cannot finish a draft whose body begins"
     shipped = [path for base in (Path(__file__).resolve().parents[1], Path(__file__).resolve().parents[2] / "plugins" / "trust-ladder") for path in base.rglob("*")
                if path.is_file() and "e2e" not in path.parts and "vendor" not in path.parts and "__pycache__" not in path.parts and sentence in path.read_text(errors="ignore")]
     run.step("the launch footer tells the session to open its pull request ready (draft false) once, with or without the footer in the brief, and no other shipped text repeats it",
-             first.count(sentence) == 1 and seen_held.count(sentence) == 1 and sentence in faker_kit.SUMMARY_FOOTER and first.count("a draft is a hold and no bot merges it") == 1
-             and [path.name for path in shipped] == ["faker_kit.py"], ", ".join(path.name for path in shipped))
+             first.count(sentence) == 1 and seen_held.count(sentence) == 1 and sentence in prompt_rule.SUMMARY_FOOTER
+             and [path.name for path in shipped] == ["faker_kit_prompt.py"], ", ".join(path.name for path in shipped))
     code, out, err = run.kit("launch", "--project", "shop", "--brief-file", str(run.brief_for(BOOTSTRAP, "setup.md", "/faker-mode\n\nGOAL: set up the repository.\n")), bot=BOOTSTRAP)
     seen_boot = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1] if code == 0 else ""
-    run.step("a launch from the bootstrap bot carries both footers once", code == 0 and seen_boot.count(faker_kit.FAKER_FOOTER) == 1 and seen_boot.count("Stop rule:") == 1, out.strip() or err.strip())
-    run.step("a launch from the bootstrap bot carries the coding rule once, with both of its parts",
-             seen_boot.count(faker_kit.CODING_RULE) == 1 and seen_boot.count("Reuse before build:") == 1 and seen_boot.count("Confirm before coding.") == 1, seen_boot[-300:].replace("\n", " "))
+    run.step("a launch from the bootstrap bot carries both footers once", code == 0 and seen_boot.count(prompt_rule.FAKER_FOOTER) == 1
+             and seen_boot.count("Stop rule:") == 1, out.strip() or err.strip())
+    run.step("a launch from the bootstrap bot carries the session coding rule once",
+             seen_boot.count(coding_rule.SESSION_CODING_RULE) == 1 and seen_boot.count("Reuse before build:") == 1
+             and seen_boot.count("Confirm before coding.") == 0, seen_boot[-300:].replace("\n", " "))
     run.step("a launch prompt carries the pull request label rule once, in the andon footer both backends share, and neither footer trips the secret check",
-             seen_boot.count("Label rule:") == 1 and "add the label faker-kit to it in the same step" in seen_boot and "check the label is on the pull request before the session ends" in seen_boot
-             and "add the line `Label: faker-kit` to the pull request body" in seen_boot and "Never add the label to a pull request you did not open" in seen_boot
-             and "If you cannot use gh, use the GitHub integration you have" in seen_boot and not faker_kit.SECRET_SHAPES.search(faker_kit.ANDON_FOOTER + faker_kit.FAKER_FOOTER),
+             seen_boot.count("Label rule:") == 1 and "add the label `faker-kit` (create it if missing)" in seen_boot and "check it is there" in seen_boot
+             and "put `Label: faker-kit` in the body" in seen_boot and "label no other" in seen_boot and not faker_kit.SECRET_SHAPES.search(prompt_rule.ANDON_FOOTER + prompt_rule.FAKER_FOOTER),
              seen_boot[-700:].replace("\n", " "))
     edge_head = f"/faker-mode\n{DECISIONS_LINE}\n{CHANGES_FIXTURE_LINE}\n"
     code, _, err = run.kit("launch", "--brief-file", str(run.brief("long.md", edge_head + "x" * faker_kit.MAX_BRIEF_CHARS)))
@@ -1088,10 +1092,10 @@ def launch_scenario(run: Run) -> None:
         "with-decisions.md", "/faker-mode\n\nGOAL: add a toggle.\nOWNER DECISIONS: the Pal app shows it as a catalog row with an Allow button.\n" + CHANGES_FIXTURE_LINE + "\n", decided=False)))
     run.step("launch starts a brief that lists the owner's decisions", answered[0] == 0 and len(run.claude_log.read_text().splitlines()) == sessions_decided + 1, answered[2].strip())
     seen_rule = json.loads(run.claude_log.read_text().splitlines()[-1])["argv"][1]
-    sentence = "Do not decide an unspecified requirement or choose between visible patterns (a new switch, screen, flag) yourself"
+    sentence = "Never guess an open requirement: copy the existing pattern or leave it out"
     run.step("the launch footer tells the session not to decide an unspecified requirement, to follow the existing pattern or leave it out and list it under Open questions, once",
-             seen_rule.count(sentence) == 1 and seen_rule.count('under "Open questions" in the pull request body') == 1 and seen_rule.endswith(faker_kit.FAKER_FOOTER + faker_kit.CODING_FOOTER)
-             and sentence in faker_kit.FAKER_RULE, seen_rule[-300:].replace("\n", " "))
+             seen_rule.count(sentence) == 1 and seen_rule.count("list it under Open questions") == 1 and seen_rule.endswith(prompt_rule.FAKER_FOOTER + coding_rule.SESSION_CODING_FOOTER)
+             and sentence in prompt_rule.SUMMARY_RULE, seen_rule[-300:].replace("\n", " "))
     operating = (HERMES / "profiles" / "OPERATING.md").read_text()
     dispatch = (HERMES / "skills" / "dispatch" / "SKILL.md").read_text()
     run.step("the guide and the dispatch skill carry the faker-mode launch rule",
@@ -2539,13 +2543,14 @@ def install_scenario(run: Run, work: Path) -> None:
     operating = (HERMES / "profiles" / "OPERATING.md").read_text()
     souls = {bot: (hermes / "profiles" / bot / "SOUL.md").read_text() for bot in (BOOTSTRAP, BOT)}
     run.step("every bot's SOUL.md is its role prompt followed by the shared operating guide",
-             souls[BOT].startswith((HERMES / "profiles" / "project" / "SOUL.md").read_text().rstrip()) and (operating + "\n" + faker_kit.CODING_RULE + "\n") in souls[BOT]
-             and souls[BOOTSTRAP].startswith((HERMES / "profiles" / "bootstrap" / "SOUL.md").read_text().rstrip()) and (operating + "\n" + faker_kit.CODING_RULE + "\n") in souls[BOOTSTRAP],
+             souls[BOT].startswith((HERMES / "profiles" / "project" / "SOUL.md").read_text().rstrip()) and (operating + "\n" + coding_rule.BOT_CODING_RULE + "\n") in souls[BOT]
+             and souls[BOOTSTRAP].startswith((HERMES / "profiles" / "bootstrap" / "SOUL.md").read_text().rstrip()) and (operating + "\n" + coding_rule.BOT_CODING_RULE + "\n") in souls[BOOTSTRAP],
              " | ".join(f"{bot}: {len(text)} chars" for bot, text in souls.items()))
     run.step("a fresh install gives every bot's SOUL.md the coding rule once, with both of its parts, after the shared guide",
-             all(text.count(faker_kit.CODING_RULE) == 1 and text.count("Reuse before build:") == 1 and text.count("Confirm before coding.") == 1 and text.index(operating) < text.index("Coding rule:")
+             all(text.count(coding_rule.BOT_CODING_RULE) == 1 and text.count(coding_rule.SESSION_CODING_RULE) == 1
+                 and text.count("Reuse before build:") == 1 and text.count("Confirm before coding.") == 1 and text.index(operating) < text.index("Coding rule:")
                  for text in souls.values()), " | ".join(f"{bot}: {text.count('Coding rule:')}" for bot, text in souls.items()))
-    previous = {bot: souls[bot].replace("\n" + faker_kit.CODING_RULE + "\n", "") for bot in souls}
+    previous = {bot: souls[bot].replace("\n" + coding_rule.BOT_CODING_RULE + "\n", "") for bot in souls}
     edited = "my own notes about this bot\n"
     (hermes / "profiles" / BOT / "SOUL.md").write_text(previous[BOT])
     (hermes / "profiles" / BOOTSTRAP / "SOUL.md").write_text(edited)
@@ -2553,7 +2558,7 @@ def install_scenario(run: Run, work: Path) -> None:
     again = install()
     after = {bot: (hermes / "profiles" / bot / "SOUL.md").read_text() for bot in (BOOTSTRAP, BOT)}
     run.step("a refresh over the previous kit's SOUL.md adds the coding rule once, and over a user-edited SOUL.md keeps the old file as SOUL.md.bak",
-             again.returncode == 0 and faker_kit.CODING_RULE not in previous[BOT] and after[BOT] == souls[BOT] and after[BOT].count(faker_kit.CODING_RULE) == 1
+             again.returncode == 0 and coding_rule.BOT_CODING_RULE not in previous[BOT] and after[BOT] == souls[BOT] and after[BOT].count(coding_rule.BOT_CODING_RULE) == 1
              and after[BOOTSTRAP] == souls[BOOTSTRAP] and (hermes / "profiles" / BOOTSTRAP / "SOUL.md.bak").read_text() == edited
              and (hermes / "profiles" / BOT / "SOUL.md.bak").read_text() == previous[BOT], (again.stdout + again.stderr).strip()[-300:])
     dirs = __import__("yaml").safe_load((hermes / "config.yaml").read_text())["skills"]["external_dirs"]
@@ -4388,6 +4393,7 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "install-labels": lambda c: install_labels_scenario(c.run(), c.root / "install-labels"),
     "environment-setup": lambda c: tooling_scenario.environment_scenario(c.root / "environment-setup", c.recorder().step),
     "ratchet": lambda c: tooling_scenario.ratchet_scenario(c.root / "ratchet", c.recorder().step),
+    "prompt-size": lambda c: prompt_size_scenario.prompt_size_scenario(c.run()),
     "playbook-paths": lambda c: tooling_scenario.playbook_paths_scenario(c.root / "playbook-paths", c.recorder().step),
     "guard": lambda c: guard_scenario.guard_scenario(c.root / "guard", c.recorder().step, c.verdicts.append),
     "t3code": lambda c: t3code_scenario.t3code_scenario(c.run(), BOT),
@@ -4404,6 +4410,7 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "session-conflicts": lambda c: session_conflicts_scenario.conflicts_scenario(c.run()),
     "merged-gates": lambda c: merged_gates_scenario.merged_gates_scenario(c.run(), open_gates),
     "merged-ready": lambda c: merged_ready_scenario.merged_ready_scenario(c.run()),
+    "part-follows-units": lambda c: part_follows_units_scenario.part_follows_units_scenario(c.run()),
     "kanban-text": lambda c: kanban_text_scenario.kanban_text_scenario(c.run()),
     "kanban-backfill": lambda c: kanban_text_scenario.kanban_backfill_scenario(c.run()),
     "kanban-close": lambda c: kanban_text_scenario.kanban_close_scenario(c.run()),

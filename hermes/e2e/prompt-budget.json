@@ -1,0 +1,11 @@
+{
+  "fixed_footers_chars": 1200,
+  "sample_repo": "acme/shop",
+  "components": {
+    "andon": 430,
+    "closing summary": 380,
+    "CI": 165,
+    "faker-mode rule": 105,
+    "coding rule": 140
+  }
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -37,6 +38,7 @@ class Tracked:
     stages: dict[str, str]
     card: Card | None = None
     problem: str | None = None
+    units: tuple[Card, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ class Findings:
     refused: list[dict[str, object]] = field(default_factory=list)
     pending: list[dict[str, object]] = field(default_factory=list)
     stale_blocked: list[dict[str, object]] = field(default_factory=list)
+    parts_without_pr: list[dict[str, object]] = field(default_factory=list)
 
 
 class Settler:
@@ -102,6 +105,9 @@ def reconcile(items: list[Tracked], read: PullReader, settle: Settler | None) ->
         if item.problem or item.repo is None:
             found.unreadable.append({"id": item.ident, "reason": item.problem or f"project {item.project} is no longer on this machine"})
             continue
+        if item.units and not item.prs:
+            report_without_pr(found, item, settle)
+            continue
         seen: list[Seen] = []
         reason = ""
         for number in item.prs:
@@ -119,12 +125,18 @@ def reconcile(items: list[Tracked], read: PullReader, settle: Settler | None) ->
         if reason:
             found.unreadable.append({"id": item.ident, "reason": reason})
         elif any(s.open for s in seen):
-            found.unchanged.append(item.ident)
+            open_units = settle.open_units(item) if isinstance(settle, CardSettler) and item.units else []
+            if open_units:
+                found.waiting.append({"id": item.ident, "card": item.card.id if item.card else item.ident, "units": open_units})
+            else:
+                found.unchanged.append(item.ident)
             live = max((s for s in seen if s.open and not s.draft), key=lambda s: s.number, default=None)
             if settle is not None and live is not None and item.kind == "unit":
                 publish(found, item, live, settle)
         elif any(s.merged for s in seen):
             land(found, item, max((s for s in seen if s.merged), key=lambda s: s.merged_at), settle)
+        elif item.units:
+            report_without_pr(found, item, settle)
         elif settle is not None:
             settle.close(item)
             found.closed.append(item.ident)
@@ -132,6 +144,18 @@ def reconcile(items: list[Tracked], read: PullReader, settle: Settler | None) ->
             found.closed.append(item.ident)
     found.read = len(cache)
     return found
+
+
+def report_without_pr(found: Findings, item: Tracked, settle: Settler | None) -> None:
+    if any(CardSettler.unit_open(unit) for unit in item.units):
+        return
+    units = [{"unit": unit.ref or unit.slug, "state": unit_state(unit)} for unit in item.units]
+    if not isinstance(settle, CardSettler) or settle.note_without_pr(item, units):
+        found.parts_without_pr.append({"id": item.ident, "card": item.card.id if item.card else item.ident, "units": units})
+
+
+def unit_state(unit: Card) -> str:
+    return unit.header.fields.get("State", unit.status) if unit.header else unit.status
 
 
 def publish(found: Findings, item: Tracked, live: Seen, settle: Settler) -> None:
@@ -167,12 +191,12 @@ def land(found: Findings, item: Tracked, last: Seen, settle: Settler | None) -> 
 
 def entries(found: Findings) -> dict[str, object]:
     return {"unchanged": found.unchanged, "published": found.published, "unreadable": found.unreadable, "awaiting_stage_evidence": found.awaiting, "waiting_on_units": found.waiting,
-            "refused": found.refused, "completion_pending": found.pending, "stale_blocked": found.stale_blocked}
+            "refused": found.refused, "completion_pending": found.pending, "stale_blocked": found.stale_blocked, "parts_without_pr": found.parts_without_pr}
 
 
 def render(found: Findings, mode: str) -> dict:
     rest = {"unchanged": len(found.unchanged), "unreadable": len(found.unreadable), "refused": len(found.refused),
-            "completion_pending": len(found.pending), "stale_blocked": len(found.stale_blocked)}
+            "completion_pending": len(found.pending), "stale_blocked": len(found.stale_blocked), "parts_without_pr": len(found.parts_without_pr)}
     if mode == "dry-run":
         return {"read": found.read, "would_set_merged": len(found.merged), "would_set_closed": len(found.closed), **rest,
                 "entries": {"merged": found.merged, "closed": found.closed, **entries(found)}}
@@ -185,7 +209,7 @@ def render(found: Findings, mode: str) -> dict:
 
 def counts(rendered: dict) -> dict[str, object]:
     return {k: rendered[k] for k in ("mode", "read", "set_merged", "set_closed", "unchanged", "unreadable", "refused",
-        "completion_pending", "stale_blocked")} | {"unreadable_ids": [u["id"] for u in rendered["entries"]["unreadable"]]}
+        "completion_pending", "stale_blocked", "parts_without_pr")} | {"unreadable_ids": [u["id"] for u in rendered["entries"]["unreadable"]]}
 
 
 def ledger_items(parts: list[dict], repos: dict[str, str]) -> list[Tracked]:
@@ -224,6 +248,23 @@ def evidence_numbers(kanban: Kanban, card: Card, repo: str | None) -> tuple[list
     return ([int(found.group(1))] if found else []), (None if found else f"card {card.id} is bound to a pull request outside {repo}")
 
 
+def part_units(kanban: Kanban, part: Card, cards: list[Card], part_id: int) -> tuple[Card, ...]:
+    linked = set(kanban.parents(part.id))
+    project = part.header.fields.get("Project") if part.header else None
+    return tuple(c for c in cards if c.header is not None and c.header.fields.get("Kind") == "unit"
+                 and (c.id in linked or (c.header.fields.get("Part") == str(part_id) and c.header.fields.get("Project") == project)))
+
+
+def units_prs(kanban: Kanban, units: tuple[Card, ...], repo: str | None) -> tuple[tuple[int, ...], str | None]:
+    found: set[int] = set()
+    for unit in units:
+        prs, problem = card_prs(kanban, unit, repo)
+        if problem:
+            return (), problem
+        found.update(prs)
+    return tuple(sorted(found)), None
+
+
 def serving_stages(by_key: dict[str, Card], fields: dict[str, str]) -> dict[str, str]:
     number = fields.get("Part", "")
     part = by_key.get(part_key(int(number))) if number.isdigit() else None
@@ -244,17 +285,21 @@ def card_items(kanban: Kanban, cards: list[Card], kind: str, repos: dict[str, st
         if card.archived or fields.get("Kind") != kind or closed or (project is not None and fields.get("Project") != project) or (owner is not None and card.assignee != owner):
             continue
         repo = repos.get(fields.get("Project", ""))
+        units: tuple[Card, ...] = ()
         if kind == "part":
             entry = part_entry(card)
             ident, outcome, stages = str(entry["id"]), entry["outcome"], dict(entry["stages"])
             bound, problem = evidence_numbers(kanban, card, repo)
             prs = tuple(sorted(set(bound or entry["prs"])))
+            if not prs and not problem:
+                units = part_units(kanban, card, cards, entry["id"])
+                prs, problem = units_prs(kanban, units, repo)
         else:
             ident, outcome = card.slug, fields.get("Outcome", DEFAULT_OUTCOME)
             stages = {**serving_stages(by_key, fields), **dict(line.partition("=")[::2] for line in card.header.lines("Stage"))} if card.header else {}
             prs, problem = card_prs(kanban, card, repo)
-        if prs or problem:
-            items.append(Tracked(ident, kind, fields.get("Project", ""), repo, prs, outcome, stages, card, problem))
+        if prs or problem or units:
+            items.append(Tracked(ident, kind, fields.get("Project", ""), repo, prs, outcome, stages, card, problem, units))
     return items
 
 
@@ -264,8 +309,12 @@ class CardSettler(Settler):
         self.refusals = Refusals(loop.home, loop.bot)
         self.cards = {c.id: c for c in cards}
 
-    def open_units(self, card: Card) -> list[str]:
-        return [p for p in self.kanban.parents(card.id) if self.unit_open(self.cards.get(p))]
+    def open_units(self, item: Tracked) -> list[str]:
+        card = item.card
+        if card is None:
+            return []
+        linked = self.kanban.parents(card.id)
+        return [*(p for p in linked if self.unit_open(self.cards.get(p))), *(u.id for u in item.units if u.id not in linked and self.unit_open(u))]
 
     @staticmethod
     def unit_open(unit: Card | None) -> bool:
@@ -280,7 +329,7 @@ class CardSettler(Settler):
         if card.status == "done":
             self.mark(item, card, "merged", last.number, None)
             return "done", {}
-        open_units = self.open_units(card) if item.kind == "part" else []
+        open_units = self.open_units(item) if item.kind == "part" else []
         if open_units:
             return "waiting", {"card": card.id, "units": open_units}
         if self.kanban.given_up_on_stale_claim(card):
@@ -300,6 +349,16 @@ class CardSettler(Settler):
             return "done", {}
         parked = self.park(card, waiting or "") if result.get("held") else {}
         return "pending", {"card": result.get("id", card.id), "head": last.head, **{k: v for k, v in result.items() if k != "id"}, **parked, "completion": "pending"}
+
+    def note_without_pr(self, item: Tracked, units: list[dict[str, str]]) -> bool:
+        card = item.card
+        if card is None or card.header is None:
+            return False
+        said = hashlib.sha256(",".join(sorted(f"{u['unit']}={u['state']}" for u in units)).encode()).hexdigest()[:16]
+        if card.header.fields.get("Without-PR") == said:
+            return False
+        self.kanban.edit_body_if_changed(card.id, refresh(card.header.with_fields({"Without-PR": said}), card.title, self.loop.repos.get(item.project)), card.header)
+        return True
 
     def park(self, card: Card, reason: str) -> dict:
         return park_card(self.kanban, card.id, reason, False) if card.status == "ready" else {}
@@ -333,8 +392,9 @@ class CardSettler(Settler):
     def mark(self, item: Tracked, card: Card, state: str, pr: int | None, waiting: str | None = None) -> None:
         extra = {"Acceptance": waiting} if state == "merged" else None
         if item.kind == "part":
+            prs = sorted({*([pr] if pr else []), *(item.prs if item.units else ())})
             if not already_merged(card, state, pr) or acceptance_moves(card, extra):
-                self.loop.update(int(item.ident), state, [pr] if pr else [], None, False, self.now, extra=extra)
+                self.loop.update(int(item.ident), state, prs, None, False, self.now, extra=extra)
             return
         mark_unit(self.kanban, card, state, pr, self.now, item.repo, extra)
 
