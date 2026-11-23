@@ -27,7 +27,8 @@ guard:
   trusted_authors:
     - CHANGE-ME          # your GitHub login
   ask_owner: true
-  max_in_flight_total: 20
+  max_in_flight_total: 500
+  max_in_flight_per_project: 50
 
 # One project bot per repository. Each plays the long-lived coordinator chat for its project.
 projects:

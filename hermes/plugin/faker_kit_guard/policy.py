@@ -205,6 +205,7 @@ class Policy:
     trusted_authors: frozenset[str]
     max_in_flight_total: int
     ask_owner: bool = True
+    max_in_flight_per_project: int | None = None
     alert_hosts: frozenset[str] = frozenset()
     bots: dict[str, Bot] = field(default_factory=dict)
     home: Path = field(default_factory=faker_kit_home)
@@ -305,6 +306,9 @@ def parse_policy(data: object, bots: object = None, home: Path | None = None) ->
     total = data.get("max_in_flight_total")
     if not isinstance(total, int) or isinstance(total, bool) or total < 1:
         raise PolicyError("guard.yaml max_in_flight_total must be a whole number of 1 or more")
+    per_project = data.get("max_in_flight_per_project")
+    if per_project is not None and (not isinstance(per_project, int) or isinstance(per_project, bool) or per_project < 1):
+        raise PolicyError("guard.yaml max_in_flight_per_project must be a whole number of 1 or more")
     ask_owner = data.get("ask_owner", True)
     if not isinstance(ask_owner, bool):
         raise PolicyError("guard.yaml ask_owner must be true or false")
@@ -315,6 +319,7 @@ def parse_policy(data: object, bots: object = None, home: Path | None = None) ->
         read_only_tools=frozenset(data.get("read_only_tools") or DEFAULT_READ_ONLY_TOOLS),
         trusted_authors=frozenset(str(a).lower() for a in data.get("trusted_authors") or []),
         max_in_flight_total=total,
+        max_in_flight_per_project=per_project,
         ask_owner=ask_owner,
         alert_hosts=parse_alert_hosts(data.get("alert_hosts")),
         bots=parsed_bots,

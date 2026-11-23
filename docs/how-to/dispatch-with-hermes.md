@@ -2,7 +2,7 @@
 
 You tell a Hermes project bot what you want in Hermes Desktop. The bot is the long-lived coordinator chat for that project. It splits the work into units, writes a brief for each, and starts a Claude Code cloud session on every brief, or, for a repository that names T3 Code as its backend, a thread in T3 Code on your Mac. Each unit ends as one pull request. The bot babysits the pull requests until they are green, has a separate cloud session verify them, and lands the ones that pass the merge gate. You answer the questions it cannot, and you keep every pull request the gate leaves to you.
 
-This is the Orchestrate, Autopilot, Babysit, and Shipping playbooks (see the pstack guide's [Run work while you sleep](../../plugins/pstack/docs/guide/07-overnight.md)) with a Hermes bot as the coordinator and Claude Code cloud (or T3 Code on your Mac) as the place sessions run. How many sessions run at once comes from `max_in_flight` in the repository's `.agents/dispatch.json`, which the owner sets; T3 Code threads have their own `t3code.max_in_flight`.
+This is the Orchestrate, Autopilot, Babysit, and Shipping playbooks (see the pstack guide's [Run work while you sleep](../../plugins/pstack/docs/guide/07-overnight.md)) with a Hermes bot as the coordinator and Claude Code cloud (or T3 Code on your Mac) as the place sessions run. How many sessions run at once comes from `max_in_flight_per_project` in the machine's `guard.yaml` (one number for every project; without it the repository's `max_in_flight` in `.agents/dispatch.json` applies, then 50); T3 Code threads have their own `t3code.max_in_flight`.
 
 The Hermes side is the kit's [`hermes/`](../../hermes/) module. Its [README](../../hermes/README.md) lists every file it installs.
 
@@ -87,7 +87,7 @@ If T3 Code is not connected, the bot starts nothing and tells you to connect it 
 
 ### How many run at once
 
-`max_in_flight_total` in `guard.yaml` is how many sessions the machine carries, because every project draws on the same Claude subscription. The bot counts the running rows in its store and launches the next wave only when there is room. T3 Code threads run on your Mac, so they have their own cap, `t3code.max_in_flight` (default 2): the bot counts the running rows whose backend is `t3code` for it and counts them against neither `max_in_flight` nor the machine total.
+`max_in_flight_total` in `guard.yaml` (500 by default, at most 1000) is how many sessions the machine carries, because every project draws on the same Claude subscription. Keep it at or above `max_in_flight_per_project` times the number of projects. The bot counts the running unit cards and launches the next wave only when there is room. A T3 Code thread's card counts like any other; `t3code.max_in_flight` is only printed by `launch`, nothing enforces it.
 
 ## Install
 

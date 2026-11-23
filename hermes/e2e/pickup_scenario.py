@@ -41,6 +41,7 @@ def cron(_argv: list[str], _seconds: int) -> tuple[int, str]:
 
 def pickup_scenario(run: Run) -> None:
     guard = run.team / "guard.yaml"
+    guard.write_text(re.sub(r"^max_in_flight_per_project:.*\n", "", guard.read_text().replace("max_in_flight_total: 500", "max_in_flight_total: 20"), flags=re.M))
     bots = run.team / "bots.yaml"
     bots.write_text(bots.read_text().replace("bots:\n", f"bots:\n  {CHIEF}:\n    role: chief\n", 1))
     board = Board(run)
@@ -123,7 +124,7 @@ def pickup_scenario(run: Run) -> None:
              "card with a pull request, Session line, live run, title only, no decisions, steered or archived one",
              off_gate == [] and everything == [old, mid, new] and not set(everything) & chief_ids and not set(everything) & set(excluded.values()), json.dumps(everything))
     run.step("pickup selection: every excluded class has a case and none is selected", all(card not in everything for card in excluded.values()) and len(excluded) == 9, ", ".join(sorted(excluded)))
-    run.update_gh(lambda st: st["files"].__setitem__(".agents/dispatch.json", json.dumps({"forbidden_paths": ["infra/"]})))
+    run.update_gh(lambda st: st["files"].__setitem__(".agents/dispatch.json", json.dumps({"max_in_flight": 5, "forbidden_paths": ["infra/"]})))
 
     fresh_process = subprocess.run([sys.executable, str(HERMES / "bin" / "faker_kit.py"), "pickup", "status"], capture_output=True, text=True, check=False,
                                    env={**run.env(), "HERMES_HOME": str(run.profile), "FAKER_KIT_HOME": str(run.team)})
@@ -135,9 +136,10 @@ def pickup_scenario(run: Run) -> None:
 
     status_now = json_of(project("pickup", "status"))
     chief_now = json_of(chief("pickup", "status"))
-    run.step("pickup limits, defaults: a machine and a repository with no explicit limits print 20 running unit cards in total and 5 per project in pickup status",
-             status_now.get("total") == 20 and status_now.get("per_project") == 5 and chief_now.get("total") == 20 and chief_now.get("per_project") == {PROJECT: 5},
-             json.dumps({"project": [status_now.get("per_project"), status_now.get("total")], "chief": [chief_now.get("per_project"), chief_now.get("total")]}))
+    run.step("pickup limits: a machine with no per-project key and a repository that says 5 print 5 per project (source repository) and the machine's 20 in total in pickup status",
+             status_now.get("total") == 20 and status_now.get("per_project") == 5 and status_now.get("per_project_source") == "repository" and chief_now.get("total") == 20
+             and chief_now.get("per_project") == {PROJECT: 5} and chief_now.get("per_project_source") == {PROJECT: "repository"},
+             json.dumps({"project": [status_now.get("per_project"), status_now.get("per_project_source"), status_now.get("total")], "chief": [chief_now.get("per_project"), chief_now.get("total")]}))
 
     [add(f"busy-{i}", card_body(f"busy-{i}", goal, decisions, 3.0), status="running") for i in range(4)]
     owner("pickup", "off")
@@ -199,7 +201,7 @@ def pickup_scenario(run: Run) -> None:
              listed() == [] and capped.get("per_project") == 1 and capped.get("total") == 3, json.dumps([capped.get("per_project"), capped.get("total")]))
     board.edit_card(key("busy-0"), status="done")
     guard.write_text(guard.read_text().replace("max_in_flight_total: 3", "max_in_flight_total: 20"))
-    run.update_gh(lambda st: st["files"].__setitem__(".agents/dispatch.json", json.dumps({"forbidden_paths": ["infra/"]})))
+    run.update_gh(lambda st: st["files"].__setitem__(".agents/dispatch.json", json.dumps({"max_in_flight": 5, "forbidden_paths": ["infra/"]})))
 
     stuck_unit, pr_unit = "stuck-unit", "pr-unit"
     long_ago = stamp(run.clock - 2 * HOUR)
