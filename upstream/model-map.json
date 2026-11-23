@@ -6,8 +6,8 @@
       "files": [
         "harness/pstack/claude-code/skills/arena/SKILL.md"
       ],
-      "from": "Families go by prefix, and the longest matching prefix wins: `claude-fable-*`, `claude-*`, and `gemini-*`. Drop a leading `cursor-` before you compare.",
-      "to": "Families go by prefix, and the longest matching prefix wins: `claude-*` and `gpt-*`.",
+      "from": "Families go by prefix, and the longest match wins: `claude-fable-*`, `claude-*`, and `gemini-*`, after dropping a leading `cursor-`.",
+      "to": "Families go by prefix, and the longest match wins: `claude-*` and `gpt-*`.",
       "count": 1
     },
     {
@@ -15,7 +15,7 @@
       "files": [
         "harness/pstack/claude-code/docs/harness/claude-code.md"
       ],
-      "from": "Map each default slug with the rows above: `claude-opus-5-5-xhigh` is `opus xhigh`, `claude-opus-5-5-high-fast` is `opus high`, `claude-fable-5-2-max` is `fable max`, and `gemini-4-carbon-high` is `inherit-parent`.",
+      "from": "Map each default slug with the rows above: `claude-opus-5-5-xhigh-fast` is `opus xhigh`, `claude-opus-5-5-high-fast` is `opus high`, `claude-fable-5-2-high` is `fable high`, and `gemini-4-neon-xhigh` is `inherit-parent`.",
       "to": "Map each default slug with the rows above. A default of `inherit-parent` stays `inherit-parent`.",
       "count": 1
     },
@@ -24,8 +24,8 @@
       "files": [
         "harness/pstack/claude-code/skills/arena/SKILL.md"
       ],
-      "from": "choose from `claude-fable-5-2-high`, `claude-opus-5-5-high-fast`, and `gemini-4-carbon-high`.",
-      "to": "choose from `claude-opus-5-5-max` and `gpt-6-sol-high`.",
+      "from": "by default `claude-opus-5-5-high-fast`, `gemini-4-neon-xhigh`.",
+      "to": "by default `claude-opus-5-5-max` and `gpt-6-sol-high`.",
       "count": 1
     },
     {
@@ -35,15 +35,15 @@
       ],
       "from": "With the default pool, a Claude parent gets `gemini-4-carbon-high`. A parent from any other vendor gets `claude-fable-5-2-high` first, then `claude-opus-5-5-high-fast`.",
       "to": "With the default pool, a Claude parent gets `gpt-6-sol-high`. A parent from any other vendor gets `claude-opus-5-5-max` first.",
-      "count": 1
+      "count": 0
     },
     {
       "id": "pstack-arena-vendor-fable-clause",
       "files": [
         "harness/pstack/claude-code/skills/arena/SKILL.md"
       ],
-      "from": ", except that `claude-fable-*` and `claude-*` are one vendor",
-      "to": "",
+      "from": ", and Fable counts as Claude for that check, so use the first entry from another vendor.",
+      "to": ". Use the first entry from another vendor.",
       "count": 1
     },
     {
@@ -67,10 +67,10 @@
     {
       "id": "pstack-panel-backticked",
       "files": [
-        "harness/pstack/claude-code/skills/architect/SKILL.md",
+        "harness/pstack/claude-code/skills/poteto-mode/SKILL.md",
         "harness/pstack/claude-code/skills/arena/SKILL.md"
       ],
-      "from": "`claude-fable-5-2-high`, `claude-opus-5-5-high-fast`, and `gemini-4-carbon-high`",
+      "from": "`claude-fable-5-2-high`, `claude-opus-5-5-high-fast`, and `gemini-4-neon-xhigh`",
       "to": "`inherit-parent`, `inherit-parent`, and `inherit-parent`",
       "count": 2
     },
@@ -79,16 +79,25 @@
       "files": [
         "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
-      "from": "claude-fable-5-2-high, claude-opus-5-5-high-fast, gemini-4-carbon-high",
+      "from": "claude-fable-5-2-high, claude-opus-5-5-high-fast, gemini-4-neon-xhigh",
       "to": "inherit-parent, inherit-parent, inherit-parent",
-      "count": 4
+      "count": 2
+    },
+    {
+      "id": "pstack-setup-cross-judge-pool-pair",
+      "files": [
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
+      ],
+      "from": "arena cross-judge pool: claude-opus-5-5-high-fast, gemini-4-neon-xhigh",
+      "to": "arena cross-judge pool: inherit-parent, inherit-parent, inherit-parent",
+      "count": 1
     },
     {
       "id": "pstack-budget-example",
       "files": [
         "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
-      "from": "So `unlimited` turns `claude-opus-5-5-xhigh` into `claude-opus-5-5-max` and `claude-opus-5-5-high-fast` into `claude-opus-5-5-xhigh-fast`, and it keeps `claude-fable-5-2-max`. Gemini tops out at `high`, so under `unlimited` the fallback keeps `gemini-4-carbon-high` as it is. `small` turns the first two into `claude-opus-5-5-medium` and `claude-opus-5-5-low-fast`. Fable 5.2 and Gemini have no fast slug, so never write one.",
+      "from": "So `medium` turns `claude-opus-5-5-xhigh-fast` into `claude-opus-5-5-high-fast` and `claude-opus-5-5-high-fast` into `claude-opus-5-5-medium-fast`, and `small` turns them into `claude-opus-5-5-medium-fast` and `claude-opus-5-5-low-fast`. Opus 5.5 always runs its `-fast` slug, so every Opus 5.5 value ends in `-fast`. Fable 5.2 and Gemini have no fast slug, so never write one. Gemini 4 Neon slugs run from `low` to `xhigh` with no `max` or `fast` slug, so its seat runs at `gemini-4-neon-xhigh`, its top slug. A Gemini 4 Neon entry in a panel role takes its own target, `xhigh` moved by the budget, so `large` keeps `gemini-4-neon-xhigh`, `medium` writes `gemini-4-neon-high`, and `small` writes `gemini-4-neon-medium`.",
       "to": "So `small` turns `gpt-6-sol-high` into `gpt-6-sol-medium`.",
       "count": 1
     },
@@ -97,8 +106,17 @@
       "files": [
         "harness/pstack/claude-code/skills/poteto-mode/SKILL.md"
       ],
-      "from": "Defaults `claude-opus-5-5-xhigh` for code, prose, and judgment)",
-      "to": "Defaults `sonnet` for code, `inherit-parent` for prose and judgment)",
+      "from": "- Code, prose, and judgment: `claude-opus-5-5-xhigh-fast`.",
+      "to": "- Code, including the hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms): `sonnet` (Claude Sonnet 5.5). Prose and judgment: `inherit-parent`. The Task tool takes these aliases, not version slugs.",
+      "count": 1
+    },
+    {
+      "id": "pstack-poteto-mode-trivial-edits-haiku",
+      "files": [
+        "harness/pstack/claude-code/skills/poteto-mode/SKILL.md"
+      ],
+      "from": "- Trivial mechanical edits: `claude-opus-5-5-high-fast`.",
+      "to": "- Trivial mechanical edits (a rename, a move, a formatting or one-line fix, or steps specified to the letter with nothing to decide): `haiku` (Claude Haiku 5.5), the `trivial edits` line.",
       "count": 1
     },
     {
@@ -106,7 +124,7 @@
       "files": [
         "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
-      "from": "feature, refactoring: claude-opus-5-5-xhigh\nbug-fix: claude-opus-5-5-xhigh\nperf-issue: claude-opus-5-5-xhigh\nhillclimb: claude-opus-5-5-xhigh\n",
+      "from": "feature, refactoring: claude-opus-5-5-xhigh-fast\nbug-fix: claude-opus-5-5-xhigh-fast\nperf-issue: claude-opus-5-5-xhigh-fast\nhillclimb: claude-opus-5-5-xhigh-fast\n",
       "to": "feature, refactoring: sonnet\nbug-fix: sonnet\nperf-issue: sonnet\nhillclimb: sonnet\ntrivial edits: haiku\n",
       "count": 1
     },
@@ -119,7 +137,7 @@
         "harness/pstack/claude-code/skills/poteto-mode/playbooks/perf-issue.md",
         "harness/pstack/claude-code/skills/poteto-mode/playbooks/refactoring.md"
       ],
-      "from": "model (default `claude-opus-5-5-xhigh`)",
+      "from": "model (default `claude-opus-5-5-xhigh-fast`)",
       "to": "model (default `sonnet`, or `haiku` for a trivial mechanical edit)",
       "count": 5
     },
@@ -148,7 +166,7 @@
       ],
       "from": "| `reflect judgment, divergent, synthesizer` | `claude-opus-5-5-xhigh` |",
       "to": "| `reflect judgment, divergent, synthesizer` | `inherit-parent` |",
-      "count": 2
+      "count": 0
     },
     {
       "id": "pstack-reflect-synthesizer-current-agent",
@@ -157,7 +175,7 @@
       ],
       "from": "(default `claude-opus-5-5-xhigh`)",
       "to": "(default `inherit-parent`)",
-      "count": 1
+      "count": 0
     },
     {
       "id": "pstack-poteto-mode-prose-judgment-current-agent",
@@ -175,14 +193,14 @@
       ],
       "from": "The hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) go to your `hardest tasks` model (default `claude-fable-5-2-max`), whether the task needs judgment on vague intent or is a precisely specified sequence of steps to execute to the letter. Trivial mechanical edits go to your `swarm workers` model (default `claude-opus-5-5-high-fast`). Review and design panels default to one runner each on `claude-fable-5-2-high`, `claude-opus-5-5-high-fast`, and `gemini-4-carbon-high`.",
       "to": "A feature, refactor, bug fix, perf fix, hillclimb step, or one of the hardest changes (cross-cutting design, gnarly concurrency, subtle algorithms) goes to `sonnet` (Claude Sonnet 5.5). A trivial mechanical edit (a rename, a move, a formatting or one-line fix, or steps specified to the letter with nothing to decide) goes to `haiku` (Claude Haiku 5.5), the `trivial edits` line. The Task tool takes these aliases, not version slugs. Review and design panels default to one runner each on `inherit-parent`, `inherit-parent`, and `inherit-parent`.",
-      "count": 1
+      "count": 0
     },
     {
       "id": "pstack-poteto-mode-fable-family-sentence",
       "files": [
         "harness/pstack/claude-code/skills/poteto-mode/SKILL.md"
       ],
-      "from": " Fable (`claude-fable-*`) is its own family, apart from the other Claude models.",
+      "from": "**Fable 5.2 is an exception.** It runs outside a panel only when the user named it for this task or two Opus 5.5 xhigh runs of the same brief failed its check. Say which. Difficulty alone never qualifies.\n\n",
       "to": "",
       "count": 1
     },
@@ -191,7 +209,7 @@
       "files": [
         "harness/pstack/claude-code/skills/poteto-mode/SKILL.md"
       ],
-      "from": " Gemini has no xhigh, max, or fast slug, so a Gemini subagent runs at high, such as `gemini-4-carbon-high`, whenever the job calls for high or above. Fable 5.2 has no fast slug, so an urgent Fable 5.2 subagent runs at standard speed and keeps its level.",
+      "from": " A Gemini seat runs at `gemini-4-neon-xhigh` unless its line names another level.",
       "to": "",
       "count": 1
     },
@@ -200,7 +218,7 @@
       "files": [
         "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
       ],
-      "from": "judgment and prose: claude-opus-5-5-xhigh",
+      "from": "judgment and prose: claude-opus-5-5-xhigh-fast",
       "to": "judgment and prose: inherit-parent",
       "count": 1
     },
@@ -211,7 +229,7 @@
       ],
       "from": "hardest tasks: claude-fable-5-2-max",
       "to": "hardest tasks: sonnet",
-      "count": 1
+      "count": 0
     },
     {
       "id": "pstack-setup-how-explainer",
@@ -238,6 +256,42 @@
       ],
       "from": "reflect judgment, divergent, synthesizer: claude-opus-5-5-xhigh",
       "to": "reflect judgment, divergent, synthesizer: inherit-parent",
+      "count": 0
+    },
+    {
+      "id": "pstack-setup-retired-gemini-default-paragraph",
+      "files": [
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
+      ],
+      "from": "Older defaults put another Gemini model, then `gemini-4-neon-high`, in the panel seat. So in any rule, a `gemini-4-neon-high` entry, or a `gemini-4-*` entry other than `gemini-4-neon-*`, in a panel role (`arena runners`, `arena cross-judge pool`, `interrogate reviewers`) is an old default. Each one becomes `gemini-4-neon-xhigh`. A Gemini 4 Neon entry at any other level is the user's choice and stays. Tell the user which entries you replaced.\n\n",
+      "to": "",
+      "count": 1
+    },
+    {
+      "id": "pstack-setup-retired-fable-gemini-pool-bullet",
+      "files": [
+        "harness/pstack/claude-code/skills/setup-pstack/SKILL.md"
+      ],
+      "from": "- An `arena cross-judge pool` list of exactly one `claude-fable-*` entry, one `claude-opus-*` entry, and one `gemini-*` entry, in any order, takes the role's step 5 list. Fable and Opus are one vendor, so the Fable entry could judge only where the Opus entry also could.\n",
+      "to": "",
+      "count": 1
+    },
+    {
+      "id": "pstack-agent-model-pin-removed",
+      "files": [
+        "harness/pstack/claude-code/agents/poteto-agent.md"
+      ],
+      "from": "model: claude-opus-5-5-xhigh-fast\n",
+      "to": "",
+      "count": 1
+    },
+    {
+      "id": "pstack-eval-dispatch-agent-model",
+      "files": [
+        "harness/pstack/claude-code/skills/poteto-mode/playbooks/eval.md"
+      ],
+      "from": "`claude-opus-5-5-medium-fast`",
+      "to": "`inherit-parent`",
       "count": 1
     },
     {
@@ -247,14 +301,14 @@
       ],
       "from": "claude-opus-5-5-high-fast",
       "to": "inherit-parent",
-      "count": 7
+      "count": 4
     },
     {
       "id": "pstack-readme-model-split",
       "files": [
         "harness/pstack/claude-code/README.md"
       ],
-      "from": "code delegates (feature, refactoring, bug fix, perf, hillclimb), prose, and judgment go to opus 5.5, while the hardest changes go to fable 5.2. the default panel is fable 5.2 / opus 5.5 / gemini 4 carbon.",
+      "from": "code delegates (feature, refactoring, bug fix, perf, hillclimb), prose, and judgment go to opus 5.5 at xhigh, and no role runs above xhigh. outside a review panel, fable 5.2 runs only when you name it or after two opus 5.5 runs of the same brief fail. the default panel is fable 5.2 / opus 5.5 / gemini 4 neon.",
       "to": "code delegates (feature, refactoring, bug fix, perf, hillclimb) and the hardest changes run on `sonnet` (Claude Sonnet 5.5), and trivial mechanical edits on `haiku` (Claude Haiku 5.5). prose, judgment, and every seat of the default panel run on your current coding agent's model.",
       "count": 1
     },

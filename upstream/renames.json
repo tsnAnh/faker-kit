@@ -44,7 +44,7 @@
       ],
       "from": "poteto-mode",
       "to": "faker-mode",
-      "count": 250
+      "count": 243
     },
     {
       "id": "rename-poteto-agent",
@@ -53,7 +53,7 @@
       ],
       "from": "poteto-agent",
       "to": "faker-agent",
-      "count": 17
+      "count": 18
     },
     {
       "id": "neutral-adapter-skill-line",
@@ -161,7 +161,7 @@
       ],
       "from": "~/.cursor/rules/pstack-models.mdc",
       "to": "~/.agents/pstack-models.md",
-      "count": 9
+      "count": 10
     },
     {
       "id": "neutral-pstack-models-file",
@@ -170,7 +170,7 @@
       ],
       "from": "pstack-models.mdc",
       "to": "pstack-models.md",
-      "count": 3
+      "count": 1
     },
     {
       "id": "neutral-home-dir-shell",
@@ -188,7 +188,7 @@
       ],
       "from": "~/.cursor/",
       "to": "~/.agents/",
-      "count": 21
+      "count": 14
     },
     {
       "id": "neutral-project-dir",
@@ -197,7 +197,7 @@
       ],
       "from": ".cursor/",
       "to": ".agents/",
-      "count": 42
+      "count": 39
     },
     {
       "id": "neutral-plugin-root-env",
@@ -233,7 +233,7 @@
       ],
       "from": "cursor-team-kit",
       "to": "team-workflows",
-      "count": 22
+      "count": 18
     },
     {
       "id": "neutral-scripts-package-scope",
@@ -296,7 +296,7 @@
       ],
       "from": "Cursor's built-in",
       "to": "the agent's built-in",
-      "count": 10
+      "count": 7
     },
     {
       "id": "neutral-loop-command",
@@ -314,7 +314,7 @@
       ],
       "from": "a Cursor restart",
       "to": "an agent restart",
-      "count": 1
+      "count": 0
     },
     {
       "id": "neutral-cloud-agent",
@@ -576,7 +576,7 @@
       ],
       "from": " Gemini tops out at `high`, so it stays there.",
       "to": "",
-      "count": 1
+      "count": 0
     },
     {
       "id": "neutral-readme-custom-mode",
