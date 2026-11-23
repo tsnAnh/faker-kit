@@ -17,6 +17,7 @@ SLACK_CHANNEL = re.compile(r"\A[CG][A-Z0-9]{8,}\Z")
 ABSOLUTE_PATH = re.compile(r"\A/[A-Za-z0-9_./-]+\Z")
 SERVICE_UNIT = re.compile(r"\A[A-Za-z0-9_.@-]+\.service\Z")
 PLACEHOLDER = "CHANGE-ME"
+MAX_IN_FLIGHT = 1000
 SUBSCRIPTION_PROVIDER = "claude-subscription-directsdk-experimental"
 
 WEBHOOK_HOST = "127.0.0.1"
@@ -89,6 +90,7 @@ class Machine:
     kit_ref: str | None = None
     skills: tuple[str, ...] = ()
     ci_runners: tuple[CiRunner, ...] = ()
+    max_in_flight_per_project: int | None = None
 
 
 def _mapping(value: object, where: str) -> dict[str, object]:
@@ -144,8 +146,11 @@ def parse_machine(data: object) -> Machine:
     total = guard.get("max_in_flight_total", DEFAULT_TOTAL)
     if not isinstance(ask_owner, bool):
         raise MachineError("guard.ask_owner must be true or false")
-    if not isinstance(total, int) or isinstance(total, bool) or not 1 <= total <= 50:
-        raise MachineError("guard.max_in_flight_total must be a number from 1 to 50")
+    if not isinstance(total, int) or isinstance(total, bool) or not 1 <= total <= MAX_IN_FLIGHT:
+        raise MachineError(f"guard.max_in_flight_total must be a number from 1 to {MAX_IN_FLIGHT}")
+    per_project = guard.get("max_in_flight_per_project")
+    if per_project is not None and (not isinstance(per_project, int) or isinstance(per_project, bool) or not 1 <= per_project <= MAX_IN_FLIGHT):
+        raise MachineError(f"guard.max_in_flight_per_project must be a number from 1 to {MAX_IN_FLIGHT}")
     subscription = top.get("claude_subscription", False)
     if not isinstance(subscription, bool):
         raise MachineError("claude_subscription must be true or false")
@@ -210,7 +215,7 @@ def parse_machine(data: object) -> Machine:
                    claude_subscription=subscription, projects=tuple(projects), chief=chief_bot,
                    chief_model=chief_model, chief_provider=chief_provider, bootstrap_model=bootstrap_model,
                    bootstrap_provider=bootstrap_provider, webhook_url=url, tunnel=tunnel, tunnel_config=tunnel_config, tunnel_unit=tunnel_unit, slack=slack, kit_ref=kit_ref,
-                   skills=tuple(dict.fromkeys(skills)), ci_runners=tuple(runners))
+                   skills=tuple(dict.fromkeys(skills)), ci_runners=tuple(runners), max_in_flight_per_project=per_project)
 
 
 def load_machine(path: Path) -> Machine:
@@ -253,6 +258,7 @@ def cloudflared_config(tunnel_id: str, credentials: Path, hostname: str) -> str:
 
 
 GUARD_SCALARS = ("max_in_flight_total", "ask_owner")
+PER_PROJECT_KEY = "max_in_flight_per_project"
 
 
 def edit_guard(text: str, machine: Machine) -> str:
@@ -267,5 +273,11 @@ def edit_guard(text: str, machine: Machine) -> str:
 
     for key in GUARD_SCALARS:
         text = replace(rf"^{key}:.*$", f"{key}: {scalar(getattr(machine, key))}", text, key)
+    if machine.max_in_flight_per_project is not None:
+        line = f"{PER_PROJECT_KEY}: {machine.max_in_flight_per_project}"
+        if re.search(rf"^{PER_PROJECT_KEY}:", text, re.M):
+            text = replace(rf"^{PER_PROJECT_KEY}:.*$", line, text, PER_PROJECT_KEY)
+        else:
+            text = replace(r"^max_in_flight_total:.*$", f"max_in_flight_total: {machine.max_in_flight_total}\n{line}", text, "max_in_flight_total")
     authors = "trusted_authors:\n" + "".join(f"  - {a}\n" for a in machine.trusted_authors)
     return replace(r"^trusted_authors:\n(?:[ \t]+-[^\n]*\n|[ \t]*#[^\n]*\n)*", authors, text, "trusted_authors")

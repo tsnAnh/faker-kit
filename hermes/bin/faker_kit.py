@@ -147,7 +147,8 @@ NOT_A_CHANGE = (
 MAX_BRIEF_CHARS = 60_000
 SESSION_MODEL = re.compile(r"\A(?:opus|sonnet|haiku|fable|claude-[a-z0-9]+(?:-[a-z0-9]+){1,6})\Z")
 UNIT_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,63}\Z")
-STATUS_PRS = 30
+STATUS_PRS = 100
+BUSY_NOTICE_UNITS = 25
 MERGEABLE_READS = 5
 MERGEABLE_PAUSE_SECONDS = 5.0
 MERGE_WAIT_POLL_SECONDS = 30.0
@@ -375,6 +376,10 @@ class Kit:
             out["notice"] = checks.notice
         if unit_card_found is not None:
             out["card"] = self.launch_claim(target, *unit_card_found, str(result.fields.get("session") or f"{dispatch.backend} launch {digest}"))
+            running = len(running_units(unit_card_found[0].cards(False), str(target.project)))
+            if running > BUSY_NOTICE_UNITS:
+                out["notice"] = (f"{running} unit cards of {target.project} are running; each babysit tick reads GitHub about ten times per open pull request, "
+                                 f"so above {BUSY_NOTICE_UNITS} running units the hourly GitHub request limit can run out")
         return out
 
     @staticmethod
@@ -433,7 +438,7 @@ class Kit:
         card = kanban.find_card(unit_key(str(target.project), unit))
         checks.run(lambda: self.require_ready_card(target, unit, card))
         if dispatch is not None and read_pickup(self.home).enabled:
-            refusal = slots(kanban.cards(False), str(target.project), dispatch.max_in_flight, self.policy().max_in_flight_total).refusal(unit)
+            refusal = self.slots_for(kanban.cards(False), str(target.project), dispatch.max_in_flight).refusal(unit)
             if refusal:
                 checks.run(partial(self.refuse, refusal))
         return (kanban, card) if card is not None else None
@@ -1195,7 +1200,11 @@ class Kit:
             per = self.dispatch(bot.name, str(bot.repo)).max_in_flight
         except Refused:
             per = None
-        return slots(cards, str(bot.project), per, self.policy().max_in_flight_total)
+        return self.slots_for(cards, str(bot.project), per)
+
+    def slots_for(self, cards: list[Card], project: str, repository: int | None) -> Slots:
+        policy = self.policy()
+        return slots(cards, project, repository, policy.max_in_flight_total, policy.max_in_flight_per_project)
 
     def babysit_job(self, bot: Bot) -> dict:
         code, text = self.tool(["hermes", "-p", bot.name, "cron", "list", "--all"], 60)
@@ -1215,10 +1224,11 @@ class Kit:
         limits = {str(b.project): self.pickup_slots(b, cards) for b in bots}
         if caller is not None and caller.role == "project":
             mine = limits[str(caller.project)]
-            out["per_project"], out["total"] = mine.per_project, mine.total
+            out["per_project"], out["per_project_source"], out["total"] = mine.per_project, mine.source, mine.total
             out["running"], out["running_total"] = len(mine.in_project), len(mine.everywhere)
         else:
             out["per_project"], out["total"] = {name: row.per_project for name, row in limits.items()}, self.policy().max_in_flight_total
+            out["per_project_source"] = {name: row.source for name, row in limits.items()}
             out["running"], out["running_total"] = {name: len(row.in_project) for name, row in limits.items()}, len(running_units(cards))
         if not ready:
             return {**out, "candidates": {}, "pickup": []}

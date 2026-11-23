@@ -34,6 +34,7 @@
   "owner-merge": 14.0,
   "part-follows-units": 8.0,
   "pickup": 10.0,
+  "pickup-limit": 32.0,
   "playbook-paths": 8.0,
   "pr-label": 8.0,
   "profile-approval": 35.0,

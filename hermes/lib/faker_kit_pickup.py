@@ -16,8 +16,8 @@ from faker_kit_text import kept_decisions, pull_numbers, summary_of
 KIT_OWNED = True
 
 FILE = "pickup.json"
-DEFAULT_PER_PROJECT = 5
-DEFAULT_TOTAL = 20
+DEFAULT_PER_PROJECT = 50
+DEFAULT_TOTAL = 500
 STEER_GRACE_SECONDS = 3600
 STAMP = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -106,6 +106,7 @@ class Slots:
     everywhere: list[Card]
     per_project: int
     total: int
+    source: str = "default"
 
     @property
     def free(self) -> int:
@@ -121,8 +122,17 @@ class Slots:
                 "a card whose pull request already merged frees its slot on the next faker-kit loop reconcile")
 
 
-def slots(cards: list[Card], project: str, per_project: int | None, total: int) -> Slots:
-    return Slots(project, running_units(cards, project), running_units(cards), DEFAULT_PER_PROJECT if per_project is None else per_project, total)
+def per_project_limit(machine: int | None, repository: int | None) -> tuple[int, str]:
+    if machine is not None:
+        return machine, "machine"
+    if repository is not None:
+        return repository, "repository"
+    return DEFAULT_PER_PROJECT, "default"
+
+
+def slots(cards: list[Card], project: str, repository: int | None, total: int, machine: int | None = None) -> Slots:
+    per_project, source = per_project_limit(machine, repository)
+    return Slots(project, running_units(cards, project), running_units(cards), per_project, total, source)
 
 
 def abandoned_after_steer(cards: list[Card], bot: str, project: str, open_units: dict[tuple[str, str], dict], now: float) -> list[Card]:

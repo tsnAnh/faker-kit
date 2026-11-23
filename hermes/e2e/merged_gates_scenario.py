@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -165,7 +166,7 @@ def merged_gates_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
 
     owner("pickup", "on")
     guard = run.team / "guard.yaml"
-    guard.write_text(guard.read_text().replace("max_in_flight_total: 20", "max_in_flight_total: 10"))
+    guard.write_text(re.sub(r"^max_in_flight_per_project:.*\n", "", guard.read_text().replace("max_in_flight_total: 500", "max_in_flight_total: 10"), flags=re.M))
     run.update_gh(lambda state: state["files"].__setitem__(".agents/dispatch.json", json.dumps({"max_in_flight": 1})))
     board.set(tasks=[{**t, "status": "done" if t["status"] == "running" else t["status"]} for t in board.state()["tasks"]])
     slot = [f"slot-{i}" for i in range(10)]

@@ -41,6 +41,7 @@ import kanban_visibility_scenario
 import merged_gates_scenario
 import merged_ready_scenario
 import part_follows_units_scenario
+import pickup_limit_scenario
 import pickup_scenario
 import prompt_size_scenario
 import ready_scenario
@@ -2072,7 +2073,7 @@ guard:
   trusted_authors:
     - {OWNER}
   ask_owner: false
-  max_in_flight_total: 20
+  max_in_flight_total: 500
 projects:
   - bot: {BOT}
     project: shop
@@ -2725,7 +2726,7 @@ guard:
   trusted_authors:
     - {OWNER}
   ask_owner: true
-  max_in_flight_total: 20
+  max_in_flight_total: 500
 projects:
   - bot: {BOT}
     project: shop
@@ -2831,14 +2832,39 @@ def provider_scenario(run: Run, work: Path) -> None:
     guard_before, machine_before = state / "guard.yaml", state / "machine.yaml"
     kept_guard, kept_machine_bytes = guard_before.read_bytes(), machine_before.read_bytes()
     explicit_line = "  max_in_flight_total: 3\n"
-    for label, text, wanted in (("no max_in_flight_total in the machine file", PROVIDER_MACHINE.replace("  max_in_flight_total: 20\n", ""), 20),
-                                ("an explicit max_in_flight_total: 3 in the machine file", PROVIDER_MACHINE.replace("  max_in_flight_total: 20\n", explicit_line), 3)):
-        guard_before.write_text(kept_guard.decode().replace("max_in_flight_total: 20", "max_in_flight_total: 7"))
+    for label, text, wanted in (("no max_in_flight_total in the machine file", PROVIDER_MACHINE.replace("  max_in_flight_total: 500\n", ""), 500),
+                                ("an explicit max_in_flight_total: 3 in the machine file", PROVIDER_MACHINE.replace("  max_in_flight_total: 500\n", explicit_line), 3)):
+        guard_before.write_text(kept_guard.decode().replace("max_in_flight_total: 500", "max_in_flight_total: 7"))
         machine.write_text(text)
         refreshed = kit("install", "--config", str(machine))
         written = re.search(r"^max_in_flight_total: (\d+)$", guard_before.read_text(), re.M)
         run.step(f"install --config with {label} writes {wanted} into guard.yaml (a missing value takes the one default, an explicit value wins)",
                  refreshed.returncode == 0 and written is not None and int(written.group(1)) == wanted, refreshed.stderr.strip()[-200:] or (written.group(0) if written else "no line"))
+    guard_before.write_bytes(kept_guard)
+    total_line = "  max_in_flight_total: 500\n"
+    per_project_cases = (("a machine file that sets max_in_flight_per_project: 7", PROVIDER_MACHINE.replace(total_line, total_line + "  max_in_flight_per_project: 7\n"), 7),
+                         ("a machine file with no per-project key keeps the guard.yaml line the owner set", PROVIDER_MACHINE, 9))
+    for label, text, wanted in per_project_cases:
+        guard_before.write_text(kept_guard.decode().replace("max_in_flight_per_project: 50", "max_in_flight_per_project: 9"))
+        machine.write_text(text)
+        refreshed = kit("install", "--config", str(machine))
+        written = re.search(r"^max_in_flight_per_project: (\d+)$", guard_before.read_text(), re.M)
+        run.step(f"install --config with {label}: guard.yaml says {wanted}",
+                 refreshed.returncode == 0 and written is not None and int(written.group(1)) == wanted, refreshed.stderr.strip()[-200:] or (written.group(0) if written else "no line"))
+    guard_before.write_text(re.sub(r"^max_in_flight_per_project:.*\n", "", kept_guard.decode(), flags=re.M))
+    machine.write_text(PROVIDER_MACHINE.replace(total_line, total_line + "  max_in_flight_per_project: 33\n"))
+    inserted = kit("install", "--config", str(machine))
+    run.step("install --config adds the per-project line to a guard.yaml written before the key existed, right after the total, without touching other lines",
+             inserted.returncode == 0 and "max_in_flight_total: 500\nmax_in_flight_per_project: 33\n" in guard_before.read_text(), inserted.stderr.strip()[-200:] or "inserted")
+    bounds = []
+    for label, line, ok in (("a total of 1000", "  max_in_flight_total: 1000\n", True), ("a total of 1001", "  max_in_flight_total: 1001\n", False),
+                            ("a per-project value of 0", total_line + "  max_in_flight_per_project: 0\n", False),
+                            ("a per-project value of 1000", total_line + "  max_in_flight_per_project: 1000\n", True)):
+        guard_before.write_bytes(kept_guard)
+        machine.write_text(PROVIDER_MACHINE.replace(total_line, line))
+        outcome = kit("install", "--config", str(machine))
+        bounds.append((label, (outcome.returncode == 0) == ok))
+    run.step("install --config accepts a total or per-project value up to 1000 and refuses 1001 and a per-project 0", all(good for _, good in bounds), json.dumps(bounds))
     guard_before.write_bytes(kept_guard)
     machine_before.write_bytes(kept_machine_bytes)
 
@@ -2991,7 +3017,7 @@ guard:
   trusted_authors:
     - {OWNER}
   ask_owner: false
-  max_in_flight_total: 20
+  max_in_flight_total: 500
 projects:
   - bot: {BOT}
     project: shop
@@ -3365,7 +3391,7 @@ guard:
   trusted_authors:
     - {OWNER}
   ask_owner: false
-  max_in_flight_total: 20
+  max_in_flight_total: 500
 projects:
   - bot: {BOT}
     project: shop
@@ -4292,10 +4318,10 @@ def host_secret_scenario(run: Run, work: Path) -> None:
 
 def pickup_limits_step(run: Run) -> None:
     defaults = importlib.import_module("faker_kit_pickup")
-    shipped_totals = [int(m.group(1)) for path in ("guard.yaml", "machine.yaml") for m in re.finditer(r"^\s*max_in_flight_total: (\d+)", (HERMES / "templates" / path).read_text(), re.M)]
-    run.step("pickup limits: the shipped guard.yaml and machine.yaml templates carry the one default total in faker_kit_pickup.py, and its defaults are the owner's 20 and 5",
-             shipped_totals == [defaults.DEFAULT_TOTAL] * 2 and (defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT) == (20, 5),
-             json.dumps([shipped_totals, defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT]))
+    shipped = {path: {m.group(1): int(m.group(2)) for m in re.finditer(r"^\s*(max_in_flight_\w+): (\d+)", (HERMES / "templates" / path).read_text(), re.M)} for path in ("guard.yaml", "machine.yaml")}
+    run.step("pickup limits: the shipped guard.yaml and machine.yaml templates carry the default total of faker_kit_pickup.py (500) and the one per-project value (50), the same as its default",
+             all(row == {"max_in_flight_total": defaults.DEFAULT_TOTAL, "max_in_flight_per_project": defaults.DEFAULT_PER_PROJECT} for row in shipped.values())
+             and (defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT) == (500, 50), json.dumps([shipped, defaults.DEFAULT_TOTAL, defaults.DEFAULT_PER_PROJECT]))
 
 
 class Ctx:
@@ -4379,6 +4405,7 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "kanban-evidence": lambda c: kanban_evidence_scenario.evidence_scenario(c.run()),
     "kanban-visibility": lambda c: kanban_visibility_scenario.visibility_scenario(c.run()),
     "pickup": scenario_pickup,
+    "pickup-limit": lambda c: pickup_limit_scenario.pickup_limit_scenario(c.run()),
     "session-summary": lambda c: session_summary_scenario.session_scenario(c.run()),
     "session-conflicts": lambda c: session_conflicts_scenario.conflicts_scenario(c.run()),
     "merged-gates": lambda c: merged_gates_scenario.merged_gates_scenario(c.run(), open_gates),
