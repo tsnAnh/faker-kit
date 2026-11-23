@@ -39,6 +39,7 @@ import kanban_scenario
 import kanban_text_scenario
 import kanban_visibility_scenario
 import merged_gates_scenario
+import merged_ready_scenario
 import pickup_scenario
 import ready_scenario
 import refresh_scenario
@@ -4374,6 +4375,7 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "session-summary": lambda c: session_summary_scenario.session_scenario(c.run()),
     "session-conflicts": lambda c: session_conflicts_scenario.conflicts_scenario(c.run()),
     "merged-gates": lambda c: merged_gates_scenario.merged_gates_scenario(c.run(), open_gates),
+    "merged-ready": lambda c: merged_ready_scenario.merged_ready_scenario(c.run()),
     "kanban-text": lambda c: kanban_text_scenario.kanban_text_scenario(c.run()),
     "kanban-backfill": lambda c: kanban_text_scenario.kanban_backfill_scenario(c.run()),
     "kanban-close": lambda c: kanban_text_scenario.kanban_close_scenario(c.run()),

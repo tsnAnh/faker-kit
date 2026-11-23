@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, completion_pending, let_go, part_entry, part_key
+from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, completion_pending, let_go, park_card, part_entry, part_key, waiting_reason
 from faker_kit_gh import Refused, scrub
 from faker_kit_kanban import Card, Kanban, KanbanError
 from faker_kit_loop import CLOSED, DEFAULT_OUTCOME, Loop
@@ -15,6 +15,7 @@ from faker_kit_text import refresh
 PullReader = Callable[[str, int], dict]
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 CLOSED_UNIT_STATES = ("merged", "abandoned", "closed", "done")
+ABANDONED_STATES = ("abandoned", "taken-back")
 
 
 def recorded_prs(text: str) -> list[int]:
@@ -249,7 +250,8 @@ def card_items(kanban: Kanban, cards: list[Card], kind: str, repos: dict[str, st
             bound, problem = evidence_numbers(kanban, card, repo)
             prs = tuple(sorted(set(bound or entry["prs"])))
         else:
-            ident, outcome, stages = card.slug, fields.get("Outcome", DEFAULT_OUTCOME), serving_stages(by_key, fields)
+            ident, outcome = card.slug, fields.get("Outcome", DEFAULT_OUTCOME)
+            stages = {**serving_stages(by_key, fields), **dict(line.partition("=")[::2] for line in card.header.lines("Stage"))} if card.header else {}
             prs, problem = card_prs(kanban, card, repo)
         if prs or problem:
             items.append(Tracked(ident, kind, fields.get("Project", ""), repo, prs, outcome, stages, card, problem))
@@ -260,37 +262,58 @@ class CardSettler(Settler):
     def __init__(self, kanban: Kanban, loop: CardLoop, cards: list[Card], now: float) -> None:
         self.kanban, self.loop, self.now = kanban, loop, now
         self.refusals = Refusals(loop.home, loop.bot)
-        self.status = {c.id: c.status for c in cards}
+        self.cards = {c.id: c for c in cards}
+
+    def open_units(self, card: Card) -> list[str]:
+        return [p for p in self.kanban.parents(card.id) if self.unit_open(self.cards.get(p))]
+
+    @staticmethod
+    def unit_open(unit: Card | None) -> bool:
+        if unit is None:
+            return True
+        return unit.status not in ("done", "archived") and (unit.header is None or unit.header.fields.get("State") not in ABANDONED_STATES)
 
     def merge(self, item: Tracked, last: Seen) -> tuple[str, dict[str, object]]:
         card = item.card
         if card is None:
             return "refused", {"completion": "refused", "classification": "unknown", "detail": "the entry has no card"}
-        if card.status != "done":
-            if self.kanban.given_up_on_stale_claim(card):
-                self.mark(item, card, "merged", last.number)
-                return "stale_blocked", {"card": card.id, "completion": "stale_blocked", "unblock": f"hermes kanban unblock {card.id}",
-                                         "detail": "Kanban gave this card up after a stale kit claim; the owner or chief can run the unblock line, then loop reconcile completes it"}
-            if not SHA.match(last.merge_commit) or not SHA.match(last.head):
-                self.mark(item, card, "merged", last.number)
-                return "pending", {"card": card.id, "head": last.head, "completion": "pending", "classification": "unknown",
-                                   "detail": f"GitHub reports no merge commit for #{last.number} yet; loop reconcile completes the card once it does"}
-            open_units = [p for p in self.kanban.parents(card.id) if self.status.get(p) != "done"] if item.kind == "part" else []
-            if open_units:
-                return "waiting", {"card": card.id, "units": open_units}
-            merged = Merged(last.number, last.url, last.head, last.merge_commit)
-            result = self.refusals.attempt(card.id, last.number, last.head, self.now, lambda: complete_card(self.kanban, card, item.outcome, merged, item.stages))
-            self.mark(item, card, "merged", last.number)
-            if result["completion"] != "done":
-                return "pending", {"card": result.pop("id"), "head": last.head, **result, "completion": "pending"}
+        if card.status == "done":
+            self.mark(item, card, "merged", last.number, None)
             return "done", {}
-        self.mark(item, card, "merged", last.number)
-        return "done", {}
+        open_units = self.open_units(card) if item.kind == "part" else []
+        if open_units:
+            return "waiting", {"card": card.id, "units": open_units}
+        if self.kanban.given_up_on_stale_claim(card):
+            self.mark(item, card, "merged", last.number)
+            return "stale_blocked", {"card": card.id, "completion": "stale_blocked", "unblock": f"hermes kanban unblock {card.id}",
+                                     "detail": "Kanban gave this card up after a stale kit claim; the owner or chief can run the unblock line, then loop reconcile completes it"}
+        if not SHA.match(last.merge_commit) or not SHA.match(last.head):
+            said = f"GitHub reports no merge commit for #{last.number} yet; loop reconcile completes the card once it does"
+            self.mark(item, card, "merged", last.number, said)
+            return "pending", {"card": card.id, "head": last.head, "completion": "pending", "classification": "unknown", "detail": said, **self.park(card, said)}
+        merged = Merged(last.number, last.url, last.head, last.merge_commit)
+        result = self.refusals.attempt(card.id, last.number, last.head, self.now, lambda: complete_card(self.kanban, card, item.outcome, merged, item.stages))
+        done = result["completion"] == "done"
+        waiting = None if done else waiting_reason(result)
+        self.mark(item, card, "merged", last.number, waiting)
+        if done:
+            return "done", {}
+        parked = self.park(card, waiting or "") if result.get("held") else {}
+        return "pending", {"card": result.get("id", card.id), "head": last.head, **{k: v for k, v in result.items() if k != "id"}, **parked, "completion": "pending"}
+
+    def park(self, card: Card, reason: str) -> dict:
+        return park_card(self.kanban, card.id, reason, False) if card.status == "ready" else {}
 
     def landed(self, item: Tracked, last: Seen) -> None:
-        if item.card is not None and item.card.status != "done":
-            let_go(self.kanban, item.card, "faker-kit: the pull request merged and the card waits for its stage evidence, claim released")
-            self.mark(item, item.card, "merged", last.number)
+        card = item.card
+        if card is None or card.status == "done":
+            return
+        said = f"the {item.outcome} evidence is not recorded on the card yet"
+        self.mark(item, card, "merged", last.number, said)
+        if card.status == "ready":
+            park_card(self.kanban, card.id, said, False)
+        elif card.status == "running" and self.kanban.live_run(card.id) is not None:
+            park_card(self.kanban, card.id, said, True)
 
     def close(self, item: Tracked) -> None:
         if item.card is not None:
@@ -299,7 +322,7 @@ class CardSettler(Settler):
 
     def publish(self, item: Tracked, live: Seen) -> bool:
         card = item.card
-        if card is None or card.status == "done" or not SHA.match(live.head):
+        if card is None or card.status == "done" or item.outcome != DEFAULT_OUTCOME or not SHA.match(live.head):
             return False
         run_id = self.kanban.open_run(card.id)
         if run_id is None:
@@ -307,12 +330,13 @@ class CardSettler(Settler):
         payload: dict[str, object] = {"pr_url": live.url, "head_sha": live.head}
         return self.kanban.evidence_add(card.id, run_id, "pr_published", payload)
 
-    def mark(self, item: Tracked, card: Card, state: str, pr: int | None) -> None:
+    def mark(self, item: Tracked, card: Card, state: str, pr: int | None, waiting: str | None = None) -> None:
+        extra = {"Acceptance": waiting} if state == "merged" else None
         if item.kind == "part":
-            if not already_merged(card, state, pr):
-                self.loop.update(int(item.ident), state, [pr] if pr else [], None, False, self.now)
+            if not already_merged(card, state, pr) or acceptance_moves(card, extra):
+                self.loop.update(int(item.ident), state, [pr] if pr else [], None, False, self.now, extra=extra)
             return
-        mark_unit(self.kanban, card, state, pr, self.now, item.repo)
+        mark_unit(self.kanban, card, state, pr, self.now, item.repo, extra)
 
 
 def already_merged(card: Card, state: str, pr: int | None) -> bool:
@@ -320,12 +344,19 @@ def already_merged(card: Card, state: str, pr: int | None) -> bool:
     return state == "merged" and header is not None and header.fields.get("State") == "merged" and pr is not None and pr in recorded_prs(header.fields.get("PRs", ""))
 
 
-def mark_unit(kanban: Kanban, card: Card, state: str, pr: int | None, now: float, repo: str | None) -> None:
+def acceptance_moves(card: Card, extra: dict[str, str | None] | None) -> bool:
+    return extra is not None and card.header is not None and card.header.fields.get("Acceptance") != extra["Acceptance"]
+
+
+def mark_unit(kanban: Kanban, card: Card, state: str, pr: int | None, now: float, repo: str | None, extra: dict[str, str | None] | None = None) -> None:
     header = card.header
-    if header is not None and not already_merged(card, state, pr):
+    moved = not already_merged(card, state, pr)
+    if header is not None and (moved or acceptance_moves(card, extra)):
         prs = sorted({*recorded_prs(header.fields.get("PRs", "")), *([pr] if pr else [])})
-        changed = header.with_fields({"State": state, "PRs": ",".join(str(p) for p in prs) or None, "Updated": str(float(now))})
-        kanban.edit_body_if_changed(card.id, refresh(changed, card.title, repo), header)
+        changes: dict[str, str | None] = {"State": state, "PRs": ",".join(str(p) for p in prs) or None, **(extra or {})}
+        if moved:
+            changes["Updated"] = str(float(now))
+        kanban.edit_body_if_changed(card.id, refresh(header.with_fields(changes), card.title, repo), header)
     if state == "abandoned":
         kanban.archive(card.id)
 

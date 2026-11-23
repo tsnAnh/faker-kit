@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from run_dispatch_e2e import Run
 
 BUILT = json.dumps({"name": "release.tgz", "sha256": "a" * 64})
-WRITES = ("claim", "reclaim", "complete", "edit", "create", "archive", "block", "link", "heartbeat")
+WRITES = ("claim", "reclaim", "complete", "edit", "create", "archive", "block", "link", "heartbeat", "schedule", "unblock")
 
 
 def evidence_scenario(run: Run) -> None:
@@ -69,9 +69,9 @@ def evidence_scenario(run: Run) -> None:
     ticks = [json_of(project("loop", "reconcile")) for _ in range(9)]
     first_row, last_row = refused_row(first, card_a), refused_row(ticks[-1], card_a)
     run.step("evidence dedupe: a merged pull request whose completion Kanban always refuses, reconciled 10 times, ends with one run and one pr_published and one pr_merged row",
-             len(runs(key("dup-a"))) == 1 and kinds(rows(key("dup-a"))) == {"pr_merged": 1, "pr_published": 1} and board.by_key()[key("dup-a")]["status"] == "ready"
+             len(runs(key("dup-a"))) == 1 and kinds(rows(key("dup-a"))) == {"pr_merged": 1, "pr_published": 1} and board.by_key()[key("dup-a")]["status"] == "scheduled"
              and board.open_claims(key("dup-a")) == [], json.dumps(kinds(rows(key("dup-a")))))
-    run.step("evidence dedupe: ticks 2 to 10 make no Kanban write at all (no claim, evidence, complete, or reclaim), and the refusal stays visible with its classification and head",
+    run.step("evidence dedupe: ticks 2 to 10 make no Kanban write at all (no claim, evidence, complete, schedule, or unblock), and the refusal stays visible with its classification and head",
              board.mutations() == after_first and writes_since(mark) == [] and first_row.get("classification") == "pending" and first_row.get("held") is None
              and all(refused_row(t, card_a).get("held") is True and refused_row(t, card_a).get("classification") == "pending" for t in ticks)
              and last_row.get("head") == head_of(201) and last_row.get("retry_after", 0) > run.clock, json.dumps(last_row))
@@ -90,7 +90,7 @@ def evidence_scenario(run: Run) -> None:
     board.set(complete_refuse=None)
     still = json_of(project("loop", "reconcile"))
     run.step("evidence dedupe: the cause clearing on Kanban's side is not visible to the kit, so the card stays held and nothing is written until the hold passes",
-             board.mutations() == again and refused_row(still, card_a).get("held") is True and board.by_key()[key("dup-a")]["status"] == "ready", json.dumps(refused_row(still, card_a)))
+             board.mutations() == again and refused_row(still, card_a).get("held") is True and board.by_key()[key("dup-a")]["status"] == "scheduled", json.dumps(refused_row(still, card_a)))
     run.clock = float(refused_row(still, card_a)["retry_after"]) + 1
     done = json_of(project("loop", "reconcile"))
     final = rows(key("dup-a"), runs(key("dup-a"))[-1]["id"])

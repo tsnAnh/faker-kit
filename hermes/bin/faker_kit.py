@@ -36,7 +36,23 @@ from faker_kit_backfill import backfill, backfill_refs
 from faker_kit_card_watch import align as align_parts
 from faker_kit_card_watch import check as check_cards
 from faker_kit_card_watch import hold_live_units, session_of
-from faker_kit_cards import CLOSE_KINDS, CardLoop, Merged, PullOwners, bound_pr_url, close_card, complete_card, create_unit, hold, ref_view, refresh_work, retitle_card, unit_key, unit_rows
+from faker_kit_cards import (
+    CLOSE_KINDS,
+    CardLoop,
+    Merged,
+    PullOwners,
+    bound_pr_url,
+    close_card,
+    complete_card,
+    create_unit,
+    hold,
+    ref_view,
+    refresh_work,
+    retitle_card,
+    unit_key,
+    unit_rows,
+    waiting_reason,
+)
 from faker_kit_ci_rule import CI_FOOTER, CI_RULE
 from faker_kit_cloud import CHECKOUT, EFFORT_LEVELS, SESSION_ID, Cloud, CloudError, trust_checkout
 from faker_kit_coding_rule import CODING_FOOTER, CODING_RULE
@@ -173,7 +189,7 @@ SUMMARY_FOOTER = (
 )
 SUMMARY_RULE = SUMMARY_FOOTER.strip().removeprefix("Closing summary rule: ")
 LOOP_ACTIONS = {"chief": ("show", "set", "digest", "migrate", "reconcile", "backfill", "close", "check", "align", "title"),
-                "project": ("show", "migrate", "unit", "reconcile", "ready", "backfill", "close", "check", "title")}
+                "project": ("show", "set", "migrate", "unit", "reconcile", "ready", "backfill", "close", "check", "title")}
 ROLE_COMMANDS = {
     "project": {"launch", "merge", "status", "andon", "incidents", "issues", "loop", "news", "session", "pickup"},
     "bootstrap": {"add-project", "launch", "status", "andon", "refresh", "import"},
@@ -830,7 +846,7 @@ class Kit:
         if result.get("completion") == "done":
             return result
         try:
-            mark_unit(kanban, card, "merged", pr, self.now(), str(bot.repo))
+            mark_unit(kanban, card, "merged", pr, self.now(), str(bot.repo), {"Acceptance": waiting_reason(result)})
         except KanbanError as err:
             return {**result, "completion": "pending", "detail": f"{result.get('detail', '')}; {scrub(str(err))}; faker-kit loop reconcile closes the card in the kit"}
         return {**result, "completion": "pending"}
@@ -1039,6 +1055,13 @@ class Kit:
             return self.loop_unit(caller, part_id, state, waits_on, reported, evidence, prs, part, title)
         if part is not None:
             raise Refused("--part belongs to loop unit")
+        if caller.role == "project" and action == "set":
+            if part_id is None:
+                raise Refused("loop set takes a unit: faker-kit loop set <unit ref | card id> --evidence STAGE=REF")
+            if not cutover(self.home):
+                raise Refused("the Kanban cutover is not done: units still live in units.tsv, so there is no unit card to record evidence on")
+            self.ref_target(caller, part_id)
+            return self.unit_evidence(caller, part_id, state, prs, waits_on, reported, evidence)
         if caller.role == "project":
             if part_id is not None or state or prs or waits_on or reported or evidence:
                 raise Refused("loop show takes no part id or changes")
@@ -1052,12 +1075,21 @@ class Kit:
         if action == "set":
             if part_id is None:
                 raise Refused("loop set takes the part's id: faker-kit loop set <id> --state <state>")
-            return cards.update(self.part_number(self.ref_target(caller, part_id)), state, prs, waits_on, reported, self.now(), evidence, self.head_reader(caller))
+            target = self.ref_target(caller, part_id)
+            if isinstance(target, int):
+                return cards.update(target, state, prs, waits_on, reported, self.now(), evidence, self.head_reader(caller))
+            return self.unit_evidence(caller, part_id, state, prs, waits_on, reported, evidence)
         if part_id is not None or state or prs or waits_on or reported or evidence:
             raise Refused(f"loop {action} takes no part id or changes; use loop set <id>")
         if action == "digest":
             return {**cards.digest(self.now()), **reconciled, "check": self.loop_check(caller)["lines"]}
         return cards.show(everything)
+
+    def unit_evidence(self, caller: Bot, target: int | str, state: str | None, prs: list[int], waits_on: str | None, reported: bool, evidence: list[str] | None) -> dict:
+        if state or prs or waits_on or reported:
+            raise Refused("a unit card takes only --evidence: faker-kit loop set <unit ref | card id> --evidence STAGE=REF")
+        cards = CardLoop(self.kanban(caller), self.home, caller.name, self.role_repos(caller))
+        return cards.update_unit(caller.role, caller.project, target, evidence or [], self.now(), self.head_reader(caller))
 
     def head_reader(self, caller: Bot) -> Callable[[str, list[int]], str | None]:
         repos = self.role_repos(caller)

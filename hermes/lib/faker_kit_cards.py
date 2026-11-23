@@ -33,7 +33,7 @@ from faker_kit_loop import (
 from faker_kit_merge import unit_of
 from faker_kit_refs import belongs_elsewhere, clean_phrase, ensure_prefix, find_ref, foreign, known_ref, next_ref, numbered, owner_of, with_ref
 from faker_kit_session_card import steered
-from faker_kit_text import pull_numbers, refresh, summary_of
+from faker_kit_text import WAITING_FOR_ACCEPTANCE, pull_numbers, refresh, summary_of
 from faker_kit_units import brief_source, read_units, unit_index
 
 CHIEF_KEY = "chief"
@@ -54,6 +54,7 @@ DEVICE = re.compile(r"\b(emulator-\d+)\b|\bdevice[ =:]+([A-Za-z0-9_.:-]+)")
 ONE_LINE_KEYS = frozenset({"text", "head_sha", "sha256", "version", "device"})
 MAX_DETAIL = 400
 MAX_LINE_CHECKS = 3
+MAX_WAITING = 300
 NO_RECEIPT = "receipt: none for this run"
 REFUSAL_CLASS = re.compile(r"PR acceptance (" + "|".join(ACCEPTANCE_CLASSIFICATIONS) + r")\b")
 
@@ -276,7 +277,7 @@ class CardLoop:
         raise LoopError("could not reserve a part id; run the handoff again")
 
     def update(self, part_id: int, state: str | None, prs: list[int], waits_on: str | None, reported: bool, now: float, evidence: list[str] | None = None,
-               head: Callable[[str, list[int]], str | None] | None = None) -> dict:
+               head: Callable[[str, list[int]], str | None] | None = None, extra: dict[str, str | None] | None = None) -> dict:
         check_update(state, prs, waits_on)
         parse_card_evidence(evidence or [])
         with self.locked():
@@ -289,13 +290,39 @@ class CardLoop:
             changed = apply_update(entry, part_id, state, prs, waits_on, reported, now, {s: stage_ref(p) for s, p in payloads.items()})
             deferred = bool(payloads) and not self.record(card, payloads)
             work = work_line(self.kanban, card, {c.id: c for c in self.kanban.cards(False)})
-            fresh = refresh(entry_header(changed, card.header).with_fields({"Work": work}), card.title, self.repos.get(entry["project"]))
+            fresh = refresh(entry_header(changed, card.header).with_fields({"Work": work, **(extra or {})}), card.title, self.repos.get(entry["project"]))
             self.kanban.edit_body_if_changed(card.id, fresh, card.header)
             if changed["state"] != entry["state"] and changed["state"] in ("abandoned", "taken-back"):
                 let_go(self.kanban, card, f"faker-kit: part {part_id} is {changed['state']}")
                 self.kanban.archive(card.id)
                 return part_row(changed)
         row = part_row(changed)
+        return {**row, "evidence_note": DEFERRED_EVIDENCE} if deferred else row
+
+    def update_unit(self, role: str, project: str | None, target: int | str, evidence: list[str], now: float, head: Callable[[str, list[int]], str | None] | None = None) -> dict:
+        if not evidence:
+            raise LoopError("a unit card takes only evidence: faker-kit loop set <unit ref | card id> --evidence STAGE=REF")
+        parse_card_evidence(evidence)
+        with self.locked():
+            self.kanban.require_external()
+            card = close_target(self.kanban, self.home, role, project, target)
+            header = card.header
+            fields = header.fields if header else {}
+            if header is None or fields.get("Kind") != "unit" or (role != "chief" and fields.get("Project") != project):
+                raise LoopError(f"card {card.id} is not a unit card of {project or 'a project'}; nothing was changed")
+            if card.archived or card.status == "done":
+                raise LoopError(f"card {card.id} is already closed; nothing was changed")
+            outcome = fields.get("Outcome", DEFAULT_OUTCOME)
+            if outcome == DEFAULT_OUTCOME:
+                raise LoopError(f"card {card.id} is done by a merged pull request, not by stage evidence; nothing was changed")
+            prs = [int(p) for p in fields.get("PRs", "").split(",") if p.isdigit()]
+            payloads = parse_card_evidence(evidence, head(fields["Project"], prs) if head else None)
+            deferred = not self.record(card, payloads)
+            held = {**dict(line.partition("=")[::2] for line in header.lines("Stage")), **{s: stage_ref(p) for s, p in payloads.items()}}
+            repeated = (*(row for row in header.repeated if row[0] != "Stage"), *(("Stage", f"{s}={ref}") for s, ref in sorted(held.items())))
+            fresh = refresh(header.with_fields({"Updated": str(float(now))}, repeated), card.title, self.repos.get(fields["Project"]))
+            self.kanban.edit_body_if_changed(card.id, fresh, header)
+        row = {"unit": card.slug, "card": card.id, "ref": card.ref, "outcome": outcome, "evidence": {s: STAGE_KIND[s] for s in payloads}}
         return {**row, "evidence_note": DEFERRED_EVIDENCE} if deferred else row
 
     def record(self, card: Card, payloads: dict[str, dict[str, object]]) -> bool:
@@ -309,12 +336,16 @@ class CardLoop:
                 payloads = {stage: p for stage, p in payloads.items() if not any(r.kind == STAGE_KIND[stage] and r.payload == p for r in rows)}
                 if not payloads:
                     return True
+                if card.status == "scheduled":
+                    self.kanban.unblock(card.id)
                 run_id = self.kanban.claim(card.id)
             try:
                 for stage, payload in payloads.items():
                     self.kanban.evidence_add(card.id, run_id, STAGE_KIND[stage], payload)
             finally:
-                if borrowed:
+                if borrowed and completion_pending(card):
+                    self.kanban.schedule(card.id, f"Status: {WAITING_FOR_ACCEPTANCE}stage evidence recorded, completion adds it on its own run")
+                elif borrowed:
                     self.kanban.release(card.id, "faker-kit: stage evidence recorded, claim released; completion adds it again on its own run")
         except KanbanError as err:
             raise LoopError(f"Kanban did not accept the evidence ({err}); the part was not changed") from None
@@ -454,9 +485,10 @@ class Merged:
 
 
 def completion_evidence(card: Card, outcome: str, merged: Merged, stages: dict[str, str] | None = None) -> list[tuple[str, dict[str, object]]]:
-    wanted: list[tuple[str, dict[str, object]]] = [("pr_published", {"pr_url": merged.url, "head_sha": merged.head})]
+    wanted: list[tuple[str, dict[str, object]]] = []
     if outcome == DEFAULT_OUTCOME:
-        wanted.append(("pr_merged", {"pr_url": merged.url, "head_sha": merged.head, "merge_commit": merged.merge_commit}))
+        wanted = [("pr_published", {"pr_url": merged.url, "head_sha": merged.head}),
+                  ("pr_merged", {"pr_url": merged.url, "head_sha": merged.head, "merge_commit": merged.merge_commit})]
     held = stages if stages is not None else dict(line.partition("=")[::2] for line in (card.header.lines("Stage") if card.header else []))
     for stage, ref in held.items():
         if stage in STAGE_KIND:
@@ -473,11 +505,27 @@ def release_claim(kanban: Kanban, card_id: str) -> dict:
     return {}
 
 
+def park_card(kanban: Kanban, card_id: str, reason: str, live_run: bool) -> dict:
+    try:
+        kanban.schedule(card_id, f"Status: {WAITING_FOR_ACCEPTANCE}{reason}")
+    except KanbanError as err:
+        notice = f"Kanban would not schedule the card ({scrub(str(err))[:100]}); the old behaviour applies: the claim is released and the card returns to Ready"
+        return {"schedule_unavailable": notice, **(release_claim(kanban, card_id) if live_run else {})}
+    return {"scheduled": True}
+
+
+def waiting_reason(result: dict) -> str:
+    said = " ".join(f"{result.get('classification') or 'unknown'}: {result.get('detail') or ''}".split()).rstrip(": ")
+    return scrub(said)[:MAX_WAITING]
+
+
 def complete_card(kanban: Kanban, card: Card, outcome: str, merged: Merged, stages: dict[str, str] | None = None) -> dict:
     run_id: int | None = None
     try:
         run_id = kanban.open_run(card.id)
         if run_id is None:
+            if card.status == "scheduled":
+                kanban.unblock(card.id)
             run_id = kanban.claim(card.id)
         for kind, payload in completion_evidence(card, outcome, merged, stages):
             kanban.evidence_add(card.id, run_id, kind, payload)
@@ -486,7 +534,7 @@ def complete_card(kanban: Kanban, card: Card, outcome: str, merged: Merged, stag
         return {"id": card.id, "completion": "done"}
     except KanbanError as err:
         refused = {"id": card.id, "completion": "refused", **refusal_detail(kanban, card.id, run_id, str(err))}
-        return {**refused, **release_claim(kanban, card.id)} if run_id is not None else refused
+        return {**refused, **park_card(kanban, card.id, waiting_reason(refused), True)} if run_id is not None else refused
     return {"id": card.id, "completion": "done"}
 
 
@@ -571,7 +619,7 @@ def close_card(kanban: Kanban, home: Path, role: str, bot: str, project: str | N
             raise LoopError(f"card {card.id} is not one {bot} may close; nothing was changed")
         if any(SECRET_SHAPES.search(v) for v in (*fields.values(), *(v for _, v in header.repeated))):
             raise LoopError(f"card {card.id} holds text that looks like a token or key; nothing was changed")
-        if card.archived or fields.get("State") in CLOSED:
+        if card.archived or card.status == "done":
             raise LoopError(f"card {card.id} is already closed; nothing was changed")
         if (fields.get("PRs") or header.lines("PR")) and kind not in ("superseded", "folded"):
             raise LoopError(f"card {card.id} records a pull request; close it with --as superseded or --as folded, or let loop reconcile settle it; nothing was changed")

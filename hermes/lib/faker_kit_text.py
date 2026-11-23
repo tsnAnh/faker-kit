@@ -12,6 +12,7 @@ NONE = "none"
 GOAL_PREFIX = "**Goal:** "
 DONE_PREFIX = "**Done means:** "
 STATUS_PREFIX = "**Current status:** "
+WAITING_FOR_ACCEPTANCE = "merged, waiting for Kanban acceptance: "
 DECISIONS_PREFIX = "**Owner decisions:** "
 OLD_DECISIONS_PREFIX = "Owner decisions: "
 DONE_MEANS = {
@@ -78,8 +79,10 @@ def card_text(header: Header, goal: str, repo: str | None, decisions: str | None
     closed = closed_line(header)
     if closed:
         status.append(closed)
+    waiting = one_line(fields.get("Acceptance", ""))
     paragraphs = [*([f"Ref: {header.ref}"] if header.ref else []), f"{GOAL_PREFIX}{cut(one_line(goal), MAX_SUMMARY)}",
-                  f"{DONE_PREFIX}{DONE_MEANS.get(fields.get('Outcome', ''), DONE_MEANS['merged-pr'])}", f"{STATUS_PREFIX}{'; '.join(status)}", f"{DECISIONS_PREFIX}{owner}"]
+                  f"{DONE_PREFIX}{DONE_MEANS.get(fields.get('Outcome', ''), DONE_MEANS['merged-pr'])}", f"{STATUS_PREFIX}{'; '.join(status)}",
+                  *([f"Status: {WAITING_FOR_ACCEPTANCE}{waiting}"] if waiting else []), f"{DECISIONS_PREFIX}{owner}"]
     return cut("\n\n".join(paragraphs), MAX_TEXT)
 
 

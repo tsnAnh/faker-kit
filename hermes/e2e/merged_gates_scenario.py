@@ -76,9 +76,9 @@ def merged_gates_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
         out = json_of(project("loop", "reconcile"))
         row = pending_rows(out).get("landed", {})
         seen_classes.append(str(row.get("classification")))
-        run.step(f"merged gates 1: Kanban refusing completion ({mode}) leaves the card header State merged with the pull request number, the claim released, the card ready and not archived, "
+        run.step(f"merged gates 1: Kanban refusing completion ({mode}) leaves the card header State merged with the pull request number, the claim released, the card scheduled and not archived, "
                  "and reports a pending row, not a refusal",
-                 "State: merged" in lines(card("landed")) and "PRs: 110" in lines(card("landed")) and board.open_claims(key("landed")) == [] and card("landed")["status"] == "ready"
+                 "State: merged" in lines(card("landed")) and "PRs: 110" in lines(card("landed")) and board.open_claims(key("landed")) == [] and card("landed")["status"] == "scheduled"
                  and row.get("completion") == "pending" and row.get("classification") == wanted and row.get("detail") and out.get("completion_pending") == 1
                  and not [r for r in out.get("entries", {}).get("refused", []) if r["id"] == "landed"], json.dumps(row)[:240])
     run.step("merged gates 1: the refusal that names no receipt (Kanban's bare refusal) prints the missing receipt in its notice instead of an empty detail",
@@ -86,7 +86,7 @@ def merged_gates_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     after_last, calls_last = board.mutations(), len(board.calls())
     again = json_of(project("loop", "reconcile"))
     run.step("merged gates 1: the next pass prints the same pending row as held and makes no Kanban write, because the header already says merged and nothing is claimed again",
-             pending_rows(again).get("landed", {}).get("held") is True and board.mutations() == after_last and len(board.calls()) > calls_last and card("landed")["status"] == "ready",
+             pending_rows(again).get("landed", {}).get("held") is True and board.mutations() == after_last and len(board.calls()) > calls_last and card("landed")["status"] == "scheduled",
              json.dumps(pending_rows(again))[:240])
     board.set(complete_refuse=None)
     run.clock += 7 * 3600
@@ -151,7 +151,7 @@ def merged_gates_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     run.step("merged gates 1: a completion refusal whose text merely contains the words already done stays a refusal: a pending row with that "
              "text, the claim released, and the card not listed as merged",
              row.get("completion") == "pending" and "already done" in str(row.get("detail")) and "wording" not in wording.get("entries", {}).get("merged", [])
-             and board.open_claims(key("wording")) == [] and card("wording")["status"] == "ready", json.dumps(row)[:240])
+             and board.open_claims(key("wording")) == [] and card("wording")["status"] == "scheduled", json.dumps(row)[:240])
     board.set(complete_refuse=None)
 
     merged(114, "plain")
@@ -214,7 +214,7 @@ def merged_gates_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     free = json_of(project("pickup", "status", "--no-job"))
     run.step("merged gates 5: a unit whose merged pull request still waits for its stage evidence (built) is closed in the kit and holds no slot, and the stage evidence rule is unchanged",
              held.get("running") == 1 and free.get("running") == 0 and free.get("free_slots") == 1 and {"id": "built-unit", "outcome": "built"} in waiting["entries"]["awaiting_stage_evidence"]
-             and "State: merged" in lines(card("built-unit")) and board.open_claims(key("built-unit")) == [] and card("built-unit")["status"] == "ready",
+             and "State: merged" in lines(card("built-unit")) and board.open_claims(key("built-unit")) == [] and card("built-unit")["status"] == "scheduled",
              json.dumps({"before": held.get("running"), "after": free.get("running")}))
 
     def ready(n: int) -> None:

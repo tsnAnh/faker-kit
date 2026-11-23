@@ -58,9 +58,9 @@ def claims_scenario(run: Run) -> None:
     first = json_of(project("loop", "reconcile"))
     refused = {r["id"]: r for r in first["entries"]["completion_pending"]}
     later = board.by_key()[key("later-a")]
-    run.step("kanban claims: a merged pull request whose acceptance refuses (pending) is reported once, the card stays ready with no claim left open, and it never reaches blocked",
-             refused["later-a"]["classification"] == "pending" and later["status"] == "ready" and board.open_claims(key("later-a")) == [] and len(runs(key("later-a"))) == 1
-             and runs(key("later-a"))[0]["status"] == "reclaimed" and board.state()["failures"].get(later["id"], 0) == 0 and "claim_left_open" not in refused["later-a"],
+    run.step("kanban claims: a merged pull request whose acceptance refuses (pending) is reported once, the card is scheduled with no claim left open, and it never reaches blocked",
+             refused["later-a"]["classification"] == "pending" and later["status"] == "scheduled" and board.open_claims(key("later-a")) == [] and len(runs(key("later-a"))) == 1
+             and runs(key("later-a"))[0]["status"] == "scheduled" and board.state().get("failures", {}).get(later["id"], 0) == 0 and "claim_left_open" not in refused["later-a"],
              json.dumps(refused["later-a"]))
 
     board.set(complete_refuse="text-infra")
@@ -118,8 +118,8 @@ def claims_scenario(run: Run) -> None:
         run.clock += pause
         project("loop", "reconcile")
     never = board.by_key()[key("never-f")]
-    run.step("kanban claims: three refused attempts in a row, each after its hold, leave the card ready with no claim and no failure count, so Kanban never gives it up",
-             never["status"] == "ready" and board.open_claims(key("never-f")) == [] and len(runs(key("never-f"))) == 3 and board.state()["failures"].get(never["id"], 0) == 0
+    run.step("kanban claims: three refused attempts in a row, each after its hold, leave the card scheduled with no claim and no failure count, so Kanban never gives it up",
+             never["status"] == "scheduled" and board.open_claims(key("never-f")) == [] and len(runs(key("never-f"))) == 3 and board.state().get("failures", {}).get(never["id"], 0) == 0
              and board.state()["peak"][never["id"]] == 1, str(never["status"]))
     board.set(complete_refuse=None)
     run.clock += 15000
@@ -154,10 +154,13 @@ def claims_scenario(run: Run) -> None:
     last_built = [e["kind"] for e in rows(built_key, built_runs[-1])]
     run.step("kanban claims: the chief's part cards complete the same way: evidence from a stale older run is not reused, and a built part gets its stage evidence again on the run that completes",
              str(parts["plain"]) in finished["entries"]["merged"] and plain_done["status"] == "done" and sorted(e["kind"] for e in rows(plain_key, old + 1)) == ["pr_merged", "pr_published"]
-             and str(parts["built"]) in finished["entries"]["merged"] and built_done["status"] == "done" and len(built_runs) == 2 and sorted(last_built) == ["artifact_built", "pr_published"]
+             and str(parts["built"]) in finished["entries"]["merged"] and built_done["status"] == "done" and len(built_runs) == 2 and sorted(last_built) == ["artifact_built"]
              and board.open_claims(plain_key) == [] and board.open_claims(built_key) == [], json.dumps(finished["entries"]["merged"]))
 
     flat = {v[0] for v in board.verbs()}
     tokens = {token for _, rest in board.calls() for token in rest}
-    run.step("kanban claims: the only new Kanban call is reclaim, used to release the kit's own claim; no unblock, force, or dispatch call appears",
-             "reclaim" in flat and not tokens & {"unblock", "--force", "dispatch", "daemon", "swarm", "specify", "decompose", "set-dispatch-mode"}, ",".join(sorted(flat)))
+    unblocked = board.state().get("unblocked_from", [])
+    run.step("kanban claims: the new Kanban calls are schedule (park a merged card Kanban refuses), unblock (only a scheduled card, never a "
+             "blocked one), and reclaim (release a claim on an unmerged card); no force or dispatch call appears",
+             {"schedule", "unblock", "reclaim"} <= flat and unblocked and all(row["from"] == "scheduled" for row in unblocked)
+             and not tokens & {"--force", "dispatch", "daemon", "swarm", "specify", "decompose", "set-dispatch-mode"}, ",".join(sorted(flat)))
