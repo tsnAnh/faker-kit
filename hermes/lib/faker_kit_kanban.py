@@ -16,10 +16,10 @@ BOARD = "default"
 MARKER = "kanban-cutover.json"
 TIMEOUT_SECONDS = 60
 EXTERNAL = "external"
-MUTATING = frozenset({"create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "complete", "archive", "block"})
+MUTATING = frozenset({"create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "complete", "archive", "block", "schedule", "unblock"})
 ACCEPTANCE_CLASSIFICATIONS = ("pending", "failure", "missing", "stale", "provenance", "auth", "infra", "mismatch")
 EVIDENCE_KINDS = ("execution_ref", "pr_published", "pr_merged", "artifact_built", "app_installed", "other_result")
-SINGLE = ("Key", "Ref", "Kind", "Project", "Bot", "Outcome", "State", "Waits-on", "PRs", "Reported", "Part", "Added", "Updated", "Decisions", "Run", "Work")
+SINGLE = ("Key", "Ref", "Kind", "Project", "Bot", "Outcome", "State", "Waits-on", "PRs", "Reported", "Part", "Added", "Updated", "Decisions", "Run", "Work", "Acceptance")
 REPEATED = ("Stage", "History", "PR", "Session")
 REF = re.compile(r"\A([A-Z]{2,5})-([1-9][0-9]{0,8})\Z")
 HEADER_LINE = re.compile(r"\A([A-Za-z][A-Za-z-]*): (.*)\Z")
@@ -406,6 +406,14 @@ class Kanban:
     def release(self, card: str, reason: str) -> None:
         self.require_external()
         self.call(["reclaim", card_id(card), "--reason", reason])
+
+    def schedule(self, card: str, reason: str) -> None:
+        self.require_external()
+        self.call(["schedule", card_id(card), reason])
+
+    def unblock(self, card: str) -> None:
+        self.require_external()
+        self.call(["unblock", card_id(card)])
 
     def block(self, card: str, reason: str) -> None:
         self.require_external()

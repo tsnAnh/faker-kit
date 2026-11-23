@@ -57,7 +57,7 @@ def kanban_main():
     def view(found):
         return {**found, "status": "todo"} if waiting(found) else found
 
-    allowed = {"boards", "list", "show", "create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "complete", "archive", "block"}
+    allowed = {"boards", "list", "show", "create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "complete", "archive", "block", "schedule", "unblock"}
     clock = float(os.environ.get("E2E_CLOCK", "1"))
     for run in st["runs"]:
         expires = run.get("claim_expires")
@@ -169,6 +169,23 @@ def kanban_main():
         st.setdefault("failures", {})[found["id"]] = 0
         st.setdefault("events", []).append({"task_id": found["id"], "kind": "reclaimed", "run_id": live["id"], "created_at": 2, "payload": {"manual": True,
             "reason": rest[rest.index("--reason") + 1]}})
+    elif verb == "schedule" and st.get("schedule_refuse"):
+        die("schedule: this profile may not schedule cards on an external board")
+    elif verb == "schedule":
+        found = task(rest[0])
+        if found is None or found["status"] not in ("todo", "ready", "running", "blocked"):
+            die(f"cannot schedule {rest[0]} (unknown id or terminal state)")
+        for live in [r for r in st["runs"] if r["task_id"] == found["id"] and r["ended_at"] is None]:
+            live["ended_at"], live["status"] = clock, "scheduled"
+        found["status"] = "scheduled"
+        st.setdefault("events", []).append({"task_id": found["id"], "kind": "scheduled", "run_id": None, "created_at": clock, "payload": {"reason": " ".join(rest[1:])}})
+    elif verb == "unblock":
+        found = task(rest[0])
+        if found is None or found["status"] not in ("blocked", "scheduled"):
+            die(f"cannot unblock {rest[0]} (not blocked or scheduled)")
+        st.setdefault("unblocked_from", []).append({"task": found["id"], "from": found["status"]})
+        found["status"] = "ready"
+        st.setdefault("events", []).append({"task_id": found["id"], "kind": "unblocked", "run_id": None, "created_at": clock, "payload": {}})
     elif verb == "block":
         found, positional = opts(rest)
         card = task(positional[0])
@@ -182,6 +199,11 @@ def kanban_main():
         live = next((r for r in st["runs"] if r["id"] == run_id and r["task_id"] == positional[0] and r["ended_at"] is None), None)
         if live is None or st.get("evidence_refuse"):
             die("evidence refused: no live run" if live is None else "evidence refused: schema")
+        accepted = {"merged_pr": ("pr_published", "pr_merged", "execution_ref"), "built_artifact": ("artifact_built", "execution_ref"),
+                    "installed_app": ("app_installed", "artifact_built", "execution_ref"), "other": ("other_result", "execution_ref")}
+        contract = json.loads(task(positional[0])["outcome_contract"])["kind"]
+        if found["--kind"] not in accepted[contract]:
+            die(f"evidence refused (mismatch): {found['--kind']} evidence does not belong to a {contract} contract; use one of {', '.join(accepted[contract])}")
         st["evidence"].append({"id": len(st["evidence"]) + 1, "task_id": positional[0], "run_id": run_id, "kind": found["--kind"], "payload": json.loads(found["--json"])})
     elif verb == "evidence":
         print(json.dumps([e for e in st["evidence"] if e["task_id"] == rest[1]]))
@@ -216,8 +238,8 @@ BOT = "meo-beo"
 PROJECT = "shop"
 REPO = "acme/shop"
 DECISIONS = "none: bug fix, expected behaviour obvious from the report"
-ALLOWED_VERBS = {"boards", "list", "show", "create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "archive", "block"}
-FORBIDDEN_TOKENS = {"dispatch", "daemon", "swarm", "specify", "decompose", "promote", "unblock", "--force", "set-dispatch-mode", "switch", "rm"}
+ALLOWED_VERBS = {"boards", "list", "show", "create", "link", "edit", "claim", "heartbeat", "reclaim", "evidence", "archive", "block", "schedule", "unblock"}
+FORBIDDEN_TOKENS = {"dispatch", "daemon", "swarm", "specify", "decompose", "promote", "--force", "set-dispatch-mode", "switch", "rm"}
 HEADER_KEYS = {"id", "project", "bot", "part", "decisions", "outcome", "stages", "reached", "state", "prs", "waits_on", "added", "updated", "reported"}
 
 
@@ -289,8 +311,10 @@ class Board:
         data = self.state()
         ident = f"t_{data['next']}"
         data["next"] += 1
+        held = next((line.partition(": ")[2] for line in body.splitlines() if line.startswith("Outcome: ")), "merged-pr")
+        kind = {"merged-pr": "merged_pr", "built": "built_artifact", "installed": "installed_app", "verified": "other"}.get(held, "merged_pr")
         data["tasks"].append({"id": ident, "title": title, "body": body, "assignee": assignee, "status": status, "created_by": assignee, "completion_contract": f"fleet-ci:{REPO}",
-                              "outcome_contract": json.dumps({"kind": "merged_pr", "repo": REPO}), "result": None, "idempotency": key})
+                              "outcome_contract": json.dumps({"kind": kind, "repo": REPO} if kind == "merged_pr" else {"kind": kind}), "result": None, "idempotency": key})
         self.path.write_text(json.dumps(data))
         return ident
 
@@ -305,7 +329,7 @@ class Board:
         return str(self.by_key()[key]["body"])
 
     def mutating(self) -> list[str]:
-        return [verb[0] for verb in self.verbs() if verb[0] in ("create", "link", "edit", "claim", "reclaim", "evidence", "complete", "archive", "block")]
+        return [verb[0] for verb in self.verbs() if verb[0] in ("create", "link", "edit", "claim", "reclaim", "evidence", "complete", "archive", "block", "schedule", "unblock")]
 
     def mutations(self) -> int:
         return int(self.state()["mutations"])
@@ -538,9 +562,11 @@ def kanban_scenario(run: Run, loop_store: type, loop_error: type[Exception]) -> 
              repeat.get("created") is False and repeat["linked"] is False and board.mutations() == mutations and unknown_part[0] == 1 and "no part 77" in unknown_part[2], unknown_part[2].strip())
     listed = json_of(project("loop"))
     run.step("kanban: a project bot's loop lists its own unit cards", sorted(u["unit"] for u in listed["units"]) == ["csv-export", "login-fix", "parser-fix"], json.dumps(listed)[:200])
-    wrong_role = [project("loop", "set", "1", "--state", "blocked"), project("loop", "digest"), chief("loop", "unit", "x-1")]
-    run.step("kanban: a project bot may only show, migrate and unit, and the chief has no unit action",
-             all(r[0] == 1 and "not one of" in r[2] for r in wrong_role), " | ".join(r[2].strip() for r in wrong_role))
+    wrong_role = [project("loop", "digest"), chief("loop", "unit", "x-1")]
+    project_set = project("loop", "set", "1", "--state", "blocked")
+    run.step("kanban: a project bot may not digest, the chief has no unit action, and a project bot's loop set takes only evidence on a unit card",
+             all(r[0] == 1 and "not one of" in r[2] for r in wrong_role) and project_set[0] == 1
+                 and "takes only --evidence" in project_set[2], " | ".join(r[2].strip() for r in (*wrong_role, project_set)))
 
     board.set(dispatch_mode="workers")
     mutations = board.mutations()
@@ -734,7 +760,8 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
         run.step(f"kanban merge: Pal refusing completion ({wanted}) leaves the pull request merged, the card State merged, and completion pending, reported once with its classification",
                  result[0] == 0 and out["merged"] is True and n in merged_prs() and out["card"]["completion"] == "pending" and out["card"]["classification"] == wanted
                  and "State: merged" in lines(card) and f"PRs: {n}" in lines(card)
-                 and out["card"]["id"] == card["id"] and out["card"]["detail"] and card["status"] == "ready" and board.open_claims(card_key(unit)) == []
+                 and out["card"]["id"] == card["id"] and out["card"]["detail"] and card["status"] == "scheduled" and board.open_claims(card_key(unit)) == []
+                 and f"Status: merged, waiting for Kanban acceptance: {wanted}" in card["body"]
                  and len([c for c in state["completions"] if c["task"] == card["id"]]) == 1 and len([r for r in state["runs"] if r["task_id"] == card["id"]]) == 1,
                  json.dumps(out.get("card")))
     board.set(complete_refuse=None)
@@ -821,11 +848,12 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
     runs_per = {u: len([r for r in state["runs"] if r["task_id"] == board.by_key()[card_key(u)]["id"]]) for u in pal_units}
     evidence_per = {u: len([e for e in state["evidence"] if e["task_id"] == board.by_key()[card_key(u)]["id"]]) for u in pal_units}
     dead = board.by_key()[card_key("dead-u")]
-    run.step("kanban reconcile: after the cutover a merged pull request completes its unit card only on Pal accepting; a refusal releases the claim and leaves it ready",
+    run.step("kanban reconcile: after the cutover a merged pull request completes its unit card only on Pal accepting; a "
+             "refusal schedules the card, with no claim left open, and never leaves it ready",
              {u: refused_ids[u]["classification"] for u in pal_units} == {f"pal-{mode}": wanted for mode, wanted in pal_cases}
              and all(v == 1 for v in runs_per.values()) and all(v == 2 for v in evidence_per.values())
              and all(refused_ids[u].get("held") is True and refused_ids[u]["retry_after"] > run.clock for u in pal_units)
-             and all(board.by_key()[card_key(u)]["status"] == "ready" and board.open_claims(card_key(u)) == [] for u in pal_units)
+             and all(board.by_key()[card_key(u)]["status"] == "scheduled" and board.open_claims(card_key(u)) == [] for u in pal_units)
              and all(len([c for c in state["completions"] if c["task"] == board.by_key()[card_key(u)]["id"]]) == 1 for u in pal_units),
              json.dumps(stuck["entries"]["completion_pending"])[:300])
     run.step("kanban reconcile: a closed unmerged pull request abandons its unit card and archives it, and a GitHub read error on another unit changes nothing",
@@ -881,7 +909,7 @@ def kanban_merge_scenario(run: Run, open_gates: Callable[[Run, int, str], None])
              {r["id"]: r["classification"] for r in stuck["entries"]["completion_pending"]} == {"13": "pending"}
              and stuck["entries"]["waiting_on_units"] == [{"id": "14", "card": cards["faker-kit:chief:14"]["id"], "units": [unit_card["id"]]}]
              and stuck["entries"]["awaiting_stage_evidence"] == [{"id": "10", "outcome": "built"}] and stuck["entries"]["closed"] == ["15"] and cards["faker-kit:chief:15"]["status"] == "archived"
-             and cards["faker-kit:chief:13"]["status"] == "ready" and cards["faker-kit:chief:14"]["status"] != "done" and cards["faker-kit:chief:10"]["status"] != "done",
+             and cards["faker-kit:chief:13"]["status"] == "scheduled" and cards["faker-kit:chief:14"]["status"] != "done" and cards["faker-kit:chief:10"]["status"] != "done",
              json.dumps(stuck["entries"])[:300])
     board.set(complete_refuse=None)
     run.clock += 1000
@@ -955,14 +983,15 @@ def stage_deadlock_scenario(run: Run, board: Board, chief: Callable[..., tuple[i
     run.step("stage evidence: loop reconcile no longer reports the part as awaiting stage evidence and the part waits for its open unit card; nothing is completed yet",
              pid not in [a["id"] for a in after_stage["entries"]["awaiting_stage_evidence"]]
              and {"id": pid, "card": part_card["id"], "units": [unit_card["id"]]} in after_stage["entries"]["waiting_on_units"]
-             and board.by_key()[part_key]["status"] == "ready" and board.by_key()[card_key("sale-debug")]["status"] == "ready", json.dumps(after_stage["entries"])[:300])
+             and board.by_key()[part_key]["status"] == "ready" and board.by_key()[card_key("sale-debug")]["status"] == "scheduled", json.dumps(after_stage["entries"])[:300])
 
     unit_done = json_of(project("loop", "reconcile"))
     unit_after = board.by_key()[card_key("sale-debug")]
     unit_kinds = sorted(e["kind"] for e in board.state()["evidence"] if e["task_id"] == unit_after["id"])
-    run.step("stage evidence: the unit's merged pull request completes the unit card through reconcile, with the part's stage row on the completing run",
+    run.step("stage evidence: the unit's merged pull request completes the unit card through reconcile, with only the part's stage "
+             "row on the completing run, never a pr_published row the installed contract refuses",
              "sale-debug" in unit_done["entries"]["merged"] and unit_done["entries"]["awaiting_stage_evidence"] == [] and unit_after["status"] == "done"
-             and unit_kinds == ["app_installed", "pr_published"], json.dumps(unit_done["entries"])[:300])
+             and unit_kinds == ["app_installed"], json.dumps(unit_done["entries"])[:300])
 
     part_done = json_of(chief("loop", "reconcile"))
     final_part = board.by_key()[part_key]
@@ -970,7 +999,7 @@ def stage_deadlock_scenario(run: Run, board: Board, chief: Callable[..., tuple[i
     part_rows = sorted(e["kind"] for e in board.state()["evidence"] if e["task_id"] == final_part["id"] and e["run_id"] == part_run)
     completions = [c for c in board.state()["completions"] if c["task"] in (final_part["id"], unit_after["id"])]
     run.step("stage evidence: the part then completes through reconcile only, with its stage row on the completing run, Pal's acceptance deciding, and each card completed once",
-             pid in part_done["entries"]["merged"] and final_part["status"] == "done" and "State: merged" in lines(final_part) and part_rows == ["app_installed", "pr_published"]
+             pid in part_done["entries"]["merged"] and final_part["status"] == "done" and "State: merged" in lines(final_part) and part_rows == ["app_installed"]
              and [c["task"] for c in completions] == [unit_after["id"], final_part["id"]] and all(c["published"] == url(70) for c in completions) and board.open_claims(part_key) == [],
              json.dumps({"unit": [unit_after["status"], unit_kinds], "part": [final_part["status"], part_rows]}))
 
@@ -1060,8 +1089,8 @@ def events_scenario(run: Run, board: Board, project: Callable[..., tuple[int, st
     refused = json_of(project("loop", "reconcile"))
     card = board.by_key()[card_key("event-157")]
     row = next((r for r in refused["entries"]["completion_pending"] if r["card"] == card["id"]), {})
-    run.step("card events: a Pal refusal leaves the card ready, claim released, names the head, never forced",
-             card["status"] == "ready" and board.open_claims(card_key("event-157")) == [] and row.get("head") == head_of(157) and row.get("classification") == "pending", json.dumps(row))
+    run.step("card events: a Pal refusal schedules the card, claim released, names the head, never forced",
+             card["status"] == "scheduled" and board.open_claims(card_key("event-157")) == [] and row.get("head") == head_of(157) and row.get("classification") == "pending", json.dumps(row))
     board.set(complete_refuse=None)
     run.clock += 1000
     project("loop", "reconcile")
