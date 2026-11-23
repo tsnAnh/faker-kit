@@ -65,9 +65,9 @@ def backend_steps(run: Run, backend: str) -> None:
                  report.get("ok") is True and report.get("started") is False and report.get("backend") == backend and prompt.startswith(text)
                  and set(parts) == {"brief", *ONCE} and parts["brief"]["chars"] == len(text) and report["total_chars"] == len(prompt)
                  and claude_calls(run) == calls and len(records(run, "meo-beo")) == prepared, said or table(report))
-        run.step(f"prompt size: {backend} prompt for the {label} holds each fixed footer once", all(prompt.count(phrase) - text.count(phrase) == 1 for phrase in PHRASES), table(report))
         run.step(f"prompt size: {backend} fixed footers for the {label} stay within the budget", not over_budget(report) and report["fixed_chars"] < BUDGET["fixed_footers_chars"],
                  "; ".join(over_budget(report)) or table(report))
+        run.step(f"prompt size: {backend} prompt for the {label} holds each fixed footer once", all(prompt.count(phrase) - text.count(phrase) == 1 for phrase in PHRASES), table(report))
     code, out, err = run.kit("launch", "--brief-file", str(run.brief(f"size-{backend}-real.md", LONG_BRIEF)))
     printed = json.loads(out) if code == 0 else {}
     sent = first_message(run, backend, printed) if code == 0 else ""
