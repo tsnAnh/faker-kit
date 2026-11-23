@@ -166,17 +166,17 @@ def launch_output(run: Run, bot: str, real: float) -> dict:
              and args.get("workspaceStrategy") == {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True}
              and args.get("modelSelection") == {"instanceId": PROVIDER, "model": MODEL}, json.dumps({k: v for k, v in args.items() if k != "message"}))
     run.step("t3code: the message carries the pull request label rule once, from the same footer the claude backend gets",
-             message.count("Label rule: when you open the pull request, add the label faker-kit to it in the same step") == 1
-             and "add the line `Label: faker-kit` to the pull request body" in message and "Never add the label to a pull request you did not open" in message, message[-600:].replace("\n", " "))
+             message.count("Label rule: when you open your pull request add the label `faker-kit` (create it if missing)") == 1
+             and "put `Label: faker-kit` in the body" in message and "label no other" in message, message[-600:].replace("\n", " "))
     run.step("t3code: the message is the brief with the andon stop rule and the faker-mode rule, and its first 8 hash characters are the printed brief id",
              message.startswith("/faker-mode") and "agent:andon" in message and "Faker-mode rule:" in message and "SCOPE: reports only." in message
              and hashlib.sha256(message.encode()).hexdigest()[:8] == printed.get("brief"), message[-120:].replace("\n", " "))
-    run.step("t3code: the message carries the coding rule once, with both of its parts, from the same footer the claude backend gets",
-             message.count("Coding rule: reuse before build, and confirm before coding.") == 1 and message.count("Reuse before build:") == 1 and message.count("Confirm before coding.") == 1
-             and message.index("Faker-mode rule:") < message.index("Coding rule:") and message.rstrip().endswith("never wait for a reply."), message[-400:].replace("\n", " "))
+    run.step("t3code: the message carries the session coding rule once, from the same footer the claude backend gets",
+             message.count("Reuse before build:") == 1 and message.count("Confirm before coding.") == 0 and message.count("Coding rule:") == 0
+             and message.index("Faker-mode rule:") < message.index("Reuse before build:") and message.rstrip().endswith("say why in the pull request."), message[-400:].replace("\n", " "))
     run.step("t3code: the message carries the CI rule once, after the closing summary rule, from the same footer the claude backend gets",
-             message.count("CI rule: do not wait for CI.") == 1 and message.count("Never sleep, poll or loop on `gh run`, `gh pr checks` or the check-runs API") == 1
-             and "read the check results once, without waiting" in message and "never block on a check that is still pending" in message
+             message.count("CI rule: never wait for CI") == 1 and message.count("sleep, poll or loop on `gh run`, `gh pr checks` or the check-runs API") == 1
+             and "post the summary, end" in message
              and message.index("Closing summary rule:") < message.index("CI rule:") < message.index("Faker-mode rule:"), message[-900:].replace("\n", " "))
     run.step("t3code: launch makes no cloud session, no clone, and no call to the claude CLI",
              claude_calls(run) == calls_before and "clone" not in run.gh_log.read_text()[len(gh_before):], "")
@@ -324,8 +324,8 @@ def summary_rule_cases(run: Run, bot: str, printed: dict) -> None:
     again_code, again_printed, again_err = prepare(run, "csv-export-summary.md", "/faker-mode\n\nGOAL: add a CSV export.\n" + rule_text.removeprefix("Closing summary rule: ") + "\n", bot)
     again_message = again_printed.get("call", {}).get("args", {}).get("message", "")
     run.step("t3code: the message carries the closing summary rule once, and a brief that already holds the rule is not given it twice",
-             message.count("Closing summary rule:") == 1 and "first line is exactly `Closing summary:`" in message and "Done, Skipped, Open questions, Blockers" in message
-             and "open a draft pull request whose body begins with `Unit: <unit-id>`" in message and "no pull request or issue text from others" in message
+             message.count("Closing summary rule:") == 1 and "starting `Closing summary:`" in message and "Done, Skipped, Open questions, Blockers" in message
+             and "a draft whose body begins `Unit: <unit-id>`" in message
              and again_code == 0 and again_message.count("Closing summary rule:") == 0
              and again_message.count("Done, Skipped, Open questions, Blockers") == 1, again_err or message[-900:].replace("\n", " "))
 

@@ -16,11 +16,12 @@ LONG_BRIEF = (HERE / "fixtures" / "bot-brief.md").read_text().strip()
 TEMPLATE = (HERE.parent / "templates" / "fix-issue-brief.md").read_text()
 ONCE = {
     "andon": ("Stop rule:", "Label rule:", "Never read or print a secret or merge"),
-    "closing summary": ("Closing summary rule:", "first line is exactly", "Open questions"),
+    "closing summary": ("Closing summary rule:", "starting `Closing summary:`", "Never guess an open requirement", "list it under Open questions"),
     "CI": ("CI rule:", "never wait for CI"),
     "faker-mode rule": ("Faker-mode rule:",),
     "coding rule": ("Reuse before build:",),
 }
+PHRASES = (*(phrase for phrases in ONCE.values() for phrase in phrases), "Unit: <unit-id>")
 
 
 def filled_template() -> str:
@@ -64,8 +65,7 @@ def backend_steps(run: Run, backend: str) -> None:
                  report.get("ok") is True and report.get("started") is False and report.get("backend") == backend and prompt.startswith(text)
                  and set(parts) == {"brief", *ONCE} and parts["brief"]["chars"] == len(text) and report["total_chars"] == len(prompt)
                  and claude_calls(run) == calls and len(records(run, "meo-beo")) == prepared, said or table(report))
-        run.step(f"prompt size: {backend} prompt for the {label} holds each fixed footer once", all(prompt.count(phrase) == 1 for phrases in ONCE.values() for phrase in phrases)
-                 and prompt.count("Unit: <unit-id>") == 1, table(report))
+        run.step(f"prompt size: {backend} prompt for the {label} holds each fixed footer once", all(prompt.count(phrase) - text.count(phrase) == 1 for phrase in PHRASES), table(report))
         run.step(f"prompt size: {backend} fixed footers for the {label} stay within the budget", not over_budget(report) and report["fixed_chars"] < BUDGET["fixed_footers_chars"],
                  "; ".join(over_budget(report)) or table(report))
     code, out, err = run.kit("launch", "--brief-file", str(run.brief(f"size-{backend}-real.md", LONG_BRIEF)))
