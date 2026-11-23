@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -14,6 +15,9 @@ LINKS = SCRIPTS / "kit_links.py"
 ENVIRONMENT_SETUP = SCRIPTS / "environment-setup.sh"
 COMPAT = KIT / "plugins" / "trust-ladder" / "references" / "compat.md"
 RATCHET = KIT / "scripts" / "agent-checks" / "ratchet.mjs"
+PLAYBOOKS = KIT / "plugins" / "pstack" / "skills" / "faker-mode" / "playbooks"
+SHIPPED_TEXT = ("skills", "templates", "profiles")
+PLAYBOOK_PATH = re.compile(r"playbooks/([A-Za-z0-9_-]+\.md)")
 RULE = "gh-graphql-read"
 GUARDED = ["hermes/bin/faker_kit.py", "hermes/lib/faker_kit_gh.py"]
 PRODUCTION = GUARDED[0]
@@ -187,3 +191,30 @@ def ratchet_scenario(root: Path, step: Step) -> None:
     step("the rule covers every Python file under hermes except the e2e scenarios",
          other[0] == 1 and "hermes/bin/other.py (0 -> 1)" in other[1] and "scenario.py" not in other[1]
          and shared[0] == 1 and "hermes/lib/shared.py (0 -> 1)" in shared[1] and quiet[0] == 0, other[1][-200:])
+
+
+def named_playbooks(hermes: Path) -> dict[str, list[str]]:
+    named: dict[str, list[str]] = {}
+    for folder in SHIPPED_TEXT:
+        for path in sorted((hermes / folder).rglob("*")):
+            if path.is_file() and not path.is_symlink():
+                for name in PLAYBOOK_PATH.findall(path.read_text(errors="replace")):
+                    named.setdefault(name, []).append(str(path.relative_to(hermes.parent)))
+    return named
+
+
+def playbook_paths_scenario(root: Path, step: Step) -> None:
+    named = named_playbooks(HERMES)
+    missing = {name: files for name, files in named.items() if not (PLAYBOOKS / name).is_file()}
+    step("every playbooks/<name>.md a kit skill, template or profile names exists in the vendored faker-mode playbooks",
+         len(named) > 0 and not missing, f"named {sorted(named)}; missing {missing}")
+    fixture = root / "hermes"
+    (fixture / "skills" / "dispatch").mkdir(parents=True)
+    (fixture / "templates").mkdir()
+    (fixture / "profiles").mkdir()
+    (fixture / "skills" / "dispatch" / "SKILL.md").write_text("read `playbooks/babysit.md` and `playbooks/ghost.md`\n")
+    (fixture / "templates" / "brief.md").write_text("see playbooks/shipping.md\n")
+    found = named_playbooks(fixture)
+    gone = sorted(name for name in found if not (PLAYBOOKS / name).is_file())
+    step("a skill that names a playbook the vendored folder lacks is found, and one that names an existing playbook is not",
+         gone == ["ghost.md"] and sorted(found) == ["babysit.md", "ghost.md", "shipping.md"], str(found))

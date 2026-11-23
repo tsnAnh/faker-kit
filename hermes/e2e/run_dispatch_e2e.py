@@ -4362,6 +4362,7 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "install-labels": lambda c: install_labels_scenario(c.run(), c.root / "install-labels"),
     "environment-setup": lambda c: tooling_scenario.environment_scenario(c.root / "environment-setup", c.recorder().step),
     "ratchet": lambda c: tooling_scenario.ratchet_scenario(c.root / "ratchet", c.recorder().step),
+    "playbook-paths": lambda c: tooling_scenario.playbook_paths_scenario(c.root / "playbook-paths", c.recorder().step),
     "guard": lambda c: guard_scenario.guard_scenario(c.root / "guard", c.recorder().step, c.verdicts.append),
     "t3code": lambda c: t3code_scenario.t3code_scenario(c.run(), BOT),
     "import": lambda c: import_scenario.import_scenario(c.run()),
