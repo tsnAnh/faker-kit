@@ -20,6 +20,8 @@ UNIT_MAX_CHARS = 64
 DEFAULT_MAX_IN_FLIGHT = 2
 MAX_IN_FLIGHT_LIMIT = 20
 ORIGIN_PREFIX = "origin/"
+DEFAULT_PROVIDER = "claudeAgent"
+DEFAULT_MODEL = "claude-sonnet-5-5"
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,10 @@ class T3Settings:
     @property
     def project_is_path(self) -> bool:
         return self.project.startswith("/")
+
+    @property
+    def selection(self) -> tuple[str, str]:
+        return (self.provider, self.model) if self.provider and self.model else (DEFAULT_PROVIDER, DEFAULT_MODEL)
 
 
 def text_setting(section: dict[str, object], key: str, shape: re.Pattern[str]) -> str | None:
@@ -92,8 +98,8 @@ class T3CodeLauncher:
         args: dict[str, object] = {"title": f"Unit: {self.unit}", "workspaceStrategy": strategy}
         if not self.settings.project_is_path:
             args["projectId"] = self.settings.project
-        if self.settings.provider and self.settings.model:
-            args["modelSelection"] = {"instanceId": self.settings.provider, "model": self.settings.model}
+        provider, model = self.settings.selection
+        args["modelSelection"] = {"instanceId": provider, "model": model}
         return args
 
     def record(self, repo: str, digest: str, prepared: dict[str, object]) -> None:
@@ -130,10 +136,8 @@ class T3CodeLauncher:
                 "tool": "mcp__t3code__t3_project_list", "workspaceRoot": self.settings.project,
                 "then": "add the id of the project with that workspaceRoot to call.args as projectId",
             }
-        if self.settings.provider and self.settings.model:
-            fields["model"] = f"{self.settings.provider}/{self.settings.model}"
-        else:
-            fields["model_defaulted"] = "the T3 project's default"
+        chosen = "/".join(self.settings.selection)
+        fields["model" if self.settings.provider else "model_defaulted"] = chosen
         given = {name: value for name, value in (("model", model), ("effort", effort)) if value is not None}
         if given:
             fields["flags_not_applied"] = given

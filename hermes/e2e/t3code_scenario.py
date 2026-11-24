@@ -19,6 +19,7 @@ SEND = "mcp__t3code__t3_thread_send"
 SHOP_PROJECT = "proj-shop-1"
 PROJECT_PATH = "/Users/owner/Code/shop"
 PROVIDER, MODEL = "claudeAgent", "claude-sonnet-4-5"
+DEFAULT_SELECTION = {"instanceId": "claudeAgent", "model": "claude-sonnet-5-5"}
 GOOD = {"backend": "t3code", "max_in_flight": 5, "t3code": {"project": SHOP_PROJECT, "provider": PROVIDER, "model": MODEL}}
 READ_TOOLS = ("t3_thread_read", "t3_thread_wait", "t3_thread_list", "t3_thread_search", "t3_pending_request", "t3_worktree_status", "t3_worktree_list")
 PLAIN_TOOLS = ("t3_project_list", "t3_project_read", "t3_thread_interrupt")
@@ -293,15 +294,27 @@ def path_cases(run: Run, host: Host, bot: str, real: float) -> None:
     code, printed, err = prepare(run, "path-unit.md", "/faker-mode\n\nGOAL: unit path.\n", bot)
     args = printed.get("call", {}).get("args", {})
     resolve = printed.get("resolve_project", {})
-    run.step("t3code: a project given as a Mac path prints no projectId and says how to resolve it; a base_ref of main is used as given, a model left to the T3 project",
+    run.step("t3code: a project given as a Mac path prints no projectId and says how to resolve it; a base_ref of main is used as given, a model left out of dispatch.json is defaulted and printed",
              code == 0 and "projectId" not in args and resolve.get("tool") == "mcp__t3code__t3_project_list" and resolve.get("workspaceRoot") == PROJECT_PATH
-             and args.get("workspaceStrategy") == {"type": "worktree", "baseRef": "main"} and "modelSelection" not in args and printed.get("model_defaulted"), err or json.dumps(printed)[:200])
+             and args.get("workspaceStrategy") == {"type": "worktree", "baseRef": "main"} and args.get("modelSelection") == DEFAULT_SELECTION
+             and printed.get("model_defaulted") == "claudeAgent/claude-sonnet-5-5" and "model" not in printed, err or json.dumps(printed)[:300])
     resolved = {**args, "projectId": "proj-resolved-from-list"}
     missing = host.tool(LAUNCH, args, bot, host.sid(), "t1", "a path project launch with no projectId")
     empty = host.tool(LAUNCH, {**args, "projectId": ""}, bot, host.sid(), "t1", "a path project launch with an empty projectId")
     passed = host.tool(LAUNCH, resolved, bot, host.sid(), "t1", "a path project launch with the resolved projectId")
     run.step("t3code guard: a path project launch needs a projectId from t3_project_list, then passes once", blocked(missing, "projectId") and blocked(empty, "projectId") and passed is None,
              f"{action(missing)}, {action(empty)}, {action(passed)}")
+    code, second, err = prepare(run, "default-guard.md", "/faker-mode\n\nGOAL: unit default guard.\n", bot)
+    base = {**second.get("call", {}).get("args", {}), "projectId": "proj-resolved-from-list"}
+    variants = {
+        "another model": {**base, "modelSelection": {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}},
+        "another provider": {**base, "modelSelection": {"instanceId": "other", "model": DEFAULT_SELECTION["model"]}},
+        "no model": {k: v for k, v in base.items() if k != "modelSelection"},
+    }
+    wrong = [name for name, changed in variants.items() if not blocked(host.tool(LAUNCH, changed, bot, host.sid(), "t1", f"a defaulted launch with {name}"), "modelSelection")]
+    exact = host.tool(LAUNCH, base, bot, host.sid(), "t1", "the defaulted launch as printed")
+    run.step("t3code guard: a launch with no model in dispatch.json passes with exactly the printed default modelSelection, and another model, another provider, or none is refused",
+             code == 0 and base.get("modelSelection") == DEFAULT_SELECTION and not wrong and exact is None, err or (", ".join(wrong) or action(exact)))
     code, flagged, _ = prepare(run, "flagged.md", "/faker-mode\n\nGOAL: unit flagged.\n", bot, "--model", "haiku", "--effort", "high")
     run.step("t3code: --model and --effort keep their validation and are reported as not applied to T3",
              code == 0 and flagged.get("flags_not_applied") == {"model": "haiku", "effort": "high"}, json.dumps(flagged.get("flags_not_applied")))

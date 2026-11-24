@@ -72,7 +72,7 @@ A repository can hand its units to T3 Code running on your Mac instead of a Clau
 }
 ```
 
-Only `project` is required. `base_ref` defaults to `origin/<default branch>`, so the thread's worktree starts from the fresh remote branch (set it to a local branch for a repository with no remote). `provider` and `model` go together; without them T3 uses the project's default model. `faker-kit launch` refuses an unknown backend, an unreadable file, and an invalid `t3code` object.
+Only `project` is required. `base_ref` defaults to `origin/<default branch>`, so the thread's worktree starts from the fresh remote branch (set it to a local branch for a repository with no remote). `provider` and `model` go together; without them `launch` sends `claudeAgent` / `claude-sonnet-5-5`. `faker-kit launch` refuses an unknown backend, an unreadable file, and an invalid `t3code` object.
 
 Connect T3 Code in the Pal app on your Mac. Hermes then exposes T3 Code's tools to the bots as `mcp__t3code__<tool>`. The `t3` command line is not used: the Hermes machine never reaches it.
 
