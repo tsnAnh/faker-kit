@@ -8,7 +8,7 @@ from kanban_scenario import BOT, CHIEF, DECISIONS, FOOTER, PROJECT, REPO, Board,
 if TYPE_CHECKING:
     from run_dispatch_e2e import Run
 
-INSTALLED_LINE = "Installed the sale debug build on emulator-5554, version 1.4.2"
+INSTALLED_LINE = "app_id=com.sale.debug host=emulator-5554 artifact_sha256=" + "c" * 64 + " readback_sha256=" + "c" * 64
 OTHER = "other-shop"
 
 
@@ -269,7 +269,7 @@ def merged_ready_scenario(run: Run) -> None:
     rows = [e for e in board.state()["evidence"] if e["task_id"] == card("fren-unit")["id"]]
     run.step("merged ready 10: loop set <unit ref, any case> --evidence installed=<line> records app_installed on the unit card's own "
              "run, saves the stage in its header, and puts the card back to waiting, not to Ready",
-             saved[0] == 0 and [r["kind"] for r in rows] == ["app_installed"] and rows[0]["payload"].get("device") == "emulator-5554" and "Stage: installed=" in board.body(key("fren-unit"))
+             saved[0] == 0 and [r["kind"] for r in rows] == ["app_installed"] and rows[0]["payload"].get("host") == "emulator-5554" and "Stage: installed=" in board.body(key("fren-unit"))
              and card("fren-unit")["status"] == "scheduled" and board.open_claims(key("fren-unit")) == [], saved[2].strip() or saved[1][:240])
     by_id = project("loop", "set", card("fren-unit")["id"], "--evidence", f"installed={INSTALLED_LINE}")
     run.step("merged ready 10: the same command by card id records nothing twice", by_id[0] == 0

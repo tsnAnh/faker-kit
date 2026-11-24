@@ -51,7 +51,9 @@ LINE_BREAKS = frozenset("\u0085\u2028\u2029")
 SHA256 = re.compile(r"\b[0-9a-f]{64}\b")
 VERSION = re.compile(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.]+)?)(?![\w.])")
 DEVICE = re.compile(r"\b(emulator-\d+)\b|\bdevice[ =:]+([A-Za-z0-9_.:-]+)")
-ONE_LINE_KEYS = frozenset({"text", "head_sha", "sha256", "version", "device"})
+HEX64 = re.compile(r"[0-9a-f]{64}")
+HASH_FIELDS = frozenset({"sha256", "artifact_sha256", "readback_sha256"})
+MAX_BUILT_NAME = 500
 MAX_DETAIL = 400
 MAX_LINE_CHECKS = 3
 MAX_WAITING = 300
@@ -86,7 +88,23 @@ def completion_contract(repo: str) -> str:
 
 
 def one_line_form(stage: str) -> str:
+    if stage == "built":
+        return '--evidence built="<what was built> <its sha256, 64 lowercase hex>"'
+    if stage == "installed":
+        return '--evidence installed="app_id=<app-id> host=<host> artifact_sha256=<64 hex> readback_sha256=<64 hex read back from the installed artifact>"'
     return f'--evidence {stage}="<what was {stage}, in one line of plain text>"'
+
+
+def json_form(stage: str) -> str:
+    record = {f: "<64hex>" if f in HASH_FIELDS else "..." for f in STAGE_FIELDS[stage]}
+    return f"--evidence '{stage}={json.dumps(record, separators=(',', ':'))}'"
+
+
+def stage_hint(stage: str) -> str:
+    if stage == "verified":
+        return f"write it as {one_line_form(stage)}; the command builds the {STAGE_KIND[stage]} record itself"
+    note = "; the command never fills in readback_sha256, it must come from reading the installed artifact" if stage == "installed" else ""
+    return f"write it as {one_line_form(stage)} or as {json_form(stage)}{note}"
 
 
 def one_line_payload(text: str, head: str | None) -> dict[str, object]:
@@ -102,11 +120,45 @@ def one_line_payload(text: str, head: str | None) -> dict[str, object]:
     return facts
 
 
+def line_fields(stage: str, line: str) -> dict[str, object]:
+    words = line.split()
+    if stage == "built":
+        hashes = {w for w in words if HEX64.fullmatch(w)}
+        name = " ".join(w for w in words if w not in hashes)
+        missing = [f for f, absent in (("name", not name), ("sha256", not hashes)) if absent]
+        if missing or len(hashes) > 1:
+            problem = f"has no {' or '.join(missing)}" if missing else "names more than one sha256"
+            raise LoopError(f"the built evidence line {problem}; {stage_hint(stage)}")
+        return {"name": name, "sha256": next(iter(hashes))}
+    given: dict[str, str] = {}
+    for word in words:
+        key, sep, value = word.partition("=")
+        if sep and key in STAGE_FIELDS[stage] and value and given.setdefault(key, value) != value:
+            raise LoopError(f"the {stage} evidence line gives {key} twice with different values; {stage_hint(stage)}")
+    if missing := [f for f in STAGE_FIELDS[stage] if f not in given]:
+        raise LoopError(f"the {stage} evidence line has no {', '.join(missing)}, and the command does not guess them; {stage_hint(stage)}")
+    return dict(given)
+
+
+def stage_fields(stage: str, loaded: dict[str, object]) -> dict[str, object]:
+    fields = STAGE_FIELDS[stage]
+    texts = {f: v for f, v in loaded.items() if isinstance(v, str) and v.strip()}
+    if sorted(loaded) != list(fields) or sorted(texts) != list(fields):
+        raise LoopError(f"the {stage} evidence needs exactly these text fields: {', '.join(fields)}; {stage_hint(stage)}")
+    for f in fields:
+        if f in HASH_FIELDS and not HEX64.fullmatch(texts[f]):
+            raise LoopError(f"the {stage} evidence field {f} must be 64 lowercase hex characters; {stage_hint(stage)}")
+    if stage == "built" and len(texts["name"]) > MAX_BUILT_NAME:
+        raise LoopError(f"the built evidence field name is at most {MAX_BUILT_NAME} characters")
+    return {f: texts[f] for f in fields}
+
+
 def stage_payload(stage: str, ref: str, head: str | None = None) -> dict[str, object]:
-    hint = f"write it as {one_line_form(stage)}; the command builds the {STAGE_KIND[stage]} record itself"
     if not ref.lstrip().startswith("{"):
-        facts = one_line_payload(ref, head)
-        return {"name": VERIFIED_NAME, "receipt": facts} if stage == "verified" else facts
+        if stage == "verified":
+            return {"name": VERIFIED_NAME, "receipt": one_line_payload(ref, head)}
+        return stage_fields(stage, line_fields(stage, ref))
+    hint = stage_hint(stage)
     try:
         loaded = json.loads(ref)
     except ValueError:
@@ -118,12 +170,7 @@ def stage_payload(stage: str, ref: str, head: str | None = None) -> dict[str, ob
         if set(loaded) - {"name", "receipt"} or loaded.get("name", VERIFIED_NAME) != VERIFIED_NAME or not isinstance(receipt, dict) or not receipt:
             raise LoopError(f"the verified evidence JSON is {{\"receipt\": {{...}}}}; or {hint}")
         return {"name": VERIFIED_NAME, "receipt": receipt}
-    if "text" in loaded and set(loaded) <= ONE_LINE_KEYS and all(isinstance(v, str) and v.strip() for v in loaded.values()):
-        return dict(loaded)
-    fields = STAGE_FIELDS[stage]
-    if sorted(loaded) != list(fields) or not all(isinstance(loaded[f], str) and loaded[f].strip() for f in fields):
-        raise LoopError(f"the {stage} evidence JSON needs exactly these text fields: {', '.join(fields)}; or {hint}")
-    return {f: loaded[f] for f in fields}
+    return stage_fields(stage, loaded)
 
 
 def parse_card_evidence(items: list[str], head: str | None = None) -> dict[str, dict[str, object]]:

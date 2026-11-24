@@ -11,8 +11,8 @@ if TYPE_CHECKING:
 
 HOUR = 3600
 TTL = 8 * HOUR
-INSTALLED_LINE = "installed shop 2.4.1 on emulator-5554, sha256 " + "b" * 64
-BUILT_LINE = "built release.tgz 2.4.1 for the store"
+INSTALLED_LINE = "app_id=com.shop.app host=emulator-5554 artifact_sha256=" + "b" * 64 + " readback_sha256=" + "b" * 64
+BUILT_LINE = "release-2.4.1.tgz " + "b" * 64
 OLD_REFUSAL = "evidence is a JSON object for"
 STALE_BLOCKED = ("t_13b1a9a1", "t_2046fbaa", "t_a42c3979", "t_2156551a", "t_4d4b9fb7")
 FOOTER = "---- faker-kit machine fields (read by the kit, do not edit) ----"
@@ -179,13 +179,42 @@ def visibility_scenario(run: Run) -> None:
     installed = chief("loop", "set", "163", "--evidence", f"installed={INSTALLED_LINE}")
     built = chief("loop", "set", "163", "--evidence", f"built={BUILT_LINE}")
     rows = {e["kind"]: e["payload"] for e in board.state()["evidence"] if e["task_id"] == card("faker-kit:chief:163")["id"]}
-    run.step("visibility case 3: one-line installed= and built= evidence succeed and the command builds the app_installed and artifact_built payloads from facts it can read",
-             installed[0] == 0 and built[0] == 0 and rows.get("app_installed") == {"text": INSTALLED_LINE, "head_sha": head_of(88), "sha256": "b" * 64, "version": "2.4.1", "device": "emulator-5554"}
-             and rows.get("artifact_built") == {"text": BUILT_LINE, "head_sha": head_of(88), "version": "2.4.1"} and OLD_REFUSAL not in installed[2] + built[2], json.dumps(rows))
+    run.step("visibility case 3: one-line installed= and built= evidence build exactly the app_installed and artifact_built records Kanban's contract takes, and nothing else",
+             installed[0] == 0 and built[0] == 0 and rows.get("app_installed") == {"app_id": "com.shop.app", "artifact_sha256": "b" * 64, "host": "emulator-5554", "readback_sha256": "b" * 64}
+             and rows.get("artifact_built") == {"name": "release-2.4.1.tgz", "sha256": "b" * 64} and OLD_REFUSAL not in installed[2] + built[2], json.dumps(rows))
     by_hand = chief("loop", "set", "163", "--evidence", "built=" + json.dumps({"name": "release.tgz", "sha256": "a" * 64}))
     broken = chief("loop", "set", "163", "--evidence", 'built={"name": "x"}')
-    run.step("visibility case 3: hand-written JSON still works, and a malformed one is refused naming the one-line form",
-             by_hand[0] == 0 and broken[0] != 0 and '--evidence built="<what was built, in one line of plain text>"' in broken[2], broken[2].strip())
+    run.step("visibility case 3: hand-written JSON still works, and a malformed one is refused naming the exact fields and both forms",
+             by_hand[0] == 0 and broken[0] != 0 and "exactly these text fields: name, sha256" in broken[2] and '--evidence built="<what was built> <its sha256' in broken[2], broken[2].strip())
+
+    writes_before = len(board.state()["evidence"])
+    mutations_before = board.mutations()
+    h = "d" * 64
+    all_refusals = {
+        "built, no hash": chief("loop", "set", "163", "--evidence", "built=release.tgz"),
+        "built, no name": chief("loop", "set", "163", "--evidence", f"built={h}"),
+        "built, two hashes": chief("loop", "set", "163", "--evidence", f"built=release.tgz {h} {'e' * 64}"),
+        "installed, partial line": chief("loop", "set", "163", "--evidence", f"installed=app_id=com.shop.app host=mac artifact_sha256={h}"),
+        "installed, free text": chief("loop", "set", "163", "--evidence", "installed=installed shop 2.4.1 on emulator-5554"),
+        "installed, short hash": chief("loop", "set", "163", "--evidence", f"installed=app_id=a host=h artifact_sha256={h[:60]} readback_sha256={h}"),
+        "installed, uppercase hash": chief("loop", "set", "163", "--evidence", f"installed=app_id=a host=h artifact_sha256={h} readback_sha256={h.upper()}"),
+        "installed, one-line keys as JSON": chief("loop", "set", "163", "--evidence", 'installed={"text": "x", "device": "d", "head_sha": "abc"}'),
+        "installed, JSON missing a field": chief("loop", "set", "163", "--evidence", 'installed=' + json.dumps({"app_id": "a", "host": "h", "artifact_sha256": h})),
+    }
+    err = {name: result[2] for name, result in all_refusals.items()}
+    run.step("visibility case 3: built and installed evidence that cannot fill every contract field is refused before any Kanban write, naming the field or the exact form",
+             all(r[0] == 1 for r in all_refusals.values()) and len(board.state()["evidence"]) == writes_before and board.mutations() == mutations_before
+             and "no sha256" in err["built, no hash"] and "no name" in err["built, no name"] and "more than one sha256" in err["built, two hashes"]
+             and "no readback_sha256" in err["installed, partial line"] and "no app_id, artifact_sha256, host, readback_sha256" in err["installed, free text"]
+             and "artifact_sha256 must be 64 lowercase hex" in err["installed, short hash"] and "readback_sha256 must be 64 lowercase hex" in err["installed, uppercase hash"]
+             and all("exactly these text fields" in err[n] for n in ("installed, one-line keys as JSON", "installed, JSON missing a field"))
+             and all('--evidence \'installed={"app_id":"...","artifact_sha256":"<64hex>","host":"...","readback_sha256":"<64hex>"}\'' in err[n] for n in err if n.startswith("installed"))
+             and all("never fills in readback_sha256" in err[n] for n in err if n.startswith("installed")), json.dumps(err)[:600])
+    board.add_card("faker-kit:chief:164", "part 164", part_body(164, "in-progress", outcome="verified", prs="88"), assignee=CHIEF)
+    verified = chief("loop", "set", "164", "--evidence", "verified=ran the suite on emulator-5554 v2.4.1")
+    verified_row = [e for e in board.state()["evidence"] if e["task_id"] == card("faker-kit:chief:164")["id"] and e["kind"] == "other_result"]
+    run.step("visibility case 3: verified one-line evidence still records name and receipt",
+             verified[0] == 0 and [r["payload"]["name"] for r in verified_row] == ["faker-kit-verified"] and verified_row[0]["payload"]["receipt"]["device"] == "emulator-5554", verified[2].strip())
 
     Board(run)
     run.update_gh(lambda st: st.update(pulls=[]))
