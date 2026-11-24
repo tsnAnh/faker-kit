@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 FAKE_KANBAN = r'''
 def kanban_main():
-    import os, sys
+    import os, re, sys
     state_path = root / "kanban-state.json"
     st = json.loads(state_path.read_text())
     rest = args[1:]
@@ -204,7 +204,15 @@ def kanban_main():
         contract = json.loads(task(positional[0])["outcome_contract"])["kind"]
         if found["--kind"] not in accepted[contract]:
             die(f"evidence refused (mismatch): {found['--kind']} evidence does not belong to a {contract} contract; use one of {', '.join(accepted[contract])}")
-        st["evidence"].append({"id": len(st["evidence"]) + 1, "task_id": positional[0], "run_id": run_id, "kind": found["--kind"], "payload": json.loads(found["--json"])})
+        sent = json.loads(found["--json"])
+        exact = {"artifact_built": ("name", "sha256"), "app_installed": ("app_id", "artifact_sha256", "host", "readback_sha256")}.get(found["--kind"])
+        if exact is not None:
+            absent, extra = [f for f in exact if f not in sent], sorted(set(sent) - set(exact))
+            badhex = [f for f in exact if f.endswith("sha256") and f in sent and not re.fullmatch(r"[0-9a-f]{64}", str(sent[f]))]
+            if absent or extra or badhex:
+                die(f"evidence refused (malformed): {found['--kind']} takes exactly {', '.join(exact)}; missing {', '.join(absent) or 'none'}; "
+                    f"unexpected {', '.join(extra) or 'none'}; not 64 lowercase hex {', '.join(badhex) or 'none'}")
+        st["evidence"].append({"id": len(st["evidence"]) + 1, "task_id": positional[0], "run_id": run_id, "kind": found["--kind"], "payload": sent})
     elif verb == "evidence":
         print(json.dumps([e for e in st["evidence"] if e["task_id"] == rest[1]]))
     else:
@@ -515,7 +523,7 @@ def kanban_scenario(run: Run, loop_store: type, loop_error: type[Exception]) -> 
     refuse_merge = chief("loop", "set", "10", "--state", "merged")
     bad_ref = chief("loop", "set", "10", "--evidence", 'built={"name": "release.tgz"}')
     run.step("kanban: a built part cannot be merged without built evidence, and malformed card evidence JSON is refused naming the one-line form; the card stays as it was",
-             refuse_merge[0] == 1 and "built evidence" in refuse_merge[2] and bad_ref[0] == 1 and '--evidence built="<what was built' in bad_ref[2]
+             refuse_merge[0] == 1 and "built evidence" in refuse_merge[2] and bad_ref[0] == 1 and '--evidence built="<what was built> <its sha256' in bad_ref[2]
              and "State: in-progress" in lines(board.by_key()["faker-kit:chief:10"])
              and board.state()["evidence"] == [], refuse_merge[2].strip() + bad_ref[2].strip())
     board.set(evidence_refuse=True)
@@ -967,10 +975,10 @@ def stage_deadlock_scenario(run: Run, board: Board, chief: Callable[..., tuple[i
     runs_before, evidence_before = len(board.state()["runs"]), len(board.state()["evidence"])
     bad = chief("loop", "set", pid, "--evidence", 'installed={"name": "sale.apk"}')
     run.step("stage evidence: a malformed value is refused with the usual one-line form while the unit is open, and nothing changes",
-             bad[0] == 1 and '--evidence installed="<what was installed' in bad[2] and not any(line.startswith("Stage: ") for line in lines(board.by_key()[part_key]))
+             bad[0] == 1 and '--evidence installed="app_id=<app-id> host=<host>' in bad[2] and not any(line.startswith("Stage: ") for line in lines(board.by_key()[part_key]))
              and len(board.state()["runs"]) == runs_before, bad[2].strip())
 
-    note = "Installed sale-debug on emulator-5554, version 1.4.2"
+    note = "app_id=com.sale.debug host=emulator-5554 artifact_sha256=" + "c" * 64 + " readback_sha256=" + "c" * 64
     saved = chief("loop", "set", pid, "--evidence", f"installed={note}")
     saved_out = json_of(saved)
     state = board.state()
