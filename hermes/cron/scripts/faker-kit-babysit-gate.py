@@ -33,7 +33,9 @@ def card_check_line() -> str | None:
     wrong = [f for f in findings if isinstance(f, dict) and f.get("needs_action")]
     if not wrong:
         return None
-    return f"faker-kit loop check: {len(wrong)} card(s) need action, first: {wrong[0].get('line')}; run faker-kit loop check for every fix line"
+    unreached = report.get("unreached")
+    partial = f" (partial pass, {len(unreached)} card(s) not reached yet)" if report.get("partial") is True and isinstance(unreached, list) else ""
+    return f"faker-kit loop check: {len(wrong)} card(s) need action{partial}, first: {wrong[0].get('line')}; run faker-kit loop check for every fix line"
 
 
 def told_path(kind: str = "settle") -> Path:
@@ -61,7 +63,7 @@ def write_told(keys: set[str], kind: str = "settle") -> None:
             temp.unlink(missing_ok=True)
 
 
-def settle_cards() -> tuple[dict[str, str], dict[str, str]]:
+def settle_cards() -> tuple[dict[str, str], dict[str, str], bool]:
     try:
         done = subprocess.run([gate.WRAPPER, "loop", "reconcile"], env=gate.child_env(), capture_output=True, text=True, timeout=gate.TIMEOUT_SECONDS, check=False)
         report = json.loads(done.stdout) if done.returncode == 0 else None
@@ -69,7 +71,7 @@ def settle_cards() -> tuple[dict[str, str], dict[str, str]]:
         report = None
     entries = report.get("entries") if isinstance(report, dict) else None
     if not isinstance(entries, dict):
-        return {"could-not-run": "faker-kit loop reconcile could not settle the unit cards this tick; run faker-kit loop reconcile"}, {}
+        return {"could-not-run": "faker-kit loop reconcile could not settle the unit cards this tick; run faker-kit loop reconcile"}, {}, False
     found: dict[str, str] = {}
     notices: dict[str, str] = {}
     for row in report.get("blocked") or []:
@@ -93,7 +95,7 @@ def settle_cards() -> tuple[dict[str, str], dict[str, str]]:
     for row in entries.get("unreadable") or []:
         if isinstance(row, dict):
             found[f"unreadable:{row.get('id')}:{row.get('reason', '')}"] = f"faker-kit loop reconcile: could not read GitHub for unit {row.get('id')} ({row.get('reason', '')}); the next tick retries"
-    return found, notices
+    return found, notices, report.get("partial") is True
 
 
 def ready_lines() -> dict[str, str]:
@@ -140,11 +142,12 @@ def pickup_lines() -> dict[str, str]:
 
 def main() -> None:
     issues = listed_issues()
-    settled, pending = settle_cards()
+    settled, pending, partial = settle_cards()
     told = read_told()
     refusals = [line for key, line in settled.items() if key not in told]
-    if told != set(settled):
-        write_told(set(settled))
+    kept_settled = told | set(settled) if partial else set(settled)
+    if told != kept_settled:
+        write_told(kept_settled)
     flipped = ready_lines()
     told_ready = read_told("ready")
     fresh_ready = [line for key, line in flipped.items() if key not in told_ready]
@@ -170,7 +173,7 @@ def main() -> None:
     told_pending = read_told("pending")
     notices = [line for key, line in pending.items() if key not in told_pending]
     wake = gate.tick(JOB, lines, time.time(), news, summaries=True, stuck=gate.stuck_units(time.time()))
-    kept_pending = {key for key in told_pending if key in pending} | (set(pending) if wake is not None else set())
+    kept_pending = {key for key in told_pending if partial or key in pending} | (set(pending) if wake is not None else set())
     if kept_pending != told_pending:
         write_told(kept_pending, "pending")
     if wake is None:
