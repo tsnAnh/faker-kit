@@ -45,10 +45,11 @@ SHADOWING_BOT_NAMES = frozenset({"gh", "git", "claude", "faker-kit", "python", "
 REPO = re.compile(r"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 SLACK_CHANNEL = re.compile(r"\A[CG][A-Z0-9]{8,}\Z")
 BOOTSTRAP_READ_ONLY = ("status",)
+KIT_OWNED_FOLDERS = r"(?:kit|briefs|checkouts|logs|units)"
 SECRET_TEXT = re.compile(
     r"(?<![\w.-])\.env(?:\.(?!example(?![\w-])|sample(?![\w-])|template(?![\w-])|dist(?![\w-]))[\w-]+)*(?![\w.-])"
     r"|\.ssh(?![\w-])|\.config/gh(?![\w-])|\.git-credentials|\.netrc(?![\w-])|\.aws/credentials|\bid_(?:rsa|ed25519|ecdsa)(?![\w-])"
-    r"|login\.keychain|\.hermes(?!/bin(?![\w-])|/faker-kit/kit(?![\w-])|/faker-kit/briefs(?![\w-]))(?![\w-])|\.hermes/\S*\.\."
+    r"|login\.keychain|\.hermes(?!/bin(?![\w-])|/faker-kit/" + KIT_OWNED_FOLDERS + r"(?![\w-]))(?![\w-])|\.hermes/\S*\.\."
     r"|\bHERMES_HOME\b|\bFAKER_KIT_HOME\b",
     re.I,
 )
@@ -110,7 +111,10 @@ GH_API_VALUE_OPTIONS = ("-X", "--method", "-H", "--header", "-f", "-F", "--field
 GH_API_BODY_OPTIONS = ("-f", "-F", "--field", "--raw-field", "--input")
 KIT_READERS = ("cat", "ls", "head", "tail", "grep", "rg", "wc", "less", "file", "stat", "diff", "realpath", "readlink")
 KIT_GIT_READS = ("log", "show", "status", "diff", "rev-parse", "describe", "ls-files", "blame")
-PROTECTED_KIT = re.compile(r"\.hermes/(?:bin|faker-kit/kit)(?![\w-])", re.I)
+PROTECTED_KIT = re.compile(r"\.hermes/bin(?![\w-])|\.hermes/faker-kit/kit/hermes/plugin/faker_kit_guard(?![\w-])", re.I)
+LINKED_FOLDER = re.compile(r"""\.hermes/faker-kit/(?:checkouts|logs|units)(?![\w-])[^\s'";&|<>()`]*""", re.I)
+PATH_STOP = frozenset(" \t\r\n'\";&|<>()`")
+PATH_PREFIX_CHARS = 4096
 GUARD_FILES = re.compile(r"\.hermes/faker-kit/(?:guard|bots)\.yaml(?![\w-])|plugins/faker_kit_guard(?![\w-])", re.I)
 SHELL_KEYWORDS = frozenset({"then", "do", "else", "elif", "if", "while", "until", "{", "!"})
 HEREDOC_SPAN = re.compile(r"""-?[ \t]*(?:[\w'"]|\\\\|\\\n|\\)*""")
@@ -1124,7 +1128,7 @@ def terminal_problem(command: str, depth: int = 0) -> str | None:
 
 
 def scanned_problem(command: str, depth: int) -> str | None:
-    if re.search(r">\s*\S*" + PROTECTED_KIT.pattern, command, re.I):
+    if re.search(r">\s*\S*(?:" + PROTECTED_KIT.pattern + ")", command, re.I):
         return "bots never change the kit or ~/.hermes/bin"
     clean = scan_shell(command)[1]
     for words in shell_commands(command, keep_path=True):
@@ -1236,6 +1240,22 @@ def code_problem(texts: list[str]) -> str | None:
     return None
 
 
+def leaves_linked_folder(text: str) -> str | None:
+    for found in LINKED_FOLDER.finditer(text):
+        begin = found.start()
+        while begin > 0 and found.start() - begin < PATH_PREFIX_CHARS and text[begin - 1] not in PATH_STOP:
+            begin -= 1
+        token = text[begin:found.end()]
+        expanded = str(Path(os.path.expandvars(token)).expanduser())
+        folder = re.search(r"\A.*?\.hermes/faker-kit/(?:checkouts|logs|units)", expanded, re.I)
+        if folder is None:
+            continue
+        top = os.path.realpath(folder.group())
+        if not (lambda real: real == top or real.startswith(top + os.sep))(os.path.realpath(expanded)):
+            return token
+    return None
+
+
 def secret_reference(tool_name: str, args: dict) -> str | None:
     if any(fnmatch.fnmatchcase(tool_name, pattern) for pattern in CHAT_TOOLS):
         return None
@@ -1247,6 +1267,9 @@ def secret_reference(tool_name: str, args: dict) -> str | None:
         found = SECRET_TEXT.search(text)
         if found:
             return found.group(0)
+        escaped = leaves_linked_folder(text)
+        if escaped:
+            return escaped
     return None
 
 

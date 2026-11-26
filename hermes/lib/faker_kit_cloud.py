@@ -9,6 +9,7 @@ import select
 import shutil
 import signal
 import subprocess
+import sys
 import termios
 import threading
 import time
@@ -30,6 +31,11 @@ CLAUDE_GLOBAL_CONFIG = ".claude.json"
 CLAUDE_LEGACY_CONFIG = ".config.json"
 REDACTED_PROMPT = "[redacted prompt]"
 GIT_TIMEOUT_SECONDS = 120
+GIT_GRACE_SECONDS = 10
+STALE_LOCK_SECONDS = 600
+GIT_TIMEOUT_ENV = "FAKER_KIT_GIT_TIMEOUT_SECONDS"
+PROC_DIR_ENV = "FAKER_KIT_PROC_DIR"
+LOCK_NAMES = ("index.lock", "shallow.lock", "HEAD.lock")
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 EFFORT_CEILING = "high"
 DEFAULT_EFFORT = "medium"
@@ -148,6 +154,66 @@ def stop(proc: subprocess.Popen[bytes]) -> None:
     reap(proc, 5)
 
 
+def run_git(path: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    argv = ["git", "-C", str(path), *args]
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        out, err = proc.communicate(timeout=float(os.environ.get(GIT_TIMEOUT_ENV) or GIT_TIMEOUT_SECONDS))
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            proc.communicate(timeout=GIT_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+        raise
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
+def git_locks(git_dir: Path) -> list[Path]:
+    found = [git_dir / name for name in LOCK_NAMES if (git_dir / name).is_file()]
+    refs = git_dir / "refs"
+    return found + (sorted(refs.rglob("*.lock")) if refs.is_dir() else [])
+
+
+def inside(cwd: str, root: str) -> bool:
+    return cwd == root or cwd.startswith(root + os.sep)
+
+
+def git_holders(repo: Path) -> list[int] | None:
+    root = os.path.realpath(repo)
+    proc = Path(os.environ.get(PROC_DIR_ENV, "/proc"))
+    if proc.is_dir():
+        found = []
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                name = (entry / "comm").read_text().strip()
+                cwd = str((entry / "cwd").readlink())
+            except OSError:
+                continue
+            if name.startswith("git") and inside(cwd, root):
+                found.append(int(entry.name))
+        return found
+    lsof = shutil.which("lsof")
+    if lsof is None:
+        return None
+    try:
+        done = subprocess.run([lsof, "-a", "-c", "git", "-d", "cwd", "-Fpn"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if done.returncode not in (0, 1):
+        return None
+    found, pid = [], 0
+    for line in done.stdout.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            pid = int(line[1:])
+        elif line.startswith("n") and pid and inside(line[1:], root):
+            found.append(pid)
+    return found
+
+
 def write_log(log: Path, text: str, prompt: str) -> str:
     safe = text.replace(prompt, REDACTED_PROMPT) if prompt else text
     log.write_text(safe, encoding="utf-8", errors="replace")
@@ -162,6 +228,7 @@ class Cloud:
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     now: Callable[[], float] = field(default=time.time)
+    holders: Callable[[Path], list[int] | None] = field(default_factory=lambda: git_holders)
 
     def start(self, repo: str, prompt: str, workdir: Path, model: str | None = None, effort: str | None = None) -> str:
         if not prompt.strip() or prompt.startswith("-"):
@@ -192,14 +259,42 @@ class Cloud:
             shutil.rmtree(path, ignore_errors=True)
             self.run_gh(["repo", "clone", repo, str(path), "--", "--depth", "1", "--quiet"])
             return path
+        self.clear_stale_locks(path)
+        try:
+            return self.update(path)
+        except CloudError as err:
+            if ".lock" not in str(err) or not self.clear_stale_locks(path):
+                raise
+        return self.update(path)
+
+    def update(self, path: Path) -> Path:
         for args in (["fetch", "--quiet", "--depth", "1", "origin", "HEAD"], ["reset", "--quiet", "--hard", "FETCH_HEAD"]):
             try:
-                done = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_SECONDS)
+                done = run_git(path, args)
             except (OSError, subprocess.TimeoutExpired):
                 raise CloudError(f"git {args[0]} did not finish in {path}") from None
             if done.returncode:
                 raise CloudError(f"git {args[0]} failed in {path}: {done.stderr.strip()[:200]}")
         return path
+
+    def clear_stale_locks(self, path: Path) -> list[Path]:
+        removed: list[Path] = []
+        for lock in git_locks(path / ".git"):
+            try:
+                age = int(self.now() - lock.stat().st_mtime)
+            except OSError:
+                continue
+            if age < STALE_LOCK_SECONDS:
+                raise CloudError(f"{lock} is only {age}s old, so git may still be using it; it is left in place (a lock is stale after {STALE_LOCK_SECONDS}s)")
+            held = self.holders(path)
+            if held is None:
+                raise CloudError(f"{lock} is {age}s old but faker-kit cannot tell whether a git process holds it (no /proc and no lsof); it is left in place")
+            if held:
+                raise CloudError(f"{lock} is {age}s old but git process {held[0]} is running in {path}; it is left in place")
+            lock.unlink(missing_ok=True)
+            removed.append(lock)
+            sys.stderr.write(f"removed stale {lock} older than {age}s\n")
+        return removed
 
     def launch(self, argv: list[str], cwd: Path, log: Path, prompt: str, trusted_in: Path | None = None) -> str:
         log.write_text("", encoding="utf-8")

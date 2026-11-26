@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 
 import card_prefix_scenario
 import card_refs_scenario
+import checkout_lock_scenario
 import gate_scenario
 import guard_scenario
 import import_scenario
@@ -3411,6 +3412,22 @@ webhooks:
 chief:
   bot: {CHIEF}
 """
+TWO_PROJECT_MACHINE_YAML = f"""version: 1
+bootstrap_bot: {BOOTSTRAP}
+claude_subscription: false
+guard:
+  trusted_authors:
+    - {OWNER}
+  ask_owner: false
+  max_in_flight_total: 500
+projects:
+  - bot: {BOT}
+    project: shop
+    repo: {REPO}
+  - bot: crm-bot
+    project: crm
+    repo: acme/crm
+"""
 HERMES_WRITES = (("config", "set"), ("cron", "edit"), ("cron", "remove"), ("cron", "resume"), ("plugins", "enable"))
 
 
@@ -4446,6 +4463,7 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "card-prefixes": lambda c: card_prefix_scenario.card_prefix_scenario(c.run()),
     "hot-load": scenario_hot_load,
     "ready": lambda c: ready_scenario.ready_scenario(c.run(), check_run, workflow_run, CI_PATH),
+    "checkout-lock": lambda c: checkout_lock_scenario.checkout_lock_scenario(c.run(), TWO_PROJECT_MACHINE_YAML, shop_and_crm, BOT),
 }
 BUDGETS_PATH = Path(__file__).resolve().parent / "budgets.json"
 REAL_STUBS_ENV = "E2E_REAL_STUBS"

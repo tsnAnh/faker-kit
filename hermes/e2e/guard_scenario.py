@@ -589,6 +589,51 @@ def no_pyyaml(host: Host) -> None:
               blocked(broken.get("status"), "cannot read") and blocked(broken.get("push")), json.dumps(broken)[:300])
 
 
+def linked_folders(host: Host) -> None:
+    host.policy(ask=False)
+    host.skills(False)
+    profile = host.home / ".hermes" / "profiles" / "meo-beo"
+    (profile / "config.yaml").write_text("model: x\n")
+    repo = host.team / "checkouts" / "acme__shop" / "repo"
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / "README.md").write_text("hello\n")
+    for folder in ("units", "logs"):
+        (host.team / folder).mkdir(exist_ok=True)
+    links = {
+        repo / "to-profiles": profile,
+        repo / "to-config": Path("../../../../profiles/meo-beo/config.yaml"),
+        repo / "inside": Path("README.md"),
+        host.team / "units" / "to-home": host.home / ".hermes",
+        host.team / "logs" / "to-guard": host.team / "guard.yaml",
+        host.team / "checkouts" / "up": Path(".."),
+    }
+    for link, target in links.items():
+        link.unlink(missing_ok=True)
+        link.symlink_to(target)
+    refused = [
+        host.terminal(f"cat {repo}/to-profiles/config.yaml", label="symlink in a checkout to the profiles"),
+        host.terminal(f"ls {repo}/to-profiles", label="symlink in a checkout to the profiles, listed"),
+        host.terminal(f"cat {repo}/to-config", label="relative symlink in a checkout to a profile file"),
+        host.terminal(f"git -C {repo}/to-profiles status", label="git through a symlink in a checkout"),
+        host.tool("read_file", {"path": f"{repo}/to-config"}, label="read_file through a symlink"),
+        host.tool("write_file", {"path": f"{repo}/to-profiles/config.yaml", "content": "x"}, label="write_file through a symlink"),
+        host.tool("patch", {"path": f"{repo}/to-config", "old_string": "a", "new_string": "b"}, label="patch through a symlink"),
+        host.terminal(f"cat {host.team}/units/to-home/profiles/meo-beo/config.yaml", label="symlink in units to the Hermes home"),
+        host.terminal(f"cat {host.team}/logs/to-guard", label="symlink in logs to guard.yaml"),
+        host.terminal(f"cat {host.team}/checkouts/up/guard.yaml", label="symlink in checkouts to the folder above"),
+    ]
+    host.step("guard: a symlink inside the checkouts, units, or logs folders that leads out of them stays a secret touch for terminal and file tools",
+              all(blocked(v, "a secret store or the kit's own files") for v in refused), ", ".join(action(v) for v in refused))
+    allowed = [
+        host.terminal(f"cat {repo}/inside", label="symlink inside the checkout stays inside"),
+        host.terminal(f"cat {repo}/README.md", label="plain file in a checkout"),
+        host.tool("read_file", {"path": f"{repo}/inside"}, label="read_file on an inside symlink"),
+        host.terminal(f"rm -f {repo}/.git/index.lock", label="stale lock removal in a checkout"),
+        host.terminal(f"git -C {repo} status", label="git status in a checkout"),
+    ]
+    host.step("guard: links that stay inside the folder, plain files, git, and lock removal in a checkout are not blocked", all(v is None for v in allowed), ", ".join(action(v) for v in allowed))
+
+
 def guard_scenario(root: Path, step: Step, record: Record) -> None:
     host = Host(root, step, record)
     host.policy()
@@ -600,6 +645,7 @@ def guard_scenario(root: Path, step: Step, record: Record) -> None:
     host.step("the shipped guard.yaml adds no deny rules and loads with the default total", "\ndeny: []\n" in sample and "max_in_flight_total: 500" in sample and "version: 2" in sample, "")
     for group in json.loads(CORPUS.read_text()):
         corpus_step(host, group)
+    linked_folders(host)
     add_project_check(host)
     policy_failures(host)
     routed_profile(host)
