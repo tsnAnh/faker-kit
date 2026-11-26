@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,6 +23,12 @@ case "$*" in
     ;;
   *) exec /usr/bin/git "$@" ;;
 esac
+"""
+HOLDER = """
+import ctypes, sys, time
+ctypes.CDLL(None).prctl(15, b"git", 0, 0, 0)
+print("ready", flush=True)
+time.sleep(120)
 """
 LSOF_BROKEN = "#!/bin/sh\nexit 2\n"
 LSOF_QUIET = "#!/bin/sh\nexit 1\n"
@@ -98,13 +104,11 @@ def checkout_lock_scenario(run: Run, machine_yaml: str, shop_and_crm: object, bo
              and [p["repo"] for p in out["projects"]] == ["acme/crm"] and "refreshed" in out and "skills" in out and "removed stale" not in err,
              f"{code} {err.strip()[-300:]}")
 
-    holder_dir = run.root / "holder"
-    holder_dir.mkdir()
-    fake = holder_dir / "git"
-    shutil.copy(shutil.which("sleep") or "/bin/sleep", fake)
     age(lock, STALE)
-    live = subprocess.Popen([str(fake), "60"], cwd=shop)
+    live = subprocess.Popen([sys.executable, "-c", HOLDER], cwd=shop, stdout=subprocess.PIPE, text=True)
     try:
+        if live.stdout is None or live.stdout.readline().strip() != "ready":
+            raise RuntimeError("the stand-in git process did not start")
         code, out, err = install()
         run.step("an old lock a live git process holds is left alone and refused with the process named",
                  code == 5 and lock.exists() and f"git process {live.pid}" in err and head_of(shop) != head and "removed stale" not in err, f"{code} {err.strip()[-250:]}")
