@@ -29,8 +29,8 @@ trusted_authors:
 # 200,000 characters, more than 16 wrapper programs, or shell scripts nested more than 3 deep are
 # blocked, and code pushes only a literal feature branch), but a prompt
 # injection in a web page can then make a bot act without you seeing it first.
-# faker-kit also sets each bot's Hermes approvals.mode to off when this is false; run
-# faker-kit install after changing it.
+# Hermes has no approvals key for it: current Hermes never prompts for a command, so this only
+# changes the guard's own questions.
 ask_owner: true
 
 # Hosts an incident alert source in a repository's .agents/dispatch.json may send its token to, besides

@@ -1523,8 +1523,8 @@ class Kit:
         self.andon.drop(name)
         return {"stopped": False, "closed": closed}
 
-    def sync_bot(self, bot: Bot, ask_owner: bool, model: str | None, config_dir: str | None, provider: str | None = None) -> dict:
-        home = self.profiles.refresh(bot.name, bot.role, ask_owner, model, config_dir, provider)
+    def sync_bot(self, bot: Bot, model: str | None, config_dir: str | None, provider: str | None = None) -> dict:
+        home = self.profiles.refresh(bot.name, bot.role, model, config_dir, provider)
         out: dict = {"bot": bot.name, "role": bot.role}
         (self.home / "briefs" / bot.name).mkdir(parents=True, exist_ok=True)
         if bot.role == "project":
@@ -1608,7 +1608,7 @@ class Kit:
         project_bot = policy.bot(name)
         self.ensure_labels(repo)
         self.write_bots(data)
-        out = self.sync_bot(project_bot, policy.ask_owner, model, config_dir, provider)
+        out = self.sync_bot(project_bot, model, config_dir, provider)
         out["labels"] = "ready"
         out["card_prefix"] = card_prefix
         owner, repo_name = repo.split("/")
@@ -2023,7 +2023,7 @@ class Kit:
         for bot in sorted(policy.bots.values(), key=lambda b: b.name):
             if bot.name not in done:
                 bot_model, bot_provider = chosen.get(bot.name, (None, None))
-                synced = self.sync_bot(bot, policy.ask_owner, bot_model, config_dir, bot_provider)
+                synced = self.sync_bot(bot, bot_model, config_dir, bot_provider)
                 if bot.role == "project":
                     synced["labels"] = self.sync_labels(bot)
                 refreshed.append(synced)

@@ -474,7 +474,11 @@ elif args[:2] == ["config", "set"]:
         sys.stderr.write("Error: config.yaml is read-only\n")
         sys.exit(1)
     key, value = args[2:4]
-    value = yaml.safe_load(value)
+    if key == "approvals.mode":
+        print(f"Warning: '{key}' is not a recognized config key - Did you mean approvals.cron_mode?")
+        value = yaml.safe_load(value)
+    elif key not in ("model.default", "model.provider") and (value.startswith(("[", "{")) or value in ("true", "false", "null") or value.isdecimal()):
+        value = yaml.safe_load(value)
     config = load(base / "config.yaml", {})
     node = config
     for part in key.split(".")[:-1]:
@@ -3065,9 +3069,10 @@ def profile_approval_scenario(run: Run, work: Path) -> None:
              created.returncode == 0 and code == 0 and bots["crm-bot"] == {"role": "project", "project": "crm", "repo": "acme/crm"}
              and {"agent:andon", "faker:fix"} <= {label["name"] for label in other.gh_now()["labels"]} and added["jobs_active"] is True
              and Path(added["launch_checkout"]).is_dir(), err.strip() or out[:200])
-    run.step("add-project for a new bot with ask_owner false persists approvals.mode as the string off, the case Hermes reads as false when sent bare",
-             yaml.safe_load((other.hermes / "profiles" / "crm-bot" / "config.yaml").read_text())["approvals"]["mode"] == "off", err.strip())
     crm_jobs = [job["name"] for job in json.loads((other.hermes / "profiles" / "crm-bot" / "jobs.json").read_text())]
+    crm_config = yaml.safe_load((other.hermes / "profiles" / "crm-bot" / "config.yaml").read_text())
+    run.step("add-project for a new bot with ask_owner false never calls config set approvals.mode and stores no such key",
+             "mode" not in crm_config["approvals"] and not re.search(r"config.{0,6}set.{0,12}approvals\.mode", (other.hermes / "hermes-calls.log").read_text()), json.dumps(crm_config["approvals"]))
     run.step("on a machine with no chief bot add-project creates no faker-kit-chief-news job and says so in one line",
              added.get("jobs_created") == ["faker-kit-babysit"] and crm_jobs == ["faker-kit-babysit"]
              and added.get("chief_news") == "no chief bot on this machine, so faker-kit-chief-news is not set up", json.dumps(crm_jobs) + str(added.get("chief_news")))
@@ -3485,9 +3490,9 @@ def install_skip_scenario(run: Run, work: Path) -> None:
         return yaml.safe_load((other.hermes / "profiles" / bot / "config.yaml").read_text())
 
     first, _ = install()
-    mode_sets = sorted((call[1], call[-1]) for call in first if verb_of(call) == ("config", "set") and call[4] == "approvals.mode")
-    run.step("a first install writes each bot's approvals.mode once, straight to off, and never to manual in between",
-             mode_sets == sorted((bot, '"off"') for bot in bots) and all(config_of(bot)["approvals"] == {"mode": "off", "cron_mode": "deny"} for bot in bots),
+    mode_sets = [call for call in first if verb_of(call) == ("config", "set") and call[4].startswith("approvals.mode")]
+    run.step("a first install with ask_owner false never sets approvals.mode, a key current Hermes does not know, and leaves only cron_mode in each bot's approvals",
+             not mode_sets and all(config_of(bot)["approvals"] == {"cron_mode": "deny"} for bot in bots),
              json.dumps(mode_sets))
     run.step("a first install enables the subscription plugin once per bot with tool override refused, and records the jobs it applied",
              hermes_writes(first)["plugins enable"] == len(bots)
@@ -3506,20 +3511,28 @@ def install_skip_scenario(run: Run, work: Path) -> None:
     machine.write_text(SKIP_MACHINE_YAML.replace("model: sonnet", "model: opus"))
     moved, _ = install()
     run.step("changing one project's model makes exactly the one write for it and the profile ends with the new model",
-             [call for call in moved if verb_of(call) in HERMES_WRITES] == [["-p", BOT, "config", "set", "model.default", '"opus"']]
+             [call for call in moved if verb_of(call) in HERMES_WRITES] == [["-p", BOT, "config", "set", "model.default", "opus"]]
              and config_of(BOT)["model"] == {"provider": SUBSCRIPTION, "default": "opus"} and config_of(CHIEF)["model"]["default"] == "sonnet",
              json.dumps(hermes_writes(moved)))
 
-    yaml_words = ("off", "on", "yes", "no", "true", "null", "1.5", "123")
-    persisted = {}
-    for word in yaml_words:
+    words = ("off", "on", "yes", "no", "true", "null", "1.5", "123")
+    stored = {}
+    for word in words:
         machine.write_text(SKIP_MACHINE_YAML.replace("model: sonnet", f'model: "{word}"'))
         install()
-        persisted[word] = config_of(BOT)["model"]["default"]
+        stored[word] = config_of(BOT)["model"]["default"]
     machine.write_text(SKIP_MACHINE_YAML.replace("model: sonnet", "model: opus"))
     install()
-    run.step("a model name YAML reads as a boolean, null or number persists as the same string, and the profile ends on the real model after",
-             persisted == {word: word for word in yaml_words} and config_of(BOT)["model"]["default"] == "opus", json.dumps(persisted))
+    run.step("a model name Hermes could read as a boolean, null or number is sent bare and stays the same string, because a known string key is never parsed",
+             stored == {word: word for word in words} and config_of(BOT)["model"]["default"] == "opus", json.dumps(stored))
+    snippet = other.team / "kit" / "hermes" / "profiles" / "project" / "config.yaml"
+    snippet_text = snippet.read_text()
+    snippet.write_text(snippet_text.replace("  cron_mode: deny\n", "  cron_mode: deny\n  mode: manual\n"))
+    code, _, err = other.kit("install", "--config", str(machine), bot=None)
+    snippet.write_text(snippet_text)
+    run.step("a profile snippet key this Hermes does not recognize makes install refuse naming the key and saying Hermes does not know it, not a type message",
+             code != 0 and "approvals.mode is not a config key this Hermes knows" in err and "expected type/value" not in err, err.strip()[-300:])
+    install()
 
     jobs_before = job_rows()
     spec = other.team / "kit" / "hermes" / "cron" / "project-jobs.md"
