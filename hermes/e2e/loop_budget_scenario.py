@@ -5,7 +5,7 @@ from collections import Counter
 from typing import TYPE_CHECKING
 
 from faker_kit_gh import run_gh
-from faker_kit_kanban import hermes_runner
+from faker_kit_kanban import KanbanRunner, hermes_runner
 from kanban_scenario import BOT, CHIEF, PROJECT, Board, commit_of, head_of, ledger
 from kanban_visibility_scenario import part_body, unit_body
 
@@ -37,7 +37,7 @@ class Meter:
     def calls(self) -> int:
         return sum(self.kanban.values())
 
-    def kanban_runner(self, bot: str):  # noqa: ANN201
+    def kanban_runner(self, bot: str) -> KanbanRunner:
         inner = hermes_runner(bot)
 
         def run(args: list[str], stdin: str | None) -> str:
