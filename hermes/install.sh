@@ -167,9 +167,16 @@ owner_kit() {
   if [ -f "$kit_home/host-secret" ]; then "$@" --secret-stdin < "$kit_home/host-secret"; else "$@"; fi
 }
 runner_failed=''
+projects_failed=''
 if [ -f "$machine" ]; then
+  install_status=0
   owner_kit "$py" "$pkg/bin/faker_kit.py" install --config "$machine" ${bootstrap_bot:+--bootstrap-bot "$bootstrap_bot"} ${model:+--model "$model"} ${provider:+--provider "$provider"} ${claude_subscription:+--claude-subscription} >/dev/null \
-    || die "faker-kit install --config $machine failed; fix the config, then run install.sh again"
+    || install_status=$?
+  case $install_status in
+    0) ;;
+    5) projects_failed=1 ;;
+    *) die "faker-kit install --config $machine failed; fix the config, then run install.sh again" ;;
+  esac
   if owner_kit "$py" "$pkg/bin/faker_kit.py" runner up --config "$machine" >/dev/null; then
     printf 'refreshed the bots, webhook routes, and CI runner services from %s\n' "$machine"
   else
@@ -189,10 +196,11 @@ fi
 write_record() {
   printf '%s\n' "$2" > "$kit_home/.$1.tmp.$$" && mv -f "$kit_home/.$1.tmp.$$" "$kit_home/$1"
 }
-if [ -z "$runner_failed" ]; then
+if [ -z "$runner_failed" ] && [ -z "$projects_failed" ]; then
   write_record kit-source "$source"
   write_record installed-ref "$ref"
 fi
 
 printf 'faker-kit Hermes module installed at kit %s.\n' "$ref"
 [ -z "$runner_failed" ] || die "the CI runner services were not refreshed; fix the cause, then run install.sh again"
+[ -z "$projects_failed" ] || die "the kit is installed, but a project's launch checkout was not prepared (named above); fix the cause, then run faker-kit refresh or install.sh again"

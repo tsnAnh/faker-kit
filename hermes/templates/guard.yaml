@@ -25,7 +25,7 @@ trusted_authors:
 # machine or GitHub.
 # false stops every question. Deny rules and the wrapping of untrusted output still apply, and the
 # hard blocks never lift (secret reads, repository deletion, pushes to main, force-pushes, raw
-# gh pr merge, wiping / or home, edits to the kit and the guard's own files; a command over
+# gh pr merge, wiping / or home, edits to ~/.hermes/bin and the guard's own files; a command over
 # 200,000 characters, more than 16 wrapper programs, or shell scripts nested more than 3 deep are
 # blocked, and code pushes only a literal feature branch), but a prompt
 # injection in a web page can then make a bot act without you seeing it first.

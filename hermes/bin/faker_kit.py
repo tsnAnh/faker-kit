@@ -157,6 +157,7 @@ OPEN_WAIT_DEFAULT_SECONDS = 600
 EXIT_REFUSED = 1
 EXIT_AMBIGUOUS = 3
 EXIT_ACTION = 4
+EXIT_PARTIAL = 5
 MATCH_MAX_CHARS = 100
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 UPDATED_AT = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
@@ -249,6 +250,10 @@ def check_interval(value: str | None, what: str) -> None:
 
 def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9_-]+", "-", text.lower()).strip("-")[:63]
+
+
+class CheckoutFailed(Refused):
+    pass
 
 
 class WaitExpired(Refused):
@@ -1615,7 +1620,7 @@ class Kit:
         try:
             checkout = self.cloud.checkout(repo, self.home / "checkouts" / f"{owner}__{repo_name}" / CHECKOUT)
         except CloudError as err:
-            raise Refused(f"cannot prepare the launch checkout: {err}") from err
+            raise CheckoutFailed(f"cannot prepare the launch checkout: {err}") from err
         kept = self.home / "machine.yaml"
         webhook_url = load_machine(kept).webhook_url if refresh_webhooks and kept.exists() else None
         failed: list[str] = []
@@ -2008,14 +2013,18 @@ class Kit:
                 data["bots"][name] = {"role": role}
         self.write_bots(data)
         (self.home / "briefs" / "default").mkdir(parents=True, exist_ok=True)
-        projects = []
+        projects: list[dict] = []
+        failed: list[dict[str, str]] = []
         for item in machine.projects if machine else ():
             slack = machine.slack.channel_id if machine and machine.slack and machine.slack.bot == item.bot else None
             intervals = {"heartbeat_every": item.heartbeat_every}
-            projects.append(self.add_project(item.repo, item.bot, item.project, item.model, intervals, use_subscription, slack, refresh_webhooks=False,
-                                             provider=item.provider))
+            try:
+                projects.append(self.add_project(item.repo, item.bot, item.project, item.model, intervals, use_subscription, slack, refresh_webhooks=False,
+                                                 provider=item.provider))
+            except CheckoutFailed as err:
+                failed.append({"project": item.project, "bot": item.bot, "repo": item.repo, "error": str(err)})
         policy = self.policy()
-        done = {p["bot"] for p in projects}
+        done = {p["bot"] for p in projects} | {f["bot"] for f in failed}
         chosen = {bootstrap: (model, provider)}
         if machine and machine.chief:
             chosen[machine.chief] = (machine.chief_model, machine.chief_provider)
@@ -2032,7 +2041,7 @@ class Kit:
         if config:
             self.keep_machine(config)
         self.profiles.register_update_step()
-        return {"projects": projects, "refreshed": refreshed, "skills": skills, "webhooks": hooks}
+        return {"projects": projects, "refreshed": refreshed, "skills": skills, "webhooks": hooks, **({"failed_projects": failed} if failed else {})}
 
     def webhooks(self, base_url: str, projects: list[tuple[str, str]], github: bool = True) -> list[dict]:
         listener = ("platforms", "webhook")
@@ -2329,6 +2338,9 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
         print(json.dumps(out, ensure_ascii=False))
         return 0 if out["ok"] else EXIT_REFUSED
     print("\n".join(out) if isinstance(out, list) else json.dumps(out, ensure_ascii=False))
+    if isinstance(out, dict) and out.get("failed_projects"):
+        print("faker-kit: install finished, but " + "; ".join(f"project {f['project']} ({f['repo']}): {f['error']}" for f in out["failed_projects"]), file=sys.stderr)
+        return EXIT_PARTIAL
     if isinstance(out, dict) and out.get("status") == "ambiguous":
         print("faker-kit: refused: more than one pull request matches; nothing was merged, ask the owner which one and run --pr <number>", file=sys.stderr)
         return EXIT_AMBIGUOUS

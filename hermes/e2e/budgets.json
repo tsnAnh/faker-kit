@@ -2,6 +2,7 @@
   "card-prefixes": 12.0,
   "card-refs": 8.0,
   "card-refs-backfill": 8.0,
+  "checkout-lock": 8.0,
   "credential": 8.0,
   "environment-setup": 8.0,
   "guard": 39.0,
