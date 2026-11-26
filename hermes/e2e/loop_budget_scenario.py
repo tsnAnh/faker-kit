@@ -135,17 +135,18 @@ def loop_budget_scenario(run: Run) -> None:
              f"({one['line']})",
              one["code"] == 0 and first["partial"] is True and 0 < first["reached"] < first["candidates"] and first["unreached"] and one["seconds"] <= 30
              and first["set_merged"] == len(first_wave) == len(settled()) and settled() == first_wave, one["line"])
-    cursor = run.team / "passes" / BOT / "reconcile.json"
-    marks = json.loads(cursor.read_text())
-    run.step("the cursor is a small private file in the kit's own store holding only card ids and the times they were last reached, and every card the pass reached is in it",
-             (cursor.stat().st_mode & 0o777) == 0o600 and len(marks) == first["reached"] and not set(marks) & set(first["unreached"]) and not any(".tmp" in p.name for p in cursor.parent.iterdir()),
+    checkpoint = run.team / "passes" / BOT / "reconcile.json"
+    marks = json.loads(checkpoint.read_text())
+    run.step("the resume marker is a small private file in the kit's own store holding only card ids and the pass that last reached them, and every card the pass reached is in it",
+             (checkpoint.stat().st_mode & 0o777) == 0o600 and len(marks) == first["reached"] and not set(marks) & set(first["unreached"])
+             and not any(".tmp" in p.name for p in checkpoint.parent.iterdir()),
              json.dumps(first["unreached"][:3]))
     second = one_pass(BOT, "reconcile")
     reached_first = set(marks)
     listed = list(dict.fromkeys(evidence_of(second)))
     head = listed[: len(first["unreached"])]
     touched = [verb for verb, call in second["made"] if first_wave & set(call)]
-    run.step("the next pass resumes from the cursor: the cards the first pass did not reach are read first, in order, before any card it already reached",
+    run.step("the next pass resumes from the resume marker: the cards the first pass did not reach are read first, in order, before any card it already reached",
              second["code"] == 0 and head == [i for i in first["unreached"] if i in listed][: len(head)] and not reached_first & set(head),
              f"{len(head)} cards read first, {len(reached_first & set(head))} of them reached by the first pass")
     run.step("the next pass never touches a card the first pass merged, and settles more of the board inside its own budget",
@@ -153,12 +154,12 @@ def loop_budget_scenario(run: Run) -> None:
     rest: list[dict] = []
     while len(rest) < 4:
         rest.append(one_pass(BOT, "reconcile"))
-        if len(json.loads(cursor.read_text())) >= rest[-1]["out"]["candidates"]:
+        if len(json.loads(checkpoint.read_text())) >= rest[-1]["out"]["candidates"]:
             break
     done_runs = [c["task"] for c in board.state()["completions"]]
-    run.step("the remaining passes reach every card: each pass stays under 30 s, no card is completed twice, every merged pull request's card is done, and the cursor holds every open card",
+    run.step("the remaining passes reach every card: each pass stays under 30 s, no card is completed twice, every merged pull request's card is done, and the resume marker holds every open card",
              all(p["code"] == 0 and p["seconds"] <= 30 for p in rest) and sorted(done_runs) == sorted(landed) and settled() == landed
-             and len(json.loads(cursor.read_text())) >= rest[-1]["out"]["candidates"] and len(rest) <= 3,
+             and len(json.loads(checkpoint.read_text())) >= rest[-1]["out"]["candidates"] and len(rest) <= 3,
              f"{len(rest)} passes, {len(done_runs)}/{len(landed)} done " + " | ".join(f"r{p['out']['reached']}/c{p['out']['candidates']} {p['seconds']:.1f}s" for p in rest))
 
     def cover(bot: str, kind: str, *argv: str, limit: int = 4, env: dict[str, str] | None = None) -> list[dict]:

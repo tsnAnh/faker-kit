@@ -10,7 +10,7 @@ from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, compl
 from faker_kit_gh import Refused, scrub
 from faker_kit_kanban import Card, Kanban, KanbanError
 from faker_kit_loop import CLOSED, DEFAULT_OUTCOME, Loop
-from faker_kit_passes import Budget, Cursor, Reach
+from faker_kit_passes import Budget, Checkpoint, Reach
 from faker_kit_refusals import Refusals
 from faker_kit_text import refresh
 
@@ -316,12 +316,12 @@ def card_item(kanban: Kanban, cards: list[Card], by_key: dict[str, Card], card: 
 
 
 class CardPass:
-    def __init__(self, kanban: Kanban, cards: list[Card], kind: str, repos: dict[str, str], budget: Budget, cursor: Cursor,
+    def __init__(self, kanban: Kanban, cards: list[Card], kind: str, repos: dict[str, str], budget: Budget, checkpoint: Checkpoint,
                  project: str | None = None, owner: str | None = None) -> None:
-        self.kanban, self.cards, self.kind, self.repos, self.budget, self.cursor = kanban, cards, kind, repos, budget, cursor
+        self.kanban, self.cards, self.kind, self.repos, self.budget, self.checkpoint = kanban, cards, kind, repos, budget, checkpoint
         self.by_key = {c.key: c for c in cards if c.key}
-        self.todo = cursor.order(candidate_cards(cards, kind, project, owner))
-        cursor.keep_only(self.todo)
+        self.todo = checkpoint.order(candidate_cards(cards, kind, project, owner))
+        checkpoint.keep_only(self.todo)
         self.reach = Reach(candidates=len(self.todo))
 
     def items(self) -> Iterator[Tracked]:
@@ -332,13 +332,13 @@ class CardPass:
             item = card_item(self.kanban, self.cards, self.by_key, card, self.kind, self.repos)
             self.reach.reached += 1
             if item is None:
-                self.cursor.mark(card)
+                self.checkpoint.mark(card)
             else:
                 yield item
 
     def done(self, item: Tracked) -> None:
         if item.card is not None:
-            self.cursor.mark(item.card)
+            self.checkpoint.mark(item.card)
 
 
 class CardSettler(Settler):

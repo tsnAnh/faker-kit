@@ -38,7 +38,7 @@ class Budget:
         return Budget(self.clock, now + max(self.deadline - now, 0.0) * fraction)
 
 
-class Cursor:
+class Checkpoint:
     def __init__(self, home: Path, bot: str, kind: str) -> None:
         self.path = home / "passes" / bot / f"{kind}.json"
         self.seen = self.read()

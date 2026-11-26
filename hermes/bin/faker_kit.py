@@ -116,7 +116,7 @@ from faker_kit_merge import (
     unlabeled_text,
 )
 from faker_kit_migrate import chief_parts, migrate_chief, migrate_project, read_units
-from faker_kit_passes import CLAIMS_SHARE, Budget, Cursor
+from faker_kit_passes import CLAIMS_SHARE, Budget, Checkpoint
 from faker_kit_pickup import Slots, abandoned_after_steer, pickup_candidates, read_pickup, running_units, slots, write_pickup
 from faker_kit_profiles import Profiles
 from faker_kit_prompt import brief_notice, describe, prompt_of
@@ -1109,7 +1109,7 @@ class Kit:
         if not cutover(self.home):
             return {"findings": [], "lines": [], "ok": True, "needs_action": False, "cutover": False, "partial": False, "unreached": []}
         return check_cards(self.pass_kanban(caller), caller.role, caller.project, self.open_units(caller), self.now(), caller.name, evidence, self.summary_time(caller),
-                           budget or Budget.start(self.monotonic), Cursor(self.home, caller.name, "check"))
+                           budget or Budget.start(self.monotonic), Checkpoint(self.home, caller.name, "check"))
 
     def summary_time(self, caller: Bot) -> Callable[[dict], float | None]:
         repos = self.role_repos(caller)
@@ -1179,11 +1179,11 @@ class Kit:
         budget = budget or Budget.start(self.monotonic)
         cards = kanban.cards(True)
         is_chief = caller.role == "chief"
-        cursor = Cursor(self.home, caller.name, "reconcile")
+        checkpoint = Checkpoint(self.home, caller.name, "reconcile")
         open_units = self.open_units(caller) if writes and not is_chief else {}
         claims_waiting = any(claimable(c, str(caller.project), caller.name, open_units) for c in cards)
-        source = (CardPass(kanban, cards, "part", repos, budget, cursor) if is_chief
-                  else CardPass(kanban, cards, "unit", repos, budget.share(CLAIMS_SHARE) if claims_waiting else budget, cursor, str(caller.project), caller.name))
+        source = (CardPass(kanban, cards, "part", repos, budget, checkpoint) if is_chief
+                  else CardPass(kanban, cards, "unit", repos, budget.share(CLAIMS_SHARE) if claims_waiting else budget, checkpoint, str(caller.project), caller.name))
         settler = CardSettler(kanban, CardLoop(kanban, self.home, caller.name, repos), cards, self.now()) if writes else None
         found = reconcile(source.items(), read, settler, source.done)
         found.reach = source.reach

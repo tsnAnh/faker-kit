@@ -8,7 +8,7 @@ from faker_kit_cards import CHIEF_KEY, completion_pending, hold, part_entry, ref
 from faker_kit_gh import scrub
 from faker_kit_kanban import EXTERNAL, Card, EvidenceRow, Header, Kanban, KanbanError
 from faker_kit_loop import CLOSED, Loop
-from faker_kit_passes import Budget, Cursor, Reach
+from faker_kit_passes import Budget, Checkpoint, Reach
 from faker_kit_pickup import needs_brief
 
 EXPIRY_WINDOW = 30 * 60
@@ -105,7 +105,7 @@ def duplicate_groups(rows: list[EvidenceRow]) -> list[dict]:
 
 
 def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple[str, str], dict], now: float, bot: str | None = None, evidence: bool = False,
-          summary_time: Callable[[dict], float | None] | None = None, budget: Budget | None = None, cursor: Cursor | None = None) -> dict:
+          summary_time: Callable[[dict], float | None] | None = None, budget: Budget | None = None, checkpoint: Checkpoint | None = None) -> dict:
     scope = None if role == "chief" else project
     cards = kanban.cards(False)
     by_id = {c.id: c for c in cards}
@@ -180,9 +180,9 @@ def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple
             report("part_inconsistent", card, subject, f"every unit card done, part card {card.status}", f"{RECONCILE}, or faker-kit loop set {ident} --state <merged|abandoned>")
 
     todo = [c for c in cards if c.header is not None and not c.archived and (unit_card(c, scope) or (role == "chief" and chief_part(c)))]
-    if cursor is not None:
-        todo = cursor.order(todo)
-        cursor.keep_only(todo)
+    if checkpoint is not None:
+        todo = checkpoint.order(todo)
+        checkpoint.keep_only(todo)
     reach = Reach(candidates=len(todo))
     for index, card in enumerate(todo):
         if budget is not None and budget.spent():
@@ -190,8 +190,8 @@ def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple
             break
         examine(card)
         reach.reached += 1
-        if cursor is not None:
-            cursor.mark(card)
+        if checkpoint is not None:
+            checkpoint.mark(card)
     archived_keys: set[str | None] | None = None
     for (proj, unit), pull in sorted(open_units.items()):
         if (proj, unit) not in known:
