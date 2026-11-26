@@ -474,8 +474,7 @@ elif args[:2] == ["config", "set"]:
         sys.stderr.write("Error: config.yaml is read-only\n")
         sys.exit(1)
     key, value = args[2:4]
-    if value.startswith(("[", "{")) or value in ("true", "false", "null") or value.isdecimal():
-        value = yaml.safe_load(value)
+    value = yaml.safe_load(value)
     config = load(base / "config.yaml", {})
     node = config
     for part in key.split(".")[:-1]:
@@ -3056,6 +3055,8 @@ def profile_approval_scenario(run: Run, work: Path) -> None:
              "crm-bot" not in (other.team / "bots.yaml").read_text() and other.gh_now()["labels"] == [] and not (other.team / "checkouts" / "acme__crm").exists()
              and not (other.hermes / "profiles" / "crm-bot").exists(), err.strip())
 
+    guard_file = other.team / "guard.yaml"
+    guard_file.write_text(re.sub(r"(?m)^(\s*ask_owner:).*$", r"\1 false", guard_file.read_text()))
     created = subprocess.run(["hermes", "profile", "create", "crm-bot"], env={**other.env(), **APPROVED_TURN}, capture_output=True, text=True)
     code, out, err = other.kit(*crm, bot=BOOTSTRAP, env=AGENT_TURN)
     added = json.loads(out) if code == 0 else {}
@@ -3064,6 +3065,8 @@ def profile_approval_scenario(run: Run, work: Path) -> None:
              created.returncode == 0 and code == 0 and bots["crm-bot"] == {"role": "project", "project": "crm", "repo": "acme/crm"}
              and {"agent:andon", "faker:fix"} <= {label["name"] for label in other.gh_now()["labels"]} and added["jobs_active"] is True
              and Path(added["launch_checkout"]).is_dir(), err.strip() or out[:200])
+    run.step("add-project for a new bot with ask_owner false persists approvals.mode as the string off, the case Hermes reads as false when sent bare",
+             yaml.safe_load((other.hermes / "profiles" / "crm-bot" / "config.yaml").read_text())["approvals"]["mode"] == "off", err.strip())
     crm_jobs = [job["name"] for job in json.loads((other.hermes / "profiles" / "crm-bot" / "jobs.json").read_text())]
     run.step("on a machine with no chief bot add-project creates no faker-kit-chief-news job and says so in one line",
              added.get("jobs_created") == ["faker-kit-babysit"] and crm_jobs == ["faker-kit-babysit"]
@@ -3484,7 +3487,7 @@ def install_skip_scenario(run: Run, work: Path) -> None:
     first, _ = install()
     mode_sets = sorted((call[1], call[-1]) for call in first if verb_of(call) == ("config", "set") and call[4] == "approvals.mode")
     run.step("a first install writes each bot's approvals.mode once, straight to off, and never to manual in between",
-             mode_sets == sorted((bot, "off") for bot in bots) and all(config_of(bot)["approvals"] == {"mode": "off", "cron_mode": "deny"} for bot in bots),
+             mode_sets == sorted((bot, '"off"') for bot in bots) and all(config_of(bot)["approvals"] == {"mode": "off", "cron_mode": "deny"} for bot in bots),
              json.dumps(mode_sets))
     run.step("a first install enables the subscription plugin once per bot with tool override refused, and records the jobs it applied",
              hermes_writes(first)["plugins enable"] == len(bots)
@@ -3503,9 +3506,20 @@ def install_skip_scenario(run: Run, work: Path) -> None:
     machine.write_text(SKIP_MACHINE_YAML.replace("model: sonnet", "model: opus"))
     moved, _ = install()
     run.step("changing one project's model makes exactly the one write for it and the profile ends with the new model",
-             [call for call in moved if verb_of(call) in HERMES_WRITES] == [["-p", BOT, "config", "set", "model.default", "opus"]]
+             [call for call in moved if verb_of(call) in HERMES_WRITES] == [["-p", BOT, "config", "set", "model.default", '"opus"']]
              and config_of(BOT)["model"] == {"provider": SUBSCRIPTION, "default": "opus"} and config_of(CHIEF)["model"]["default"] == "sonnet",
              json.dumps(hermes_writes(moved)))
+
+    yaml_words = ("off", "on", "yes", "no", "true", "null", "1.5", "123")
+    persisted = {}
+    for word in yaml_words:
+        machine.write_text(SKIP_MACHINE_YAML.replace("model: sonnet", f'model: "{word}"'))
+        install()
+        persisted[word] = config_of(BOT)["model"]["default"]
+    machine.write_text(SKIP_MACHINE_YAML.replace("model: sonnet", "model: opus"))
+    install()
+    run.step("a model name YAML reads as a boolean, null or number persists as the same string, and the profile ends on the real model after",
+             persisted == {word: word for word in yaml_words} and config_of(BOT)["model"]["default"] == "opus", json.dumps(persisted))
 
     jobs_before = job_rows()
     spec = other.team / "kit" / "hermes" / "cron" / "project-jobs.md"

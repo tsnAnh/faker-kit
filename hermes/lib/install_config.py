@@ -79,7 +79,7 @@ def config_set(root: Path, profile: str, keys: tuple[str, ...], value: object) -
     path = profile_home(root, profile) / "config.yaml"
     if value is not None and holds(path, keys, value):
         return
-    literal = value if isinstance(value, str) else json.dumps(value)
+    literal = json.dumps(value)
     result = subprocess.run(["hermes", "-p", profile, "config", "set", key, literal], capture_output=True, text=True)
     if result.returncode:
         raise InstallError(f"Hermes config set failed for {profile}: {key}; check CLI/schema compatibility")
