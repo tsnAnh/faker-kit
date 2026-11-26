@@ -136,9 +136,9 @@ class Profiles:
         if name not in enabled:
             config_set(self.root, bot, KIT_SKILL_ENABLED, [*enabled, name])
 
-    def refresh(self, bot: str, role: str, ask_owner: bool, model: str | None, claude_config_dir: str | None, provider: str | None = None) -> Path:
+    def refresh(self, bot: str, role: str, model: str | None, claude_config_dir: str | None, provider: str | None = None) -> Path:
         home = self.ensure(bot)
-        apply_profile(self.root, bot, self.pkg / "profiles" / role / "config.yaml", {} if ask_owner else {("approvals", "mode"): "off"})
+        apply_profile(self.root, bot, self.pkg / "profiles" / role / "config.yaml")
         if claude_config_dir is not None:
             self.use_subscription(bot, home, model, claude_config_dir)
         elif provider:

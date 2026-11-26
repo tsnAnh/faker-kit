@@ -1,6 +1,5 @@
 toolsets: [web, browser, terminal, file, code_execution, vision, image_gen, tts, skills, todo, memory, session_search, connections, clarify, delegation, cronjob, computer_use]
 approvals:
-  mode: manual
   cron_mode: deny
 plugins:
   enabled: [faker_kit_guard]

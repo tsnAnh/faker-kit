@@ -83,6 +83,8 @@ def config_set(root: Path, profile: str, keys: tuple[str, ...], value: object) -
     result = subprocess.run(["hermes", "-p", profile, "config", "set", key, literal], capture_output=True, text=True)
     if result.returncode:
         raise InstallError(f"Hermes config set failed for {profile}: {key}; check CLI/schema compatibility")
+    if "not a recognized config key" in (result.stdout + result.stderr).lower():
+        raise InstallError(f"Hermes config set {profile}: {key} is not a config key this Hermes knows; remove it from the kit's profile snippet or override")
     if not holds(path, keys, value):
         raise InstallError(f"Hermes config set did not persist {profile}: {key} with the expected type/value")
 
