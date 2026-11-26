@@ -39,7 +39,6 @@ import kanban_evidence_scenario
 import kanban_scenario
 import kanban_text_scenario
 import kanban_visibility_scenario
-import loop_budget_scenario
 import merged_gates_scenario
 import merged_ready_scenario
 import part_follows_units_scenario
@@ -4449,7 +4448,7 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "kanban-claims": lambda c: kanban_claims_scenario.claims_scenario(c.run()),
     "kanban-evidence": lambda c: kanban_evidence_scenario.evidence_scenario(c.run()),
     "kanban-visibility": lambda c: kanban_visibility_scenario.visibility_scenario(c.run()),
-    "loop-budget": lambda c: loop_budget_scenario.loop_budget_scenario(c.run()),
+    "loop-budget": lambda c: importlib.import_module("loop_budget_scenario").loop_budget_scenario(c.run()),
     "pickup": scenario_pickup,
     "pickup-limit": lambda c: pickup_limit_scenario.pickup_limit_scenario(c.run()),
     "session-summary": lambda c: session_summary_scenario.session_scenario(c.run()),

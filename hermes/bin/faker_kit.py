@@ -116,11 +116,11 @@ from faker_kit_merge import (
     unlabeled_text,
 )
 from faker_kit_migrate import chief_parts, migrate_chief, migrate_project, read_units
+from faker_kit_passes import CLAIMS_SHARE, Budget, Cursor
 from faker_kit_pickup import Slots, abandoned_after_steer, pickup_candidates, read_pickup, running_units, slots, write_pickup
 from faker_kit_profiles import Profiles
 from faker_kit_prompt import brief_notice, describe, prompt_of
 from faker_kit_ready import BULK_DRAFT_HOLD, DRAFT_HOLD, mark_ready, ready_pass
-from faker_kit_passes import CLAIMS_SHARE, Budget, Cursor
 from faker_kit_reconcile import CardPass, CardSettler, LoopSettler, Tracked, Unreadable, counts, ledger_items, mark_unit, reconcile, render, seen_pull, tsv_items
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
 from faker_kit_refs import belongs_elsewhere, ensure_prefix, find_ref, foreign, known_ref
@@ -970,8 +970,11 @@ class Kit:
                            f"updated {updated if UPDATED_AT.match(updated) else 'unknown'}", f"head {head if SHA.match(head) else 'unknown'}", gate])
 
     def kanban(self, caller: Bot) -> Kanban:
+        return Kanban(self.kanban_runner(caller.name))
+
+    def pass_kanban(self, caller: Bot) -> Kanban:
         if caller.name not in self.kanbans:
-            self.kanbans[caller.name] = Kanban(self.kanban_runner(caller.name))
+            self.kanbans[caller.name] = self.kanban(caller)
         return self.kanbans[caller.name]
 
     def handoff(self, caller: Bot, project: str, part: str, decisions: str, outcome: str = DEFAULT_OUTCOME, title: str | None = None) -> dict:
@@ -1105,7 +1108,7 @@ class Kit:
     def loop_check(self, caller: Bot, evidence: bool = False, budget: Budget | None = None) -> dict:
         if not cutover(self.home):
             return {"findings": [], "lines": [], "ok": True, "needs_action": False, "cutover": False, "partial": False, "unreached": []}
-        return check_cards(self.kanban(caller), caller.role, caller.project, self.open_units(caller), self.now(), caller.name, evidence, self.summary_time(caller),
+        return check_cards(self.pass_kanban(caller), caller.role, caller.project, self.open_units(caller), self.now(), caller.name, evidence, self.summary_time(caller),
                            budget or Budget.start(self.monotonic), Cursor(self.home, caller.name, "check"))
 
     def summary_time(self, caller: Bot) -> Callable[[dict], float | None]:
@@ -1165,7 +1168,7 @@ class Kit:
             items = self.reconcile_items(caller)
             writes = caller.role == "chief"
             return render(reconcile(items, read, LoopSettler(self.home, caller.name, self.now()) if writes else None), "apply" if writes else "report")
-        kanban = self.kanban(caller)
+        kanban = self.pass_kanban(caller)
         repos, _, _ = self.reconcile_sources(caller)
         if kanban.board().dispatch_mode != EXTERNAL:
             if strict:
@@ -2347,7 +2350,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
     wants_json = bool(getattr(args, "json", False))
     kit: Kit | None = None
     try:
-        kit = Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep, post=post, tool=tool, refresher=refresher, claude_state=claude_state, kanban_runner=kanban_runner, monotonic=monotonic)
+        kit = Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep, post=post, tool=tool, refresher=refresher, claude_state=claude_state,
+                  kanban_runner=kanban_runner, monotonic=monotonic)
         out = run_command(args, kit, bot or current_bot(), stdin or sys.stdin.buffer)
     except Exception as err:
         known = (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError)

@@ -440,6 +440,16 @@ class Gates:
         added = [row for row in loud.stdout.splitlines() if row.startswith("faker-kit loop check:")]
         step("card check gate: with nothing wrong loop check adds nothing and the tick stays quiet; a card that does not show the work wakes it with exactly one line naming the card and its fix",
              self.silent(quiet) and wakes(loud.stdout) and len(added) == 1 and line in added[0], self.say(loud))
+        partial = {"ok": False, "partial": True, "candidates": 40, "reached": 12, "unreached": ["t_9", "t_10"]}
+        self.program("loop-check", json.dumps({"findings": [], "lines": [], "needs_action": False, **partial}))
+        unread = self.tick(BABYSIT)
+        step("card check gate: a partial loop check with nothing needing action is no news, never a clean result: the tick stays quiet and prints no loop check line",
+             self.silent(unread) and not [row for row in unread.stdout.splitlines() if row.startswith("faker-kit loop check:")], self.say(unread))
+        self.program("loop-check", json.dumps({"findings": [{"line": line, "needs_action": True}], "lines": [line], "needs_action": True, **partial}))
+        half = self.tick(BABYSIT)
+        said = [row for row in half.stdout.splitlines() if row.startswith("faker-kit loop check:")]
+        step("card check gate: a partial loop check that did find a card needing action still wakes the gate with that line and says how many cards the pass did not reach",
+             wakes(half.stdout) and len(said) == 1 and line in said[0] and "partial pass, 2 card(s) not reached yet" in said[0], self.say(half))
         self.program("loop-check", json.dumps({"findings": [], "lines": [], "ok": True, "needs_action": False}))
         self.reset()
         self.card_events()
@@ -566,6 +576,11 @@ class Gates:
                              "its claim is released and the kit tries again only after a growing hold or when the head moves")
              and len(lines) == 2 and "loop reconcile" in self.calls(), self.say(loud))
         step("card events: the same refusal and unreadable read on the next tick print nothing and the gate stays quiet", self.silent(again), self.say(again))
+        self.program("loop-reconcile", json.dumps({**RECONCILE_QUIET, "partial": True, "unreached": ["t_9"]}))
+        told_before = self.state_of("settle")
+        half = self.tick(BABYSIT)
+        step("card events: a partial reconcile does not forget what it already told, so the cards it did not reach are not announced again when a later pass reaches them",
+             self.silent(half) and self.state_of("settle") == told_before and len(told_before) == 2, str(self.state_of("settle")))
         self.program("loop-reconcile", json.dumps(RECONCILE_QUIET))
         kept = self.snapshot(BABYSIT)
         cleared = self.tick(BABYSIT)

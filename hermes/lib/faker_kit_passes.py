@@ -9,13 +9,13 @@ from pathlib import Path
 from faker_kit_kanban import Card
 
 PASS_BUDGET_SECONDS = 25.0
-PASS_BUDGET_ENV = "FAKER_KIT_PASS_BUDGET_SECONDS"
+LOOP_BUDGET_ENV = "FAKER_KIT_PASS_BUDGET_SECONDS"
 CLAIMS_SHARE = 0.8
 
 
 def pass_seconds() -> float:
     try:
-        seconds = float(os.environ.get(PASS_BUDGET_ENV) or PASS_BUDGET_SECONDS)
+        seconds = float(os.environ.get(LOOP_BUDGET_ENV) or PASS_BUDGET_SECONDS)
     except ValueError:
         return PASS_BUDGET_SECONDS
     return seconds if seconds > 0 else PASS_BUDGET_SECONDS

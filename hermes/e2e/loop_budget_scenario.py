@@ -4,7 +4,9 @@ import json
 from collections import Counter
 from typing import TYPE_CHECKING
 
-from kanban_scenario import BOT, CHIEF, PROJECT, Board, commit_of, head_of, json_of, ledger
+from faker_kit_gh import run_gh
+from faker_kit_kanban import hermes_runner
+from kanban_scenario import BOT, CHIEF, PROJECT, Board, commit_of, head_of, ledger
 from kanban_visibility_scenario import part_body, unit_body
 
 if TYPE_CHECKING:
@@ -36,7 +38,6 @@ class Meter:
         return sum(self.kanban.values())
 
     def kanban_runner(self, bot: str):  # noqa: ANN201
-        from faker_kit_kanban import hermes_runner
         inner = hermes_runner(bot)
 
         def run(args: list[str], stdin: str | None) -> str:
@@ -45,18 +46,13 @@ class Meter:
             return inner(args, stdin)
         return run
 
-    def gh(self, args: list[str], input: str | None = None) -> str:  # noqa: A002
-        from faker_kit_gh import run_gh
+    def gh(self, args: list[str], input: str | None = None) -> str:
         self.seconds += CALL_SECONDS
         self.github += 1
         return run_gh(args, input)
 
     def wiring(self) -> dict:
-        import inspect
-
-        import faker_kit
-        extra = {"monotonic": self.now} if "monotonic" in inspect.signature(faker_kit.main).parameters else {}
-        return {"kanban_runner": self.kanban_runner, "run": self.gh, **extra}
+        return {"kanban_runner": self.kanban_runner, "run": self.gh, "monotonic": self.now}
 
     def line(self) -> str:
         return f"{self.calls} Kanban calls {dict(sorted(self.kanban.items()))}, {self.github} GitHub calls, {self.seconds:.2f}s modelled"
@@ -150,7 +146,8 @@ def loop_budget_scenario(run: Run) -> None:
     head = listed[: len(first["unreached"])]
     touched = [verb for verb, call in second["made"] if first_wave & set(call)]
     run.step("the next pass resumes from the cursor: the cards the first pass did not reach are read first, in order, before any card it already reached",
-             second["code"] == 0 and head == [i for i in first["unreached"] if i in listed][: len(head)] and not reached_first & set(head), f"{len(head)} cards read first, {len(reached_first & set(head))} of them reached by the first pass")
+             second["code"] == 0 and head == [i for i in first["unreached"] if i in listed][: len(head)] and not reached_first & set(head),
+             f"{len(head)} cards read first, {len(reached_first & set(head))} of them reached by the first pass")
     run.step("the next pass never touches a card the first pass merged, and settles more of the board inside its own budget",
              not touched and second["out"]["set_merged"] > 0 and second["seconds"] <= 30, f"{touched} {second['line']}")
     rest: list[dict] = []
@@ -182,7 +179,7 @@ def loop_budget_scenario(run: Run) -> None:
 
     tiny = {"FAKER_KIT_PASS_BUDGET_SECONDS": "0.1"}
     nothing = one_pass(BOT, "check", env=tiny)
-    run.step("loop check that ran out of budget before it read any card reports partial with nothing needing action: exit 0, not ok, no finding, every card listed as not reached, never a clean result",
+    run.step("loop check that ran out of budget before it read any card is partial with nothing needing action: exit 0, not ok, no finding, every card listed as not reached",
              nothing["code"] == 0 and nothing["out"]["partial"] is True and nothing["out"]["ok"] is False and nothing["out"]["needs_action"] is False and nothing["out"]["findings"] == []
              and nothing["out"]["reached"] == 0 and len(nothing["out"]["unreached"]) == nothing["out"]["candidates"], nothing["line"])
 

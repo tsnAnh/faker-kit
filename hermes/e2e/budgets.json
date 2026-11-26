@@ -29,7 +29,7 @@
   "kanban-visibility": 10.0,
   "launch": 35.0,
   "loop": 8.0,
-  "loop-budget": 200.0,
+  "loop-budget": 16.0,
   "merge": 16.0,
   "merged-gates": 12.0,
   "merged-ready": 12.0,
