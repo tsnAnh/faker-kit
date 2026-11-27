@@ -2870,7 +2870,7 @@ def provider_scenario(run: Run, work: Path) -> None:
     second = kit("install", "--config", str(machine))
     run.step("install --config writes the machine's t3code_projects into guard.yaml (repository keys lowercased), a later config replaces the block, and the guard policy still loads",
              first.returncode == 0 and written == {"acme/shop": "proj-from-machine", "acme/crm": "proj-crm"} and second.returncode == 0
-             and yaml.safe_load(guard_before.read_text()).get("t3code_projects") == {"acme/shop": "proj-second"} and guard_before.read_text().count("t3code_projects:") == 1
+             and yaml.safe_load(guard_before.read_text()).get("t3code_projects") == {"acme/shop": "proj-second"} and len(re.findall(r"^t3code_projects:", guard_before.read_text(), re.M)) == 1
              and "trusted_authors:" in guard_text, first.stderr.strip()[-200:] or second.stderr.strip()[-200:] or json.dumps(written))
     refused_maps = []
     for label, block in (("a project id with a slash", "    acme/shop: a/b\n"), ("a repository that is not OWNER/REPO", "    shop: proj-1\n"), ("a list", "    - acme/shop\n")):
