@@ -8,6 +8,7 @@ from faker_kit_cards import CHIEF_KEY, completion_pending, hold, part_entry, ref
 from faker_kit_gh import scrub
 from faker_kit_kanban import EXTERNAL, Card, EvidenceRow, Header, Kanban, KanbanError
 from faker_kit_loop import CLOSED, Loop
+from faker_kit_passes import Budget, Checkpoint, Reach
 from faker_kit_pickup import needs_brief
 
 EXPIRY_WINDOW = 30 * 60
@@ -104,7 +105,7 @@ def duplicate_groups(rows: list[EvidenceRow]) -> list[dict]:
 
 
 def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple[str, str], dict], now: float, bot: str | None = None, evidence: bool = False,
-          summary_time: Callable[[dict], float | None] | None = None) -> dict:
+          summary_time: Callable[[dict], float | None] | None = None, budget: Budget | None = None, checkpoint: Checkpoint | None = None) -> dict:
     scope = None if role == "chief" else project
     cards = kanban.cards(False)
     by_id = {c.id: c for c in cards}
@@ -116,9 +117,8 @@ def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple
         findings.append({"class": kind, "card": card.id if card else None, "subject": subject, "saw": saw, "fix": fix, "needs_action": action,
                          "line": f"{card.id if card else 'no card'} {subject}: {saw}; fix: {fix}"})
 
-    for card in cards:
-        if card.header is None or card.archived or not (unit_card(card, scope) or (role == "chief" and chief_part(card))):
-            continue
+    def examine(card: Card) -> None:
+        assert card.header is not None
         fields = card.header.fields
         ident = (card.key or "").rsplit(":", 1)[-1]
         subject = f"unit {card.slug}" if fields.get("Kind") == "unit" else f"part {ident}"
@@ -137,21 +137,21 @@ def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple
             if card.status == "blocked" and kanban.given_up_on_stale_claim(card):
                 said, fix = f"{said}; Kanban gave the card up after two stale claims", f"hermes kanban unblock {card.id} (the owner or the chief runs it; the kit never does), then reconcile completes"
             report("merged_not_done", card, subject, f"merged and closed in the kit, Kanban has not completed it ({said})", fix, False)
-            continue
+            return
         if card.status == "blocked" and kanban.given_up_on_stale_claim(card):
             report("stale_blocked", card, subject, "Kanban gave the card up after two stale claims", f"hermes kanban unblock {card.id} (the owner or the chief runs it; the kit never does)")
-            continue
+            return
         if not open_card(card):
-            continue
+            return
         payload = last_acceptance(kanban, card)
         if payload is not None and payload.get("classification") != "success":
             report("merged_not_done", card, subject, f"merged pull request not done: acceptance {payload.get('classification')}: {scrub(str(payload.get('detail') or ''))[:120]}",
                    as_bot(card, RECONCILE, role))
-            continue
+            return
         if fields.get("Kind") == "unit":
             if role == "project" and bot and project and needs_brief(card, bot, project) and not live_unit(card, open_units):
                 report("needs_brief", card, subject, "ready, but only a title and no owner decisions, so pickup never launches it", "ask the chief for a brief or owner decisions", False)
-                continue
+                return
             live = live_unit(card, open_units)
             draft = live.get("pr") if live else None
             if summary_time is not None and draft is not None and draft.get("draft"):
@@ -167,35 +167,61 @@ def check(kanban: Kanban, role: str, project: str | None, open_units: dict[tuple
                 swept = sweep(kanban, card, now)
                 if swept:
                     report("claim_expiring", card, subject, swept[0], RECONCILE, swept[1])
-            continue
+            return
         state = part_entry(card)["state"]
         units = [by_id[p] for p in kanban.parents(card.id) if p in by_id]
-        bot = fields.get("Bot", "the project bot")
+        owner_bot = fields.get("Bot", "the project bot")
         if state in LIVE_PARTS and not units:
-            report("part_inconsistent", card, subject, f"ledger {state}, no unit card linked", f"faker-kit loop unit <unit-id> --part {ident} (in {bot}'s chat)")
+            report("part_inconsistent", card, subject, f"ledger {state}, no unit card linked", f"faker-kit loop unit <unit-id> --part {ident} (in {owner_bot}'s chat)")
         elif state in LIVE_PARTS and not any(u.status in ("running", "done") for u in units):
             report("part_inconsistent", card, subject, f"ledger {state}, no unit card running ({', '.join(f'{u.id} {u.status}' for u in units)})",
-                   f"{RECONCILE} (in {bot}'s chat), or faker-kit loop set {ident} --state waiting --waits-on <project>#<n>")
+                   f"{RECONCILE} (in {owner_bot}'s chat), or faker-kit loop set {ident} --state waiting --waits-on <project>#<n>")
         elif units and all(u.status == "done" for u in units) and card.status in ("ready", "todo"):
             report("part_inconsistent", card, subject, f"every unit card done, part card {card.status}", f"{RECONCILE}, or faker-kit loop set {ident} --state <merged|abandoned>")
+
+    todo = [c for c in cards if c.header is not None and not c.archived and (unit_card(c, scope) or (role == "chief" and chief_part(c)))]
+    if checkpoint is not None:
+        todo = checkpoint.order(todo)
+        checkpoint.keep_only(todo)
+    reach = Reach(candidates=len(todo))
+    for index, card in enumerate(todo):
+        if budget is not None and budget.spent():
+            reach.unreached = tuple(c.id for c in todo[index:])
+            break
+        examine(card)
+        reach.reached += 1
+        if checkpoint is not None:
+            checkpoint.mark(card)
+    archived_keys: set[str | None] | None = None
     for (proj, unit), pull in sorted(open_units.items()):
-        if (proj, unit) not in known and kanban.find_card(unit_key(proj, unit), archived=True) is None:
+        if (proj, unit) not in known:
+            archived_keys = {c.key for c in kanban.cards(True)} if archived_keys is None else archived_keys
+            if unit_key(proj, unit) in archived_keys:
+                continue
             report("live_not_running", None, f"unit {unit} in {proj}", f"PR #{pull['number']} open, no unit card", f"faker-kit loop unit {unit} --pr {pull['number']}")
     action = [f for f in findings if f["needs_action"]]
-    return {"findings": findings, "lines": [f["line"] for f in findings], "ok": not action, "needs_action": bool(action)}
+    return {"findings": findings, "lines": [f["line"] for f in findings], "ok": not action and not reach.partial, "needs_action": bool(action), **reach.view()}
 
 
-def hold_live_units(kanban: Kanban, project: str, bot: str, open_units: dict[tuple[str, str], dict]) -> list[dict]:
+def claimable(card: Card, project: str, bot: str, open_units: dict[tuple[str, str], dict]) -> bool:
+    return unit_card(card, project) and card.assignee == bot and open_card(card) and card.status == "ready" and bool(live_unit(card, open_units))
+
+
+def hold_live_units(kanban: Kanban, project: str, bot: str, open_units: dict[tuple[str, str], dict], budget: Budget | None = None) -> tuple[list[dict], list[str]]:
     done: list[dict] = []
+    skipped: list[str] = []
     for card in kanban.cards(False):
-        if not unit_card(card, project) or card.assignee != bot or not open_card(card) or card.status != "ready" or not live_unit(card, open_units):
+        if not claimable(card, project, bot, open_units):
+            continue
+        if budget is not None and budget.spent():
+            skipped.append(card.slug)
             continue
         label = (session_of(card.header) if card.header else None) or f"unit {card.slug} reconcile"
         try:
             done.append({"unit": card.slug, **hold(kanban, card, label)})
         except KanbanError as err:
             done.append({"unit": card.slug, "card": card.id, "claim": "refused", "detail": scrub(str(err))[:160]})
-    return done
+    return done, skipped
 
 
 def align(kanban: Kanban, home: Path, bot: str, repos: dict[str, str], apply: bool) -> dict:

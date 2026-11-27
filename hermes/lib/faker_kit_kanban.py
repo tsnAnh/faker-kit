@@ -300,15 +300,29 @@ class Kanban:
     def __init__(self, run: KanbanRunner) -> None:
         self.run = run
         self.known: Board | None = None
+        self.reads: dict[tuple[str, ...], str] = {}
 
     def call(self, args: list[str], stdin: str | None = None) -> str:
         write = args[0] in MUTATING and args[:2] != ["evidence", "list"]
+        key = tuple(args) if args[0] in ("list", "show") or args[:2] == ["evidence", "list"] else None
+        if key is not None and key in self.reads:
+            return self.reads[key]
         try:
-            return self.run(args, stdin)
+            out = self.run(args, stdin)
         except KanbanError as err:
             if write:
+                self.forget(args)
                 raise KanbanError(f"Kanban did not accept the change ({err}); the card was not changed") from None
             raise KanbanError(f"could not read Kanban ({err}); nothing was changed") from None
+        if key is not None:
+            self.reads[key] = out
+        if write:
+            self.forget(args)
+        return out
+
+    def forget(self, args: list[str]) -> None:
+        touched = set(args)
+        self.reads = {key: out for key, out in self.reads.items() if key[0] != "list" and key[-2] not in touched}
 
     def read_json(self, args: list[str]) -> object:
         out = self.call(args)

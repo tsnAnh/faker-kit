@@ -659,7 +659,7 @@ class Run:
         return 202
 
     def kit(self, *argv: str, bot: str | None = BOT, env: dict[str, str] | None = None, post: object = None, tool: object = None, refresher: object = None,
-            stdin: bytes | None = None, owner: bool = True) -> tuple[int, str, str]:
+            stdin: bytes | None = None, owner: bool = True, wiring: dict | None = None) -> tuple[int, str, str]:
         secret_file = self.team / "host-secret"
         if owner and bot is None and stdin is None and argv[:1] and argv[0] in ("install", "projects", "host", "runner") and secret_file.exists():
             argv = (*argv, "--secret-stdin")
@@ -672,7 +672,7 @@ class Run:
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 code = faker_kit.main(list(argv), bot=bot or "default", now=lambda: self.clock, sleep=self.sleep, fetch_api=self.fetch_api, fetch_url=self.fetch_url,
                                   post=post or (lambda url, headers, body: self.listener(headers, body, url)),
-                                  stdin=io.BytesIO(stdin or b""), **({"tool": tool} if tool else {}), **({"refresher": refresher} if refresher else {}))
+                                  stdin=io.BytesIO(stdin or b""), **({"tool": tool} if tool else {}), **({"refresher": refresher} if refresher else {}), **(wiring or {}))
         finally:
             for key, value in saved.items():
                 if value is None:
@@ -4448,6 +4448,7 @@ SCENARIOS: dict[str, Callable[[Ctx], None]] = {
     "kanban-claims": lambda c: kanban_claims_scenario.claims_scenario(c.run()),
     "kanban-evidence": lambda c: kanban_evidence_scenario.evidence_scenario(c.run()),
     "kanban-visibility": lambda c: kanban_visibility_scenario.visibility_scenario(c.run()),
+    "loop-budget": lambda c: importlib.import_module("loop_budget_scenario").loop_budget_scenario(c.run()),
     "pickup": scenario_pickup,
     "pickup-limit": lambda c: pickup_limit_scenario.pickup_limit_scenario(c.run()),
     "session-summary": lambda c: session_summary_scenario.session_scenario(c.run()),

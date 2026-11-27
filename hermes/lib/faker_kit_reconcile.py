@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -10,6 +10,7 @@ from faker_kit_cards import CardLoop, Merged, bound_pr_url, complete_card, compl
 from faker_kit_gh import Refused, scrub
 from faker_kit_kanban import Card, Kanban, KanbanError
 from faker_kit_loop import CLOSED, DEFAULT_OUTCOME, Loop
+from faker_kit_passes import Budget, Checkpoint, Reach
 from faker_kit_refusals import Refusals
 from faker_kit_text import refresh
 
@@ -67,6 +68,7 @@ class Findings:
     pending: list[dict[str, object]] = field(default_factory=list)
     stale_blocked: list[dict[str, object]] = field(default_factory=list)
     parts_without_pr: list[dict[str, object]] = field(default_factory=list)
+    reach: Reach | None = None
 
 
 class Settler:
@@ -98,52 +100,58 @@ def read_seen(read: PullReader, repo: str, number: int) -> Seen:
     return seen_pull(raw, repo, number)
 
 
-def reconcile(items: list[Tracked], read: PullReader, settle: Settler | None) -> Findings:
+def reconcile(items: Iterable[Tracked], read: PullReader, settle: Settler | None, done: Callable[[Tracked], None] | None = None) -> Findings:
     found = Findings()
     cache: dict[tuple[str, int], Seen | Unreadable] = {}
     for item in items:
-        if item.problem or item.repo is None:
-            found.unreadable.append({"id": item.ident, "reason": item.problem or f"project {item.project} is no longer on this machine"})
-            continue
-        if item.units and not item.prs:
-            report_without_pr(found, item, settle)
-            continue
-        seen: list[Seen] = []
-        reason = ""
-        for number in item.prs:
-            key = (item.repo, number)
-            if key not in cache:
-                try:
-                    cache[key] = read_seen(read, item.repo, number)
-                except Unreadable as err:
-                    cache[key] = err
-            got = cache[key]
-            if isinstance(got, Unreadable):
-                reason = str(got)
-                break
-            seen.append(got)
-        if reason:
-            found.unreadable.append({"id": item.ident, "reason": reason})
-        elif any(s.open for s in seen):
-            open_units = settle.open_units(item) if isinstance(settle, CardSettler) and item.units else []
-            if open_units:
-                found.waiting.append({"id": item.ident, "card": item.card.id if item.card else item.ident, "units": open_units})
-            else:
-                found.unchanged.append(item.ident)
-            live = max((s for s in seen if s.open and not s.draft), key=lambda s: s.number, default=None)
-            if settle is not None and live is not None and item.kind == "unit":
-                publish(found, item, live, settle)
-        elif any(s.merged for s in seen):
-            land(found, item, max((s for s in seen if s.merged), key=lambda s: s.merged_at), settle)
-        elif item.units:
-            report_without_pr(found, item, settle)
-        elif settle is not None:
-            settle.close(item)
-            found.closed.append(item.ident)
-        else:
-            found.closed.append(item.ident)
+        settle_item(found, cache, item, read, settle)
+        if done is not None:
+            done(item)
     found.read = len(cache)
     return found
+
+
+def settle_item(found: Findings, cache: dict[tuple[str, int], Seen | Unreadable], item: Tracked, read: PullReader, settle: Settler | None) -> None:
+    if item.problem or item.repo is None:
+        found.unreadable.append({"id": item.ident, "reason": item.problem or f"project {item.project} is no longer on this machine"})
+        return
+    if item.units and not item.prs:
+        report_without_pr(found, item, settle)
+        return
+    seen: list[Seen] = []
+    reason = ""
+    for number in item.prs:
+        key = (item.repo, number)
+        if key not in cache:
+            try:
+                cache[key] = read_seen(read, item.repo, number)
+            except Unreadable as err:
+                cache[key] = err
+        got = cache[key]
+        if isinstance(got, Unreadable):
+            reason = str(got)
+            break
+        seen.append(got)
+    if reason:
+        found.unreadable.append({"id": item.ident, "reason": reason})
+    elif any(s.open for s in seen):
+        open_units = settle.open_units(item) if isinstance(settle, CardSettler) and item.units else []
+        if open_units:
+            found.waiting.append({"id": item.ident, "card": item.card.id if item.card else item.ident, "units": open_units})
+        else:
+            found.unchanged.append(item.ident)
+        live = max((s for s in seen if s.open and not s.draft), key=lambda s: s.number, default=None)
+        if settle is not None and live is not None and item.kind == "unit":
+            publish(found, item, live, settle)
+    elif any(s.merged for s in seen):
+        land(found, item, max((s for s in seen if s.merged), key=lambda s: s.merged_at), settle)
+    elif item.units:
+        report_without_pr(found, item, settle)
+    elif settle is not None:
+        settle.close(item)
+        found.closed.append(item.ident)
+    else:
+        found.closed.append(item.ident)
 
 
 def report_without_pr(found: Findings, item: Tracked, settle: Settler | None) -> None:
@@ -196,7 +204,8 @@ def entries(found: Findings) -> dict[str, object]:
 
 def render(found: Findings, mode: str) -> dict:
     rest = {"unchanged": len(found.unchanged), "unreadable": len(found.unreadable), "refused": len(found.refused),
-            "completion_pending": len(found.pending), "stale_blocked": len(found.stale_blocked), "parts_without_pr": len(found.parts_without_pr)}
+            "completion_pending": len(found.pending), "stale_blocked": len(found.stale_blocked), "parts_without_pr": len(found.parts_without_pr),
+            **(found.reach.view() if found.reach else {"partial": False})}
     if mode == "dry-run":
         return {"read": found.read, "would_set_merged": len(found.merged), "would_set_closed": len(found.closed), **rest,
                 "entries": {"merged": found.merged, "closed": found.closed, **entries(found)}}
@@ -209,7 +218,7 @@ def render(found: Findings, mode: str) -> dict:
 
 def counts(rendered: dict) -> dict[str, object]:
     return {k: rendered[k] for k in ("mode", "read", "set_merged", "set_closed", "unchanged", "unreadable", "refused",
-        "completion_pending", "stale_blocked", "parts_without_pr")} | {"unreadable_ids": [u["id"] for u in rendered["entries"]["unreadable"]]}
+        "completion_pending", "stale_blocked", "parts_without_pr", "partial")} | {"unreadable_ids": [u["id"] for u in rendered["entries"]["unreadable"]]}
 
 
 def ledger_items(parts: list[dict], repos: dict[str, str]) -> list[Tracked]:
@@ -276,31 +285,60 @@ def serving_stages(by_key: dict[str, Card], fields: dict[str, str]) -> dict[str,
         return {}
 
 
-def card_items(kanban: Kanban, cards: list[Card], kind: str, repos: dict[str, str], project: str | None = None, owner: str | None = None) -> list[Tracked]:
-    items: list[Tracked] = []
-    by_key = {c.key: c for c in cards if c.key}
+def candidate_cards(cards: list[Card], kind: str, project: str | None = None, owner: str | None = None) -> list[Card]:
+    found: list[Card] = []
     for card in cards:
         fields = card.header.fields if card.header else {}
         closed = fields.get("State") in CLOSED and not completion_pending(card)
         if card.archived or fields.get("Kind") != kind or closed or (project is not None and fields.get("Project") != project) or (owner is not None and card.assignee != owner):
             continue
-        repo = repos.get(fields.get("Project", ""))
-        units: tuple[Card, ...] = ()
-        if kind == "part":
-            entry = part_entry(card)
-            ident, outcome, stages = str(entry["id"]), entry["outcome"], dict(entry["stages"])
-            bound, problem = evidence_numbers(kanban, card, repo)
-            prs = tuple(sorted(set(bound or entry["prs"])))
-            if not prs and not problem:
-                units = part_units(kanban, card, cards, entry["id"])
-                prs, problem = units_prs(kanban, units, repo)
-        else:
-            ident, outcome = card.slug, fields.get("Outcome", DEFAULT_OUTCOME)
-            stages = {**serving_stages(by_key, fields), **dict(line.partition("=")[::2] for line in card.header.lines("Stage"))} if card.header else {}
-            prs, problem = card_prs(kanban, card, repo)
-        if prs or problem or units:
-            items.append(Tracked(ident, kind, fields.get("Project", ""), repo, prs, outcome, stages, card, problem, units))
-    return items
+        found.append(card)
+    return found
+
+
+def card_item(kanban: Kanban, cards: list[Card], by_key: dict[str, Card], card: Card, kind: str, repos: dict[str, str]) -> Tracked | None:
+    fields = card.header.fields if card.header else {}
+    repo = repos.get(fields.get("Project", ""))
+    units: tuple[Card, ...] = ()
+    if kind == "part":
+        entry = part_entry(card)
+        ident, outcome, stages = str(entry["id"]), entry["outcome"], dict(entry["stages"])
+        bound, problem = evidence_numbers(kanban, card, repo)
+        prs = tuple(sorted(set(bound or entry["prs"])))
+        if not prs and not problem:
+            units = part_units(kanban, card, cards, entry["id"])
+            prs, problem = units_prs(kanban, units, repo)
+    else:
+        ident, outcome = card.slug, fields.get("Outcome", DEFAULT_OUTCOME)
+        stages = {**serving_stages(by_key, fields), **dict(line.partition("=")[::2] for line in card.header.lines("Stage"))} if card.header else {}
+        prs, problem = card_prs(kanban, card, repo)
+    return Tracked(ident, kind, fields.get("Project", ""), repo, prs, outcome, stages, card, problem, units) if prs or problem or units else None
+
+
+class CardPass:
+    def __init__(self, kanban: Kanban, cards: list[Card], kind: str, repos: dict[str, str], budget: Budget, checkpoint: Checkpoint,
+                 project: str | None = None, owner: str | None = None) -> None:
+        self.kanban, self.cards, self.kind, self.repos, self.budget, self.checkpoint = kanban, cards, kind, repos, budget, checkpoint
+        self.by_key = {c.key: c for c in cards if c.key}
+        self.todo = checkpoint.order(candidate_cards(cards, kind, project, owner))
+        checkpoint.keep_only(self.todo)
+        self.reach = Reach(candidates=len(self.todo))
+
+    def items(self) -> Iterator[Tracked]:
+        for index, card in enumerate(self.todo):
+            if self.budget.spent():
+                self.reach.unreached = tuple(c.id for c in self.todo[index:])
+                return
+            item = card_item(self.kanban, self.cards, self.by_key, card, self.kind, self.repos)
+            self.reach.reached += 1
+            if item is None:
+                self.checkpoint.mark(card)
+            else:
+                yield item
+
+    def done(self, item: Tracked) -> None:
+        if item.card is not None:
+            self.checkpoint.mark(item.card)
 
 
 class CardSettler(Settler):

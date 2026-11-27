@@ -35,7 +35,7 @@ from faker_kit_andon import LABEL, MACHINE, Andon, AndonError, Cord, clean_reaso
 from faker_kit_backfill import backfill, backfill_refs
 from faker_kit_card_watch import align as align_parts
 from faker_kit_card_watch import check as check_cards
-from faker_kit_card_watch import hold_live_units, session_of
+from faker_kit_card_watch import claimable, hold_live_units, session_of
 from faker_kit_cards import (
     CLOSE_KINDS,
     CardLoop,
@@ -116,11 +116,12 @@ from faker_kit_merge import (
     unlabeled_text,
 )
 from faker_kit_migrate import chief_parts, migrate_chief, migrate_project, read_units
+from faker_kit_passes import CLAIMS_SHARE, Budget, Checkpoint
 from faker_kit_pickup import Slots, abandoned_after_steer, pickup_candidates, read_pickup, running_units, slots, write_pickup
 from faker_kit_profiles import Profiles
 from faker_kit_prompt import brief_notice, describe, prompt_of
 from faker_kit_ready import BULK_DRAFT_HOLD, DRAFT_HOLD, mark_ready, ready_pass
-from faker_kit_reconcile import CardSettler, LoopSettler, Tracked, Unreadable, card_items, counts, ledger_items, mark_unit, reconcile, render, seen_pull, tsv_items
+from faker_kit_reconcile import CardPass, CardSettler, LoopSettler, Tracked, Unreadable, counts, ledger_items, mark_unit, reconcile, render, seen_pull, tsv_items
 from faker_kit_refresh import clean_source, exclusive, installed_commit, latest_main, recorded_source, refresh
 from faker_kit_refs import belongs_elsewhere, ensure_prefix, find_ref, foreign, known_ref
 from faker_kit_refusals import Refusals
@@ -157,6 +158,7 @@ OPEN_WAIT_DEFAULT_SECONDS = 600
 EXIT_REFUSED = 1
 EXIT_AMBIGUOUS = 3
 EXIT_ACTION = 4
+DIGEST_RECONCILE_SHARE = 0.6
 EXIT_PARTIAL = 5
 MATCH_MAX_CHARS = 100
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
@@ -268,9 +270,11 @@ class Kit:
     def __init__(self, run: Runner = run_gh, cloud: Cloud | None = None, home: Path | None = None, now: Callable[[], float] = time.time,
                  fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status, sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping,
                  tool: Tool = run_tool, refresher: Refresher = refresh, claude_state: ClaudeState = claude_cli_state,
-                 kanban_runner: Callable[[str], KanbanRunner] = hermes_runner) -> None:
+                 kanban_runner: Callable[[str], KanbanRunner] = hermes_runner, monotonic: Callable[[], float] = time.monotonic) -> None:
         self.claude_state = claude_state
         self.kanban_runner = kanban_runner
+        self.monotonic = monotonic
+        self.kanbans: dict[str, Kanban] = {}
         self.run, self.now, self.fetch_api, self.fetch_url, self.sleep, self.post = run, now, fetch_api, fetch_url, sleep, post
         self.tool, self.refresher = tool, refresher
         self.home = home or faker_kit_home()
@@ -968,6 +972,11 @@ class Kit:
     def kanban(self, caller: Bot) -> Kanban:
         return Kanban(self.kanban_runner(caller.name))
 
+    def pass_kanban(self, caller: Bot) -> Kanban:
+        if caller.name not in self.kanbans:
+            self.kanbans[caller.name] = self.kanban(caller)
+        return self.kanbans[caller.name]
+
     def handoff(self, caller: Bot, project: str, part: str, decisions: str, outcome: str = DEFAULT_OUTCOME, title: str | None = None) -> dict:
         owner = self.policy().projects().get(project)
         if owner is None:
@@ -1048,7 +1057,8 @@ class Kit:
             if not cutover(self.home):
                 raise Refused("the Kanban cutover is not done: units still live in units.tsv, and loop migrate --dry-run shows what moving them would do")
             return unit_rows(self.kanban(caller), str(caller.project))
-        reconciled = {"reconcile": counts(self.loop_reconcile(caller, strict=False))} if action == "digest" else {}
+        budget = Budget.start(self.monotonic) if action == "digest" else None
+        reconciled = {"reconcile": counts(self.loop_reconcile(caller, strict=False, budget=budget.share(DIGEST_RECONCILE_SHARE)))} if budget else {}
         if not cutover(self.home):
             return {**self.old_loop(caller, action, part_id, state, prs, waits_on, reported, everything, evidence), **reconciled}
         cards = CardLoop(self.kanban(caller), self.home, caller.name, self.role_repos(caller))
@@ -1062,7 +1072,9 @@ class Kit:
         if part_id is not None or state or prs or waits_on or reported or evidence:
             raise Refused(f"loop {action} takes no part id or changes; use loop set <id>")
         if action == "digest":
-            return {**cards.digest(self.now()), **reconciled, "check": self.loop_check(caller)["lines"]}
+            checked = self.loop_check(caller, budget=budget)
+            return {**cards.digest(self.now()), **reconciled, "check": checked["lines"], "partial": bool(reconciled["reconcile"]["partial"] or checked["partial"]),
+                    "check_unreached": checked["unreached"]}
         return cards.show(everything)
 
     def unit_evidence(self, caller: Bot, target: int | str, state: str | None, prs: list[int], waits_on: str | None, reported: bool, evidence: list[str] | None) -> dict:
@@ -1093,10 +1105,11 @@ class Kit:
                     found.setdefault((project, unit), pull)
         return found
 
-    def loop_check(self, caller: Bot, evidence: bool = False) -> dict:
+    def loop_check(self, caller: Bot, evidence: bool = False, budget: Budget | None = None) -> dict:
         if not cutover(self.home):
-            return {"findings": [], "lines": [], "ok": True, "needs_action": False, "cutover": False}
-        return check_cards(self.kanban(caller), caller.role, caller.project, self.open_units(caller), self.now(), caller.name, evidence, self.summary_time(caller))
+            return {"findings": [], "lines": [], "ok": True, "needs_action": False, "cutover": False, "partial": False, "unreached": []}
+        return check_cards(self.pass_kanban(caller), caller.role, caller.project, self.open_units(caller), self.now(), caller.name, evidence, self.summary_time(caller),
+                           budget or Budget.start(self.monotonic), Checkpoint(self.home, caller.name, "check"))
 
     def summary_time(self, caller: Bot) -> Callable[[dict], float | None]:
         repos = self.role_repos(caller)
@@ -1149,13 +1162,13 @@ class Kit:
         repos, parts, rows = self.reconcile_sources(caller)
         return ledger_items(parts, repos) if caller.role == "chief" else tsv_items(rows, parts, str(caller.project), str(caller.repo))
 
-    def loop_reconcile(self, caller: Bot, strict: bool) -> dict:
+    def loop_reconcile(self, caller: Bot, strict: bool, budget: Budget | None = None) -> dict:
         read = self.pull_reader(caller)
         if not cutover(self.home):
             items = self.reconcile_items(caller)
             writes = caller.role == "chief"
             return render(reconcile(items, read, LoopSettler(self.home, caller.name, self.now()) if writes else None), "apply" if writes else "report")
-        kanban = self.kanban(caller)
+        kanban = self.pass_kanban(caller)
         repos, _, _ = self.reconcile_sources(caller)
         if kanban.board().dispatch_mode != EXTERNAL:
             if strict:
@@ -1163,14 +1176,28 @@ class Kit:
             writes = False
         else:
             writes = True
+        budget = budget or Budget.start(self.monotonic)
         cards = kanban.cards(True)
-        items = card_items(kanban, cards, "part", repos) if caller.role == "chief" else card_items(kanban, cards, "unit", repos, str(caller.project), caller.name)
+        is_chief = caller.role == "chief"
+        checkpoint = Checkpoint(self.home, caller.name, "reconcile")
+        open_units = self.open_units(caller) if writes and not is_chief else {}
+        claims_waiting = any(claimable(c, str(caller.project), caller.name, open_units) for c in cards)
+        source = (CardPass(kanban, cards, "part", repos, budget, checkpoint) if is_chief
+                  else CardPass(kanban, cards, "unit", repos, budget.share(CLAIMS_SHARE) if claims_waiting else budget, checkpoint, str(caller.project), caller.name))
         settler = CardSettler(kanban, CardLoop(kanban, self.home, caller.name, repos), cards, self.now()) if writes else None
-        out = render(reconcile(items, read, settler), "apply" if writes else "report")
+        found = reconcile(source.items(), read, settler, source.done)
+        found.reach = source.reach
+        out = render(found, "apply" if writes else "report")
         if writes and caller.role == "project":
             with Loop(self.home, caller.name).locked():
-                out["claims"] = hold_live_units(kanban, str(caller.project), caller.name, self.open_units(caller))
-                out["blocked"] = self.block_abandoned(caller, kanban)
+                out["claims"], skipped = hold_live_units(kanban, str(caller.project), caller.name, open_units, budget)
+                if skipped:
+                    out.update(partial=True, claims_unreached=skipped)
+                if budget.spent():
+                    out["partial"] = True
+                    out["blocked"] = []
+                else:
+                    out["blocked"] = self.block_abandoned(caller, kanban, open_units)
                 for held in out["claims"]:
                     unit = kanban.find_card(unit_key(str(caller.project), str(held["unit"])))
                     if unit is not None:
@@ -1178,11 +1205,11 @@ class Kit:
                             self.refresh_parent_work(kanban, unit, str(caller.repo))
         return out
 
-    def block_abandoned(self, caller: Bot, kanban: Kanban) -> list[dict]:
+    def block_abandoned(self, caller: Bot, kanban: Kanban, open_units: dict[tuple[str, str], dict]) -> list[dict]:
         if not read_pickup(self.home).enabled:
             return []
         blocked: list[dict] = []
-        for card in abandoned_after_steer(kanban.cards(False), caller.name, str(caller.project), self.open_units(caller), self.now()):
+        for card in abandoned_after_steer(kanban.cards(False), caller.name, str(caller.project), open_units, self.now()):
             reason = f"faker-kit: unit {card.slug} still had no pull request after its one steer; blocked, never relaunched"
             try:
                 if card.status == "running":
@@ -2306,7 +2333,8 @@ def failure_envelope(err: BaseException, secrets: tuple[str, ...]) -> dict:
 def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | None = None, bot: str | None = None,
          now: Callable[[], float] = time.time, fetch_api: FetchJson = fetch_json, fetch_url: FetchStatus = fetch_status,
          sleep: Callable[[float], None] = time.sleep, post: Poster = post_ping, tool: Tool = run_tool, refresher: Refresher = refresh,
-         stdin: IO[bytes] | None = None, claude_state: ClaudeState = claude_cli_state, kanban_runner: Callable[[str], KanbanRunner] = hermes_runner) -> int:
+         stdin: IO[bytes] | None = None, claude_state: ClaudeState = claude_cli_state, kanban_runner: Callable[[str], KanbanRunner] = hermes_runner,
+         monotonic: Callable[[], float] = time.monotonic) -> int:
     given = sys.argv[1:] if argv is None else argv
     try:
         args = parser().parse_args(argv)
@@ -2322,7 +2350,8 @@ def main(argv: list[str] | None = None, run: Runner = run_gh, cloud: Cloud | Non
     wants_json = bool(getattr(args, "json", False))
     kit: Kit | None = None
     try:
-        kit = Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep, post=post, tool=tool, refresher=refresher, claude_state=claude_state, kanban_runner=kanban_runner)
+        kit = Kit(run, cloud, now=now, fetch_api=fetch_api, fetch_url=fetch_url, sleep=sleep, post=post, tool=tool, refresher=refresher, claude_state=claude_state,
+                  kanban_runner=kanban_runner, monotonic=monotonic)
         out = run_command(args, kit, bot or current_bot(), stdin or sys.stdin.buffer)
     except Exception as err:
         known = (Refused, CloudError, PolicyError, AndonError, LoopError, MachineError, InstallError, RunnerError, yaml.YAMLError)
