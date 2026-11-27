@@ -16,6 +16,11 @@ max_in_flight_total: 500
 # own max_in_flight applies, then 50 for a repository that sets none.
 max_in_flight_per_project: 50
 
+# T3 Code project ids for `faker-kit launch --backend t3code`, by repository (OWNER/REPO). The kit ships
+# a few; a line here wins. `faker-kit install --config` writes this from the machine file's guard section.
+# t3code_projects:
+#   OWNER/REPO: <T3 project id>
+
 # GitHub logins that count as the owner: the account the coding agent posts as (for Claude Code
 # on the web, usually the owner). A repository's setup brief writes them into its trusted_dispatchers.
 trusted_authors:

@@ -211,6 +211,7 @@ class Policy:
     ask_owner: bool = True
     max_in_flight_per_project: int | None = None
     alert_hosts: frozenset[str] = frozenset()
+    t3code_projects: dict[str, str] = field(default_factory=dict)
     bots: dict[str, Bot] = field(default_factory=dict)
     home: Path = field(default_factory=faker_kit_home)
 
@@ -304,6 +305,22 @@ def parse_alert_hosts(value: object) -> frozenset[str]:
     return frozenset(h.lower() for h in value)
 
 
+T3_PROJECT_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{0,199}\Z")
+
+
+def parse_t3code_projects(value: object) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise PolicyError("guard.yaml t3code_projects must map OWNER/REPO to a T3 project id")
+    found: dict[str, str] = {}
+    for repo, project in value.items():
+        if not isinstance(repo, str) or not REPO.match(repo) or not isinstance(project, str) or not T3_PROJECT_ID.match(project):
+            raise PolicyError("guard.yaml t3code_projects must map OWNER/REPO to a T3 project id")
+        found[repo.lower()] = project
+    return found
+
+
 def parse_policy(data: object, bots: object = None, home: Path | None = None) -> Policy:
     if not isinstance(data, dict) or data.get("version") != GUARD_VERSION:
         raise PolicyError("guard.yaml must be a mapping with version: 2")
@@ -326,6 +343,7 @@ def parse_policy(data: object, bots: object = None, home: Path | None = None) ->
         max_in_flight_per_project=per_project,
         ask_owner=ask_owner,
         alert_hosts=parse_alert_hosts(data.get("alert_hosts")),
+        t3code_projects=parse_t3code_projects(data.get("t3code_projects")),
         bots=parsed_bots,
         home=home or faker_kit_home(),
     )

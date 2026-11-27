@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypedDict
 
@@ -15,6 +16,7 @@ EVERY = re.compile(r"\A[1-9][0-9]*[mh]\Z")
 HTTPS_URL = re.compile(r"\Ahttps://[a-z0-9.-]+\.[a-z]{2,}\Z")
 SLACK_CHANNEL = re.compile(r"\A[CG][A-Z0-9]{8,}\Z")
 ABSOLUTE_PATH = re.compile(r"\A/[A-Za-z0-9_./-]+\Z")
+T3_PROJECT_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{0,199}\Z")
 SERVICE_UNIT = re.compile(r"\A[A-Za-z0-9_.@-]+\.service\Z")
 PLACEHOLDER = "CHANGE-ME"
 MAX_IN_FLIGHT = 1000
@@ -91,6 +93,7 @@ class Machine:
     skills: tuple[str, ...] = ()
     ci_runners: tuple[CiRunner, ...] = ()
     max_in_flight_per_project: int | None = None
+    t3code_projects: dict[str, str] = field(default_factory=dict)
 
 
 def _mapping(value: object, where: str) -> dict[str, object]:
@@ -151,6 +154,14 @@ def parse_machine(data: object) -> Machine:
     per_project = guard.get("max_in_flight_per_project")
     if per_project is not None and (not isinstance(per_project, int) or isinstance(per_project, bool) or not 1 <= per_project <= MAX_IN_FLIGHT):
         raise MachineError(f"guard.max_in_flight_per_project must be a number from 1 to {MAX_IN_FLIGHT}")
+    raw_t3 = {} if guard.get("t3code_projects") is None else _mapping(guard["t3code_projects"], "guard.t3code_projects")
+    t3_projects = {}
+    for repo, project in raw_t3.items():
+        if not REPO.match(repo) or not isinstance(project, str) or not T3_PROJECT_ID.match(project):
+            raise MachineError(f"guard.t3code_projects.{repo} must map OWNER/REPO to a T3 project id")
+        if repo.lower() in t3_projects:
+            raise MachineError(f"guard.t3code_projects lists {repo} twice")
+        t3_projects[repo.lower()] = project
     subscription = top.get("claude_subscription", False)
     if not isinstance(subscription, bool):
         raise MachineError("claude_subscription must be true or false")
@@ -215,7 +226,7 @@ def parse_machine(data: object) -> Machine:
                    claude_subscription=subscription, projects=tuple(projects), chief=chief_bot,
                    chief_model=chief_model, chief_provider=chief_provider, bootstrap_model=bootstrap_model,
                    bootstrap_provider=bootstrap_provider, webhook_url=url, tunnel=tunnel, tunnel_config=tunnel_config, tunnel_unit=tunnel_unit, slack=slack, kit_ref=kit_ref,
-                   skills=tuple(dict.fromkeys(skills)), ci_runners=tuple(runners), max_in_flight_per_project=per_project)
+                   skills=tuple(dict.fromkeys(skills)), ci_runners=tuple(runners), max_in_flight_per_project=per_project, t3code_projects=t3_projects)
 
 
 def load_machine(path: Path) -> Machine:
@@ -279,5 +290,11 @@ def edit_guard(text: str, machine: Machine) -> str:
             text = replace(rf"^{PER_PROJECT_KEY}:.*$", line, text, PER_PROJECT_KEY)
         else:
             text = replace(r"^max_in_flight_total:.*$", f"max_in_flight_total: {machine.max_in_flight_total}\n{line}", text, "max_in_flight_total")
+    if machine.t3code_projects:
+        block = "t3code_projects:\n" + "".join(f"  {repo}: {json.dumps(project)}\n" for repo, project in sorted(machine.t3code_projects.items()))
+        if re.search(r"^t3code_projects:", text, re.M):
+            text = replace(r"^t3code_projects:\n(?:[ \t]+[^\n]*\n)*", block, text, "t3code_projects")
+        else:
+            text = replace(r"^trusted_authors:", block + "trusted_authors:", text, "trusted_authors")
     authors = "trusted_authors:\n" + "".join(f"  - {a}\n" for a in machine.trusted_authors)
     return replace(r"^trusted_authors:\n(?:[ \t]+-[^\n]*\n|[ \t]*#[^\n]*\n)*", authors, text, "trusted_authors")

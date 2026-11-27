@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +22,10 @@ MAX_IN_FLIGHT_LIMIT = 20
 ORIGIN_PREFIX = "origin/"
 DEFAULT_PROVIDER = "claudeAgent"
 DEFAULT_MODEL = "claude-sonnet-5-5"
+BACKEND = "t3code"
+SEEDED_PROJECTS = {
+    "titoniumlab/titox-mobile-sdk": "03f86665-683a-41b2-9982-f56069044a53",
+}
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,15 @@ def parse_settings(section: object, default_branch: str) -> T3Settings:
         raise Refused(f"{SECTION}.max_in_flight must be a whole number from 1 to {MAX_IN_FLIGHT_LIMIT}")
     base = text_setting(section, "base_ref", REF) or f"{ORIGIN_PREFIX}{default_branch}"
     return T3Settings(project, base, provider, model, limit)
+
+
+def with_mapped_project(section: object, repo: str, machine_projects: Mapping[str, str]) -> object:
+    if isinstance(section, dict) and "project" in section:
+        return section
+    project = {**SEEDED_PROJECTS, **machine_projects}.get(repo.lower())
+    if project is None:
+        raise Refused(f"no T3 project for {repo}: add it under t3code_projects in machine.yaml")
+    return {**section, "project": project} if isinstance(section, dict) else {"project": project}
 
 
 def check_t3code_backend(dispatch: Dispatch, brief_name: str) -> None:
