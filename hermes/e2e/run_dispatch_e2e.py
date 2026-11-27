@@ -2860,6 +2860,24 @@ def provider_scenario(run: Run, work: Path) -> None:
     inserted = kit("install", "--config", str(machine))
     run.step("install --config adds the per-project line to a guard.yaml written before the key existed, right after the total, without touching other lines",
              inserted.returncode == 0 and "max_in_flight_total: 500\nmax_in_flight_per_project: 33\n" in guard_before.read_text(), inserted.stderr.strip()[-200:] or "inserted")
+    t3_map = total_line + '  t3code_projects:\n    Acme/Shop: "proj-from-machine"\n    acme/crm: proj-crm\n'
+    guard_before.write_bytes(kept_guard)
+    machine.write_text(PROVIDER_MACHINE.replace(total_line, t3_map))
+    first = kit("install", "--config", str(machine))
+    written = yaml.safe_load(guard_before.read_text()).get("t3code_projects")
+    guard_text = guard_before.read_text()
+    machine.write_text(PROVIDER_MACHINE.replace(total_line, total_line + '  t3code_projects:\n    acme/shop: proj-second\n'))
+    second = kit("install", "--config", str(machine))
+    run.step("install --config writes the machine's t3code_projects into guard.yaml (repository keys lowercased), a later config replaces the block, and the guard policy still loads",
+             first.returncode == 0 and written == {"acme/shop": "proj-from-machine", "acme/crm": "proj-crm"} and second.returncode == 0
+             and yaml.safe_load(guard_before.read_text()).get("t3code_projects") == {"acme/shop": "proj-second"} and len(re.findall(r"^t3code_projects:", guard_before.read_text(), re.M)) == 1
+             and "trusted_authors:" in guard_text, first.stderr.strip()[-200:] or second.stderr.strip()[-200:] or json.dumps(written))
+    refused_maps = []
+    for label, block in (("a project id with a slash", "    acme/shop: a/b\n"), ("a repository that is not OWNER/REPO", "    shop: proj-1\n"), ("a list", "    - acme/shop\n")):
+        guard_before.write_bytes(kept_guard)
+        machine.write_text(PROVIDER_MACHINE.replace(total_line, total_line + "  t3code_projects:\n" + block))
+        refused_maps.append((label, kit("install", "--config", str(machine)).returncode != 0 and guard_before.read_bytes() == kept_guard))
+    run.step("install --config refuses a malformed t3code_projects and leaves guard.yaml as it was", all(good for _, good in refused_maps), json.dumps(refused_maps))
     bounds = []
     for label, line, ok in (("a total of 1000", "  max_in_flight_total: 1000\n", True), ("a total of 1001", "  max_in_flight_total: 1001\n", False),
                             ("a per-project value of 0", total_line + "  max_in_flight_per_project: 0\n", False),

@@ -24,6 +24,10 @@ GOOD = {"backend": "t3code", "max_in_flight": 5, "t3code": {"project": SHOP_PROJ
 READ_TOOLS = ("t3_thread_read", "t3_thread_wait", "t3_thread_list", "t3_thread_search", "t3_pending_request", "t3_worktree_status", "t3_worktree_list")
 PLAIN_TOOLS = ("t3_project_list", "t3_project_read", "t3_thread_interrupt")
 TTL_SECONDS = 3600
+BOOTSTRAP = "ong-xay"
+MAPPED_PROJECT = "proj-shop-mapped"
+SEEDED_REPO, SEEDED_PROJECT = "TitoniumLab/titox-mobile-sdk", "03f86665-683a-41b2-9982-f56069044a53"
+NO_PROJECT = "no T3 project for acme/shop: add it under t3code_projects in machine.yaml"
 
 
 def dispatch(run: Run, config: object) -> None:
@@ -320,6 +324,98 @@ def path_cases(run: Run, host: Host, bot: str, real: float) -> None:
              code == 0 and flagged.get("flags_not_applied") == {"model": "haiku", "effort": "high"}, json.dumps(flagged.get("flags_not_applied")))
 
 
+def override_cases(run: Run, host: Host, bot: str, real: float) -> None:
+    guard_file, bots_file = run.team / "guard.yaml", run.team / "bots.yaml"
+    kept_guard, kept_bots = guard_file.read_text(), bots_file.read_text()
+    kept_files = run.gh_now()["files"].copy()
+    claude_repo = {"backend": "claude", "max_in_flight": 4, "forbidden_paths": ["infra/"]}
+    flag = ("--backend", "t3code")
+    run.clock = real
+    unit = "/faker-mode\n\nGOAL: unit override.\n"
+
+    def refused(label: str, name: str, who: str, *flags: str, needle: str) -> tuple[bool, str]:
+        before, kept = claude_calls(run), len(records(run, who))
+        code, _, err = prepare(run, name, unit, who, *flags)
+        return code == 1 and needle in err and claude_calls(run) == before and len(records(run, who)) == kept, f"{label}: {err[:140]}"
+
+    dispatch(run, claude_repo)
+    plain = prepare(run, "plain-claude.md", unit, bot)
+    run.step("t3code override: a launch without the flag on a claude repository is unchanged",
+             plain[0] == 0 and plain[1].get("backend") == "claude" and str(plain[1].get("session", "")).startswith("https://claude.ai/code/"), plain[2] or json.dumps(plain[1])[:200])
+    missing = refused("no map entry", "override-missing.md", bot, *flag, needle=NO_PROJECT)
+    code, out, err = run.kit("launch", "--brief-file", str(run.brief("override-missing.md", unit)), *flag, "--check")
+    report = json.loads(out) if code == 0 else {}
+    run.step("t3code override: a repository with no map entry refuses with the one-line fix, starts nothing, and --check lists the same refusal",
+             missing[0] and report.get("ok") is False and NO_PROJECT in " ".join(report.get("problems", [])) and report.get("started") is False, missing[1] + out[:200])
+
+    guard_file.write_text(kept_guard.replace("trusted_authors:", f't3code_projects:\n  Acme/Shop: "{MAPPED_PROJECT}"\ntrusted_authors:', 1))
+    code, printed, err = prepare(run, "override-unit.md", unit, bot, *flag)
+    args = printed.get("call", {}).get("args", {})
+    run.step("t3code override: --backend t3code on a claude repository prints the T3 call with the mapped projectId, a fresh-branch worktree, the default model, and the T3 cap of 2",
+             code == 0 and printed.get("backend") == "t3code" and printed["call"]["tool"] == LAUNCH and args.get("projectId") == MAPPED_PROJECT
+             and args.get("workspaceStrategy") == {"type": "worktree", "baseRef": "origin/main", "startFromOrigin": True}
+             and args.get("modelSelection") == DEFAULT_SELECTION and printed.get("max_in_flight") == 2 and printed.get("model_defaulted") == "claudeAgent/claude-sonnet-5-5"
+             and "session" not in printed, err or json.dumps(printed)[:300])
+    run.step("t3code override: the repository's dispatch.json is read and never written, and no cloud session starts",
+             run.gh_now()["files"] == {**kept_files, ".agents/dispatch.json": json.dumps(claude_repo)}
+             and not any("-X" in line and "dispatch.json" in line for line in run.gh_log.read_text().splitlines()), "")
+    exact = host.tool(LAUNCH, call_args(printed), bot, host.sid(), "t1", "the override launch as printed")
+    code, again, err = prepare(run, "override-unit-two.md", unit, bot, *flag)
+    changed = host.tool(LAUNCH, {**call_args(again), "projectId": "proj-another"}, bot, host.sid(), "t1", "the override launch with another project")
+    model_changed = host.tool(LAUNCH, {**call_args(again), "modelSelection": {"instanceId": "claudeAgent", "model": "claude-opus-5-5"}}, bot, host.sid(), "t1", "the override launch on another model")
+    run.step("t3code override: the guard passes the printed override call unchanged and refuses another project or another model",
+             exact is None and blocked(changed, "projectId") and blocked(model_changed, "modelSelection"), f"{action(exact)}, {action(changed)}, {action(model_changed)}")
+
+    dispatch(run, {"backend": "claude", "t3code": {"project": SHOP_PROJECT, "provider": PROVIDER, "model": MODEL, "max_in_flight": 3}})
+    code, named, err = prepare(run, "override-named.md", unit, bot, *flag)
+    named_args = named.get("call", {}).get("args", {})
+    dispatch(run, {"backend": "claude", "t3code": {"base_ref": "main", "max_in_flight": 5}})
+    code2, partial, err2 = prepare(run, "override-partial.md", unit, bot, *flag)
+    partial_args = partial.get("call", {}).get("args", {})
+    run.step("t3code override: what dispatch.json's t3code object sets wins field by field, and the map and defaults fill the rest",
+             code == 0 and named_args.get("projectId") == SHOP_PROJECT and named.get("max_in_flight") == 3 and named.get("model") == f"{PROVIDER}/{MODEL}"
+             and code2 == 0 and partial_args.get("projectId") == MAPPED_PROJECT and partial_args.get("workspaceStrategy") == {"type": "worktree", "baseRef": "main"}
+             and partial.get("max_in_flight") == 5 and partial_args.get("modelSelection") == DEFAULT_SELECTION, err or err2 or json.dumps(partial)[:300])
+    dispatch(run, {"backend": "claude", "t3code": {"project": SHOP_PROJECT, "model": MODEL}})
+    cap = refused("a model without a provider", "override-bad-model.md", bot, *flag, needle="go together")
+    dispatch(run, {"backend": "claude", "t3code": {"max_in_flight": 21}})
+    over = refused("a T3 cap above the limit", "override-bad-cap.md", bot, *flag, needle="max_in_flight must be")
+    run.step("t3code override: the model pair and the T3 cap are validated as for a dispatch.json repository", cap[0] and over[0], f"{cap[1]} | {over[1]}")
+
+    dispatch(run, GOOD)
+    code, with_flag, err = prepare(run, "pal-unit.md", unit, bot, *flag)
+    code2, without_flag, err2 = prepare(run, "pal-unit.md", unit, bot)
+    run.step("t3code override: a repository that already names its T3 project prints the same output with or without the flag, byte for byte",
+             code == 0 and code2 == 0 and json.dumps(with_flag, sort_keys=True) == json.dumps(without_flag, sort_keys=True) and with_flag["call"]["args"]["projectId"] == SHOP_PROJECT,
+             err or err2 or "identical")
+
+    dispatch(run, claude_repo)
+    reasons = [
+        refused("a bootstrap bot", "override-bootstrap.md", BOOTSTRAP, *flag, needle="project bot launching its own repository"),
+        refused("another project", "override-other.md", bot, *flag, "--project", "crm", needle="project bot launching its own repository"),
+        refused("an unknown backend", "override-codex.md", bot, "--backend", "claude", needle="takes t3code only"),
+    ]
+    code, out, err = run.kit("launch", "--project", "shop", "--brief-file", str(run.brief_for("default", "override-owner.md", unit)), *flag, bot=None)
+    reasons.append((code == 1 and "project bot launching its own repository" in err, f"the owner's own terminal: {err[:140]}"))
+    run.step("t3code override: a caller that is not a project bot, another project, and a backend other than t3code are refused and start nothing",
+             all(ok for ok, _ in reasons), " | ".join(text for ok, text in reasons if not ok) or "4 refusals")
+
+    bots_file.write_text(kept_bots.replace(f"repo: {run.gh_now()['repo']}", f"repo: {SEEDED_REPO}"))
+    run.update_gh(lambda state: state.update({"repo": SEEDED_REPO}))
+    guard_file.write_text(kept_guard)
+    code, seeded, err = prepare(run, "override-seeded.md", unit, bot, *flag)
+    guard_file.write_text(kept_guard.replace("trusted_authors:", f't3code_projects:\n  titoniumlab/titox-mobile-sdk: "{MAPPED_PROJECT}"\ntrusted_authors:', 1))
+    code2, machine_wins, err2 = prepare(run, "override-machine.md", unit, bot, *flag)
+    run.step("t3code override: a shipped seed names the T3 project for titox-mobile-sdk with no machine entry, and the machine entry wins over it",
+             code == 0 and seeded.get("call", {}).get("args", {}).get("projectId") == SEEDED_PROJECT
+             and code2 == 0 and machine_wins.get("call", {}).get("args", {}).get("projectId") == MAPPED_PROJECT, err or err2 or json.dumps(seeded)[:200])
+    guard_file.write_text(kept_guard)
+    bots_file.write_text(kept_bots)
+    run.update_gh(lambda state: state.update({"repo": "acme/shop", "files": kept_files}))
+    for record in records(run, bot):
+        record.unlink()
+
+
 def tool_cases(run: Run, host: Host) -> None:
     token = "gh" + "p_" + "B" * 36
     leaked = host.tool(SEND, {"threadId": "t-1", "message": f"push with {token}", "mode": "queue"}, "meo-beo", host.sid(), "t1", "t3code steering with a token")
@@ -356,5 +452,6 @@ def t3code_scenario(run: Run, bot: str) -> None:
     host.load()
     guard_cases(run, host, bot, real)
     path_cases(run, host, bot, real)
+    override_cases(run, host, bot, real)
     tool_cases(run, host)
     summary_rule_cases(run, bot, printed)

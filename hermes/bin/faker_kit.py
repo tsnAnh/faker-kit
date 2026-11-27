@@ -129,7 +129,8 @@ from faker_kit_runner import RunnerError, Services, Slot, build_image, check_slo
 from faker_kit_session_card import conflict_followups, steered, with_conflict_followup, with_steer, with_summary
 from faker_kit_session_summary import STEER_MESSAGE, closing_comments, read_summary
 from faker_kit_subscriptions import SubscriptionsError, sync_subscriptions
-from faker_kit_t3code import T3CodeLauncher, check_t3code_backend, parse_settings, unit_id
+from faker_kit_t3code import BACKEND as T3CODE_BACKEND
+from faker_kit_t3code import T3CodeLauncher, check_t3code_backend, parse_settings, unit_id, with_mapped_project
 from faker_kit_text import pull_numbers
 from faker_kit_text import refresh as refresh_text
 from faker_kit_units import SESSION_URL
@@ -347,10 +348,13 @@ class Kit:
                 raise Refused(f"{target} must be a regular file with no other names")
             return handle.read()
 
-    def launch(self, caller: Bot | None, project: str | None, brief_file: str, model: str | None = None, effort: str | None = None, check: bool = False, show_prompt: bool = False) -> dict:
+    def launch(self, caller: Bot | None, project: str | None, brief_file: str, model: str | None = None, effort: str | None = None,
+               check: bool = False, show_prompt: bool = False, backend: str | None = None) -> dict:
         checks = Checks(check or show_prompt)
-        checks.run(lambda: self.launch_options(model, effort))
+        checks.run(lambda: self.launch_options(model, effort, backend))
         target = checks.run(lambda: self.launch_target(caller, project))
+        if target is not None and backend is not None:
+            checks.run(lambda: self.launch_override(caller, project, target))
         if target is None:
             return checks.report()
         text = checks.run(lambda: self.brief_text(caller.name if caller else "default", brief_file))
@@ -362,7 +366,7 @@ class Kit:
         repo = str(target.repo)
         checks.run(lambda: self.refuse_cord(target.name))
         ready = checks.run(lambda: self.launch_credentials(target))
-        dispatch = checks.run(lambda: self.dispatch(target.name, repo)) if ready is not None else None
+        dispatch = checks.run(lambda: self.dispatch(target.name, repo, backend)) if ready is not None else None
         if dispatch is not None:
             checks.run(lambda: preflight(dispatch, self.backend_checks(brief_file)))
             checks.run(lambda: pick_factory(dispatch, self.backends(caller.name if caller else "default", brief_file)))
@@ -396,11 +400,18 @@ class Kit:
         raise Refused(problem)
 
     @staticmethod
-    def launch_options(model: str | None, effort: str | None) -> None:
+    def launch_options(model: str | None, effort: str | None, backend: str | None = None) -> None:
+        if backend is not None and backend != T3CODE_BACKEND:
+            raise Refused(f"--backend takes {T3CODE_BACKEND} only; the repository's .agents/dispatch.json names the default backend")
         if model is not None and not SESSION_MODEL.match(model):
             raise Refused("--model takes opus, sonnet, haiku, fable, or a full claude- model name")
         if effort is not None and effort not in EFFORT_LEVELS:
             raise Refused(f"--effort takes one of {', '.join(EFFORT_LEVELS)}")
+
+    @staticmethod
+    def launch_override(caller: Bot | None, project: str | None, target: Bot) -> None:
+        if caller is None or caller.role != "project" or caller.name != target.name or (project and project != target.project):
+            raise Refused("--backend is for a project bot launching its own repository")
 
     def launch_target(self, caller: Bot | None, project: str | None) -> Bot:
         if caller is not None and caller.role == "project":
@@ -524,12 +535,15 @@ class Kit:
         except ImportRefused as err:
             raise Refused(f"{err.code}: {err}") from None
 
-    def dispatch(self, bot: str, repo: str) -> Dispatch:
+    def dispatch(self, bot: str, repo: str, backend: str | None = None) -> Dispatch:
         gh = Gh(self.home, bot, repo, self.run)
         default = gh.default_branch()
         if not default:
             raise Refused(f"cannot read the default branch of {repo}")
-        return read_dispatch(gh.file_text(DISPATCH_FILE, default), default)
+        found = read_dispatch(gh.file_text(DISPATCH_FILE, default), default)
+        if backend is None:
+            return found
+        return replace(found, backend=backend, t3code=with_mapped_project(found.t3code, repo, self.policy().t3code_projects))
 
     def backend_checks(self, brief_file: str) -> dict[str, BackendCheck]:
         return {
@@ -2163,6 +2177,7 @@ def parser() -> argparse.ArgumentParser:
     cmd.add_argument("--project")
     cmd.add_argument("--model")
     cmd.add_argument("--effort")
+    cmd.add_argument("--backend", help="t3code: launch this one unit on T3 Code on the owner's Mac, whatever the repository's dispatch.json names; a project bot only, for its own repository")
     cmd.add_argument("--check", action="store_true", help="run every refusal launch would run, print them all, and start nothing")
     cmd.add_argument("--show-prompt", action="store_true", help="implies --check: print the first message a session gets and its size per component; starts and claims nothing")
     cmd = sub.add_parser("merge", allow_abbrev=False)
@@ -2271,7 +2286,7 @@ def run_command(args: argparse.Namespace, kit: Kit, who: str, stdin: IO[bytes]) 
         added = kit.add_project(args.repo, args.bot, args.project, args.model, intervals, args.claude_subscription or None, provider=args.provider, check=args.check, reload_gateway=caller is None)
         return kit.add_project_envelope(added) if args.json else added
     if args.command == "launch":
-        return kit.launch(caller, args.project, args.brief_file, args.model, args.effort, args.check, args.show_prompt)
+        return kit.launch(caller, args.project, args.brief_file, args.model, args.effort, args.check, args.show_prompt, args.backend)
     if args.command == "merge":
         return kit.merge_command(caller, args.pr, args.project, args.owner_approved, args.wait, args.everything, args.all_projects, args.match)
     if args.command == "import":
