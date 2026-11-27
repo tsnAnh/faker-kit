@@ -1,0 +1,9 @@
+name: faker-kit
+version: "0.1.0"
+description: "faker-kit for Hermes: the chief, bootstrap and project bots, the guard plugin, scheduled jobs and optional CI runners. Installing only places the files; nothing runs until you run `hermes faker-kit setup --yes`, which installs services, cron jobs and Docker CI runners (disclosed in the catalog entry)."
+author: tsnAnh
+requires_hermes: ">=0.21.5"
+provides_tools: []
+provides_hooks: []
+provides_middleware: []
+requires_env: []
